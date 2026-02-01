@@ -31,8 +31,8 @@ var (
 	brokerSnapshotReadUnorderedScriptSource string
 	//go:embed internal/redis_lua/keyed_engine_stream_read.lua
 	brokerSnapshotReadStreamScriptSource string
-	//go:embed internal/redis_lua/keyed_engine_stream_read_meta.lua
-	brokerSnapshotReadStreamMetaScriptSource string
+	//go:embed internal/redis_lua/keyed_engine_read_meta.lua
+	brokerSnapshotReadMetaScriptSource string
 	//go:embed internal/redis_lua/keyed_engine_stats.lua
 	brokerSnapshotStatsScriptSource string
 	//go:embed internal/redis_lua/keyed_engine_cleanup.lua
@@ -83,13 +83,13 @@ type RedisKeyedEngine struct {
 
 	shards []*engineShardWrapper
 
-	addScript            *rueidis.Lua
-	readOrderedScript    *rueidis.Lua
-	readUnorderedScript  *rueidis.Lua
-	readStreamScript     *rueidis.Lua
-	readStreamMetaScript *rueidis.Lua
-	presenceStatsScript  *rueidis.Lua
-	cleanupScript        *rueidis.Lua
+	addScript           *rueidis.Lua
+	readOrderedScript   *rueidis.Lua
+	readUnorderedScript *rueidis.Lua
+	readStreamScript    *rueidis.Lua
+	readMetaScript      *rueidis.Lua
+	presenceStatsScript *rueidis.Lua
+	cleanupScript       *rueidis.Lua
 
 	closeCh                chan struct{}
 	closeOnce              sync.Once
@@ -144,8 +144,8 @@ type RedisKeyedEngineConfig struct {
 	PresenceStreamSize int
 	// PresenceStreamTTL defines TTL for presence stream.
 	PresenceStreamTTL time.Duration
-	// PresenceStreamMetaTTL defines TTL for presence stream metadata (offset, epoch).
-	PresenceStreamMetaTTL time.Duration
+	// PresenceMetaTTL defines TTL for presence stream metadata (offset, epoch).
+	PresenceMetaTTL time.Duration
 }
 
 // NewRedisKeyedEngine initializes RedisKeyedEngine.
@@ -212,8 +212,8 @@ func NewRedisKeyedEngine(n *Node, conf RedisKeyedEngineConfig) (*RedisKeyedEngin
 			brokerSnapshotReadStreamScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
 		),
-		readStreamMetaScript: rueidis.NewLuaScript(
-			brokerSnapshotReadStreamMetaScriptSource,
+		readMetaScript: rueidis.NewLuaScript(
+			brokerSnapshotReadMetaScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
 		),
 		presenceStatsScript: rueidis.NewLuaScript(
@@ -342,7 +342,7 @@ func (e *RedisKeyedEngine) snapshotMetaKey(s *RedisShard, ch string) string {
 // - snapshotHashKey instead of presenceHashKey
 // - snapshotExpireKey instead of presenceExpireKey
 // - streamKey instead of presenceStreamKey
-// - metaKey instead of presenceStreamMetaKey
+// - metaKey instead of presenceMetaKey
 // This unifies presence and keyed state - both are just keyed snapshots with different configs.
 
 func (e *RedisKeyedEngine) aggregationZSetKey(s *RedisShard, ch string) string {
@@ -1490,7 +1490,7 @@ func (e *RedisKeyedEngine) ReadStreamZero2(ctx context.Context, ch string, opts 
 	// 2. Call 1: Get metadata with ExecWithReader (zero-alloc)
 	var streamPos StreamPosition
 
-	err := e.readStreamMetaScript.ExecWithReader(
+	err := e.readMetaScript.ExecWithReader(
 		ctx,
 		s.shard.client,
 		[]string{e.metaKey(s.shard, ch)},
@@ -1875,7 +1875,7 @@ func (e *RedisKeyedEngine) ReadStream2(ctx context.Context, ch string, opts Keye
 	}
 
 	// 2. Call 1: Get metadata using new simpler Lua script
-	metaReplies, err := e.readStreamMetaScript.Exec(ctx, s.shard.client,
+	metaReplies, err := e.readMetaScript.Exec(ctx, s.shard.client,
 		[]string{e.metaKey(s.shard, ch)},
 		[]string{metaExpire, e.node.ID()},
 	).ToArray()
@@ -2809,8 +2809,8 @@ func parseAddScriptResult(replies []rueidis.RedisMessage) (KeyedPublishResult, e
 //	if e.conf.PresenceStreamSize > 0 {
 //		streamKey = e.streamKey(s.shard, ch)
 //		metaKey = e.metaKey(s.shard, ch)
-//		if e.conf.PresenceStreamMetaTTL > 0 {
-//			metaExpire = strconv.Itoa(int(e.conf.PresenceStreamMetaTTL.Seconds()))
+//		if e.conf.PresenceMetaTTL > 0 {
+//			metaExpire = strconv.Itoa(int(e.conf.PresenceMetaTTL.Seconds()))
 //		} else {
 //			metaExpire = "0"
 //		}
@@ -2904,8 +2904,8 @@ func parseAddScriptResult(replies []rueidis.RedisMessage) (KeyedPublishResult, e
 //	if e.conf.PresenceStreamSize > 0 {
 //		streamKey = e.streamKey(s.shard, ch)
 //		metaKey = e.metaKey(s.shard, ch)
-//		if e.conf.PresenceStreamMetaTTL > 0 {
-//			metaExpire = strconv.Itoa(int(e.conf.PresenceStreamMetaTTL.Seconds()))
+//		if e.conf.PresenceMetaTTL > 0 {
+//			metaExpire = strconv.Itoa(int(e.conf.PresenceMetaTTL.Seconds()))
 //		} else {
 //			metaExpire = "0"
 //		}
@@ -2981,8 +2981,8 @@ func parseAddScriptResult(replies []rueidis.RedisMessage) (KeyedPublishResult, e
 //	shardClient := s.shard.client
 //
 //	metaTTL := "0"
-//	if e.conf.PresenceStreamMetaTTL > 0 {
-//		metaTTL = strconv.Itoa(int(e.conf.PresenceStreamMetaTTL.Seconds()))
+//	if e.conf.PresenceMetaTTL > 0 {
+//		metaTTL = strconv.Itoa(int(e.conf.PresenceMetaTTL.Seconds()))
 //	}
 //
 //	replies, err := e.readUnorderedScript.Exec(ctx, shardClient,

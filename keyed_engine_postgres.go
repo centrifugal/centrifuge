@@ -298,15 +298,15 @@ func (e *PostgresKeyedEngine) Publish(ctx context.Context, ch string, key string
 	// Prepare TTLs as interval strings
 	var keyTTL, streamTTL, metaTTL, idempotencyTTL *string
 	if opts.KeyTTL > 0 {
-		s := fmt.Sprintf("%d seconds", int(opts.KeyTTL.Seconds()))
+		s := strconv.Itoa(int(opts.KeyTTL.Seconds())) + " seconds"
 		keyTTL = &s
 	}
 	if opts.StreamTTL > 0 {
-		s := fmt.Sprintf("%d seconds", int(opts.StreamTTL.Seconds()))
+		s := strconv.Itoa(int(opts.StreamTTL.Seconds())) + " seconds"
 		streamTTL = &s
 	}
 	if opts.MetaTTL > 0 {
-		s := fmt.Sprintf("%d seconds", int(opts.MetaTTL.Seconds()))
+		s := strconv.Itoa(int(opts.MetaTTL.Seconds())) + " seconds"
 		metaTTL = &s
 	}
 	idempotentResultTTL := opts.IdempotentResultTTL
@@ -314,7 +314,7 @@ func (e *PostgresKeyedEngine) Publish(ctx context.Context, ch string, key string
 		idempotentResultTTL = e.conf.IdempotentResultTTL
 	}
 	if opts.IdempotencyKey != "" && idempotentResultTTL > 0 {
-		s := fmt.Sprintf("%d seconds", int(idempotentResultTTL.Seconds()))
+		s := strconv.Itoa(int(idempotentResultTTL.Seconds())) + " seconds"
 		idempotencyTTL = &s
 	}
 
@@ -436,11 +436,11 @@ func (e *PostgresKeyedEngine) Unpublish(ctx context.Context, ch string, key stri
 	// Prepare TTLs as interval strings
 	var streamTTL, metaTTL, idempotencyTTL *string
 	if opts.StreamTTL > 0 {
-		s := fmt.Sprintf("%d seconds", int(opts.StreamTTL.Seconds()))
+		s := strconv.Itoa(int(opts.StreamTTL.Seconds())) + " seconds"
 		streamTTL = &s
 	}
 	if opts.MetaTTL > 0 {
-		s := fmt.Sprintf("%d seconds", int(opts.MetaTTL.Seconds()))
+		s := strconv.Itoa(int(opts.MetaTTL.Seconds())) + " seconds"
 		metaTTL = &s
 	}
 	idempotentResultTTL := opts.IdempotentResultTTL
@@ -448,7 +448,7 @@ func (e *PostgresKeyedEngine) Unpublish(ctx context.Context, ch string, key stri
 		idempotentResultTTL = e.conf.IdempotentResultTTL
 	}
 	if opts.IdempotencyKey != "" && idempotentResultTTL > 0 {
-		s := fmt.Sprintf("%d seconds", int(idempotentResultTTL.Seconds()))
+		s := strconv.Itoa(int(idempotentResultTTL.Seconds())) + " seconds"
 		idempotencyTTL = &s
 	}
 
@@ -506,11 +506,18 @@ func (e *PostgresKeyedEngine) Unpublish(ctx context.Context, ch string, key stri
 func (e *PostgresKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error) {
 	pool := e.getReadPool()
 
-	// Get current stream position
+	// Use REPEATABLE READ transaction to ensure atomic read of meta + snapshot.
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, StreamPosition{}, "", err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Get current stream position.
 	var topOffset int64
 	var epoch string
-	err := pool.QueryRow(ctx, `
-		SELECT top_offset, epoch FROM cf_keyed_stream_meta WHERE channel = $1
+	err = tx.QueryRow(ctx, `
+		SELECT top_offset, epoch FROM cf_keyed_meta WHERE channel = $1
 	`, ch).Scan(&topOffset, &epoch)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Channel doesn't exist
@@ -539,7 +546,7 @@ func (e *PostgresKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts 
 		var tagsJSON []byte
 		var clientID, userID *string
 		var connInfo, chanInfo []byte
-		err := pool.QueryRow(ctx, `
+		err := tx.QueryRow(ctx, `
 			SELECT key, data, tags, key_offset, client_id, user_id, conn_info, chan_info
 			FROM cf_keyed_snapshot
 			WHERE channel = $1 AND key = $2 AND (expires_at IS NULL OR expires_at > NOW())
@@ -567,7 +574,7 @@ func (e *PostgresKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts 
 		return []*Publication{&p}, streamPos, "", nil
 	}
 
-	// Paginated snapshot read
+	// Paginated snapshot read.
 	var query string
 	if opts.Ordered {
 		query = `
@@ -592,7 +599,7 @@ func (e *PostgresKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts 
 		limit = 100
 	}
 
-	// Parse cursor as offset
+	// Parse cursor as offset.
 	offset := opts.Offset
 	if opts.Cursor != "" {
 		parsedOffset, err := strconv.Atoi(opts.Cursor)
@@ -601,7 +608,7 @@ func (e *PostgresKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts 
 		}
 	}
 
-	rows, err := pool.Query(ctx, query, ch, limit+1, offset)
+	rows, err := tx.Query(ctx, query, ch, limit+1, offset)
 	if err != nil {
 		return nil, StreamPosition{}, "", err
 	}
@@ -646,11 +653,18 @@ func (e *PostgresKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts 
 func (e *PostgresKeyedEngine) ReadStream(ctx context.Context, ch string, opts KeyedReadStreamOptions) ([]*Publication, StreamPosition, error) {
 	pool := e.getReadPool()
 
-	// Get current meta
+	// Use REPEATABLE READ transaction to ensure atomic read of meta + stream.
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, StreamPosition{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Get current meta.
 	var topOffset int64
 	var epoch string
-	err := pool.QueryRow(ctx, `
-		SELECT top_offset, epoch FROM cf_keyed_stream_meta WHERE channel = $1
+	err = tx.QueryRow(ctx, `
+		SELECT top_offset, epoch FROM cf_keyed_meta WHERE channel = $1
 	`, ch).Scan(&topOffset, &epoch)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, StreamPosition{Offset: 0}, nil
@@ -675,7 +689,7 @@ func (e *PostgresKeyedEngine) ReadStream(ctx context.Context, ch string, opts Ke
 		limit = 10000
 	}
 
-	// Query by per-channel offset (not global id)
+	// Query by per-channel offset (not global id).
 	var query string
 	if opts.Filter.Reverse {
 		query = `
@@ -698,13 +712,14 @@ func (e *PostgresKeyedEngine) ReadStream(ctx context.Context, ch string, opts Ke
 		`
 	}
 
-	rows, err := pool.Query(ctx, query, ch, sinceOffset, limit)
+	rows, err := tx.Query(ctx, query, ch, sinceOffset, limit)
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}
 	defer rows.Close()
 
-	var pubs []*Publication
+	// Pre-allocate slice with expected capacity.
+	pubs := make([]*Publication, 0, limit)
 	for rows.Next() {
 		var p Publication
 		var removed bool
@@ -755,7 +770,7 @@ func (e *PostgresKeyedEngine) Remove(ctx context.Context, ch string, _ KeyedRemo
 	_, err := e.pool.Exec(ctx, `
 		DELETE FROM cf_keyed_stream WHERE channel = $1;
 		DELETE FROM cf_keyed_snapshot WHERE channel = $1;
-		DELETE FROM cf_keyed_stream_meta WHERE channel = $1;
+		DELETE FROM cf_keyed_meta WHERE channel = $1;
 		DELETE FROM cf_keyed_idempotency WHERE channel = $1;
 	`, ch)
 	return err
@@ -862,11 +877,13 @@ func (e *PostgresKeyedEngine) poll(ctx context.Context) error {
 	lastID := e.lastID
 	e.lastIDMu.Unlock()
 
+	// Join with cf_keyed_meta to get epoch atomically with stream data.
 	rows, err := pool.Query(ctx, `
-		SELECT id, channel, channel_offset, key, data, tags, removed
-		FROM cf_keyed_stream
-		WHERE id > $1
-		ORDER BY id
+		SELECT s.id, s.channel, s.channel_offset, s.key, s.data, s.tags, s.removed, COALESCE(m.epoch, '')
+		FROM cf_keyed_stream s
+		LEFT JOIN cf_keyed_meta m ON s.channel = m.channel
+		WHERE s.id > $1
+		ORDER BY s.id
 		LIMIT $2
 	`, lastID, e.conf.PollBatchSize)
 	if err != nil {
@@ -883,8 +900,9 @@ func (e *PostgresKeyedEngine) poll(ctx context.Context) error {
 			data     []byte
 			tagsJSON []byte
 			removed  bool
+			epoch    string
 		)
-		if err := rows.Scan(&id, &channel, &offset, &key, &data, &tagsJSON, &removed); err != nil {
+		if err := rows.Scan(&id, &channel, &offset, &key, &data, &tagsJSON, &removed, &epoch); err != nil {
 			return err
 		}
 
@@ -900,12 +918,6 @@ func (e *PostgresKeyedEngine) poll(ctx context.Context) error {
 			Tags:    tags,
 			Removed: removed,
 		}
-
-		// Get epoch for this channel
-		var epoch string
-		_ = pool.QueryRow(ctx, `
-			SELECT epoch FROM cf_keyed_stream_meta WHERE channel = $1
-		`, channel).Scan(&epoch)
 
 		// Deliver to subscribers
 		_ = e.eventHandler.HandlePublication(
@@ -1003,7 +1015,7 @@ func (e *PostgresKeyedEngine) cleanupExpiredEntries(ctx context.Context) {
 
 	// Remove expired stream metadata
 	_, _ = e.pool.Exec(ctx, `
-		DELETE FROM cf_keyed_stream_meta
+		DELETE FROM cf_keyed_meta
 		WHERE expires_at IS NOT NULL AND expires_at < NOW()
 	`)
 

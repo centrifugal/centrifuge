@@ -30,7 +30,7 @@ func setupPostgresKeyedEngineBench(b *testing.B) (*PostgresKeyedEngine, func()) 
 	ctx := context.Background()
 	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_keyed_stream WHERE channel LIKE 'bench_%'")
 	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_keyed_snapshot WHERE channel LIKE 'bench_%'")
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_keyed_stream_meta WHERE channel LIKE 'bench_%'")
+	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_keyed_meta WHERE channel LIKE 'bench_%'")
 	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_keyed_idempotency WHERE channel LIKE 'bench_%'")
 
 	return engine, func() {
@@ -56,9 +56,9 @@ func BenchmarkPostgresKeyedEngine_PublishStreamOnly(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			data := []byte(fmt.Sprintf("message_%d", i))
 			_, err := engine.Publish(ctx, channel, "", KeyedPublishOptions{
-				Data: data,
-				//StreamSize: 10000, // This is rather expensive, rely on TTL fits PG better.
-				StreamTTL: 300 * time.Second,
+				Data:       data,
+				StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
+				StreamTTL:  300 * time.Second,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -85,10 +85,10 @@ func BenchmarkPostgresKeyedEngine_PublishKeyedStateSimple(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
-				Data: data,
-				//StreamSize: 10000, // This is rather expensive, rely on TTL fits PG better.
-				StreamTTL: 300 * time.Second,
-				KeyTTL:    300 * time.Second,
+				Data:       data,
+				StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
+				StreamTTL:  300 * time.Second,
+				KeyTTL:     300 * time.Second,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -115,12 +115,12 @@ func BenchmarkPostgresKeyedEngine_PublishKeyedStateOrdered(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
-				Data:    data,
-				Ordered: true,
-				Score:   i,
-				//StreamSize: 10000, // This is rather expensive, rely on TTL fits PG better.
-				StreamTTL: 300 * time.Second,
-				KeyTTL:    300 * time.Second,
+				Data:       data,
+				Ordered:    true,
+				Score:      i,
+				StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
+				StreamTTL:  300 * time.Second,
+				KeyTTL:     300 * time.Second,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -147,10 +147,10 @@ func BenchmarkPostgresKeyedEngine_PublishCombined(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
-				Data: data,
-				//StreamSize: 10000, // This is rather expensive, rely on TTL fits PG better.
-				StreamTTL: 300 * time.Second,
-				KeyTTL:    300 * time.Second,
+				Data:       data,
+				StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
+				StreamTTL:  300 * time.Second,
+				KeyTTL:     300 * time.Second,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -172,9 +172,9 @@ func BenchmarkPostgresKeyedEngine_ReadStream(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		data := []byte(fmt.Sprintf("message_%d", i))
 		res, err := engine.Publish(ctx, channel, "", KeyedPublishOptions{
-			Data: data,
-			//StreamSize: 10000, // This is rather expensive, rely on TTL fits PG better.
-			StreamTTL: 300 * time.Second,
+			Data:       data,
+			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
+			StreamTTL:  300 * time.Second,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -215,10 +215,10 @@ func BenchmarkPostgresKeyedEngine_ReadSnapshotFull(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
-			Data: data,
-			//StreamSize: 10000, // This is rather expensive, rely on TTL fits PG better.
-			StreamTTL: 300 * time.Second,
-			KeyTTL:    300 * time.Second,
+			Data:       data,
+			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -254,10 +254,10 @@ func BenchmarkPostgresKeyedEngine_ReadSnapshotPaginated(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
-			Data: data,
-			//StreamSize: 10000, // This is rather expensive, rely on TTL fits PG better.
-			StreamTTL: 300 * time.Second,
-			KeyTTL:    300 * time.Second,
+			Data:       data,
+			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -294,12 +294,12 @@ func BenchmarkPostgresKeyedEngine_ReadSnapshotOrdered(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
-			Data:    data,
-			Ordered: true,
-			Score:   int64(i),
-			//StreamSize: 10000, // This is rather expensive, rely on TTL fits PG better.
-			StreamTTL: 300 * time.Second,
-			KeyTTL:    300 * time.Second,
+			Data:       data,
+			Ordered:    true,
+			Score:      int64(i),
+			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -336,10 +336,10 @@ func BenchmarkPostgresKeyedEngine_Stats(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
-			Data: data,
-			//StreamSize: 10000, // This is rather expensive, rely on TTL fits PG better.
-			StreamTTL: 300 * time.Second,
-			KeyTTL:    300 * time.Second,
+			Data:       data,
+			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -372,10 +372,10 @@ func BenchmarkPostgresKeyedEngine_Unpublish(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
-			Data: data,
-			//StreamSize: 10000, // This is rather expensive, rely on TTL fits PG better.
-			StreamTTL: 300 * time.Second,
-			KeyTTL:    300 * time.Second,
+			Data:       data,
+			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -391,8 +391,8 @@ func BenchmarkPostgresKeyedEngine_Unpublish(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			_, err := engine.Unpublish(ctx, channel, key, KeyedUnpublishOptions{
-				//StreamSize: 10000, // This is rather expensive, rely on TTL fits PG better.
-				StreamTTL: 300 * time.Second,
+				StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
+				StreamTTL:  300 * time.Second,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -442,9 +442,9 @@ func BenchmarkPostgresKeyedEngine_CAS(b *testing.B) {
 
 	// Create initial key
 	res, err := engine.Publish(ctx, channel, "shared_counter", KeyedPublishOptions{
-		Data: []byte("0"),
-		//StreamSize: 10000, // This is rather expensive, rely on TTL fits PG better.
-		StreamTTL: 300 * time.Second,
+		Data:       []byte("0"),
+		StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
+		StreamTTL:  300 * time.Second,
 	})
 	if err != nil {
 		b.Fatal(err)

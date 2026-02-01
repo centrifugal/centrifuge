@@ -133,10 +133,10 @@ CREATE INDEX cf_keyed_snapshot_expires_idx
     WHERE expires_at IS NOT NULL;
 ```
 
-### cf_keyed_stream_meta (Stream Metadata)
+### cf_keyed_meta (Metadata)
 
 ```sql
-CREATE TABLE cf_keyed_stream_meta (
+CREATE TABLE cf_keyed_meta (
     channel         TEXT PRIMARY KEY,
     top_offset      BIGINT NOT NULL DEFAULT 0,
     epoch           TEXT NOT NULL DEFAULT '',
@@ -147,8 +147,8 @@ CREATE TABLE cf_keyed_stream_meta (
     expires_at      TIMESTAMPTZ
 );
 
-CREATE INDEX cf_keyed_stream_meta_expires_idx
-    ON cf_keyed_stream_meta (expires_at)
+CREATE INDEX cf_keyed_meta_expires_idx
+    ON cf_keyed_meta (expires_at)
     WHERE expires_at IS NOT NULL;
 ```
 

@@ -52,7 +52,7 @@ CREATE INDEX cf_keyed_snapshot_expires_idx
     WHERE expires_at IS NOT NULL;
 
 -- Stream Metadata Table
-CREATE TABLE cf_keyed_stream_meta (
+CREATE TABLE cf_keyed_meta (
     channel         TEXT PRIMARY KEY,
     top_offset      BIGINT NOT NULL DEFAULT 0,
     epoch           TEXT NOT NULL DEFAULT '',
@@ -63,8 +63,8 @@ CREATE TABLE cf_keyed_stream_meta (
     expires_at      TIMESTAMPTZ
 );
 
-CREATE INDEX cf_keyed_stream_meta_expires_idx
-    ON cf_keyed_stream_meta (expires_at)
+CREATE INDEX cf_keyed_meta_expires_idx
+    ON cf_keyed_meta (expires_at)
     WHERE expires_at IS NOT NULL;
 
 -- Idempotency Table
@@ -129,13 +129,13 @@ DECLARE
     v_stream_version_epoch TEXT;
 BEGIN
     -- 1. Get or create stream metadata
-    INSERT INTO cf_keyed_stream_meta (channel, top_offset, epoch, updated_at)
+    INSERT INTO cf_keyed_meta (channel, top_offset, epoch, updated_at)
     VALUES (p_channel, 0, substr(md5(random()::text), 1, 4), NOW())
     ON CONFLICT (channel) DO NOTHING;
 
     SELECT top_offset, m.epoch, COALESCE(version, 0), version_epoch
     INTO v_offset, v_epoch, v_stream_version, v_stream_version_epoch
-    FROM cf_keyed_stream_meta m WHERE m.channel = p_channel FOR UPDATE;
+    FROM cf_keyed_meta m WHERE m.channel = p_channel FOR UPDATE;
 
     -- 2. Check idempotency
     IF p_idempotency_key IS NOT NULL THEN
@@ -188,7 +188,7 @@ BEGIN
     END IF;
 
     -- 6. All checks passed - increment offset and update version
-    UPDATE cf_keyed_stream_meta SET
+    UPDATE cf_keyed_meta SET
         top_offset = top_offset + 1,
         version = GREATEST(COALESCE(version, 0), COALESCE(p_version, 0)),
         version_epoch = COALESCE(p_version_epoch, version_epoch),
@@ -339,7 +339,7 @@ DECLARE
 BEGIN
     -- 1. Get stream metadata
     SELECT top_offset, m.epoch INTO v_offset, v_epoch
-    FROM cf_keyed_stream_meta m WHERE m.channel = p_channel;
+    FROM cf_keyed_meta m WHERE m.channel = p_channel;
 
     IF NOT FOUND THEN
         RETURN QUERY SELECT NULL::BIGINT, 0::BIGINT, ''::TEXT, TRUE, 'key_not_found'::TEXT;
@@ -366,7 +366,7 @@ BEGIN
     END IF;
 
     -- 4. Increment offset
-    UPDATE cf_keyed_stream_meta SET
+    UPDATE cf_keyed_meta SET
         top_offset = top_offset + 1,
         expires_at = COALESCE(CASE WHEN p_meta_ttl IS NOT NULL THEN NOW() + p_meta_ttl ELSE NULL END, expires_at),
         updated_at = NOW()

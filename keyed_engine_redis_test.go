@@ -22,11 +22,11 @@ func newTestSnapshotRedisEngine(tb testing.TB, n *Node) *RedisKeyedEngine {
 	shard, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
 	e, err := NewRedisKeyedEngine(n, RedisKeyedEngineConfig{
-		Shards:                []*RedisShard{shard},
-		PresenceTTL:           60 * time.Second,
-		PresenceStreamSize:    100,
-		PresenceStreamTTL:     300 * time.Second,
-		PresenceStreamMetaTTL: 3600 * time.Second,
+		Shards:             []*RedisShard{shard},
+		PresenceTTL:        60 * time.Second,
+		PresenceStreamSize: 100,
+		PresenceStreamTTL:  300 * time.Second,
+		PresenceMetaTTL:    3600 * time.Second,
 	})
 	require.NoError(tb, err)
 	tb.Cleanup(func() {
@@ -847,7 +847,7 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 //		PresenceTTL:           30 * time.Second, // Set long TTL so expire ZSET doesn't disappear
 //		PresenceStreamSize:    100,
 //		PresenceStreamTTL:     300 * time.Second,
-//		PresenceStreamMetaTTL: 3600 * time.Second,
+//		PresenceMetaTTL: 3600 * time.Second,
 //	})
 //	require.NoError(t, err)
 //	t.Cleanup(func() {
@@ -1046,7 +1046,7 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 //		PresenceTTL:           30 * time.Second,
 //		PresenceStreamSize:    100,
 //		PresenceStreamTTL:     300 * time.Second,
-//		PresenceStreamMetaTTL: 3600 * time.Second,
+//		PresenceMetaTTL: 3600 * time.Second,
 //	})
 //	require.NoError(t, err)
 //	t.Cleanup(func() {

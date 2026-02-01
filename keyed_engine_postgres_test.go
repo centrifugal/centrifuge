@@ -1,5 +1,4 @@
 //go:build integration
-// +build integration
 
 package centrifuge
 
@@ -37,7 +36,7 @@ func newTestPostgresKeyedEngine(tb testing.TB, n *Node) *PostgresKeyedEngine {
 	ctx := context.Background()
 	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_keyed_stream WHERE channel LIKE 'test_%'")
 	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_keyed_snapshot WHERE channel LIKE 'test_%'")
-	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_keyed_stream_meta WHERE channel LIKE 'test_%'")
+	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_keyed_meta WHERE channel LIKE 'test_%'")
 	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_keyed_idempotency WHERE channel LIKE 'test_%'")
 
 	tb.Cleanup(func() {
