@@ -286,7 +286,16 @@ func (e *CachedKeyedEngine) withChannelLock(ch string, fn func()) {
 
 // Subscribe registers this server node to receive pub/sub messages for the channel.
 func (e *CachedKeyedEngine) Subscribe(ch string) error {
-	return e.backend.Subscribe(ch)
+	// Subscribe to backend PUB/SUB first so we receive updates
+	if err := e.backend.Subscribe(ch); err != nil {
+		return err
+	}
+	// Preload cache - this ensures cache is populated before first read
+	// and HandlePublication can update it for real-time changes
+	ctx, cancel := context.WithTimeout(context.Background(), e.conf.LoadTimeout)
+	defer cancel()
+	_ = e.ensureLoaded(ctx, ch)
+	return nil
 }
 
 // Unsubscribe removes this server node from receiving pub/sub messages for the channel.
