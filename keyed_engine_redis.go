@@ -571,11 +571,12 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, o
 		streamData = opts.StreamData
 	}
 	streamProtoPub := &protocol.Publication{
-		Data: streamData,
-		Info: infoToProto(opts.ClientInfo),
-		Tags: opts.Tags,
-		Time: now,
-		Key:  key,
+		Data:  streamData,
+		Info:  infoToProto(opts.ClientInfo),
+		Tags:  opts.Tags,
+		Time:  now,
+		Key:   key,
+		Score: opts.Score,
 	}
 	streamBytes, err := streamProtoPub.MarshalVT()
 	if err != nil {
@@ -587,11 +588,12 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, o
 	if len(opts.StreamData) > 0 {
 		// Different data for snapshot vs stream - need separate serialization.
 		snapshotProtoPub := &protocol.Publication{
-			Data: opts.Data,
-			Info: infoToProto(opts.ClientInfo),
-			Tags: opts.Tags,
-			Time: now,
-			Key:  key,
+			Data:  opts.Data,
+			Info:  infoToProto(opts.ClientInfo),
+			Tags:  opts.Tags,
+			Time:  now,
+			Key:   key,
+			Score: opts.Score,
 		}
 		snapshotBytes, err = snapshotProtoPub.MarshalVT()
 		if err != nil {
@@ -741,16 +743,11 @@ func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string,
 		metaExpire = strconv.Itoa(int(e.node.config.HistoryMetaTTL.Seconds()))
 	}
 
-	publishCommand := ""
-	var chID string
-	if opts.Publish {
-		if e.useShardedPubSub(s.shard) {
-			publishCommand = "SPUBLISH"
-		} else {
-			publishCommand = "PUBLISH"
-		}
-		chID = e.messageChannelID(s.shard, ch)
+	publishCommand := "PUBLISH"
+	if e.useShardedPubSub(s.shard) {
+		publishCommand = "SPUBLISH"
 	}
+	chID := e.messageChannelID(s.shard, ch)
 	if e.conf.SkipPubSub {
 		publishCommand = ""
 		chID = ""
@@ -1433,6 +1430,7 @@ func (e *RedisKeyedEngine) ReadStreamZero(
 					Time:    protoPub.Time,
 					Key:     protoPub.GetKey(),
 					Removed: protoPub.GetRemoved(),
+					Score:   protoPub.GetScore(),
 				})
 			}
 			return nil
@@ -1669,6 +1667,7 @@ func (e *RedisKeyedEngine) ReadStreamZero2(ctx context.Context, ch string, opts 
 				Time:    protoPub.Time,
 				Key:     protoPub.GetKey(),
 				Removed: protoPub.GetRemoved(),
+				Score:   protoPub.GetScore(),
 			})
 		}
 
@@ -1827,6 +1826,7 @@ func (e *RedisKeyedEngine) ReadStream(ctx context.Context, ch string, opts Keyed
 			Time:    protoPub.Time,
 			Key:     protoPub.GetKey(),
 			Removed: protoPub.GetRemoved(),
+			Score:   protoPub.GetScore(),
 		}
 	}
 	return pubs, streamPos, nil
@@ -1996,6 +1996,7 @@ func (e *RedisKeyedEngine) ReadStream2(ctx context.Context, ch string, opts Keye
 			Key:     protoPub.GetKey(),
 			Removed: protoPub.GetRemoved(),
 			Channel: protoPub.GetChannel(),
+			Score:   protoPub.GetScore(),
 		})
 	}
 

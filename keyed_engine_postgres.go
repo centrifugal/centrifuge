@@ -51,10 +51,6 @@ type PostgresKeyedEngineConfig struct {
 	// Example: "postgres://user:pass@localhost:5432/dbname?sslmode=disable"
 	ConnString string
 
-	// ReplicaConnString is optional connection string for read replica.
-	// If empty, reads go to primary. Use for scaling reads across replicas.
-	ReplicaConnString string
-
 	// PoolSize sets the maximum number of connections in the pool.
 	// Default: 32
 	PoolSize int
@@ -129,36 +125,12 @@ func NewPostgresKeyedEngine(n *Node, conf PostgresKeyedEngineConfig) (*PostgresK
 		return nil, fmt.Errorf("postgres keyed engine: ping primary: %w", err)
 	}
 
-	// Configure read replica pool if specified
-	var readPool *pgxpool.Pool
-	if conf.ReplicaConnString != "" {
-		replicaConfig, err := pgxpool.ParseConfig(conf.ReplicaConnString)
-		if err != nil {
-			pool.Close()
-			return nil, fmt.Errorf("postgres keyed engine: parse replica config: %w", err)
-		}
-		replicaConfig.MaxConns = int32(conf.PoolSize)
-
-		readPool, err = pgxpool.NewWithConfig(ctx, replicaConfig)
-		if err != nil {
-			pool.Close()
-			return nil, fmt.Errorf("postgres keyed engine: connect replica: %w", err)
-		}
-
-		if err := readPool.Ping(ctx); err != nil {
-			pool.Close()
-			readPool.Close()
-			return nil, fmt.Errorf("postgres keyed engine: ping replica: %w", err)
-		}
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 
 	e := &PostgresKeyedEngine{
 		node:       n,
 		conf:       conf,
 		pool:       pool,
-		readPool:   readPool,
 		wakeup:     make(chan struct{}, 1),
 		closeCh:    make(chan struct{}),
 		cancelCtx:  ctx,
@@ -168,12 +140,49 @@ func NewPostgresKeyedEngine(n *Node, conf PostgresKeyedEngineConfig) (*PostgresK
 	return e, nil
 }
 
-// getReadPool returns the read pool (replica if configured, otherwise primary).
+// getReadPool returns the read pool (only primary - replica can't be used from atomicity perspective).
 func (e *PostgresKeyedEngine) getReadPool() *pgxpool.Pool {
-	if e.readPool != nil {
-		return e.readPool
-	}
 	return e.pool
+}
+
+// pgGenerateEpoch creates a random 4-character epoch string.
+// This matches the format used by MemoryKeyedEngine's memstream.
+func pgGenerateEpoch() string {
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	b := make([]byte, 4)
+	n := time.Now().UnixNano()
+	for i := range b {
+		b[i] = letters[n%int64(len(letters))]
+		n = n / int64(len(letters))
+	}
+	return string(b)
+}
+
+// ensureChannelMeta creates the channel meta if it doesn't exist and returns the stream position.
+// This ensures that empty channels have an epoch, matching MemoryKeyedEngine behavior.
+// Uses a single query with CTE for efficiency.
+func (e *PostgresKeyedEngine) ensureChannelMeta(ctx context.Context, ch string) (StreamPosition, error) {
+	epoch := pgGenerateEpoch()
+
+	var topOffset int64
+	var actualEpoch string
+	err := e.pool.QueryRow(ctx, `
+		WITH new_row AS (
+			INSERT INTO cf_keyed_meta (channel, top_offset, epoch)
+			VALUES ($1, 0, $2)
+			ON CONFLICT (channel) DO NOTHING
+			RETURNING top_offset, epoch
+		)
+		SELECT top_offset, epoch FROM new_row
+		UNION ALL
+		SELECT top_offset, epoch FROM cf_keyed_meta
+		WHERE channel = $1 AND NOT EXISTS (SELECT 1 FROM new_row)
+	`, ch, epoch).Scan(&topOffset, &actualEpoch)
+	if err != nil {
+		return StreamPosition{}, err
+	}
+
+	return StreamPosition{Offset: uint64(topOffset), Epoch: actualEpoch}, nil
 }
 
 // RegisterBrokerEventHandler registers the event handler and starts background workers.
@@ -410,13 +419,14 @@ func (e *PostgresKeyedEngine) Publish(ctx context.Context, ch string, key string
 	}
 
 	// Handle local delivery if configured
-	if opts.Publish && e.eventHandler != nil {
+	if e.eventHandler != nil {
 		pub := &Publication{
 			Offset: uint64(channelOffset),
 			Key:    key,
 			Data:   opts.Data,
 			Tags:   opts.Tags,
 			Info:   opts.ClientInfo,
+			Score:  opts.Score,
 			Time:   time.Now().UnixMilli(),
 		}
 		_ = e.eventHandler.HandlePublication(ch, pub, newPos, opts.UseDelta, nil)
@@ -489,7 +499,7 @@ func (e *PostgresKeyedEngine) Unpublish(ctx context.Context, ch string, key stri
 	}
 
 	// Handle local delivery if configured
-	if opts.Publish && e.eventHandler != nil {
+	if e.eventHandler != nil {
 		pub := &Publication{
 			Key:     key,
 			Removed: true,
@@ -520,12 +530,19 @@ func (e *PostgresKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts 
 		SELECT top_offset, epoch FROM cf_keyed_meta WHERE channel = $1
 	`, ch).Scan(&topOffset, &epoch)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Channel doesn't exist
+		// Channel doesn't exist yet
 		if opts.Revision != nil && opts.Revision.Epoch != "" {
 			// Client sent an epoch but channel is gone - unrecoverable
 			return nil, StreamPosition{}, "", ErrorUnrecoverablePosition
 		}
-		return nil, StreamPosition{}, "", nil
+		// Rollback read-only tx, then create channel meta with epoch.
+		// This matches MemoryKeyedEngine behavior where empty channels have an epoch.
+		_ = tx.Rollback(ctx)
+		pos, err := e.ensureChannelMeta(ctx, ch)
+		if err != nil {
+			return nil, StreamPosition{}, "", err
+		}
+		return nil, pos, "", nil
 	}
 	if err != nil {
 		return nil, StreamPosition{}, "", err
@@ -627,6 +644,9 @@ func (e *PostgresKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts 
 		if len(tagsJSON) > 0 {
 			_ = json.Unmarshal(tagsJSON, &p.Tags)
 		}
+		if score != nil {
+			p.Score = *score
+		}
 		if clientID != nil {
 			p.Info = &ClientInfo{
 				ClientID: *clientID,
@@ -667,7 +687,14 @@ func (e *PostgresKeyedEngine) ReadStream(ctx context.Context, ch string, opts Ke
 		SELECT top_offset, epoch FROM cf_keyed_meta WHERE channel = $1
 	`, ch).Scan(&topOffset, &epoch)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, StreamPosition{Offset: 0}, nil
+		// Channel doesn't exist yet - create it with an epoch.
+		// This matches MemoryKeyedEngine behavior where empty channels have an epoch.
+		_ = tx.Rollback(ctx)
+		pos, err := e.ensureChannelMeta(ctx, ch)
+		if err != nil {
+			return nil, StreamPosition{}, err
+		}
+		return nil, pos, nil
 	}
 	if err != nil {
 		return nil, StreamPosition{}, err
@@ -693,7 +720,7 @@ func (e *PostgresKeyedEngine) ReadStream(ctx context.Context, ch string, opts Ke
 	var query string
 	if opts.Filter.Reverse {
 		query = `
-			SELECT key, data, tags, channel_offset, removed, client_id, user_id, conn_info, chan_info
+			SELECT key, data, tags, channel_offset, removed, score, client_id, user_id, conn_info, chan_info
 			FROM cf_keyed_stream
 			WHERE channel = $1 AND channel_offset < $2
 			ORDER BY channel_offset DESC
@@ -704,7 +731,7 @@ func (e *PostgresKeyedEngine) ReadStream(ctx context.Context, ch string, opts Ke
 		}
 	} else {
 		query = `
-			SELECT key, data, tags, channel_offset, removed, client_id, user_id, conn_info, chan_info
+			SELECT key, data, tags, channel_offset, removed, score, client_id, user_id, conn_info, chan_info
 			FROM cf_keyed_stream
 			WHERE channel = $1 AND channel_offset > $2
 			ORDER BY channel_offset ASC
@@ -723,13 +750,17 @@ func (e *PostgresKeyedEngine) ReadStream(ctx context.Context, ch string, opts Ke
 	for rows.Next() {
 		var p Publication
 		var removed bool
+		var score *int64
 		var tagsJSON []byte
 		var clientID, userID *string
 		var connInfo, chanInfo []byte
-		if err := rows.Scan(&p.Key, &p.Data, &tagsJSON, &p.Offset, &removed, &clientID, &userID, &connInfo, &chanInfo); err != nil {
+		if err := rows.Scan(&p.Key, &p.Data, &tagsJSON, &p.Offset, &removed, &score, &clientID, &userID, &connInfo, &chanInfo); err != nil {
 			return nil, StreamPosition{}, err
 		}
 		p.Removed = removed
+		if score != nil {
+			p.Score = *score
+		}
 		if len(tagsJSON) > 0 {
 			_ = json.Unmarshal(tagsJSON, &p.Tags)
 		}
@@ -879,7 +910,7 @@ func (e *PostgresKeyedEngine) poll(ctx context.Context) error {
 
 	// Join with cf_keyed_meta to get epoch atomically with stream data.
 	rows, err := pool.Query(ctx, `
-		SELECT s.id, s.channel, s.channel_offset, s.key, s.data, s.tags, s.removed, COALESCE(m.epoch, '')
+		SELECT s.id, s.channel, s.channel_offset, s.key, s.data, s.tags, s.removed, s.score, COALESCE(m.epoch, '')
 		FROM cf_keyed_stream s
 		LEFT JOIN cf_keyed_meta m ON s.channel = m.channel
 		WHERE s.id > $1
@@ -900,9 +931,10 @@ func (e *PostgresKeyedEngine) poll(ctx context.Context) error {
 			data     []byte
 			tagsJSON []byte
 			removed  bool
+			score    *int64
 			epoch    string
 		)
-		if err := rows.Scan(&id, &channel, &offset, &key, &data, &tagsJSON, &removed, &epoch); err != nil {
+		if err := rows.Scan(&id, &channel, &offset, &key, &data, &tagsJSON, &removed, &score, &epoch); err != nil {
 			return err
 		}
 
@@ -917,6 +949,9 @@ func (e *PostgresKeyedEngine) poll(ctx context.Context) error {
 			Data:    data,
 			Tags:    tags,
 			Removed: removed,
+		}
+		if score != nil {
+			pub.Score = *score
 		}
 
 		// Deliver to subscribers
@@ -955,32 +990,41 @@ func (e *PostgresKeyedEngine) runTTLExpirationWorker() {
 }
 
 func (e *PostgresKeyedEngine) expireKeys(ctx context.Context) {
-	// Find and delete expired keys, returning their info for removal events
+	// Find expired keys (don't delete yet - let Unpublish handle deletion).
 	rows, err := e.pool.Query(ctx, `
-		DELETE FROM cf_keyed_snapshot
+		SELECT channel, key FROM cf_keyed_snapshot
 		WHERE expires_at IS NOT NULL AND expires_at <= NOW()
-		RETURNING channel, key
 	`)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
 
+	// Collect expired keys first to avoid holding rows open during Unpublish calls.
+	type expiredKey struct {
+		channel string
+		key     string
+	}
+	var expiredKeys []expiredKey
 	for rows.Next() {
 		var ch, key string
 		if err := rows.Scan(&ch, &key); err != nil {
 			continue
 		}
+		expiredKeys = append(expiredKeys, expiredKey{channel: ch, key: key})
+	}
 
-		// Get channel options for this channel
+	// Now unpublish each expired key (this deletes from snapshot and emits to stream).
+	for _, ek := range expiredKeys {
+		// Get channel options for this channel.
 		opts := DefaultKeyedChannelOptions()
 		if e.channelOptionsResolver != nil {
-			opts = e.channelOptionsResolver(ch)
+			opts = e.channelOptionsResolver(ek.channel)
 		}
 
-		// Emit removal to stream
-		_, _ = e.Unpublish(ctx, ch, key, KeyedUnpublishOptions{
-			Publish:    true,
+		// Unpublish handles deletion and emits removal to stream.
+		_, _ = e.Unpublish(ctx, ek.channel, ek.key, KeyedUnpublishOptions{
+			
 			StreamSize: opts.StreamSize,
 			StreamTTL:  opts.StreamTTL,
 			MetaTTL:    opts.MetaTTL,

@@ -32,6 +32,9 @@ type Publication struct {
 	// Removed indicates this is a remove/leave event (true) vs add/join event (false).
 	// Used in keyed snapshots and presence streams to distinguish event types.
 	Removed bool
+	// Score is used for ordered keyed snapshots (leaderboards, priority queues).
+	// Higher scores appear first when Ordered=true in ReadSnapshot.
+	Score int64
 }
 
 // ClientInfo contains information about client connection.

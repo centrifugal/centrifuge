@@ -287,11 +287,6 @@ func (c *Client) handleKeyedSnapshotPhase(
 ) error {
 	channel := req.Channel
 
-	keyedEngine := c.node.keyedEngine
-	if keyedEngine == nil {
-		return ErrorNotAvailable
-	}
-
 	// Acquire pagination lock for this channel.
 	if !c.acquireKeyedPaginationLock(channel) {
 		return ErrorConcurrentPagination
@@ -371,7 +366,7 @@ func (c *Client) handleKeyedSnapshotPhase(
 	}
 
 	// Read snapshot page.
-	pubs, streamPos, nextCursor, err := keyedEngine.ReadSnapshot(c.ctx, channel, opts)
+	snapshotResult, err := c.node.KeyedSnapshotRead(c.ctx, channel, opts)
 	if err != nil {
 		if errors.Is(err, ErrorUnrecoverablePosition) {
 			c.cleanupKeyedSubscribing(channel)
@@ -383,6 +378,9 @@ func (c *Client) handleKeyedSnapshotPhase(
 		c.cleanupKeyedSubscribing(channel)
 		return ErrorInternal
 	}
+	pubs := snapshotResult.Publications
+	streamPos := snapshotResult.Position
+	nextCursor := snapshotResult.Cursor
 
 	// Get state for tags filter and epoch update.
 	c.mu.RLock()
@@ -438,11 +436,6 @@ func (c *Client) handleKeyedStreamPhase(
 ) error {
 	channel := req.Channel
 
-	keyedEngine := c.node.keyedEngine
-	if keyedEngine == nil {
-		return ErrorNotAvailable
-	}
-
 	// Verify we have authorization (must have started keyed subscription).
 	c.mu.RLock()
 	state, ok := c.keyedSubscribing[channel]
@@ -487,7 +480,7 @@ func (c *Client) handleKeyedStreamPhase(
 	}
 
 	// Read stream.
-	pubs, streamPos, err := keyedEngine.ReadStream(c.ctx, channel, opts)
+	streamResult, err := c.node.KeyedStreamRead(c.ctx, channel, opts)
 	if err != nil {
 		if errors.Is(err, ErrorUnrecoverablePosition) {
 			c.cleanupKeyedSubscribing(channel)
@@ -499,6 +492,8 @@ func (c *Client) handleKeyedStreamPhase(
 		c.cleanupKeyedSubscribing(channel)
 		return ErrorInternal
 	}
+	pubs := streamResult.Publications
+	streamPos := streamResult.Position
 
 	// Apply tags filter to stream publications.
 	if state.tagsFilter != nil {
@@ -643,7 +638,7 @@ func (c *Client) handleKeyedLivePhase(
 		MetaTTL: opts.HistoryMetaTTL,
 	}
 
-	pubs, streamPos, err := keyedEngine.ReadStream(c.ctx, channel, streamOpts)
+	streamResult, err := c.node.KeyedStreamRead(c.ctx, channel, streamOpts)
 	if err != nil {
 		c.pubSubSync.StopBuffering(channel)
 		_ = c.node.removeSubscription(channel, c)
@@ -657,6 +652,8 @@ func (c *Client) handleKeyedLivePhase(
 		}))
 		return ErrorInternal
 	}
+	pubs := streamResult.Publications
+	streamPos := streamResult.Position
 
 	// Convert to protocol publications.
 	for _, pub := range pubs {
@@ -939,46 +936,31 @@ func (c *Client) keyedPresenceTTL() time.Duration {
 // addKeyedClientPresence adds client presence to {channel}:clients.
 // Key is clientId, stores full ClientInfo.
 func (c *Client) addKeyedClientPresence(channel string, info *ClientInfo) error {
-	keyedEngine := c.node.keyedEngine
-	if keyedEngine == nil {
-		return ErrorNotAvailable
-	}
-
 	clientsChannel := channel + clientsSuffix
 
 	// Use KeyModeIfNew with RefreshTTLOnSuppress to:
 	// - Publish JOIN event only if this is a new presence entry
 	// - Refresh TTL without publishing if entry already exists (quick reconnect)
 	// Stream options (StreamSize/TTL/MetaTTL) use defaults from GetKeyedChannelOptions.
-	_, err := keyedEngine.Publish(c.ctx, clientsChannel, c.uid, KeyedPublishOptions{
-		Publish:              true,
+	_, err := c.node.KeyedPublish(c.ctx, clientsChannel, c.uid, KeyedPublishOptions{
 		ClientInfo:           info,
 		KeyTTL:               c.keyedPresenceTTL(),
 		KeyMode:              KeyModeIfNew,
 		RefreshTTLOnSuppress: true,
 	})
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 // addKeyedUserPresence adds user presence to {channel}:users.
 // Key is userId, no ClientInfo stored (just the key for uniqueness).
 func (c *Client) addKeyedUserPresence(channel string) error {
-	keyedEngine := c.node.keyedEngine
-	if keyedEngine == nil {
-		return ErrorNotAvailable
-	}
-
 	usersChannel := channel + usersSuffix
 
 	// Use KeyModeIfNew with RefreshTTLOnSuppress to:
 	// - Publish JOIN event only if this is a new user
 	// - Refresh TTL without publishing if user already exists
 	// Stream options (StreamSize/TTL/MetaTTL) use defaults from GetKeyedChannelOptions.
-	_, err := keyedEngine.Publish(c.ctx, usersChannel, c.user, KeyedPublishOptions{
-		Publish:              true,
+	_, err := c.node.KeyedPublish(c.ctx, usersChannel, c.user, KeyedPublishOptions{
 		KeyTTL:               c.keyedPresenceTTL(),
 		KeyMode:              KeyModeIfNew,
 		RefreshTTLOnSuppress: true,
@@ -990,11 +972,6 @@ func (c *Client) addKeyedUserPresence(channel string) error {
 // This is called periodically by updateChannelPresence to refresh the TTL.
 // Handles :clients and :users channels based on flags.
 func (c *Client) updateKeyedPresence(channel string, info *ClientInfo, flags uint16) error {
-	keyedEngine := c.node.keyedEngine
-	if keyedEngine == nil {
-		return ErrorNotAvailable
-	}
-
 	// Use KeyModeIfNew with RefreshTTLOnSuppress for TTL refresh:
 	// - Since key already exists, publish is suppressed (no offset increment)
 	// - TTL is refreshed without generating stream entries
@@ -1003,8 +980,7 @@ func (c *Client) updateKeyedPresence(channel string, info *ClientInfo, flags uin
 	// Update :clients if EmitKeyedClientPresence is enabled.
 	if channelHasFlag(flags, flagEmitKeyedClientPresence) {
 		clientsChannel := channel + clientsSuffix
-		_, err := keyedEngine.Publish(c.ctx, clientsChannel, c.uid, KeyedPublishOptions{
-			Publish:              true,
+		_, err := c.node.KeyedPublish(c.ctx, clientsChannel, c.uid, KeyedPublishOptions{
 			ClientInfo:           info,
 			KeyTTL:               c.keyedPresenceTTL(),
 			KeyMode:              KeyModeIfNew,
@@ -1018,8 +994,7 @@ func (c *Client) updateKeyedPresence(channel string, info *ClientInfo, flags uin
 	// Update :users if EmitKeyedUserPresence is enabled.
 	if channelHasFlag(flags, flagEmitKeyedUserPresence) {
 		usersChannel := channel + usersSuffix
-		_, err := keyedEngine.Publish(c.ctx, usersChannel, c.user, KeyedPublishOptions{
-			Publish:              true,
+		_, err := c.node.KeyedPublish(c.ctx, usersChannel, c.user, KeyedPublishOptions{
 			KeyTTL:               c.keyedPresenceTTL(),
 			KeyMode:              KeyModeIfNew,
 			RefreshTTLOnSuppress: true,
@@ -1036,11 +1011,6 @@ func (c *Client) updateKeyedPresence(channel string, info *ClientInfo, flags uin
 // Called on explicit unsubscribe or disconnect. Only removes from :presence and :clients,
 // :users entries expire via TTL (acts as debounce for quick reconnects).
 func (c *Client) removeKeyedPresence(channel string, flags uint16) error {
-	keyedEngine := c.node.keyedEngine
-	if keyedEngine == nil {
-		return nil
-	}
-
 	// Remove from :presence if EmitPresence is enabled.
 	if channelHasFlag(flags, flagEmitPresence) {
 		if err := c.node.removePresence(channel, c.uid, c.user); err != nil {
@@ -1052,9 +1022,7 @@ func (c *Client) removeKeyedPresence(channel string, flags uint16) error {
 	// Stream options (StreamSize/TTL/MetaTTL) use defaults from GetKeyedChannelOptions.
 	if channelHasFlag(flags, flagEmitKeyedClientPresence) {
 		clientsChannel := channel + clientsSuffix
-		_, err := keyedEngine.Unpublish(context.Background(), clientsChannel, c.uid, KeyedUnpublishOptions{
-			Publish: true,
-		})
+		_, err := c.node.KeyedUnpublish(context.Background(), clientsChannel, c.uid, KeyedUnpublishOptions{})
 		if err != nil {
 			c.node.logger.log(newErrorLogEntry(err, "error removing keyed clients presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		}
@@ -1068,9 +1036,7 @@ func (c *Client) removeKeyedPresence(channel string, flags uint16) error {
 	// to a key that equals their client ID.
 	// Stream options (StreamSize/TTL/MetaTTL) use defaults from GetKeyedChannelOptions.
 	if channelHasFlag(flags, flagCleanupOnUnsubscribe) {
-		_, err := keyedEngine.Unpublish(context.Background(), channel, c.uid, KeyedUnpublishOptions{
-			Publish: true,
-		})
+		_, err := c.node.KeyedUnpublish(context.Background(), channel, c.uid, KeyedUnpublishOptions{})
 		if err != nil {
 			c.node.logger.log(newErrorLogEntry(err, "error cleaning up keyed state on unsubscribe", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		}

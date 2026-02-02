@@ -144,10 +144,6 @@ type KeyedEngine interface {
 
 // KeyedPublishOptions defines options for publishing to a keyed channel.
 type KeyedPublishOptions struct {
-	// Publish controls whether to broadcast this update to pub/sub subscribers.
-	// Set to true for real-time delivery, false for silent snapshot updates.
-	Publish bool
-
 	// IdempotencyKey enables duplicate detection. If the same key is seen within
 	// IdempotentResultTTL, the operation is suppressed (Suppressed=true).
 	// Use for safe client retries without duplicating state changes.
@@ -218,10 +214,6 @@ type KeyedPublishOptions struct {
 
 // KeyedUnpublishOptions defines options for removing a key from a keyed channel.
 type KeyedUnpublishOptions struct {
-	// Publish controls whether to broadcast the removal to pub/sub subscribers.
-	// Set to true so clients receive real-time notification of key removal.
-	Publish bool
-
 	// IdempotencyKey enables duplicate detection for removal operations.
 	IdempotencyKey      string
 	IdempotentResultTTL time.Duration

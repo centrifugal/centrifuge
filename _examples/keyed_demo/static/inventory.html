@@ -286,6 +286,9 @@
         // Store items state.
         const items = new Map();
 
+        // Track loading state by item ID.
+        const loadingItems = new Set();
+
         // Connect to Centrifuge.
         const centrifuge = new Centrifuge('ws://localhost:3000/connection/websocket', {
             name: userId
@@ -359,13 +362,17 @@
                     stockText = `Only ${item.stock} left!`;
                 }
 
+                const isLoading = loadingItems.has(item.id);
+                const buyBtnClass = `btn btn-buy${isLoading ? ' loading' : ''}`;
+                const buyBtnDisabled = item.stock === 0 || isLoading ? 'disabled' : '';
+
                 card.innerHTML = `
                     <div class="item-emoji">${item.emoji}</div>
                     <div class="item-name">${item.name}</div>
                     <div class="item-price">${item.price} coins</div>
                     <div class="item-stock ${stockClass}">${stockText}</div>
                     <div class="item-buttons">
-                        <button class="btn btn-buy" onclick="buyItem('${item.id}', this)" ${item.stock === 0 ? 'disabled' : ''}>Buy</button>
+                        <button class="${buyBtnClass}" onclick="buyItem('${item.id}')" ${buyBtnDisabled}>Buy</button>
                         <button class="btn btn-restock" onclick="restockItem('${item.id}')">+1</button>
                     </div>
                 `;
@@ -373,8 +380,9 @@
             }
         }
 
-        function buyItem(itemId, btn) {
-            btn.classList.add('loading');
+        function buyItem(itemId) {
+            loadingItems.add(itemId);
+            renderItems();
             centrifuge.rpc('inventory:buy', { itemId: itemId, quantity: 1 })
                 .then(result => {
                     if (result.data.success) {
@@ -391,7 +399,8 @@
                     showToast(err.message || 'Purchase failed', 'error');
                 })
                 .finally(() => {
-                    btn.classList.remove('loading');
+                    loadingItems.delete(itemId);
+                    renderItems();
                 });
         }
 

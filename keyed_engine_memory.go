@@ -112,22 +112,24 @@ func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, 
 
 	// Snapshot publication stores full state (Data).
 	snapshotPub := &Publication{
-		Data: opts.Data,
-		Info: opts.ClientInfo,
-		Tags: opts.Tags,
-		Time: now,
-		Key:  key,
+		Data:  opts.Data,
+		Info:  opts.ClientInfo,
+		Tags:  opts.Tags,
+		Time:  now,
+		Key:   key,
+		Score: opts.Score,
 	}
 
 	// Stream publication may have different data (StreamData) for incremental updates.
 	var streamPub *Publication
 	if len(opts.StreamData) > 0 {
 		streamPub = &Publication{
-			Data: opts.StreamData,
-			Info: opts.ClientInfo,
-			Tags: opts.Tags,
-			Time: now,
-			Key:  key,
+			Data:  opts.StreamData,
+			Info:  opts.ClientInfo,
+			Tags:  opts.Tags,
+			Time:  now,
+			Key:   key,
+			Score: opts.Score,
 		}
 	} else {
 		streamPub = snapshotPub
@@ -160,14 +162,11 @@ func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, 
 	}
 
 	if e.eventHandler != nil {
-		if opts.Publish {
-			// Publish streamPub (with StreamData if set) to subscribers.
-			err = e.eventHandler.HandlePublication(ch, streamPub, streamTop, opts.UseDelta, prevPub)
-			if err != nil {
-				e.node.logger.log(newErrorLogEntry(err, "error handling publication in channel", map[string]any{"channel": ch}))
-			}
+		// Publish streamPub (with StreamData if set) to subscribers.
+		err = e.eventHandler.HandlePublication(ch, streamPub, streamTop, opts.UseDelta, prevPub)
+		if err != nil {
+			e.node.logger.log(newErrorLogEntry(err, "error handling publication in channel", map[string]any{"channel": ch}))
 		}
-		return KeyedPublishResult{Position: streamTop}, nil
 	}
 
 	return KeyedPublishResult{Position: streamTop}, nil
@@ -194,7 +193,7 @@ func (e *MemoryKeyedEngine) Unpublish(ctx context.Context, ch string, key string
 		return KeyedPublishResult{Position: streamTop, Suppressed: true, SuppressReason: SuppressReasonKeyNotFound}, nil
 	}
 
-	if opts.Publish && e.eventHandler != nil {
+	if e.eventHandler != nil {
 		pub := &Publication{
 			Key:     key,
 			Removed: true,

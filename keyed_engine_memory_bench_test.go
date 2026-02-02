@@ -370,7 +370,6 @@ func BenchmarkMemoryKeyedEngine_Remove(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			_, err := engine.Unpublish(ctx, channel, key, KeyedUnpublishOptions{
-				Publish:    false,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 			})

@@ -1440,7 +1440,7 @@ func TestNodeCheckPositionKeyed(t *testing.T) {
 
 	// Publish some data to create stream position.
 	result, err := keyedEngine.Publish(ctx, channel, "key1", KeyedPublishOptions{
-		Publish:    true,
+		
 		Data:       []byte(`{"test": 1}`),
 		StreamSize: 100,
 		StreamTTL:  time.Hour,
@@ -1471,7 +1471,7 @@ func TestNodeCheckPositionKeyed(t *testing.T) {
 
 	// Publish more data.
 	result2, err := keyedEngine.Publish(ctx, channel, "key2", KeyedPublishOptions{
-		Publish:    true,
+		
 		Data:       []byte(`{"test": 2}`),
 		StreamSize: 100,
 		StreamTTL:  time.Hour,

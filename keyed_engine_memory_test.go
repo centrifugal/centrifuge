@@ -813,7 +813,7 @@ func TestMemoryKeyedEngine_Remove(t *testing.T) {
 
 	// Remove key1
 	_, err = engine.Unpublish(ctx, channel, "key1", KeyedUnpublishOptions{
-		Publish:    true,
+		
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 	})
@@ -1093,7 +1093,7 @@ func TestMemoryKeyedEngine_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	// This would cause key_11 to shift into position 10, potentially being skipped
 	// with integer offset pagination
 	_, err = engine.Unpublish(ctx, channel, "key_10", KeyedUnpublishOptions{
-		Publish:    true,
+		
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 	})
@@ -1430,7 +1430,7 @@ func TestMemoryKeyedEngine_OrderedContinuity_EntryRemoved(t *testing.T) {
 
 	// CONCURRENT MODIFICATION: Remove key_10 (first entry of next page)
 	_, err = engine.Unpublish(ctx, channel, "key_10", KeyedUnpublishOptions{
-		Publish:    true,
+		
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 	})
@@ -1526,7 +1526,7 @@ func TestMemoryKeyedEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 
 	// 2. Remove an entry from middle
 	_, err = engine.Unpublish(ctx, channel, "key_15", KeyedUnpublishOptions{
-		Publish:    true,
+		
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 	})

@@ -319,7 +319,7 @@ func (c *Client) startPresenceMaintenance(channel string) {
         // ...
     }
     c.node.keyedEngine.Publish(ctx, presenceChannel, c.ID(), data,
-        KeyedPublishOptions{KeyTTL: 60 * time.Second, Publish: true})
+        KeyedPublishOptions{KeyTTL: 60 * time.Second})
 
     // 2. Start keepalive goroutine (refreshes presence every ~25s)
     go c.presenceKeepalive(presenceChannel)
@@ -329,7 +329,7 @@ func (c *Client) onDisconnect() {
     // Remove presence for all channels where it was maintained
     for ch := range c.presenceMaintainedChannels {
         c.node.keyedEngine.Unpublish(ctx, ch+":presence", c.ID(),
-            KeyedUnpublishOptions{Publish: true})
+            KeyedUnpublishOptions{})
     }
 }
 ```

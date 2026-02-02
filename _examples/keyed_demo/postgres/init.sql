@@ -16,6 +16,7 @@ CREATE TABLE cf_keyed_stream (
     chan_info       BYTEA,
     subscribed_at   TIMESTAMPTZ,
     removed         BOOLEAN DEFAULT FALSE,
+    score           BIGINT,
     expires_at      TIMESTAMPTZ,
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
@@ -215,9 +216,9 @@ BEGIN
 
     -- 8. Insert into stream
     INSERT INTO cf_keyed_stream (
-        channel, channel_offset, key, data, tags, client_id, user_id, conn_info, chan_info, subscribed_at, expires_at
+        channel, channel_offset, key, data, tags, client_id, user_id, conn_info, chan_info, subscribed_at, score, expires_at
     ) VALUES (
-        p_channel, v_offset, p_key, p_data, p_tags, p_client_id, p_user_id, p_conn_info, p_chan_info, p_subscribed_at,
+        p_channel, v_offset, p_key, p_data, p_tags, p_client_id, p_user_id, p_conn_info, p_chan_info, p_subscribed_at, p_score,
         CASE WHEN p_stream_ttl IS NOT NULL THEN NOW() + p_stream_ttl ELSE NULL END
     ) RETURNING cf_keyed_stream.id INTO v_id;
 

@@ -86,6 +86,7 @@ func handleLog(e centrifuge.LogEntry) {
 var (
 	redisAddr    = flag.String("redis", "", "Redis address (e.g., localhost:6379). If empty, uses in-memory engine.")
 	postgresAddr = flag.String("postgres", "", "PostgreSQL connection string (e.g., postgres://user:pass@localhost:5432/db?sslmode=disable)")
+	enableCache  = flag.Bool("cache", false, "Enable memory cache layer for Redis/Postgres engines (provides read-your-own-writes and low-latency reads)")
 )
 
 func main() {
@@ -129,7 +130,8 @@ func main() {
 	}
 
 	// Set up keyed engine (memory, Redis, or PostgreSQL based on flags).
-	keyedEngine, registerHandler, err := setupKeyedEngine(node, *redisAddr, *postgresAddr)
+	// When -cache flag is set, wraps Redis/Postgres engines with CachedKeyedEngine.
+	keyedEngine, registerHandler, err := setupKeyedEngine(node, *redisAddr, *postgresAddr, *enableCache)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -276,7 +278,7 @@ func handleCursorUpdate(client *centrifuge.Client, ke centrifuge.KeyedEngine, da
 
 	// Note: StreamSize/TTL/MetaTTL are configured via GetKeyedChannelOptions in node config.
 	_, err := ke.Publish(context.Background(), "cursors", client.ID(), centrifuge.KeyedPublishOptions{
-		Publish: true,
+		
 		Data:    data,
 		KeyTTL:  5 * time.Second, // Auto-expire if client stops sending updates.
 	})
@@ -328,7 +330,7 @@ func handleGameCreate(client *centrifuge.Client, ke centrifuge.KeyedEngine, data
 	// Publish game to games list channel.
 	gameData, _ := json.Marshal(game)
 	_, err := ke.Publish(context.Background(), "games", gameID, centrifuge.KeyedPublishOptions{
-		Publish: true,
+		
 		Data:    gameData,
 		KeyTTL:  10 * time.Minute, // Games expire after 10 minutes of inactivity.
 	})
@@ -384,7 +386,7 @@ func handleGameJoin(client *centrifuge.Client, ke centrifuge.KeyedEngine, data [
 
 	// Use KeyModeIfNew to prevent slot stealing.
 	result, err := ke.Publish(context.Background(), channel, key, centrifuge.KeyedPublishOptions{
-		Publish: true,
+		
 		Data:    playerData,
 		KeyMode: centrifuge.KeyModeIfNew,
 		KeyTTL:  5 * time.Minute,
@@ -425,7 +427,7 @@ func handleGameLeave(_ *centrifuge.Client, ke centrifuge.KeyedEngine, data []byt
 	key := fmt.Sprintf("slot_%d", req.Slot)
 
 	_, err := ke.Unpublish(context.Background(), channel, key, centrifuge.KeyedUnpublishOptions{
-		Publish: true,
+		
 	})
 	if err != nil {
 		log.Printf("game leave error: %v", err)
@@ -468,7 +470,7 @@ func checkGameFull(ke centrifuge.KeyedEngine, gameID string, maxPlayers int) {
 			"message": "Game is starting!",
 		})
 		_, _ = ke.Publish(context.Background(), channel, "game_event", centrifuge.KeyedPublishOptions{
-			Publish: true,
+			
 			Data:    gameData,
 		})
 
@@ -476,15 +478,15 @@ func checkGameFull(ke centrifuge.KeyedEngine, gameID string, maxPlayers int) {
 		time.AfterFunc(3*time.Second, func() {
 			// Remove from games list.
 			_, _ = ke.Unpublish(context.Background(), "games", gameID, centrifuge.KeyedUnpublishOptions{
-				Publish: true,
+				
 			})
 
 			// Clear all slots and event.
 			for i := 1; i <= maxPlayers; i++ {
 				key := fmt.Sprintf("slot_%d", i)
-				_, _ = ke.Unpublish(context.Background(), channel, key, centrifuge.KeyedUnpublishOptions{Publish: true})
+				_, _ = ke.Unpublish(context.Background(), channel, key, centrifuge.KeyedUnpublishOptions{})
 			}
-			_, _ = ke.Unpublish(context.Background(), channel, "game_event", centrifuge.KeyedUnpublishOptions{Publish: true})
+			_, _ = ke.Unpublish(context.Background(), channel, "game_event", centrifuge.KeyedUnpublishOptions{})
 
 			// Remove from in-memory store.
 			gamesMu.Lock()
@@ -800,7 +802,7 @@ func handleInventoryBuy(client *centrifuge.Client, ke centrifuge.KeyedEngine, da
 
 		// Note: StreamSize/TTL/MetaTTL are configured via GetKeyedChannelOptions in node config.
 		result, err := ke.Publish(ctx, "inventory", req.ItemID, centrifuge.KeyedPublishOptions{
-			Publish:          true,
+			
 			Data:             payload,
 			ExpectedPosition: &expectedPos,
 		})
@@ -913,7 +915,7 @@ func handleInventoryRestock(_ *centrifuge.Client, ke centrifuge.KeyedEngine, dat
 
 		// Note: StreamSize/TTL/MetaTTL are configured via GetKeyedChannelOptions in node config.
 		result, err := ke.Publish(ctx, "inventory", req.ItemID, centrifuge.KeyedPublishOptions{
-			Publish:          true,
+			
 			Data:             payload,
 			ExpectedPosition: &expectedPos,
 		})
@@ -946,8 +948,13 @@ func handleInventoryRestock(_ *centrifuge.Client, ke centrifuge.KeyedEngine, dat
 }
 
 // setupKeyedEngine creates either a memory, Redis, or PostgreSQL keyed engine.
+// When enableCache is true, wraps Redis/Postgres engines with CachedKeyedEngine
+// for read-your-own-writes consistency and low-latency reads.
 // Returns the engine and a function to register the broker event handler.
-func setupKeyedEngine(node *centrifuge.Node, redisAddr, postgresAddr string) (centrifuge.KeyedEngine, func(centrifuge.BrokerEventHandler) error, error) {
+func setupKeyedEngine(node *centrifuge.Node, redisAddr, postgresAddr string, enableCache bool) (centrifuge.KeyedEngine, func(centrifuge.BrokerEventHandler) error, error) {
+	var backend centrifuge.KeyedEngine
+	var registerHandler func(centrifuge.BrokerEventHandler) error
+
 	// PostgreSQL takes priority if specified
 	if postgresAddr != "" {
 		log.Printf("Using PostgreSQL keyed engine")
@@ -957,11 +964,10 @@ func setupKeyedEngine(node *centrifuge.Node, redisAddr, postgresAddr string) (ce
 		if err != nil {
 			return nil, nil, fmt.Errorf("error creating PostgreSQL keyed engine: %w", err)
 		}
-		return engine, engine.RegisterEventHandler, nil
-	}
-
-	// Redis if specified
-	if redisAddr != "" {
+		backend = engine
+		registerHandler = engine.RegisterEventHandler
+	} else if redisAddr != "" {
+		// Redis if specified
 		log.Printf("Using Redis keyed engine at %s", redisAddr)
 
 		redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
@@ -978,14 +984,35 @@ func setupKeyedEngine(node *centrifuge.Node, redisAddr, postgresAddr string) (ce
 		if err != nil {
 			return nil, nil, err
 		}
-		return engine, engine.RegisterEventHandler, nil
+		backend = engine
+		registerHandler = engine.RegisterEventHandler
+	} else {
+		// Default to memory - cache not applicable (already in-memory)
+		log.Println("Using in-memory keyed engine")
+		engine, err := centrifuge.NewMemoryKeyedEngine(node, centrifuge.MemoryKeyedEngineConfig{})
+		if err != nil {
+			return nil, nil, err
+		}
+		return engine, engine.RegisterBrokerEventHandler, nil
 	}
 
-	// Default to memory
-	log.Println("Using in-memory keyed engine")
-	engine, err := centrifuge.NewMemoryKeyedEngine(node, centrifuge.MemoryKeyedEngineConfig{})
-	if err != nil {
-		return nil, nil, err
+	// Wrap with cache layer if enabled (only for Redis/Postgres)
+	if enableCache {
+		log.Println("Enabling memory cache layer")
+		cached, err := centrifuge.NewCachedKeyedEngine(node, backend, centrifuge.CachedKeyedEngineConfig{
+			Cache: centrifuge.KeyedCacheConfig{
+				MaxChannels:        10000,
+				ChannelIdleTimeout: 5 * time.Minute,
+				StreamSize:         1000,
+			},
+			SyncInterval:  100 * time.Millisecond,
+			SyncBatchSize: 1000,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("error creating cached keyed engine: %w", err)
+		}
+		return cached, cached.RegisterEventHandler, nil
 	}
-	return engine, engine.RegisterBrokerEventHandler, nil
+
+	return backend, registerHandler, nil
 }

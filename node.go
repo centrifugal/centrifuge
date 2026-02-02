@@ -1291,6 +1291,9 @@ var (
 	presenceGroup      singleflight.Group
 	presenceStatsGroup singleflight.Group
 	historyGroup       singleflight.Group
+	keyedSnapshotGroup singleflight.Group
+	keyedStreamGroup   singleflight.Group
+	keyedStatsGroup    singleflight.Group
 )
 
 // PresenceResult wraps presence.
@@ -1384,6 +1387,7 @@ func pubFromProto(pub *protocol.Publication) *Publication {
 		Channel: pub.GetChannel(),
 		Key:     pub.GetKey(),
 		Removed: pub.GetRemoved(),
+		Score:   pub.GetScore(),
 	}
 }
 
@@ -1806,4 +1810,188 @@ func (n *Node) HandleLeave(ch string, info *ClientInfo) error {
 // HandleControl coming from Broker.
 func (n *Node) HandleControl(data []byte) error {
 	return n.handleControl(data)
+}
+
+// KeyedSnapshotResult wraps keyed snapshot result.
+type KeyedSnapshotResult struct {
+	Publications []*Publication
+	Position     StreamPosition
+	Cursor       string
+}
+
+// KeyedSnapshotRead retrieves keyed snapshot for a channel.
+func (n *Node) KeyedSnapshotRead(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) (KeyedSnapshotResult, error) {
+	if n.keyedEngine == nil {
+		return KeyedSnapshotResult{}, ErrorNotAvailable
+	}
+
+	n.metrics.incActionCount("keyed_snapshot_read", ch)
+	if n.config.UseSingleFlight {
+		key := n.keyedSnapshotKey(ch, opts)
+		result, err, _ := keyedSnapshotGroup.Do(key, func() (any, error) {
+			pubs, pos, cursor, err := n.keyedEngine.ReadSnapshot(ctx, ch, opts)
+			if err != nil {
+				return KeyedSnapshotResult{}, err
+			}
+			return KeyedSnapshotResult{
+				Publications: pubs,
+				Position:     pos,
+				Cursor:       cursor,
+			}, nil
+		})
+		if err != nil {
+			return KeyedSnapshotResult{}, err
+		}
+		return result.(KeyedSnapshotResult), nil
+	}
+
+	pubs, pos, cursor, err := n.keyedEngine.ReadSnapshot(ctx, ch, opts)
+	if err != nil {
+		return KeyedSnapshotResult{}, err
+	}
+	return KeyedSnapshotResult{
+		Publications: pubs,
+		Position:     pos,
+		Cursor:       cursor,
+	}, nil
+}
+
+func (n *Node) keyedSnapshotKey(ch string, opts KeyedReadSnapshotOptions) string {
+	var builder strings.Builder
+	builder.WriteString(ch)
+	builder.WriteString(",cursor:")
+	builder.WriteString(opts.Cursor)
+	builder.WriteString(",limit:")
+	builder.WriteString(strconv.Itoa(opts.Limit))
+	builder.WriteString(",ordered:")
+	builder.WriteString(strconv.FormatBool(opts.Ordered))
+	builder.WriteString(",key:")
+	builder.WriteString(opts.Key)
+	if opts.Revision != nil {
+		builder.WriteString(",rev_offset:")
+		builder.WriteString(strconv.FormatUint(opts.Revision.Offset, 10))
+		builder.WriteString(",rev_epoch:")
+		builder.WriteString(opts.Revision.Epoch)
+	}
+	return builder.String()
+}
+
+// KeyedStreamResult wraps keyed stream result.
+type KeyedStreamResult struct {
+	Publications []*Publication
+	Position     StreamPosition
+}
+
+// KeyedStreamRead retrieves keyed stream for a channel.
+func (n *Node) KeyedStreamRead(ctx context.Context, ch string, opts KeyedReadStreamOptions) (KeyedStreamResult, error) {
+	if n.keyedEngine == nil {
+		return KeyedStreamResult{}, ErrorNotAvailable
+	}
+
+	n.metrics.incActionCount("keyed_stream_read", ch)
+	if n.config.UseSingleFlight {
+		key := n.keyedStreamKey(ch, opts)
+		result, err, _ := keyedStreamGroup.Do(key, func() (any, error) {
+			pubs, pos, err := n.keyedEngine.ReadStream(ctx, ch, opts)
+			if err != nil {
+				return KeyedStreamResult{}, err
+			}
+			return KeyedStreamResult{
+				Publications: pubs,
+				Position:     pos,
+			}, nil
+		})
+		if err != nil {
+			return KeyedStreamResult{}, err
+		}
+		return result.(KeyedStreamResult), nil
+	}
+
+	pubs, pos, err := n.keyedEngine.ReadStream(ctx, ch, opts)
+	if err != nil {
+		return KeyedStreamResult{}, err
+	}
+	return KeyedStreamResult{
+		Publications: pubs,
+		Position:     pos,
+	}, nil
+}
+
+func (n *Node) keyedStreamKey(ch string, opts KeyedReadStreamOptions) string {
+	var builder strings.Builder
+	builder.WriteString(ch)
+	if opts.Filter.Since != nil {
+		builder.WriteString(",since_offset:")
+		builder.WriteString(strconv.FormatUint(opts.Filter.Since.Offset, 10))
+		builder.WriteString(",since_epoch:")
+		builder.WriteString(opts.Filter.Since.Epoch)
+	}
+	builder.WriteString(",limit:")
+	builder.WriteString(strconv.Itoa(opts.Filter.Limit))
+	builder.WriteString(",reverse:")
+	builder.WriteString(strconv.FormatBool(opts.Filter.Reverse))
+	return builder.String()
+}
+
+// KeyedStatsResult wraps keyed stats result.
+type KeyedStatsResult struct {
+	KeyedStats
+}
+
+// KeyedStats retrieves stats for a keyed channel.
+func (n *Node) KeyedStats(ctx context.Context, ch string) (KeyedStatsResult, error) {
+	if n.keyedEngine == nil {
+		return KeyedStatsResult{}, ErrorNotAvailable
+	}
+
+	n.metrics.incActionCount("keyed_stats", ch)
+	if n.config.UseSingleFlight {
+		result, err, _ := keyedStatsGroup.Do(ch, func() (any, error) {
+			stats, err := n.keyedEngine.Stats(ctx, ch)
+			if err != nil {
+				return KeyedStatsResult{}, err
+			}
+			return KeyedStatsResult{KeyedStats: stats}, nil
+		})
+		if err != nil {
+			return KeyedStatsResult{}, err
+		}
+		return result.(KeyedStatsResult), nil
+	}
+
+	stats, err := n.keyedEngine.Stats(ctx, ch)
+	if err != nil {
+		return KeyedStatsResult{}, err
+	}
+	return KeyedStatsResult{KeyedStats: stats}, nil
+}
+
+// KeyedPublish publishes data to a keyed channel.
+// This updates the snapshot and optionally broadcasts to subscribers.
+func (n *Node) KeyedPublish(ctx context.Context, ch string, key string, opts KeyedPublishOptions) (KeyedPublishResult, error) {
+	if n.keyedEngine == nil {
+		return KeyedPublishResult{}, ErrorNotAvailable
+	}
+	n.metrics.incActionCount("keyed_publish", ch)
+	return n.keyedEngine.Publish(ctx, ch, key, opts)
+}
+
+// KeyedUnpublish removes a key from a keyed channel.
+// This removes the key from snapshot and optionally broadcasts removal to subscribers.
+func (n *Node) KeyedUnpublish(ctx context.Context, ch string, key string, opts KeyedUnpublishOptions) (KeyedPublishResult, error) {
+	if n.keyedEngine == nil {
+		return KeyedPublishResult{}, ErrorNotAvailable
+	}
+	n.metrics.incActionCount("keyed_unpublish", ch)
+	return n.keyedEngine.Unpublish(ctx, ch, key, opts)
+}
+
+// KeyedRemove deletes all data for a keyed channel (snapshot and stream).
+// Use for cleanup when a channel is no longer needed.
+func (n *Node) KeyedRemove(ctx context.Context, ch string, opts KeyedRemoveOptions) error {
+	if n.keyedEngine == nil {
+		return ErrorNotAvailable
+	}
+	n.metrics.incActionCount("keyed_remove", ch)
+	return n.keyedEngine.Remove(ctx, ch, opts)
 }

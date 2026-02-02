@@ -624,7 +624,7 @@ func TestKeyedSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 
 	// Publish a key with key=clientID (simulating cursor/ephemeral state).
 	_, err := engine.Publish(ctx, channel, clientID, KeyedPublishOptions{
-		Publish:    true,
+		
 		Data:       []byte(`{"x":100,"y":200}`),
 		StreamSize: 1000,
 		ClientInfo: &ClientInfo{ClientID: clientID, UserID: "user1"},
@@ -679,7 +679,7 @@ func TestKeyedSubscribe_CleanupOnDisconnect(t *testing.T) {
 
 	// Publish a key with key=clientID.
 	_, err := engine.Publish(ctx, channel, clientID, KeyedPublishOptions{
-		Publish:    true,
+		
 		Data:       []byte(`{"x":100,"y":200}`),
 		StreamSize: 1000,
 		ClientInfo: &ClientInfo{ClientID: clientID, UserID: "user1"},

@@ -109,7 +109,8 @@ type Config struct {
 	// By default, no limit used.
 	RecoveryMaxPublicationLimit int
 	// UseSingleFlight allows turning on mode where singleflight will be automatically used
-	// for Node.History (including recovery) and Node.Presence/Node.PresenceStats calls.
+	// for Node.History (including recovery), Node.Presence/Node.PresenceStats,
+	// and Node.KeyedSnapshotRead/Node.KeyedStreamRead/Node.KeyedStats calls.
 	UseSingleFlight bool
 	// HistoryMetaTTL sets a time of stream meta key expiration in Redis. Stream
 	// meta key is a Redis HASH that contains top offset in channel and epoch value.
