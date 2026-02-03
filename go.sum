@@ -47,8 +47,8 @@ github.com/prometheus/procfs v0.16.1 h1:hZ15bTNuirocR6u0JZ6BAHHmwS1p8B4P6MRqxtzM
 github.com/prometheus/procfs v0.16.1/go.mod h1:teAbpZRB1iIAJYREa1LsoWUXykVXA1KlTmWl8x/U+Is=
 github.com/quagmt/udecimal v1.9.0 h1:TLuZiFeg0HhS6X8VDa78Y6XTaitZZfh+z5q4SXMzpDQ=
 github.com/quagmt/udecimal v1.9.0/go.mod h1:ScmJ/xTGZcEoYiyMMzgDLn79PEJHcMBiJ4NNRT3FirA=
-github.com/redis/rueidis v1.0.70 h1:O01v0Mt27/qXV9mKU/zahgxHdC8piHzIepqW4Nyzn/I=
-github.com/redis/rueidis v1.0.70/go.mod h1:lfdcZzJ1oKGKL37vh9fO3ymwt+0TdjkkUCJxbgpmcgQ=
+github.com/redis/rueidis v1.0.71 h1:pODtnAR5GAB7j4ekhldZ29HKOxe4Hph0GTDGk1ayEQY=
+github.com/redis/rueidis v1.0.71/go.mod h1:lfdcZzJ1oKGKL37vh9fO3ymwt+0TdjkkUCJxbgpmcgQ=
 github.com/rogpeppe/go-internal v1.10.0 h1:TMyTOH3F/DB16zRVcYyreMH6GnZZrwQVAoYjRBZyWFQ=
 github.com/rogpeppe/go-internal v1.10.0/go.mod h1:UQnix2H7Ngw/k4C5ijL5+65zddjncjaFoBhdsK/akog=
 github.com/segmentio/asm v1.2.0 h1:9BQrFxC+YOHJlTlHGkTrFWf59nbL3XnCoFLTwDCI7ys=
