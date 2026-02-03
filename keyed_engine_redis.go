@@ -91,11 +91,10 @@ type RedisKeyedEngine struct {
 	presenceStatsScript *rueidis.Lua
 	cleanupScript       *rueidis.Lua
 
-	closeCh                chan struct{}
-	closeOnce              sync.Once
-	shardChannel           string
-	messagePrefix          string
-	channelOptionsResolver ChannelOptionsResolver
+	closeCh       chan struct{}
+	closeOnce     sync.Once
+	shardChannel  string
+	messagePrefix string
 }
 
 var _ KeyedEngine = (*RedisKeyedEngine)(nil)
@@ -503,11 +502,6 @@ func (e *RedisKeyedEngine) Close(_ context.Context) error {
 	return nil
 }
 
-// SetChannelOptionsResolver sets the callback for resolving stream options per channel.
-func (e *RedisKeyedEngine) SetChannelOptionsResolver(r ChannelOptionsResolver) {
-	e.channelOptionsResolver = r
-}
-
 func (e *RedisKeyedEngine) Remove(ctx context.Context, ch string, opts KeyedRemoveOptions) error {
 	// TODO: implement.
 	return nil
@@ -525,10 +519,10 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, o
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
-	// Apply channel options defaults from resolver.
+	// Apply channel options defaults from node config.
 	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = applyChannelOptionsDefaults(
 		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL,
-		e.channelOptionsResolver, ch,
+		e.node.ResolveKeyedChannelOptions, ch,
 	)
 
 	// Fast path for non-history, non-idempotent, non-keyed publications.
@@ -719,10 +713,10 @@ func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string,
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
-	// Apply channel options defaults from resolver.
+	// Apply channel options defaults from node config.
 	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, _ = applyChannelOptionsDefaults(
 		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, 0,
-		e.channelOptionsResolver, ch,
+		e.node.ResolveKeyedChannelOptions, ch,
 	)
 
 	var streamKey, metaKey string
@@ -2226,11 +2220,8 @@ func (e *RedisKeyedEngine) cleanupChannel(ctx context.Context, shard *RedisShard
 		chID = e.messageChannelID(shard, ch)
 	}
 
-	// Get channel options for this channel
-	opts := DefaultKeyedChannelOptions()
-	if e.channelOptionsResolver != nil {
-		opts = e.channelOptionsResolver(ch)
-	}
+	// Get channel options for this channel.
+	opts := e.node.ResolveKeyedChannelOptions(ch)
 
 	metaExpire := "0"
 	if opts.MetaTTL > 0 {
@@ -2536,18 +2527,6 @@ func (e *RedisKeyedEngine) handleRedisClientMessage(isCluster bool, eventHandler
 
 	if protoPub.Offset == 0 {
 		protoPub.Offset = offset
-	}
-
-	// Check if this is a presence event (has Info field but no Data)
-	if protoPub.Info != nil && len(protoPub.Data) == 0 {
-		// Presence event: join or leave based on Removed flag
-		info := infoFromProto(protoPub.Info)
-		if protoPub.Removed {
-			_ = eventHandler.HandleLeave(channel, info)
-		} else {
-			_ = eventHandler.HandleJoin(channel, info)
-		}
-		return nil
 	}
 
 	// Regular publication

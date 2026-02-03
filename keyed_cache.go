@@ -57,6 +57,19 @@ type KeyedCache interface {
 	// IsLoaded returns true if the channel is currently in cache.
 	IsLoaded(ch string) bool
 
+	// IsLoading returns true if the channel is currently being loaded.
+	IsLoading(ch string) bool
+
+	// BufferPublication buffers a publication for a channel that is being loaded.
+	// Returns true if buffered, false if the channel is not loading.
+	BufferPublication(ch string, pub *Publication, pos StreamPosition, removed bool) bool
+
+	// MarkLoading marks a channel as loading so publications are buffered.
+	MarkLoading(ch string)
+
+	// ClearLoading clears the loading state for a channel.
+	ClearLoading(ch string)
+
 	// LoadedChannels returns a list of all currently loaded channels.
 	LoadedChannels() []string
 
@@ -81,20 +94,34 @@ type KeyedCache interface {
 	// or uses defaults for new channels.
 	ApplySnapshot(ch string, pubs []*Publication, pos StreamPosition, opts *KeyedChannelOptions) error
 
+	// PopulateStream populates the stream with initial data from backend.
+	// Unlike ApplyPublication, this doesn't check position offset since we're
+	// loading historical data that may have lower offsets than the current position.
+	PopulateStream(ch string, pubs []*Publication, epoch string)
+
 	// Close shuts down the cache and releases resources.
 	Close() error
 }
 
+// bufferedPub holds a publication that arrived during channel loading.
+type bufferedPub struct {
+	pub     *Publication
+	pos     StreamPosition
+	removed bool
+}
+
 // keyedCacheImpl implements KeyedCache.
 type keyedCacheImpl struct {
-	mu         sync.RWMutex
-	channels   map[string]*cachedChannel
-	loadGroup  singleflight.Group
-	loaded     map[string]bool
-	lastAccess map[string]time.Time
-	conf       KeyedCacheConfig
-	closeCh    chan struct{}
-	closeOnce  sync.Once
+	mu            sync.RWMutex
+	channels      map[string]*cachedChannel
+	loadGroup     singleflight.Group
+	loaded        map[string]bool
+	loading       map[string]bool          // Channels currently being loaded
+	loadingBuffer map[string][]*bufferedPub // Publications buffered during loading
+	lastAccess    map[string]time.Time
+	conf          KeyedCacheConfig
+	closeCh       chan struct{}
+	closeOnce     sync.Once
 }
 
 // cachedChannel holds cached data for a single channel.
@@ -119,11 +146,13 @@ type cachedSnapshotEntry struct {
 // newKeyedCache creates a new KeyedCache with the given configuration.
 func newKeyedCache(conf KeyedCacheConfig) *keyedCacheImpl {
 	c := &keyedCacheImpl{
-		channels:   make(map[string]*cachedChannel),
-		loaded:     make(map[string]bool),
-		lastAccess: make(map[string]time.Time),
-		conf:       conf,
-		closeCh:    make(chan struct{}),
+		channels:      make(map[string]*cachedChannel),
+		loaded:        make(map[string]bool),
+		loading:       make(map[string]bool),
+		loadingBuffer: make(map[string][]*bufferedPub),
+		lastAccess:    make(map[string]time.Time),
+		conf:          conf,
+		closeCh:       make(chan struct{}),
 	}
 
 	// Start idle timeout eviction if configured
@@ -152,16 +181,23 @@ func (c *keyedCacheImpl) EnsureLoaded(ctx context.Context, ch string, opts Keyed
 	// Slow path: load with singleflight to prevent thundering herd
 	_, err, _ := c.loadGroup.Do(ch, func() (any, error) {
 		// Double-check after acquiring singleflight
-		c.mu.RLock()
+		c.mu.Lock()
 		if c.loaded[ch] {
-			c.mu.RUnlock()
+			c.mu.Unlock()
 			return nil, nil
 		}
-		c.mu.RUnlock()
+		// Mark as loading so incoming publications are buffered
+		c.loading[ch] = true
+		c.mu.Unlock()
 
 		// Load from backend (snapshot + stream for recovery)
 		snapshotPubs, streamPubs, pos, err := loader(ctx, ch, opts)
 		if err != nil {
+			// Clean up loading state on error
+			c.mu.Lock()
+			delete(c.loading, ch)
+			delete(c.loadingBuffer, ch)
+			c.mu.Unlock()
 			return nil, err
 		}
 
@@ -217,6 +253,18 @@ func (c *keyedCacheImpl) EnsureLoaded(ctx context.Context, ch string, opts Keyed
 		c.loaded[ch] = true
 		c.lastAccess[ch] = time.Now()
 
+		// Apply any publications that arrived during loading
+		buffered := c.loadingBuffer[ch]
+		delete(c.loadingBuffer, ch)
+		delete(c.loading, ch)
+
+		for _, bp := range buffered {
+			// Only apply if offset is newer than what we loaded
+			if bp.pub.Offset > channel.position.Offset {
+				c.applyPublicationLocked(ch, bp.pub, bp.pos, bp.removed)
+			}
+		}
+
 		return nil, nil
 	})
 
@@ -233,6 +281,8 @@ func (c *keyedCacheImpl) Evict(ch string) {
 func (c *keyedCacheImpl) evictLocked(ch string) {
 	delete(c.channels, ch)
 	delete(c.loaded, ch)
+	delete(c.loading, ch)
+	delete(c.loadingBuffer, ch)
 	delete(c.lastAccess, ch)
 }
 
@@ -241,6 +291,48 @@ func (c *keyedCacheImpl) IsLoaded(ch string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.loaded[ch]
+}
+
+// IsLoading returns true if the channel is currently being loaded.
+func (c *keyedCacheImpl) IsLoading(ch string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.loading[ch]
+}
+
+// BufferPublication buffers a publication for a channel that is being loaded.
+// Returns true if buffered, false if the channel is not loading.
+func (c *keyedCacheImpl) BufferPublication(ch string, pub *Publication, pos StreamPosition, removed bool) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.loading[ch] {
+		return false
+	}
+	c.loadingBuffer[ch] = append(c.loadingBuffer[ch], &bufferedPub{
+		pub:     pub,
+		pos:     pos,
+		removed: removed,
+	})
+	return true
+}
+
+// MarkLoading marks a channel as loading so publications are buffered.
+// Call this BEFORE subscribing to pub/sub to prevent race conditions.
+func (c *keyedCacheImpl) MarkLoading(ch string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.loaded[ch] {
+		c.loading[ch] = true
+	}
+}
+
+// ClearLoading clears the loading state for a channel.
+// Used when Subscribe fails before EnsureLoaded runs.
+func (c *keyedCacheImpl) ClearLoading(ch string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.loading, ch)
+	delete(c.loadingBuffer, ch)
 }
 
 // LoadedChannels returns a list of all currently loaded channels.
@@ -496,7 +588,11 @@ func (c *keyedCacheImpl) GetPosition(ch string) StreamPosition {
 func (c *keyedCacheImpl) ApplyPublication(ch string, pub *Publication, pos StreamPosition, removed bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.applyPublicationLocked(ch, pub, pos, removed)
+}
 
+// applyPublicationLocked applies a publication while holding the lock.
+func (c *keyedCacheImpl) applyPublicationLocked(ch string, pub *Publication, pos StreamPosition, removed bool) error {
 	channel, ok := c.channels[ch]
 	if !ok {
 		// Channel not loaded, nothing to update
@@ -552,6 +648,93 @@ func (c *keyedCacheImpl) ApplyPublication(ch string, pub *Publication, pos Strea
 	c.lastAccess[ch] = time.Now()
 
 	return nil
+}
+
+// PopulateStream populates the stream with initial data from backend.
+// Unlike ApplyPublication, this doesn't check position offset since we're
+// loading historical data that may have lower offsets than the current position.
+// This method preserves any entries added by HandlePublication (newer offsets)
+// and only adds missing historical entries.
+func (c *keyedCacheImpl) PopulateStream(ch string, pubs []*Publication, epoch string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	channel, ok := c.channels[ch]
+	if !ok {
+		// Channel not loaded, nothing to update
+		return
+	}
+
+	// Get stream configuration
+	streamSize := channel.options.StreamSize
+	if streamSize <= 0 {
+		streamSize = c.conf.StreamSize
+	}
+	if streamSize <= 0 {
+		return
+	}
+
+	streamTTL := uint64(channel.options.StreamTTL.Seconds())
+
+	// Get existing entries from stream (added by HandlePublication)
+	var existingPubs []*Publication
+	if channel.stream != nil {
+		items, _, _ := channel.stream.Get(0, false, -1, false)
+		for _, item := range items {
+			existingPubs = append(existingPubs, item.Value.(*Publication))
+		}
+	}
+
+	// Build a set of existing offsets and track max offset
+	existingOffsets := make(map[uint64]bool)
+	var maxOffset uint64
+	for _, pub := range existingPubs {
+		existingOffsets[pub.Offset] = true
+		if pub.Offset > maxOffset {
+			maxOffset = pub.Offset
+		}
+	}
+
+	// Create fresh stream
+	channel.stream = memstream.New()
+
+	// Add backend publications (historical data)
+	for _, pub := range pubs {
+		if pub.Offset > maxOffset {
+			maxOffset = pub.Offset
+		}
+		if existingOffsets[pub.Offset] {
+			continue // Skip if already exists (from HandlePublication)
+		}
+		streamPub := &Publication{
+			Offset:  pub.Offset,
+			Key:     pub.Key,
+			Data:    pub.Data,
+			Tags:    pub.Tags,
+			Info:    pub.Info,
+			Time:    pub.Time,
+			Removed: pub.Removed,
+			Score:   pub.Score,
+		}
+		channel.stream.Add(streamPub, streamSize, streamTTL, "")
+	}
+
+	// Re-add existing entries (from HandlePublication - these are newer)
+	for _, pub := range existingPubs {
+		channel.stream.Add(pub, streamSize, streamTTL, "")
+	}
+
+	// Update channel position to reflect the highest offset in the stream.
+	// This is critical - without it, GetStream may return empty when checking
+	// "already up to date" even though new publications exist.
+	if maxOffset > channel.position.Offset {
+		channel.position.Offset = maxOffset
+		if epoch != "" {
+			channel.position.Epoch = epoch
+		}
+	}
+
+	c.lastAccess[ch] = time.Now()
 }
 
 // ApplySnapshot replaces the entire snapshot for a channel.

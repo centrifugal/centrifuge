@@ -456,7 +456,7 @@
         document.getElementById('playerName').value = 'Player ' + userId.substr(5, 4).toUpperCase();
 
         // Connect to Centrifuge
-        const centrifuge = new Centrifuge('ws://localhost:3000/connection/websocket', {
+        const centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket', {
             name: userId
         });
 

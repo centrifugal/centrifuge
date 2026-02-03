@@ -765,7 +765,7 @@ func TestCachedKeyedEngine_Backend(t *testing.T) {
 	node, _ := New(Config{})
 	cached, backend := newTestCachedKeyedEngine(t, node)
 
-	require.Same(t, backend, cached.Backend())
+	require.Same(t, backend, cached.underlyingBackend())
 }
 
 // TestNewCachedKeyedEngine_NilBackend tests error on nil backend.
@@ -1552,8 +1552,6 @@ func TestCachedKeyedEngine_ChannelOptionsInheritance(t *testing.T) {
 		LoadTimeout:  5 * time.Second,
 	})
 	require.NoError(t, err)
-	// Set the channel options resolver
-	cached.SetChannelOptionsResolver(node.getKeyedChannelOptions)
 	err = cached.RegisterEventHandler(nil)
 	require.NoError(t, err)
 	defer func() { _ = cached.Close(context.Background()) }()
@@ -1662,7 +1660,6 @@ func TestCachedKeyedEngine_OptionsFromBackendLoad(t *testing.T) {
 		LoadTimeout:  5 * time.Second,
 	})
 	require.NoError(t, err)
-	cached.SetChannelOptionsResolver(node.getKeyedChannelOptions)
 	err = cached.RegisterEventHandler(nil)
 	require.NoError(t, err)
 	defer func() { _ = cached.Close(context.Background()) }()
@@ -1764,4 +1761,402 @@ func TestCachedKeyedEngine_ConcurrentWriteOrdering(t *testing.T) {
 	for i := uint64(1); i <= uint64(expectedKeys); i++ {
 		require.True(t, offsets[i], "offset %d should be in stream", i)
 	}
+}
+
+// TestCachedKeyedEngine_HandlePublication_LoadingRace tests that publications
+// are not lost when loading finishes between IsLoading check and BufferPublication.
+// This is the TOCTOU (Time Of Check To Time Of Use) race condition fix.
+func TestCachedKeyedEngine_HandlePublication_LoadingRace(t *testing.T) {
+	node, _ := New(Config{})
+	backend, err := NewMemoryKeyedEngine(node, MemoryKeyedEngineConfig{})
+	require.NoError(t, err)
+
+	cached, err := NewCachedKeyedEngine(node, backend, CachedKeyedEngineConfig{
+		Cache: KeyedCacheConfig{
+			MaxChannels:        1000,
+			ChannelIdleTimeout: 5 * time.Minute,
+			StreamSize:         1000,
+		},
+		SyncInterval: 1 * time.Hour, // Disable sync for this test
+		LoadTimeout:  5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Track publications received by the handler (only count race_key publications)
+	var raceKeyCount atomic.Int32
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			if len(pub.Key) > 8 && pub.Key[:8] == "race_key" {
+				raceKeyCount.Add(1)
+			}
+			return nil
+		},
+	}
+	err = cached.RegisterEventHandler(handler)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = cached.Close(context.Background())
+		_ = node.Shutdown(context.Background())
+	})
+
+	ctx := context.Background()
+	channel := "test_loading_race"
+
+	// Publish initial data to backend
+	for i := 1; i <= 3; i++ {
+		_, err := backend.Publish(ctx, channel, fmt.Sprintf("key%d", i), KeyedPublishOptions{
+			Data:       []byte(fmt.Sprintf(`{"id":%d}`, i)),
+			StreamSize: 1000,
+			StreamTTL:  time.Hour,
+		})
+		require.NoError(t, err)
+	}
+
+	// Subscribe to the channel - this will load the cache
+	err = cached.Subscribe(channel)
+	require.NoError(t, err)
+
+	// Verify initial data is loaded
+	pubs, _, _, err := cached.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{})
+	require.NoError(t, err)
+	require.Len(t, pubs, 3)
+
+	// Now simulate the race: publish while the cache transitions from loading to loaded
+	// We do this by publishing multiple times concurrently with cache operations
+	var wg sync.WaitGroup
+	publishCount := 10
+
+	for i := 0; i < publishCount; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			_, err := cached.Publish(ctx, channel, fmt.Sprintf("race_key%d", idx), KeyedPublishOptions{
+				Data:       []byte(fmt.Sprintf(`{"race":%d}`, idx)),
+				StreamSize: 1000,
+				StreamTTL:  time.Hour,
+			})
+			require.NoError(t, err)
+		}(i)
+	}
+	wg.Wait()
+
+	// Give time for any async operations
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify all publications made it to the cache
+	pubs, _, _, err = cached.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{})
+	require.NoError(t, err)
+	require.Len(t, pubs, 3+publishCount, "all publications should be in cache")
+
+	// Verify all race_key publications were forwarded to the handler
+	require.Equal(t, int32(publishCount), raceKeyCount.Load(), "all race_key publications should be forwarded to handler")
+}
+
+// TestCachedKeyedEngine_ResubscribeFreshData tests that when re-subscribing to
+// an already-loaded channel, we get fresh data from backend (not stale cache).
+func TestCachedKeyedEngine_ResubscribeFreshData(t *testing.T) {
+	node, _ := New(Config{})
+	backend, err := NewMemoryKeyedEngine(node, MemoryKeyedEngineConfig{})
+	require.NoError(t, err)
+
+	cached, err := NewCachedKeyedEngine(node, backend, CachedKeyedEngineConfig{
+		Cache: KeyedCacheConfig{
+			MaxChannels:        1000,
+			ChannelIdleTimeout: 5 * time.Minute,
+			StreamSize:         1000,
+		},
+		SyncInterval: 1 * time.Hour, // Disable sync for this test
+		LoadTimeout:  5 * time.Second,
+	})
+	require.NoError(t, err)
+	err = cached.RegisterEventHandler(nil)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = cached.Close(context.Background())
+		_ = node.Shutdown(context.Background())
+	})
+
+	ctx := context.Background()
+	channel := "test_resubscribe"
+
+	// Step 1: Publish initial data and subscribe
+	for i := 1; i <= 3; i++ {
+		_, err := backend.Publish(ctx, channel, fmt.Sprintf("key%d", i), KeyedPublishOptions{
+			Data:       []byte(fmt.Sprintf(`{"id":%d}`, i)),
+			StreamSize: 1000,
+			StreamTTL:  time.Hour,
+		})
+		require.NoError(t, err)
+	}
+
+	err = cached.Subscribe(channel)
+	require.NoError(t, err)
+
+	// Verify we see 3 entries
+	pubs, _, _, err := cached.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{})
+	require.NoError(t, err)
+	require.Len(t, pubs, 3)
+
+	// Step 2: Unsubscribe (simulating all clients leaving)
+	err = cached.Unsubscribe(channel)
+	require.NoError(t, err)
+
+	// Step 3: While unsubscribed, publish more data directly to backend
+	// These publications won't be seen by the cached engine (not subscribed to pub/sub)
+	for i := 4; i <= 6; i++ {
+		_, err := backend.Publish(ctx, channel, fmt.Sprintf("key%d", i), KeyedPublishOptions{
+			Data:       []byte(fmt.Sprintf(`{"id":%d}`, i)),
+			StreamSize: 1000,
+			StreamTTL:  time.Hour,
+		})
+		require.NoError(t, err)
+	}
+
+	// Step 4: Re-subscribe - should get fresh data including new entries
+	err = cached.Subscribe(channel)
+	require.NoError(t, err)
+
+	// Verify we see all 6 entries (not stale 3)
+	pubs, _, _, err = cached.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{})
+	require.NoError(t, err)
+	require.Len(t, pubs, 6, "re-subscribe should load fresh data from backend")
+
+	// Verify we have all keys
+	keys := make(map[string]bool)
+	for _, pub := range pubs {
+		keys[pub.Key] = true
+	}
+	for i := 1; i <= 6; i++ {
+		require.True(t, keys[fmt.Sprintf("key%d", i)], "key%d should be present", i)
+	}
+}
+
+// TestCachedKeyedEngine_ConcurrentPresenceScenario simulates the scenario where
+// multiple clients publish presence and subscribe concurrently after server restart.
+// All clients should eventually see the same count.
+func TestCachedKeyedEngine_ConcurrentPresenceScenario(t *testing.T) {
+	node, _ := New(Config{})
+	backend, err := NewMemoryKeyedEngine(node, MemoryKeyedEngineConfig{})
+	require.NoError(t, err)
+
+	cached, err := NewCachedKeyedEngine(node, backend, CachedKeyedEngineConfig{
+		Cache: KeyedCacheConfig{
+			MaxChannels:        1000,
+			ChannelIdleTimeout: 5 * time.Minute,
+			StreamSize:         1000,
+		},
+		SyncInterval: 1 * time.Hour, // Disable sync for this test
+		LoadTimeout:  5 * time.Second,
+	})
+	require.NoError(t, err)
+	err = cached.RegisterEventHandler(nil)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = cached.Close(context.Background())
+		_ = node.Shutdown(context.Background())
+	})
+
+	ctx := context.Background()
+	channel := "presence:clients"
+	numClients := 6
+
+	// Simulate server restart scenario:
+	// All clients reconnect and publish presence, then subscribe to watch
+	var wg sync.WaitGroup
+	results := make([]int, numClients)
+
+	for i := 0; i < numClients; i++ {
+		wg.Add(1)
+		go func(clientIdx int) {
+			defer wg.Done()
+
+			// Each client publishes their presence
+			_, err := cached.Publish(ctx, channel, fmt.Sprintf("client%d", clientIdx), KeyedPublishOptions{
+				Data:       []byte(fmt.Sprintf(`{"client":%d}`, clientIdx)),
+				StreamSize: 1000,
+				StreamTTL:  time.Hour,
+			})
+			require.NoError(t, err)
+
+			// Small random delay to simulate network variance
+			time.Sleep(time.Duration(clientIdx) * time.Millisecond)
+
+			// Subscribe to watch presence
+			err = cached.Subscribe(channel)
+			require.NoError(t, err)
+
+			// Read snapshot
+			pubs, _, _, err := cached.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{})
+			require.NoError(t, err)
+			results[clientIdx] = len(pubs)
+		}(i)
+	}
+	wg.Wait()
+
+	// Give time for any async operations
+	time.Sleep(100 * time.Millisecond)
+
+	// Final read should show all clients
+	pubs, _, _, err := cached.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{})
+	require.NoError(t, err)
+	require.Len(t, pubs, numClients, "final snapshot should have all %d clients", numClients)
+
+	// Log the intermediate results for debugging
+	t.Logf("Intermediate results: %v", results)
+
+	// All intermediate results should eventually converge
+	// (some may have seen fewer during the race, but that's expected)
+	for i, count := range results {
+		require.GreaterOrEqual(t, count, 1, "client %d should see at least their own presence", i)
+	}
+}
+
+// TestCachedKeyedEngine_SubscribeAlreadyLoadedChannel tests that subscribing
+// to a channel that's already in cache forces a refresh.
+func TestCachedKeyedEngine_SubscribeAlreadyLoadedChannel(t *testing.T) {
+	node, _ := New(Config{})
+	backend, err := NewMemoryKeyedEngine(node, MemoryKeyedEngineConfig{})
+	require.NoError(t, err)
+
+	cached, err := NewCachedKeyedEngine(node, backend, CachedKeyedEngineConfig{
+		Cache: KeyedCacheConfig{
+			MaxChannels:        1000,
+			ChannelIdleTimeout: 5 * time.Minute,
+			StreamSize:         1000,
+		},
+		SyncInterval: 1 * time.Hour, // Disable sync
+		LoadTimeout:  5 * time.Second,
+	})
+	require.NoError(t, err)
+	err = cached.RegisterEventHandler(nil)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = cached.Close(context.Background())
+		_ = node.Shutdown(context.Background())
+	})
+
+	ctx := context.Background()
+	channel := "test_already_loaded"
+
+	// Publish initial data
+	_, err = backend.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte(`{"id":1}`),
+		StreamSize: 1000,
+		StreamTTL:  time.Hour,
+	})
+	require.NoError(t, err)
+
+	// First subscribe - loads cache
+	err = cached.Subscribe(channel)
+	require.NoError(t, err)
+
+	pubs, _, _, err := cached.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+
+	// Cache is now loaded. Publish more data directly to backend.
+	// Since we're subscribed to pub/sub, this will update the cache.
+	_, err = backend.Publish(ctx, channel, "key2", KeyedPublishOptions{
+		Data:       []byte(`{"id":2}`),
+		StreamSize: 1000,
+		StreamTTL:  time.Hour,
+	})
+	require.NoError(t, err)
+
+	// Verify cache was updated via pub/sub
+	pubs, _, _, err = cached.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{})
+	require.NoError(t, err)
+	require.Len(t, pubs, 2)
+
+	// Now simulate a second client subscribing to same channel
+	// (Subscribe is called again even though channel is loaded)
+	// This should NOT cause issues - cache should still be consistent
+	err = cached.Subscribe(channel)
+	require.NoError(t, err)
+
+	// Publish another entry
+	_, err = backend.Publish(ctx, channel, "key3", KeyedPublishOptions{
+		Data:       []byte(`{"id":3}`),
+		StreamSize: 1000,
+		StreamTTL:  time.Hour,
+	})
+	require.NoError(t, err)
+
+	// Verify all 3 entries are visible
+	pubs, _, _, err = cached.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{})
+	require.NoError(t, err)
+	require.Len(t, pubs, 3, "all entries should be visible after re-subscribe")
+}
+
+// TestCachedKeyedEngine_BufferPublicationRace tests that publications are not
+// lost when BufferPublication is called but loading has just finished.
+func TestCachedKeyedEngine_BufferPublicationRace(t *testing.T) {
+	// Create a custom cache that we can control for testing
+	conf := KeyedCacheConfig{
+		MaxChannels:        1000,
+		ChannelIdleTimeout: 5 * time.Minute,
+		StreamSize:         1000,
+	}
+	cache := newKeyedCache(conf)
+
+	ctx := context.Background()
+	channel := "test_buffer_race"
+
+	// Simulate the race condition directly on the cache:
+	// 1. Mark channel as loading
+	cache.MarkLoading(channel)
+	require.True(t, cache.IsLoading(channel))
+
+	// 2. Start loading (via EnsureLoaded)
+	opts := DefaultKeyedChannelOptions()
+	opts.StreamSize = 1000
+	opts.StreamTTL = time.Hour
+
+	var loadStarted sync.WaitGroup
+	loadStarted.Add(1)
+	var loadFinished sync.WaitGroup
+	loadFinished.Add(1)
+
+	go func() {
+		loadStarted.Done()
+		err := cache.EnsureLoaded(ctx, channel, opts, func(ctx context.Context, ch string, opts KeyedChannelOptions) ([]*Publication, []*Publication, StreamPosition, error) {
+			// Simulate slow load
+			time.Sleep(50 * time.Millisecond)
+			return []*Publication{
+				{Key: "initial", Data: []byte(`{"initial":true}`), Offset: 1},
+			}, nil, StreamPosition{Offset: 1, Epoch: "test"}, nil
+		})
+		require.NoError(t, err)
+		loadFinished.Done()
+	}()
+
+	// Wait for load to start
+	loadStarted.Wait()
+
+	// 3. Try to buffer a publication while loading
+	buffered := cache.BufferPublication(channel, &Publication{
+		Key: "buffered", Data: []byte(`{"buffered":true}`), Offset: 2,
+	}, StreamPosition{Offset: 2, Epoch: "test"}, false)
+
+	// Should be buffered since loading is in progress
+	require.True(t, buffered, "publication should be buffered while loading")
+
+	// 4. Wait for load to finish
+	loadFinished.Wait()
+
+	// 5. Verify both initial and buffered publications are in cache
+	pubs, _, _, err := cache.GetSnapshot(channel, KeyedReadSnapshotOptions{})
+	require.NoError(t, err)
+	require.Len(t, pubs, 2, "both initial and buffered publications should be in cache")
+
+	keys := make(map[string]bool)
+	for _, pub := range pubs {
+		keys[pub.Key] = true
+	}
+	require.True(t, keys["initial"], "initial key should be present")
+	require.True(t, keys["buffered"], "buffered key should be present")
 }

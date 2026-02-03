@@ -3790,7 +3790,6 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	subscribingCh := chCtx.subscribingCh
 	isSubscribed := channelHasFlag(chCtx.flags, flagSubscribed)
 	serverSide := channelHasFlag(chCtx.flags, flagServerSide)
-	isKeyed := channelHasFlag(chCtx.flags, flagKeyed)
 	// Also check for in-progress keyed subscriptions.
 	keyedState, hasKeyedState := c.keyedSubscribing[channel]
 	var keyedSubscribingCh chan struct{}
@@ -3816,7 +3815,6 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		case <-subscribingCh:
 			c.mu.RLock()
 			chCtx, ok = c.channels[channel]
-			isKeyed = channelHasFlag(chCtx.flags, flagKeyed)
 			c.mu.RUnlock()
 			if !ok {
 				return nil
@@ -3845,10 +3843,10 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		case <-keyedSubscribingCh:
 			c.mu.RLock()
 			chCtx, ok = c.channels[channel]
-			if ok {
-				isKeyed = channelHasFlag(chCtx.flags, flagKeyed)
-			}
 			c.mu.RUnlock()
+			if !ok {
+				return nil
+			}
 		case <-time.After(maxWaitTimeout):
 			c.mu.Lock()
 			if state, exists := c.keyedSubscribing[channel]; exists && state.subscribingCh != nil {
@@ -3883,13 +3881,6 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		c.perChannelWriter.delWriter(channel, false)
 	}
 	c.mu.Unlock()
-
-	// Unsubscribe from keyed engine pub/sub if this was a keyed subscription.
-	if isKeyed {
-		if keyedEngine := c.node.keyedEngine; keyedEngine != nil {
-			_ = keyedEngine.Unsubscribe(channel)
-		}
-	}
 
 	// Remove presence if any presence flag is enabled.
 	hasAnyPresence := channelHasFlag(chCtx.flags, flagEmitPresence) ||

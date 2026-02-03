@@ -89,6 +89,11 @@ type CachedKeyedEngine struct {
 	syncState   map[string]*channelSyncState
 	syncStateMu sync.RWMutex
 
+	// Track which channels have had their stream initialized from backend.
+	// First ReadStream call always goes to backend; subsequent calls use cache.
+	streamInitialized   map[string]bool
+	streamInitializedMu sync.RWMutex
+
 	// Per-channel locks for ordered cache updates
 	channelLocks   map[string]*sync.Mutex
 	channelLocksMu sync.Mutex
@@ -96,10 +101,9 @@ type CachedKeyedEngine struct {
 	// Worker pool for bounded concurrency (nil if unbounded)
 	syncWorkerCh chan string
 
-	closeCh                chan struct{}
-	closeOnce              sync.Once
-	wg                     sync.WaitGroup
-	channelOptionsResolver ChannelOptionsResolver
+	closeCh   chan struct{}
+	closeOnce sync.Once
+	wg        sync.WaitGroup
 }
 
 // channelSyncState tracks sync state for a single channel.
@@ -123,13 +127,14 @@ func NewCachedKeyedEngine(n *Node, backend KeyedEngine, conf CachedKeyedEngineCo
 	cache := newKeyedCache(conf.Cache)
 
 	e := &CachedKeyedEngine{
-		node:         n,
-		backend:      backend,
-		cache:        cache,
-		conf:         conf,
-		syncState:    make(map[string]*channelSyncState),
-		channelLocks: make(map[string]*sync.Mutex),
-		closeCh:      make(chan struct{}),
+		node:              n,
+		backend:           backend,
+		cache:             cache,
+		conf:              conf,
+		syncState:         make(map[string]*channelSyncState),
+		channelLocks:      make(map[string]*sync.Mutex),
+		streamInitialized: make(map[string]bool),
+		closeCh:           make(chan struct{}),
 	}
 
 	// Create worker channel if concurrency is bounded
@@ -151,8 +156,27 @@ type cachedEventHandler struct {
 }
 
 func (h *cachedEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
-	// Update cache if channel is loaded, using per-channel lock for ordering
-	if h.cache.IsLoaded(ch) {
+	// Debug logging
+	if h.engine.node.logEnabled(LogLevelDebug) {
+		h.engine.node.logger.log(newLogEntry(LogLevelDebug, "cachedEventHandler.HandlePublication", map[string]any{
+			"channel":    ch,
+			"key":        pub.Key,
+			"offset":     pub.Offset,
+			"isLoading":  h.cache.IsLoading(ch),
+			"isLoaded":   h.cache.IsLoaded(ch),
+			"hasHandler": h.handler != nil,
+		}))
+	}
+
+	// If channel is being loaded, try to buffer the publication for replay after load completes.
+	// BufferPublication returns false if loading just finished (race condition) - in that case
+	// fall through to check if channel is now loaded.
+	buffered := false
+	if h.cache.IsLoading(ch) {
+		buffered = h.cache.BufferPublication(ch, pub, sp, pub.Removed)
+	}
+	if !buffered && h.cache.IsLoaded(ch) {
+		// Update cache if channel is loaded, using per-channel lock for ordering
 		h.engine.withChannelLock(ch, func() {
 			cachedPos := h.cache.GetPosition(ch)
 
@@ -286,10 +310,29 @@ func (e *CachedKeyedEngine) withChannelLock(ch string, fn func()) {
 
 // Subscribe registers this server node to receive pub/sub messages for the channel.
 func (e *CachedKeyedEngine) Subscribe(ch string) error {
-	// Subscribe to backend PUB/SUB first so we receive updates
+	// Check if channel is already loaded - we'll need to evict BEFORE subscribing
+	// to force a fresh load, catching any publications we might have missed.
+	wasLoaded := e.cache.IsLoaded(ch)
+	if wasLoaded {
+		// Evict before subscribing so the fresh load happens after pub/sub is active.
+		// This ensures we don't miss publications between the evict and subscribe.
+		e.cache.Evict(ch)
+		// Also clear stream initialized flag so ReadStream loads fresh from backend
+		e.streamInitializedMu.Lock()
+		delete(e.streamInitialized, ch)
+		e.streamInitializedMu.Unlock()
+	}
+
+	// Mark as loading BEFORE subscribing to pub/sub, so any incoming
+	// publications are buffered rather than dropped.
+	e.cache.MarkLoading(ch)
+
+	// Subscribe to backend PUB/SUB - now we'll receive updates
 	if err := e.backend.Subscribe(ch); err != nil {
+		e.cache.ClearLoading(ch)
 		return err
 	}
+
 	// Preload cache - this ensures cache is populated before first read
 	// and HandlePublication can update it for real-time changes
 	ctx, cancel := context.WithTimeout(context.Background(), e.conf.LoadTimeout)
@@ -302,13 +345,13 @@ func (e *CachedKeyedEngine) Subscribe(ch string) error {
 func (e *CachedKeyedEngine) Unsubscribe(ch string) error {
 	// Evict from cache on unsubscribe
 	e.cache.Evict(ch)
-	return e.backend.Unsubscribe(ch)
-}
 
-// SetChannelOptionsResolver sets the callback for resolving channel options per channel.
-func (e *CachedKeyedEngine) SetChannelOptionsResolver(r ChannelOptionsResolver) {
-	e.channelOptionsResolver = r
-	e.backend.SetChannelOptionsResolver(r)
+	// Clear stream initialized flag
+	e.streamInitializedMu.Lock()
+	delete(e.streamInitialized, ch)
+	e.streamInitializedMu.Unlock()
+
+	return e.backend.Unsubscribe(ch)
 }
 
 // Publish updates the snapshot and broadcasts the change to subscribers.
@@ -328,9 +371,20 @@ func (e *CachedKeyedEngine) Unpublish(ctx context.Context, ch string, key string
 
 // ReadSnapshot retrieves the current key-value state for a channel.
 // Read path: ensure loaded, then read from cache.
+// If opts.Primary is true, reads directly from backend bypassing cache.
 func (e *CachedKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error) {
+	// Bypass cache if Primary is requested (for read-your-writes consistency).
+	if opts.Primary {
+		return e.backend.ReadSnapshot(ctx, ch, opts)
+	}
+
+	// Mark as loading BEFORE ensureLoaded to buffer any concurrent pub/sub messages.
+	// This handles the race where pub/sub starts delivering before cache is fully loaded.
+	e.cache.MarkLoading(ch)
+
 	// Ensure channel is loaded into cache
 	if err := e.ensureLoaded(ctx, ch); err != nil {
+		e.cache.ClearLoading(ch)
 		return nil, StreamPosition{}, "", err
 	}
 
@@ -339,13 +393,46 @@ func (e *CachedKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts Ke
 }
 
 // ReadStream retrieves publications from the channel's history stream.
+// First call per channel always reads from backend to ensure we catch publications
+// that happened between snapshot load and pub/sub subscription (critical for presence).
+// Subsequent calls use the cached stream (kept updated via pub/sub and sync).
 func (e *CachedKeyedEngine) ReadStream(ctx context.Context, ch string, opts KeyedReadStreamOptions) ([]*Publication, StreamPosition, error) {
-	// Ensure channel is loaded into cache
+	// Ensure channel snapshot is loaded into cache
 	if err := e.ensureLoaded(ctx, ch); err != nil {
 		return nil, StreamPosition{}, err
 	}
 
-	// Read from cache
+	// Check if stream has been initialized for this channel
+	e.streamInitializedMu.RLock()
+	initialized := e.streamInitialized[ch]
+	e.streamInitializedMu.RUnlock()
+
+	if initialized {
+		// Stream already initialized - read from cache (eventual consistency via pub/sub and sync)
+		return e.cache.GetStream(ch, opts)
+	}
+
+	// First call for this channel - MUST read from backend.
+	// This is critical during subscription to catch publications that happened
+	// between snapshot load and pub/sub subscription (e.g., presence notifications).
+	fullPubs, pos, err := e.backend.ReadStream(ctx, ch, KeyedReadStreamOptions{
+		Filter: StreamFilter{
+			Limit: -1, // Get full stream for caching
+		},
+	})
+	if err != nil {
+		return nil, StreamPosition{}, err
+	}
+
+	// Populate cache with backend data, preserving any entries added by HandlePublication
+	e.cache.PopulateStream(ch, fullPubs, pos.Epoch)
+
+	// Mark stream as initialized - subsequent calls will use cache
+	e.streamInitializedMu.Lock()
+	e.streamInitialized[ch] = true
+	e.streamInitializedMu.Unlock()
+
+	// Return from cache with user's filter applied
 	return e.cache.GetStream(ch, opts)
 }
 
@@ -368,6 +455,11 @@ func (e *CachedKeyedEngine) Remove(ctx context.Context, ch string, opts KeyedRem
 	e.syncStateMu.Lock()
 	delete(e.syncState, ch)
 	e.syncStateMu.Unlock()
+
+	// Clear stream initialized flag
+	e.streamInitializedMu.Lock()
+	delete(e.streamInitialized, ch)
+	e.streamInitializedMu.Unlock()
 
 	// Remove from backend
 	return e.backend.Remove(ctx, ch, opts)
@@ -392,28 +484,26 @@ func (e *CachedKeyedEngine) ensureLoaded(ctx context.Context, ch string) error {
 			return nil, nil, StreamPosition{}, err
 		}
 
-		// Load stream for client recovery using channel's configured StreamSize.
-		// This enables clients to recover from the in-memory cache during
-		// reconnect storms without hitting the backend.
-		// Use Reverse=true to get the most recent entries (for recovery scenarios).
-		var streamPubs []*Publication
-		if opts.StreamSize > 0 {
-			streamPubs, _, err = e.backend.ReadStream(loadCtx, ch, KeyedReadStreamOptions{
-				Filter: StreamFilter{
-					Limit:   opts.StreamSize,
-					Reverse: true, // Get most recent entries
-				},
-			})
-			if err != nil {
-				// Stream load failure is not fatal - cache can still work
-				// without pre-populated stream (gap filling will handle it)
-				streamPubs = nil
+		// Debug logging
+		if e.node.logEnabled(LogLevelDebug) {
+			keys := make([]string, 0, len(snapshotPubs))
+			for _, pub := range snapshotPubs {
+				keys = append(keys, pub.Key)
 			}
-			// Reverse the slice to restore chronological order for cache
-			for i, j := 0, len(streamPubs)-1; i < j; i, j = i+1, j-1 {
-				streamPubs[i], streamPubs[j] = streamPubs[j], streamPubs[i]
-			}
+			e.node.logger.log(newLogEntry(LogLevelDebug, "ensureLoaded from backend", map[string]any{
+				"channel":  ch,
+				"numPubs":  len(snapshotPubs),
+				"position": pos,
+				"keys":     keys,
+			}))
 		}
+
+		// Don't pre-load stream here - it will be loaded fresh from backend
+		// when ReadStream is called. This ensures we get the latest stream data
+		// during subscription, avoiding races where publications happen between
+		// snapshot load and stream read.
+		// The stream cache will be populated by pub/sub messages after subscription.
+		var streamPubs []*Publication
 
 		// Initialize sync offset to current position
 		e.updateSyncOffset(ch, pos.Offset)
@@ -424,10 +514,7 @@ func (e *CachedKeyedEngine) ensureLoaded(ctx context.Context, ch string) error {
 
 // resolveChannelOptions resolves keyed channel options for a channel.
 func (e *CachedKeyedEngine) resolveChannelOptions(ch string) KeyedChannelOptions {
-	if e.channelOptionsResolver != nil {
-		return e.channelOptionsResolver(ch)
-	}
-	return DefaultKeyedChannelOptions()
+	return e.node.ResolveKeyedChannelOptions(ch)
 }
 
 // runSyncLoop runs the background sync scheduler.
@@ -577,11 +664,17 @@ func (e *CachedKeyedEngine) syncChannel(ch string) {
 		return
 	}
 
-	// Apply each publication to cache
+	// Apply each publication to cache and deliver to subscribers
 	for _, pub := range pubs {
 		// Use publication's own offset for position, preserving epoch from stream position
 		pubPos := StreamPosition{Offset: pub.Offset, Epoch: pos.Epoch}
 		_ = e.cache.ApplyPublication(ch, pub, pubPos, pub.Removed)
+
+		// Deliver to subscribers - this handles publications that were missed
+		// because this node wasn't subscribed to pub/sub when they were published.
+		if e.eventHandler != nil {
+			_ = e.eventHandler.HandlePublication(ch, pub, pubPos, false, nil)
+		}
 	}
 
 	// Update sync cursor
@@ -602,6 +695,11 @@ func (e *CachedKeyedEngine) reloadChannel(ctx context.Context, ch string) {
 	e.syncStateMu.Lock()
 	delete(e.syncState, ch)
 	e.syncStateMu.Unlock()
+
+	// Clear stream initialized flag so next ReadStream loads fresh from backend
+	e.streamInitializedMu.Lock()
+	delete(e.streamInitialized, ch)
+	e.streamInitializedMu.Unlock()
 
 	// Reload by ensuring it's loaded again
 	_ = e.ensureLoaded(ctx, ch)
@@ -633,8 +731,8 @@ func (e *CachedKeyedEngine) updateSyncOffset(ch string, offset uint64) {
 	}
 }
 
-// Backend returns the underlying backend KeyedEngine.
+// underlyingBackend returns the underlying backend KeyedEngine.
 // Useful for advanced operations that bypass the cache.
-func (e *CachedKeyedEngine) Backend() KeyedEngine {
+func (e *CachedKeyedEngine) underlyingBackend() KeyedEngine {
 	return e.backend
 }

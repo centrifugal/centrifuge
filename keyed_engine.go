@@ -130,16 +130,12 @@ type KeyedEngine interface {
 	// Return values: publications, stream position, next cursor ("" if done), error.
 	ReadSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error)
 
-	// Stats returns statistics about the channel's snapshot.
+	// Stats returns statistics about the channel in storage.
 	Stats(ctx context.Context, ch string) (KeyedStats, error)
 
 	// Remove deletes all data for a channel (snapshot and stream).
 	// Use for cleanup when a channel is no longer needed.
 	Remove(ctx context.Context, ch string, opts KeyedRemoveOptions) error
-
-	// SetChannelOptionsResolver sets the callback for resolving channel options per channel.
-	// Called by Node when engine is registered via SetKeyedEngine.
-	SetChannelOptionsResolver(ChannelOptionsResolver)
 }
 
 // KeyedPublishOptions defines options for publishing to a keyed channel.
@@ -283,6 +279,11 @@ type KeyedReadSnapshotOptions struct {
 	// When set, returns at most one publication (or empty if key not found).
 	// Cursor/Limit are ignored when Key is set.
 	Key string
+
+	// Primary forces reading from the primary storage, bypassing any cache layer.
+	// Use when you need read-your-writes consistency after a Publish operation.
+	// Only affects CachedKeyedEngine; other engines ignore this option.
+	Primary bool
 }
 
 // KeyedStats provides statistics about a channel's snapshot.
@@ -379,6 +380,17 @@ func applyChannelOptionsDefaults(
 		keyTTL = 0
 	} else if keyTTL == 0 {
 		keyTTL = defaults.KeyTTL
+	}
+
+	// Ensure MetaTTL is never less than StreamTTL or KeyTTL.
+	// Meta must outlive the data it describes to avoid stale reads.
+	if metaTTL > 0 {
+		if streamTTL > 0 && metaTTL < streamTTL {
+			metaTTL = streamTTL
+		}
+		if keyTTL > 0 && metaTTL < keyTTL {
+			metaTTL = keyTTL
+		}
 	}
 
 	return streamSize, streamTTL, metaTTL, keyTTL

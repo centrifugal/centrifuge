@@ -945,25 +945,25 @@ func TestHubSubscriptions(t *testing.T) {
 	require.NotZero(t, h.NumSubscribers("test2"))
 
 	// Not exited sub.
-	empty, wasRemoved := h.removeSub("not_existed", c)
+	empty, wasRemoved, _ := h.removeSub("not_existed", c)
 	require.True(t, empty)
 	require.False(t, wasRemoved)
 
 	// Exited sub with invalid uid.
 	validUID := c.uid
 	c.uid = "invalid"
-	empty, wasRemoved = h.removeSub("test1", c)
+	empty, wasRemoved, _ = h.removeSub("test1", c)
 	require.True(t, empty)
 	require.False(t, wasRemoved)
 	c.uid = validUID
 
 	// Exited sub.
-	empty, wasRemoved = h.removeSub("test1", c)
+	empty, wasRemoved, _ = h.removeSub("test1", c)
 	require.True(t, empty)
 	require.True(t, wasRemoved)
 
 	// Exited sub.
-	empty, wasRemoved = h.removeSub("test2", c)
+	empty, wasRemoved, _ = h.removeSub("test2", c)
 	require.True(t, empty)
 	require.True(t, wasRemoved)
 

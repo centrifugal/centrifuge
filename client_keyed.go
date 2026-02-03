@@ -535,8 +535,7 @@ func (c *Client) handleKeyedLivePhase(
 ) error {
 	channel := req.Channel
 
-	keyedEngine := c.node.keyedEngine
-	if keyedEngine == nil {
+	if c.node.keyedEngine == nil {
 		return ErrorNotAvailable
 	}
 
@@ -561,35 +560,18 @@ func (c *Client) handleKeyedLivePhase(
 		isPresence = req.KeyedPresence
 	}
 
-	// Start coordination: buffer -> subscribe -> read remaining -> merge.
-	c.pubSubSync.StartBuffering(channel)
-
-	// Subscribe to pub/sub via KeyedEngine.
-	if err := keyedEngine.Subscribe(channel); err != nil {
-		c.pubSubSync.StopBuffering(channel)
-		c.cleanupKeyedSubscribing(channel)
-		c.node.logger.log(newErrorLogEntry(err, "error subscribing to keyed channel", map[string]any{
-			"channel": channel, "user": c.user, "client": c.uid,
-		}))
-		return ErrorInternal
-	}
-
-	// Add subscription to node hub.
+	// Build subscription info first, validate before subscribing.
 	useID := opts.AllowChannelCompaction && req.Flag&subscriptionFlagChannelCompression != 0
-	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID}
+	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, keyed: true}
 
 	// Process tags filter if provided.
 	if req.Tf != nil {
 		if !opts.AllowTagsFilter {
-			c.pubSubSync.StopBuffering(channel)
-			_ = keyedEngine.Unsubscribe(channel)
 			c.cleanupKeyedSubscribing(channel)
 			c.node.logger.log(newLogEntry(LogLevelInfo, "tags filter not allowed for keyed channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
 			return ErrorBadRequest
 		}
 		if err := filter.Validate(req.Tf); err != nil {
-			c.pubSubSync.StopBuffering(channel)
-			_ = keyedEngine.Unsubscribe(channel)
 			c.cleanupKeyedSubscribing(channel)
 			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid tags filter for keyed channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
 			return ErrorBadRequest
@@ -610,10 +592,14 @@ func (c *Client) handleKeyedLivePhase(
 		}
 	}
 
+	// Start coordination: buffer -> add subscription (which subscribes to keyed engine) -> read remaining -> merge.
+	// IMPORTANT: addSubscription adds client to hub AND subscribes to keyed engine.
+	// This ensures the client is in hub before pub/sub messages arrive.
+	c.pubSubSync.StartBuffering(channel)
+
 	chanID, err := c.node.addSubscription(channel, sub)
 	if err != nil {
 		c.pubSubSync.StopBuffering(channel)
-		_ = keyedEngine.Unsubscribe(channel)
 		c.cleanupKeyedSubscribing(channel)
 		c.node.logger.log(newErrorLogEntry(err, "error adding keyed subscription", map[string]any{
 			"channel": channel, "user": c.user, "client": c.uid,
@@ -641,8 +627,7 @@ func (c *Client) handleKeyedLivePhase(
 	streamResult, err := c.node.KeyedStreamRead(c.ctx, channel, streamOpts)
 	if err != nil {
 		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
-		_ = keyedEngine.Unsubscribe(channel)
+		_ = c.node.removeSubscription(channel, c) // This handles keyed engine unsubscribe.
 		c.cleanupKeyedSubscribing(channel)
 		if errors.Is(err, ErrorUnrecoverablePosition) {
 			return ErrorUnrecoverablePosition
@@ -669,8 +654,7 @@ func (c *Client) handleKeyedLivePhase(
 	recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
 	if !okMerge {
 		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
-		_ = keyedEngine.Unsubscribe(channel)
+		_ = c.node.removeSubscription(channel, c) // This handles keyed engine unsubscribe.
 		c.cleanupKeyedSubscribing(channel)
 		return &DisconnectInsufficientState
 	}
@@ -724,8 +708,7 @@ func (c *Client) handleKeyedLivePhase(
 	protoReply, err := c.getSubscribeCommandReply(res)
 	if err != nil {
 		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
-		_ = keyedEngine.Unsubscribe(channel)
+		_ = c.node.removeSubscription(channel, c) // This handles keyed engine unsubscribe.
 		c.cleanupKeyedSubscribing(channel)
 		c.node.logger.log(newErrorLogEntry(err, "error encoding keyed subscribe reply", map[string]any{
 			"channel": channel, "user": c.user, "client": c.uid,

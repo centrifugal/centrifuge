@@ -184,7 +184,8 @@ func (h *Hub) addSub(ch string, sub subInfo) (int64, bool, error) {
 }
 
 // removeSub removes connection from clientHub subscriptions registry.
-func (h *Hub) removeSub(ch string, c *Client) (bool, bool) {
+// Returns (isEmpty, wasRemoved, wasKeyed).
+func (h *Hub) removeSub(ch string, c *Client) (bool, bool, bool) {
 	return h.subShards[index(ch, numHubShards)].removeSub(ch, c)
 }
 
@@ -550,6 +551,7 @@ type subInfo struct {
 	deltaType  DeltaType
 	useID      bool
 	tagsFilter *tagsFilter
+	keyed      bool // true for keyed channel subscriptions
 }
 
 type subShard struct {
@@ -561,8 +563,9 @@ type subShard struct {
 	metrics         *metrics
 	shardIndex      int
 
-	chanIDs    map[string]int64
-	lastChanID atomic.Int64
+	chanIDs       map[string]int64
+	lastChanID    atomic.Int64
+	keyedChannels map[string]bool // tracks which channels are keyed subscriptions
 }
 
 func newSubShard(logger *logger, metrics *metrics, maxTimeLagMilli int64, shardIndex int) *subShard {
@@ -573,10 +576,12 @@ func newSubShard(logger *logger, metrics *metrics, maxTimeLagMilli int64, shardI
 		maxTimeLagMilli: maxTimeLagMilli,
 		shardIndex:      shardIndex,
 		chanIDs:         make(map[string]int64),
+		keyedChannels:   make(map[string]bool),
 	}
 }
 
 // addSub adds connection into clientHub subscriptions registry.
+// Returns (chanID, isFirst, error) where isFirst is true if this is the first subscriber.
 func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -586,6 +591,10 @@ func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
 	_, ok := s.subs[ch]
 	if !ok {
 		s.subs[ch] = make(map[string]subInfo)
+		// Track if this channel is keyed (first subscriber determines this).
+		if sub.keyed {
+			s.keyedChannels[ch] = true
+		}
 	}
 	s.subs[ch][uid] = sub
 
@@ -616,9 +625,11 @@ func (s *subShard) removeSubID(ch string) {
 }
 
 // removeSub removes connection from clientHub subscriptions registry.
-// Returns true if channel does not have any subscribers left in first return value.
-// Returns true if found and really removed from registry in second return value.
-func (s *subShard) removeSub(ch string, c *Client) (bool, bool) {
+// Returns (isEmpty, wasRemoved, wasKeyed) where:
+// - isEmpty: true if channel has no subscribers left
+// - wasRemoved: true if subscription was found and removed
+// - wasKeyed: true if the now-empty channel was a keyed subscription channel
+func (s *subShard) removeSub(ch string, c *Client) (bool, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -626,10 +637,10 @@ func (s *subShard) removeSub(ch string, c *Client) (bool, bool) {
 
 	// try to find subscription to delete, return early if not found.
 	if _, ok := s.subs[ch]; !ok {
-		return true, false
+		return true, false, false
 	}
 	if _, ok := s.subs[ch][uid]; !ok {
-		return true, false
+		return true, false, false
 	}
 
 	// actually remove subscription from hub.
@@ -638,10 +649,12 @@ func (s *subShard) removeSub(ch string, c *Client) (bool, bool) {
 	// clean up subs map if it's needed.
 	if len(s.subs[ch]) == 0 {
 		delete(s.subs, ch)
-		return true, true
+		wasKeyed := s.keyedChannels[ch]
+		delete(s.keyedChannels, ch)
+		return true, true, wasKeyed
 	}
 
-	return false, true
+	return false, true, false
 }
 
 type encodeError struct {

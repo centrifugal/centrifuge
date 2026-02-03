@@ -11,19 +11,11 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/jackc/pgx/v5/pgxpool"
-)
-
-// Store for games (in-memory for demo).
-var (
-	gamesMu     sync.RWMutex
-	games       = make(map[string]*GameInfo)
-	gameCounter int
 )
 
 // PostgreSQL pool for native leaderboard operations.
@@ -84,6 +76,7 @@ func handleLog(e centrifuge.LogEntry) {
 }
 
 var (
+	port         = flag.String("port", "3000", "HTTP server port")
 	redisAddr    = flag.String("redis", "", "Redis address (e.g., localhost:6379). If empty, uses in-memory engine.")
 	postgresAddr = flag.String("postgres", "", "PostgreSQL connection string (e.g., postgres://user:pass@localhost:5432/db?sslmode=disable)")
 	enableCache  = flag.Bool("cache", false, "Enable memory cache layer for Redis/Postgres engines (provides read-your-own-writes and low-latency reads)")
@@ -242,14 +235,14 @@ func main() {
 	http.HandleFunc("/api/leaderboard/click", handleLeaderboardClickHTTP)
 	http.HandleFunc("/api/leaderboard/leave", handleLeaderboardLeaveHTTP)
 
-	server := &http.Server{Addr: ":3000"}
+	server := &http.Server{Addr: ":" + *port}
 
 	go func() {
-		log.Printf("Starting server on http://localhost:3000")
-		log.Printf("  - Cursors demo:    http://localhost:3000/cursors.html")
-		log.Printf("  - Lobby demo:      http://localhost:3000/lobby.html")
-		log.Printf("  - Leaderboard:     http://localhost:3000/leaderboard.html")
-		log.Printf("  - Inventory demo:  http://localhost:3000/inventory.html")
+		log.Printf("Starting server on http://localhost:%s", *port)
+		log.Printf("  - Cursors demo:    http://localhost:%s/cursors.html", *port)
+		log.Printf("  - Lobby demo:      http://localhost:%s/lobby.html", *port)
+		log.Printf("  - Leaderboard:     http://localhost:%s/leaderboard.html", *port)
+		log.Printf("  - Inventory demo:  http://localhost:%s/inventory.html", *port)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)
 		}
@@ -278,9 +271,9 @@ func handleCursorUpdate(client *centrifuge.Client, ke centrifuge.KeyedEngine, da
 
 	// Note: StreamSize/TTL/MetaTTL are configured via GetKeyedChannelOptions in node config.
 	_, err := ke.Publish(context.Background(), "cursors", client.ID(), centrifuge.KeyedPublishOptions{
-		
-		Data:    data,
-		KeyTTL:  5 * time.Second, // Auto-expire if client stops sending updates.
+
+		Data:   data,
+		KeyTTL: 5 * time.Second, // Auto-expire if client stops sending updates.
 	})
 	if err != nil {
 		log.Printf("cursor update error: %v", err)
@@ -314,9 +307,8 @@ func handleGameCreate(client *centrifuge.Client, ke centrifuge.KeyedEngine, data
 		req.MaxPlayers = 4
 	}
 
-	gamesMu.Lock()
-	gameCounter++
-	gameID := fmt.Sprintf("game_%d", gameCounter)
+	// Generate unique game ID using timestamp + random suffix.
+	gameID := fmt.Sprintf("game_%d_%s", time.Now().UnixNano(), client.ID()[:8])
 	game := &GameInfo{
 		ID:         gameID,
 		Name:       req.Name,
@@ -324,15 +316,13 @@ func handleGameCreate(client *centrifuge.Client, ke centrifuge.KeyedEngine, data
 		CreatedAt:  time.Now(),
 		MaxPlayers: req.MaxPlayers,
 	}
-	games[gameID] = game
-	gamesMu.Unlock()
 
-	// Publish game to games list channel.
+	// Publish game to games list channel (single source of truth).
 	gameData, _ := json.Marshal(game)
 	_, err := ke.Publish(context.Background(), "games", gameID, centrifuge.KeyedPublishOptions{
-		
-		Data:    gameData,
-		KeyTTL:  10 * time.Minute, // Games expire after 10 minutes of inactivity.
+
+		Data:   gameData,
+		KeyTTL: 10 * time.Minute, // Games expire after 10 minutes of inactivity.
 	})
 	if err != nil {
 		log.Printf("game create error: %v", err)
@@ -359,12 +349,23 @@ func handleGameJoin(client *centrifuge.Client, ke centrifuge.KeyedEngine, data [
 		return
 	}
 
-	gamesMu.RLock()
-	game, exists := games[req.GameID]
-	gamesMu.RUnlock()
-
-	if !exists {
+	// Read game info from keyed engine (single source of truth).
+	pubs, _, _, err := ke.ReadSnapshot(context.Background(), "games", centrifuge.KeyedReadSnapshotOptions{
+		Key: req.GameID,
+	})
+	if err != nil {
+		log.Printf("game lookup error: %v", err)
+		cb(centrifuge.RPCReply{}, centrifuge.ErrorInternal)
+		return
+	}
+	if len(pubs) == 0 {
 		cb(centrifuge.RPCReply{}, &centrifuge.Error{Code: 4004, Message: "game not found"})
+		return
+	}
+
+	var game GameInfo
+	if err := json.Unmarshal(pubs[0].Data, &game); err != nil {
+		cb(centrifuge.RPCReply{}, centrifuge.ErrorInternal)
 		return
 	}
 
@@ -386,7 +387,7 @@ func handleGameJoin(client *centrifuge.Client, ke centrifuge.KeyedEngine, data [
 
 	// Use KeyModeIfNew to prevent slot stealing.
 	result, err := ke.Publish(context.Background(), channel, key, centrifuge.KeyedPublishOptions{
-		
+
 		Data:    playerData,
 		KeyMode: centrifuge.KeyModeIfNew,
 		KeyTTL:  5 * time.Minute,
@@ -426,9 +427,7 @@ func handleGameLeave(_ *centrifuge.Client, ke centrifuge.KeyedEngine, data []byt
 	channel := "game:" + req.GameID
 	key := fmt.Sprintf("slot_%d", req.Slot)
 
-	_, err := ke.Unpublish(context.Background(), channel, key, centrifuge.KeyedUnpublishOptions{
-		
-	})
+	_, err := ke.Unpublish(context.Background(), channel, key, centrifuge.KeyedUnpublishOptions{})
 	if err != nil {
 		log.Printf("game leave error: %v", err)
 		cb(centrifuge.RPCReply{}, centrifuge.ErrorInternal)
@@ -441,8 +440,10 @@ func handleGameLeave(_ *centrifuge.Client, ke centrifuge.KeyedEngine, data []byt
 func checkGameFull(ke centrifuge.KeyedEngine, gameID string, maxPlayers int) {
 	channel := "game:" + gameID
 
+	// Use Primary: true for read-your-writes consistency after Publish.
 	pubs, _, _, err := ke.ReadSnapshot(context.Background(), channel, centrifuge.KeyedReadSnapshotOptions{
-		Limit: 10,
+		Limit:   10,
+		Primary: true,
 	})
 	if err != nil {
 		return
@@ -470,16 +471,13 @@ func checkGameFull(ke centrifuge.KeyedEngine, gameID string, maxPlayers int) {
 			"message": "Game is starting!",
 		})
 		_, _ = ke.Publish(context.Background(), channel, "game_event", centrifuge.KeyedPublishOptions{
-			
-			Data:    gameData,
+			Data: gameData,
 		})
 
 		// Remove game from games list and clear game channel after delay.
 		time.AfterFunc(3*time.Second, func() {
 			// Remove from games list.
-			_, _ = ke.Unpublish(context.Background(), "games", gameID, centrifuge.KeyedUnpublishOptions{
-				
-			})
+			_, _ = ke.Unpublish(context.Background(), "games", gameID, centrifuge.KeyedUnpublishOptions{})
 
 			// Clear all slots and event.
 			for i := 1; i <= maxPlayers; i++ {
@@ -487,11 +485,6 @@ func checkGameFull(ke centrifuge.KeyedEngine, gameID string, maxPlayers int) {
 				_, _ = ke.Unpublish(context.Background(), channel, key, centrifuge.KeyedUnpublishOptions{})
 			}
 			_, _ = ke.Unpublish(context.Background(), channel, "game_event", centrifuge.KeyedUnpublishOptions{})
-
-			// Remove from in-memory store.
-			gamesMu.Lock()
-			delete(games, gameID)
-			gamesMu.Unlock()
 		})
 	}
 }
@@ -802,7 +795,7 @@ func handleInventoryBuy(client *centrifuge.Client, ke centrifuge.KeyedEngine, da
 
 		// Note: StreamSize/TTL/MetaTTL are configured via GetKeyedChannelOptions in node config.
 		result, err := ke.Publish(ctx, "inventory", req.ItemID, centrifuge.KeyedPublishOptions{
-			
+
 			Data:             payload,
 			ExpectedPosition: &expectedPos,
 		})
@@ -915,7 +908,7 @@ func handleInventoryRestock(_ *centrifuge.Client, ke centrifuge.KeyedEngine, dat
 
 		// Note: StreamSize/TTL/MetaTTL are configured via GetKeyedChannelOptions in node config.
 		result, err := ke.Publish(ctx, "inventory", req.ItemID, centrifuge.KeyedPublishOptions{
-			
+
 			Data:             payload,
 			ExpectedPosition: &expectedPos,
 		})
@@ -978,8 +971,9 @@ func setupKeyedEngine(node *centrifuge.Node, redisAddr, postgresAddr string, ena
 		}
 
 		engine, err := centrifuge.NewRedisKeyedEngine(node, centrifuge.RedisKeyedEngineConfig{
-			Shards: []*centrifuge.RedisShard{redisShard},
-			Prefix: "keyed_demo",
+			Shards:          []*centrifuge.RedisShard{redisShard},
+			Prefix:          "keyed_demo",
+			CleanupInterval: 5 * time.Second, // Enable cleanup worker to remove expired presence entries.
 		})
 		if err != nil {
 			return nil, nil, err
@@ -1005,7 +999,7 @@ func setupKeyedEngine(node *centrifuge.Node, redisAddr, postgresAddr string, ena
 				ChannelIdleTimeout: 5 * time.Minute,
 				StreamSize:         1000,
 			},
-			SyncInterval:  100 * time.Millisecond,
+			SyncInterval:  10000 * time.Millisecond,
 			SyncBatchSize: 1000,
 		})
 		if err != nil {

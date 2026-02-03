@@ -19,17 +19,16 @@ import (
 // you should consider using another KeyedEngine implementation instead – for example
 // RedisKeyedEngine.
 type MemoryKeyedEngine struct {
-	node                   *Node
-	eventHandler           BrokerEventHandler
-	keyedHub               *keyedHub
-	closeOnce              sync.Once
-	closeCh                chan struct{}
-	pubLocks               map[int]*sync.Mutex
-	resultCache            map[string]StreamPosition
-	resultCacheMu          sync.RWMutex
-	nextExpireCheck        int64
-	resultExpireQueue      priority.Queue
-	channelOptionsResolver ChannelOptionsResolver
+	node              *Node
+	eventHandler      BrokerEventHandler
+	keyedHub          *keyedHub
+	closeOnce         sync.Once
+	closeCh           chan struct{}
+	pubLocks          map[int]*sync.Mutex
+	resultCache       map[string]StreamPosition
+	resultCacheMu     sync.RWMutex
+	nextExpireCheck   int64
+	resultExpireQueue priority.Queue
 }
 
 var _ KeyedEngine = (*MemoryKeyedEngine)(nil)
@@ -44,9 +43,11 @@ func NewMemoryKeyedEngine(n *Node, _ MemoryKeyedEngineConfig) (*MemoryKeyedEngin
 		pubLocks[i] = &sync.Mutex{}
 	}
 	closeCh := make(chan struct{})
+	keyedHub := newKeyedHub(n.config.HistoryMetaTTL, closeCh)
+	keyedHub.setChannelOptionsResolver(n.ResolveKeyedChannelOptions)
 	e := &MemoryKeyedEngine{
 		node:        n,
-		keyedHub:    newKeyedHub(n.config.HistoryMetaTTL, closeCh),
+		keyedHub:    keyedHub,
 		pubLocks:    pubLocks,
 		closeCh:     closeCh,
 		resultCache: map[string]StreamPosition{},
@@ -96,10 +97,10 @@ func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, 
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Apply channel options defaults from resolver.
+	// Apply channel options defaults from node config.
 	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = applyChannelOptionsDefaults(
 		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL,
-		e.channelOptionsResolver, ch,
+		e.node.ResolveKeyedChannelOptions, ch,
 	)
 
 	if opts.IdempotencyKey != "" {
@@ -178,10 +179,10 @@ func (e *MemoryKeyedEngine) Unpublish(ctx context.Context, ch string, key string
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Apply channel options defaults from resolver.
+	// Apply channel options defaults from node config.
 	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, _ = applyChannelOptionsDefaults(
 		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, 0,
-		e.channelOptionsResolver, ch,
+		e.node.ResolveKeyedChannelOptions, ch,
 	)
 
 	streamTop, applied, err := e.keyedHub.remove(ch, key, opts)
@@ -219,12 +220,6 @@ func (e *MemoryKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts Ke
 // Stats returns snapshot statistics.
 func (e *MemoryKeyedEngine) Stats(ctx context.Context, ch string) (KeyedStats, error) {
 	return e.keyedHub.getStats(ch)
-}
-
-// SetChannelOptionsResolver sets the callback for resolving stream options per channel.
-func (e *MemoryKeyedEngine) SetChannelOptionsResolver(r ChannelOptionsResolver) {
-	e.channelOptionsResolver = r
-	e.keyedHub.setChannelOptionsResolver(r)
 }
 
 // RegisterEventHandler registers event handler.

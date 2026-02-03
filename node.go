@@ -269,12 +269,11 @@ func (n *Node) SetPresenceManager(m PresenceManager) {
 // SetKeyedEngine allows setting KeyedEngine to use.
 func (n *Node) SetKeyedEngine(e KeyedEngine) {
 	n.keyedEngine = e
-	// Register channel options resolver so engine can resolve options during cleanup.
-	e.SetChannelOptionsResolver(n.getKeyedChannelOptions)
 }
 
-// getKeyedChannelOptions resolves channel options using config callback or defaults.
-func (n *Node) getKeyedChannelOptions(channel string) KeyedChannelOptions {
+// ResolveKeyedChannelOptions returns channel options for a keyed channel,
+// using the configured GetKeyedChannelOptions callback or defaults.
+func (n *Node) ResolveKeyedChannelOptions(channel string) KeyedChannelOptions {
 	if n.config.GetKeyedChannelOptions != nil {
 		return n.config.GetKeyedChannelOptions(channel)
 	}
@@ -762,6 +761,18 @@ func (n *Node) handlePublication(ch string, sp StreamPosition, pub, prevPub, loc
 	n.metrics.incMessagesReceived("publication", ch)
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
+
+	// Debug logging for keyed publications
+	if pub != nil && pub.Key != "" && n.logEnabled(LogLevelDebug) {
+		n.logger.log(newLogEntry(LogLevelDebug, "handlePublication keyed", map[string]any{
+			"channel":        ch,
+			"key":            pub.Key,
+			"offset":         pub.Offset,
+			"numSubscribers": numSubscribers,
+			"willBroadcast":  hasCurrentSubscribers,
+		}))
+	}
+
 	if !hasCurrentSubscribers {
 		return nil
 	}
@@ -1085,7 +1096,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 			if mediumOptions.isMediumEnabled() {
 				medium, err := newChannelMedium(ch, n, mediumOptions)
 				if err != nil {
-					_, _ = n.hub.removeSub(ch, sub.client)
+					_, _, _ = n.hub.removeSub(ch, sub.client)
 					return 0, err
 				}
 				mediumMu := n.mediumLock(ch)
@@ -1095,34 +1106,56 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 			}
 		}
 
-		n.metrics.incActionCount("broker_subscribe", ch)
-		err := n.getBroker(ch).Subscribe(ch)
-		if err != nil {
-			_, _ = n.hub.removeSub(ch, sub.client)
-			if n.config.GetChannelMediumOptions != nil {
-				mediumMu := n.mediumLock(ch)
-				mediumMu.Lock()
-				medium, ok := n.mediums[ch]
-				if ok {
-					medium.close()
-					delete(n.mediums, ch)
+		// Subscribe to appropriate engine based on subscription type.
+		if sub.keyed {
+			if n.keyedEngine != nil {
+				n.metrics.incActionCount("keyed_engine_subscribe", ch)
+				err := n.keyedEngine.Subscribe(ch)
+				if err != nil {
+					_, _, _ = n.hub.removeSub(ch, sub.client)
+					if n.config.GetChannelMediumOptions != nil {
+						mediumMu := n.mediumLock(ch)
+						mediumMu.Lock()
+						medium, ok := n.mediums[ch]
+						if ok {
+							medium.close()
+							delete(n.mediums, ch)
+						}
+						mediumMu.Unlock()
+					}
+					return 0, err
 				}
-				mediumMu.Unlock()
 			}
-			return 0, err
+		} else {
+			n.metrics.incActionCount("broker_subscribe", ch)
+			err := n.getBroker(ch).Subscribe(ch)
+			if err != nil {
+				_, _, _ = n.hub.removeSub(ch, sub.client)
+				if n.config.GetChannelMediumOptions != nil {
+					mediumMu := n.mediumLock(ch)
+					mediumMu.Lock()
+					medium, ok := n.mediums[ch]
+					if ok {
+						medium.close()
+						delete(n.mediums, ch)
+					}
+					mediumMu.Unlock()
+				}
+				return 0, err
+			}
 		}
 	}
 	return chanID, nil
 }
 
 // removeSubscription removes subscription of connection on channel
-// from Hub and Broker.
+// from Hub and Broker (or KeyedEngine for keyed channels).
 func (n *Node) removeSubscription(ch string, c *Client) error {
 	n.metrics.incActionCount("remove_subscription", ch)
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
-	empty, wasRemoved := n.hub.removeSub(ch, c)
+	empty, wasRemoved, wasKeyed := n.hub.removeSub(ch, c)
 	if wasRemoved {
 		n.metrics.subscriptionsInflight.WithLabelValues(c.metricName, n.metrics.getChannelNamespaceLabel(ch)).Dec()
 	}
@@ -1138,12 +1171,24 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 			defer subMu.Unlock()
 			noSubscribers := n.hub.NumSubscribers(ch) == 0
 			if noSubscribers {
-				n.metrics.incActionCount("broker_unsubscribe", ch)
-				err := n.getBroker(ch).Unsubscribe(ch)
-				if err != nil {
-					// Cool down a bit since broker is not ready to process unsubscription.
-					time.Sleep(500 * time.Millisecond)
-					return err
+				// Unsubscribe from appropriate engine based on channel type.
+				if wasKeyed {
+					if n.keyedEngine != nil {
+						n.metrics.incActionCount("keyed_engine_unsubscribe", ch)
+						err := n.keyedEngine.Unsubscribe(ch)
+						if err != nil {
+							time.Sleep(500 * time.Millisecond)
+							return err
+						}
+					}
+				} else {
+					n.metrics.incActionCount("broker_unsubscribe", ch)
+					err := n.getBroker(ch).Unsubscribe(ch)
+					if err != nil {
+						// Cool down a bit since broker is not ready to process unsubscription.
+						time.Sleep(500 * time.Millisecond)
+						return err
+					}
 				}
 				n.hub.removeSubID(ch)
 				if n.config.GetChannelMediumOptions != nil {
@@ -1973,7 +2018,18 @@ func (n *Node) KeyedPublish(ctx context.Context, ch string, key string, opts Key
 		return KeyedPublishResult{}, ErrorNotAvailable
 	}
 	n.metrics.incActionCount("keyed_publish", ch)
-	return n.keyedEngine.Publish(ctx, ch, key, opts)
+	result, err := n.keyedEngine.Publish(ctx, ch, key, opts)
+	if n.logEnabled(LogLevelDebug) {
+		n.logger.log(newLogEntry(LogLevelDebug, "KeyedPublish result", map[string]any{
+			"channel":        ch,
+			"key":            key,
+			"suppressed":     result.Suppressed,
+			"suppressReason": result.SuppressReason,
+			"offset":         result.Position.Offset,
+			"error":          err,
+		}))
+	}
+	return result, err
 }
 
 // KeyedUnpublish removes a key from a keyed channel.

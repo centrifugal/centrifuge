@@ -322,8 +322,11 @@ if snapshot_hash_key ~= '' and is_leave ~= "1" then
     if snapshot_meta_key ~= '' then
         redis.call("hset", snapshot_meta_key, "epoch", current_epoch)
         redis.call("hset", snapshot_meta_key, "updated_at", tostring(now))
-        -- Snapshot meta should persist as long or longer than snapshot data
-        if tonumber(keyed_member_ttl) > 0 then
+        -- Snapshot meta should persist as long as stream meta (meta_expire)
+        -- Using keyed_member_ttl was wrong - it's too short for presence (30s)
+        if meta_expire ~= '0' then
+            redis.call("expire", snapshot_meta_key, tonumber(meta_expire))
+        elseif tonumber(keyed_member_ttl) > 0 then
             redis.call("expire", snapshot_meta_key, tonumber(keyed_member_ttl))
         end
     end
