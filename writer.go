@@ -73,6 +73,7 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 		if bufSize < 0 { // Unlimited, just use current length.
 			bufSize = w.messages.Len()
 			if bufSize == 0 {
+				w.mu.Unlock()
 				return true
 			}
 		}
