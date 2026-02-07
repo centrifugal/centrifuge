@@ -77,6 +77,12 @@ type engineShardWrapper struct {
 // Storage:
 // - Streams (XADD): keeps protocol.Publication
 // - Snapshots (HSET): For keyed state - may keep latest protocol.Publication or custom state.
+//
+// Pagination:
+// - Ordered snapshots use ZRANGEBYSCORE/ZRANGEBYLEX with LIMIT — exact page sizes.
+// - Unordered snapshots use HSCAN with COUNT — COUNT is only a hint, Redis may return
+//   more entries than requested (especially for small hashes in listpack encoding).
+//   Callers should not rely on exact Limit enforcement for unordered reads.
 type RedisMapEngine struct {
 	node *Node
 	conf RedisMapEngineConfig
@@ -232,6 +238,9 @@ func NewRedisMapEngine(n *Node, conf RedisMapEngineConfig) (*RedisMapEngine, err
 		shard := wrapper.shard
 		if !shard.isCluster && e.conf.NumShardedPubSubPartitions > 0 {
 			return nil, errors.New("can use sharded PUB/SUB feature (non-zero number of pub/sub partitions) only with Redis Cluster")
+		}
+		if shard.isCluster && e.conf.NumShardedPubSubPartitions == 0 {
+			return nil, errors.New("Redis Cluster requires sharded PUB/SUB (set NumShardedPubSubPartitions > 0)")
 		}
 		subChannels := make([][]rueidis.DedicatedClient, 0)
 		pubSubStartChannels := make([][]*pubSubStart, 0)
@@ -2115,6 +2124,15 @@ func (e *RedisMapEngine) runForever(fn func()) {
 	}
 }
 
+// cleanupChannelBatchSize is the max number of channels to fetch per ZRANGEBYSCORE call
+// in the cleanup worker. The worker loops until all expired channels are processed.
+const cleanupChannelBatchSize = 10000
+
+// cleanupChannelConcurrency is the max number of concurrent cleanup Lua calls per partition.
+// Goroutines automatically pipeline over rueidis's multiplexed connection, reducing
+// network round-trip overhead from N sequential calls to ~N/concurrency batches.
+const cleanupChannelConcurrency = 64
+
 // runCleanupWorker runs the background cleanup worker that generates LEAVE events
 // for expired presence entries. This ensures guaranteed delivery of LEAVE events
 // even when clients disconnect without explicit leave.
@@ -2138,51 +2156,88 @@ func (e *RedisMapEngine) runCleanupWorker(ctx context.Context) {
 	}
 }
 
-// runCleanupCycle processes all shards and cleans up expired presence entries.
+// runCleanupCycle processes all shards in parallel and cleans up expired entries.
 func (e *RedisMapEngine) runCleanupCycle(ctx context.Context) {
 	now := time.Now().Unix()
 
+	var wg sync.WaitGroup
 	for _, wrapper := range e.shards {
 		if ctx.Err() != nil {
 			return
 		}
-
 		shard := wrapper.shard
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e.cleanupShard(ctx, shard, now)
+		}()
+	}
+	wg.Wait()
+}
 
-		// Get cleanup registration key(s) based on cluster configuration
-		var cleanupKeys []string
-		if e.useShardedPubSub(shard) {
-			// For sharded PUB/SUB, we have multiple cleanup keys
-			for i := 0; i < e.conf.NumShardedPubSubPartitions; i++ {
-				cleanupKeys = append(cleanupKeys, e.conf.Prefix+":cleanup:channels:{"+strconv.Itoa(i)+"}")
-			}
-		} else {
-			cleanupKeys = []string{e.conf.Prefix + ":cleanup:channels"}
+// cleanupShard processes all partitions within a shard in parallel.
+func (e *RedisMapEngine) cleanupShard(ctx context.Context, shard *RedisShard, now int64) {
+	var cleanupKeys []string
+	if e.useShardedPubSub(shard) {
+		cleanupKeys = make([]string, 0, e.conf.NumShardedPubSubPartitions)
+		for i := 0; i < e.conf.NumShardedPubSubPartitions; i++ {
+			cleanupKeys = append(cleanupKeys, e.conf.Prefix+":cleanup:channels:{"+strconv.Itoa(i)+"}")
+		}
+	} else {
+		cleanupKeys = []string{e.conf.Prefix + ":cleanup:channels"}
+	}
+
+	var wg sync.WaitGroup
+	for _, cleanupKey := range cleanupKeys {
+		if ctx.Err() != nil {
+			return
+		}
+		wg.Add(1)
+		go func(key string) {
+			defer wg.Done()
+			e.cleanupPartition(ctx, shard, key, now)
+		}(cleanupKey)
+	}
+	wg.Wait()
+}
+
+// cleanupPartition processes all expired channels within a single partition.
+// It loops until all expired channels are handled (no artificial cap).
+// Within each batch, channels are processed concurrently for pipelining.
+func (e *RedisMapEngine) cleanupPartition(ctx context.Context, shard *RedisShard, cleanupKey string, now int64) {
+	for {
+		if ctx.Err() != nil {
+			return
 		}
 
-		for _, cleanupKey := range cleanupKeys {
+		channels, err := e.getChannelsForCleanup(ctx, shard.client, cleanupKey, now)
+		if err != nil {
+			if e.node.logEnabled(LogLevelError) {
+				e.node.logger.log(newLogEntry(LogLevelError, "cleanup: failed to get channels", map[string]any{
+					"error": err.Error(),
+				}))
+			}
+			return
+		}
+		if len(channels) == 0 {
+			return
+		}
+
+		// Process channels concurrently. Goroutines pipeline over rueidis's
+		// multiplexed connection, turning N sequential round-trips into
+		// ~N/cleanupChannelConcurrency pipelined batches.
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, cleanupChannelConcurrency)
+		for _, ch := range channels {
 			if ctx.Err() != nil {
-				return
+				break
 			}
-
-			// Get channels that need cleanup (score < now)
-			channels, err := e.getChannelsForCleanup(ctx, shard.client, cleanupKey, now)
-			if err != nil {
-				if e.node.logEnabled(LogLevelError) {
-					e.node.logger.log(newLogEntry(LogLevelError, "cleanup: failed to get channels", map[string]any{
-						"error": err.Error(),
-					}))
-				}
-				continue
-			}
-
-			for _, ch := range channels {
-				if ctx.Err() != nil {
-					return
-				}
-
-				err := e.cleanupChannel(ctx, shard, ch, cleanupKey, now)
-				if err != nil {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(ch string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				if err := e.cleanupChannel(ctx, shard, ch, cleanupKey, now); err != nil {
 					if e.node.logEnabled(LogLevelError) {
 						e.node.logger.log(newLogEntry(LogLevelError, "cleanup: failed to cleanup channel", map[string]any{
 							"channel": ch,
@@ -2190,15 +2245,15 @@ func (e *RedisMapEngine) runCleanupCycle(ctx context.Context) {
 						}))
 					}
 				}
-			}
+			}(ch)
 		}
+		wg.Wait()
 	}
 }
 
-// getChannelsForCleanup returns channels that have expired entries.
+// getChannelsForCleanup returns channels that have expired entries (score <= now).
 func (e *RedisMapEngine) getChannelsForCleanup(ctx context.Context, client rueidis.Client, cleanupKey string, now int64) ([]string, error) {
-	// Get channels with score <= now (have expired entries)
-	cmd := client.B().Zrangebyscore().Key(cleanupKey).Min("0").Max(strconv.FormatInt(now, 10)).Limit(0, 100).Build()
+	cmd := client.B().Zrangebyscore().Key(cleanupKey).Min("0").Max(strconv.FormatInt(now, 10)).Limit(0, cleanupChannelBatchSize).Build()
 	result, err := client.Do(ctx, cmd).AsStrSlice()
 	if err != nil {
 		return nil, err

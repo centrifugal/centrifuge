@@ -64,34 +64,50 @@ local use_hexpire = ARGV[9]
 local channel_for_cleanup = ARGV[10]
 local force_consistency = ARGV[11]
 
+-- Helper: encode an integer as a protobuf varint
+local function encode_varint(value)
+    local parts = {}
+    while value > 127 do
+        parts[#parts+1] = string.char(128 + (value % 128))
+        value = math.floor(value / 128)
+    end
+    parts[#parts+1] = string.char(value)
+    return table.concat(parts)
+end
+
 -- Helper function to construct minimal LEAVE Publication protobuf
 local function construct_minimal_leave(key, timestamp_seconds)
-    local pb = ""
+    local parts = {}
 
     -- Field 11: key (string), wire type 2
     -- tag = (11 << 3) | 2 = 0x5A
-    pb = pb .. string.char(0x5A)
-    pb = pb .. string.char(#key)
-    pb = pb .. key
+    parts[#parts+1] = string.char(0x5A)
+    parts[#parts+1] = encode_varint(#key)
+    parts[#parts+1] = key
 
     -- Field 12: removed (bool), wire type 0
     -- tag = (12 << 3) | 0 = 0x60
-    pb = pb .. string.char(0x60)
-    pb = pb .. string.char(0x01)
+    parts[#parts+1] = string.char(0x60, 0x01)
 
     -- Field 9: time (int64, Unix ms), wire type 0
     -- tag = (9 << 3) | 0 = 0x48
-    local time_ms = timestamp_seconds * 1000
-    pb = pb .. string.char(0x48)
+    parts[#parts+1] = string.char(0x48)
+    parts[#parts+1] = encode_varint(timestamp_seconds * 1000)
 
-    -- inline varint encoding
-    while time_ms > 127 do
-        pb = pb .. string.char(128 + (time_ms % 128))
-        time_ms = math.floor(time_ms / 128)
+    return table.concat(parts)
+end
+
+-- Helper: update cleanup registration ZSET with the earliest expiry in the expire ZSET.
+-- Uses ZRANGE 0 0 WITHSCORES to find the absolute earliest entry (expired or future),
+-- ensuring remaining expired entries are not lost when batch_size limits processing.
+local function update_cleanup_registration()
+    if cleanup_registration_key == '' then return end
+    local earliest = redis.call("zrange", snapshot_expire_key, 0, 0, "WITHSCORES")
+    if #earliest >= 2 then
+        redis.call("zadd", cleanup_registration_key, earliest[2], channel_for_cleanup)
+    else
+        redis.call("zrem", cleanup_registration_key, channel_for_cleanup)
     end
-    pb = pb .. string.char(time_ms)
-
-    return pb
 end
 
 -- Find expired entries
@@ -99,14 +115,7 @@ local expired = redis.call("zrangebyscore", snapshot_expire_key, 0, now, "LIMIT"
 
 if #expired == 0 then
     -- No expired entries, update cleanup registration with next expiry
-    if cleanup_registration_key ~= '' then
-        local next_expiry = redis.call("zrangebyscore", snapshot_expire_key, now, "+inf", "WITHSCORES", "LIMIT", 0, 1)
-        if #next_expiry >= 2 then
-            redis.call("zadd", cleanup_registration_key, next_expiry[2], channel_for_cleanup)
-        else
-            redis.call("zrem", cleanup_registration_key, channel_for_cleanup)
-        end
-    end
+    update_cleanup_registration()
     return { 0, "0", "", "ok" }
 end
 
@@ -180,14 +189,7 @@ for _, entry_key in ipairs(expired) do
     -- If current_score > now, entry was re-added, skip silently
 end
 
--- Update cleanup registration with next expiry time
-if cleanup_registration_key ~= '' then
-    local next_expiry = redis.call("zrangebyscore", snapshot_expire_key, now, "+inf", "WITHSCORES", "LIMIT", 0, 1)
-    if #next_expiry >= 2 then
-        redis.call("zadd", cleanup_registration_key, next_expiry[2], channel_for_cleanup)
-    else
-        redis.call("zrem", cleanup_registration_key, channel_for_cleanup)
-    end
-end
+-- Update cleanup registration with the earliest remaining expiry.
+update_cleanup_registration()
 
 return { removed_count, tostring(redis.call("hget", meta_key, "s") or 0), current_epoch }
