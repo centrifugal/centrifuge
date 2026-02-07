@@ -190,8 +190,8 @@ type SubscribeEvent struct {
 	Recoverable bool
 	// JoinLeave is true when Client wants to receive join/leave messages.
 	JoinLeave bool
-	// Keyed is true when Client requested keyed subscription mode.
-	Keyed bool
+	// Map is true when Client requested map subscription mode.
+	Map bool
 }
 
 // SubscribeCallback should be called as soon as handler decides what to do

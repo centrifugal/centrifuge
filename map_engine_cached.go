@@ -1,0 +1,728 @@
+package centrifuge
+
+import (
+	"context"
+	"errors"
+	"math/rand"
+	"sync"
+	"time"
+)
+
+// CachedMapEngineConfig configures the cached map engine wrapper.
+type CachedMapEngineConfig struct {
+	// Cache configuration for the in-memory cache layer.
+	Cache MapCacheConfig
+
+	// SyncInterval is how often each channel syncs with backend.
+	// Each channel syncs independently on its own timer.
+	// Default: 30s
+	SyncInterval time.Duration
+
+	// SyncJitter is the relative jitter factor (0.0 to 1.0) for sync timing.
+	// Actual interval is SyncInterval * (1 ± random(0, SyncJitter)).
+	// For example, 0.1 means ±10% jitter, so 30s becomes 27s-33s.
+	// Default: 0.1 (10%)
+	SyncJitter float64
+
+	// SyncConcurrency limits parallel sync operations.
+	// 0 means unbounded (spawn goroutine per sync).
+	// Default: 0
+	SyncConcurrency int
+
+	// SyncBatchSize is max publications to fetch per sync poll.
+	// Default: 1000
+	SyncBatchSize int
+
+	// LoadTimeout is the timeout for lazy-loading a channel from backend.
+	// Default: 5s
+	LoadTimeout time.Duration
+}
+
+// DefaultCachedMapEngineConfig returns the default configuration.
+func DefaultCachedMapEngineConfig() CachedMapEngineConfig {
+	return CachedMapEngineConfig{
+		Cache:           DefaultMapCacheConfig(),
+		SyncInterval:    30 * time.Second,
+		SyncJitter:      0.1, // 10% jitter
+		SyncConcurrency: 0,
+		SyncBatchSize:   1000,
+		LoadTimeout:     5 * time.Second,
+	}
+}
+
+func (c CachedMapEngineConfig) setDefaults() CachedMapEngineConfig {
+	if c.SyncInterval <= 0 {
+		c.SyncInterval = 30 * time.Second
+	}
+	if c.SyncJitter < 0 {
+		c.SyncJitter = 0
+	}
+	if c.SyncJitter > 1 {
+		c.SyncJitter = 1
+	}
+	if c.SyncBatchSize <= 0 {
+		c.SyncBatchSize = 1000
+	}
+	if c.LoadTimeout <= 0 {
+		c.LoadTimeout = 5 * time.Second
+	}
+	if c.Cache.MaxChannels == 0 && c.Cache.ChannelIdleTimeout == 0 && c.Cache.StreamSize == 0 {
+		c.Cache = DefaultMapCacheConfig()
+	}
+	return c
+}
+
+// CachedMapEngine wraps a MapEngine with an in-memory cache layer.
+// It provides:
+// - Read-your-own-writes consistency on the publishing node
+// - Low-latency reads from memory instead of database
+// - Cross-node eventual consistency via stream synchronization
+// - Backward compatibility - existing engines work unchanged
+type CachedMapEngine struct {
+	node         *Node
+	backend      MapEngine
+	cache        *mapCacheImpl
+	conf         CachedMapEngineConfig
+	eventHandler BrokerEventHandler
+
+	// Stream synchronization - per-channel state
+	syncState   map[string]*channelSyncState
+	syncStateMu sync.RWMutex
+
+	// Track which channels have had their stream initialized from backend.
+	// First ReadStream call always goes to backend; subsequent calls use cache.
+	streamInitialized   map[string]bool
+	streamInitializedMu sync.RWMutex
+
+	// Per-channel locks for ordered cache updates
+	channelLocks   map[string]*sync.Mutex
+	channelLocksMu sync.Mutex
+
+	// Worker pool for bounded concurrency (nil if unbounded)
+	syncWorkerCh chan string
+
+	closeCh   chan struct{}
+	closeOnce sync.Once
+	wg        sync.WaitGroup
+}
+
+// channelSyncState tracks sync state for a single channel.
+type channelSyncState struct {
+	lastOffset   uint64
+	nextSyncTime time.Time
+	syncing      bool // Prevents concurrent syncs of the same channel
+}
+
+var _ MapEngine = (*CachedMapEngine)(nil)
+
+// NewCachedMapEngine creates a cached wrapper around any MapEngine.
+// The cache layer provides read-your-own-writes consistency and low-latency
+// reads while the backend provides durability and cross-node consistency.
+func NewCachedMapEngine(n *Node, backend MapEngine, conf CachedMapEngineConfig) (*CachedMapEngine, error) {
+	if backend == nil {
+		return nil, errors.New("cached map engine: backend is required")
+	}
+	conf = conf.setDefaults()
+
+	cache := newMapCache(conf.Cache)
+
+	e := &CachedMapEngine{
+		node:              n,
+		backend:           backend,
+		cache:             cache,
+		conf:              conf,
+		syncState:         make(map[string]*channelSyncState),
+		channelLocks:      make(map[string]*sync.Mutex),
+		streamInitialized: make(map[string]bool),
+		closeCh:           make(chan struct{}),
+	}
+
+	// Create worker channel if concurrency is bounded
+	if conf.SyncConcurrency > 0 {
+		e.syncWorkerCh = make(chan string, conf.SyncConcurrency*2)
+	}
+
+	return e, nil
+}
+
+// cachedEventHandler wraps the original event handler to intercept publications
+// and update the cache before forwarding to the original handler.
+type cachedEventHandler struct {
+	engine  *CachedMapEngine
+	cache   *mapCacheImpl
+	backend MapEngine
+	handler BrokerEventHandler
+	conf    CachedMapEngineConfig
+}
+
+func (h *cachedEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+	// If channel is being loaded, try to buffer the publication for replay after load completes.
+	// BufferPublication returns false if loading just finished (race condition) - in that case
+	// fall through to check if channel is now loaded.
+	buffered := false
+	if h.cache.IsLoading(ch) {
+		buffered = h.cache.BufferPublication(ch, pub, sp, pub.Removed)
+	}
+	if !buffered && h.cache.IsLoaded(ch) {
+		// Update cache if channel is loaded, using per-channel lock for ordering
+		h.engine.withChannelLock(ch, func() {
+			cachedPos := h.cache.GetPosition(ch)
+
+			// Check for gap - if incoming offset > cached + 1, we missed publications
+			if cachedPos.Offset > 0 && pub.Offset > cachedPos.Offset+1 {
+				// Check epoch first - if different, need full reload
+				if cachedPos.Epoch != "" && sp.Epoch != "" && cachedPos.Epoch != sp.Epoch {
+					// Epoch changed - evict and let next read reload
+					h.cache.Evict(ch)
+					return
+				}
+				// Same epoch - fill the gap with ONE backend call
+				h.fillGap(ch, cachedPos, pub.Offset, sp.Epoch)
+			}
+
+			// Skip if this offset was already applied (can happen with concurrent local writes)
+			if pub.Offset <= h.cache.GetPosition(ch).Offset {
+				return
+			}
+
+			// Now apply the incoming publication
+			_ = h.cache.ApplyPublication(ch, pub, sp, pub.Removed)
+		})
+	}
+	// Forward to original handler
+	if h.handler != nil {
+		return h.handler.HandlePublication(ch, pub, sp, delta, prevPub)
+	}
+	return nil
+}
+
+// fillGap fetches missing publications from backend and applies them to cache.
+// Must be called with channel lock held.
+func (h *cachedEventHandler) fillGap(ch string, cachedPos StreamPosition, incomingOffset uint64, epoch string) {
+	ctx, cancel := context.WithTimeout(context.Background(), h.conf.LoadTimeout)
+	defer cancel()
+
+	// Fetch missing publications (from cachedPos to incomingOffset-1)
+	missing, _, err := h.backend.ReadStream(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{
+			Since: &cachedPos,
+			Limit: int(incomingOffset - cachedPos.Offset - 1), // Only what's missing
+		},
+	})
+	if err != nil {
+		// On error, evict cache to force reload on next read
+		h.cache.Evict(ch)
+		return
+	}
+
+	// Apply missing publications in order
+	for _, m := range missing {
+		pubPos := StreamPosition{Offset: m.Offset, Epoch: epoch}
+		_ = h.cache.ApplyPublication(ch, m, pubPos, m.Removed)
+	}
+}
+
+func (h *cachedEventHandler) HandleJoin(ch string, info *ClientInfo) error {
+	if h.handler != nil {
+		return h.handler.HandleJoin(ch, info)
+	}
+	return nil
+}
+
+func (h *cachedEventHandler) HandleLeave(ch string, info *ClientInfo) error {
+	if h.handler != nil {
+		return h.handler.HandleLeave(ch, info)
+	}
+	return nil
+}
+
+// backendRegistrar is an interface for backends that can register event handlers.
+type backendRegistrar interface {
+	RegisterEventHandler(BrokerEventHandler) error
+}
+
+// RegisterEventHandler registers the event handler and starts background workers.
+// It also registers a wrapper handler with the backend to intercept publications
+// and update the cache.
+func (e *CachedMapEngine) RegisterEventHandler(h BrokerEventHandler) error {
+	e.eventHandler = h
+
+	// Create wrapper that updates cache and forwards to original handler
+	wrapper := &cachedEventHandler{
+		engine:  e,
+		cache:   e.cache,
+		backend: e.backend,
+		handler: h,
+		conf:    e.conf,
+	}
+
+	// Register with backend if it supports event handler registration
+	if registrar, ok := e.backend.(backendRegistrar); ok {
+		if err := registrar.RegisterEventHandler(wrapper); err != nil {
+			return err
+		}
+	}
+
+	// Start sync loop (handles cross-node updates for channels loaded before
+	// backend started delivering publications)
+	go e.runSyncLoop()
+	return nil
+}
+
+// Close shuts down the cached engine.
+func (e *CachedMapEngine) Close(ctx context.Context) error {
+	e.closeOnce.Do(func() {
+		close(e.closeCh)
+		// Wait for sync workers to finish
+		e.wg.Wait()
+		_ = e.cache.Close()
+	})
+	return nil
+}
+
+// withChannelLock executes fn while holding the per-channel lock.
+// This ensures ordered cache updates for concurrent writes to the same channel.
+func (e *CachedMapEngine) withChannelLock(ch string, fn func()) {
+	e.channelLocksMu.Lock()
+	lock, ok := e.channelLocks[ch]
+	if !ok {
+		lock = &sync.Mutex{}
+		e.channelLocks[ch] = lock
+	}
+	e.channelLocksMu.Unlock()
+
+	lock.Lock()
+	defer lock.Unlock()
+	fn()
+}
+
+// Subscribe registers this server node to receive pub/sub messages for the channel.
+func (e *CachedMapEngine) Subscribe(ch string) error {
+	// Check if channel is already loaded - we'll need to evict BEFORE subscribing
+	// to force a fresh load, catching any publications we might have missed.
+	wasLoaded := e.cache.IsLoaded(ch)
+	if wasLoaded {
+		// Evict before subscribing so the fresh load happens after pub/sub is active.
+		// This ensures we don't miss publications between the evict and subscribe.
+		e.cache.Evict(ch)
+		// Also clear stream initialized flag so ReadStream loads fresh from backend
+		e.streamInitializedMu.Lock()
+		delete(e.streamInitialized, ch)
+		e.streamInitializedMu.Unlock()
+	}
+
+	// Mark as loading BEFORE subscribing to pub/sub, so any incoming
+	// publications are buffered rather than dropped.
+	e.cache.MarkLoading(ch)
+
+	// Subscribe to backend PUB/SUB - now we'll receive updates
+	if err := e.backend.Subscribe(ch); err != nil {
+		e.cache.ClearLoading(ch)
+		return err
+	}
+
+	// Preload cache - this ensures cache is populated before first read
+	// and HandlePublication can update it for real-time changes
+	ctx, cancel := context.WithTimeout(context.Background(), e.conf.LoadTimeout)
+	defer cancel()
+	_ = e.ensureLoaded(ctx, ch)
+	return nil
+}
+
+// Unsubscribe removes this server node from receiving pub/sub messages for the channel.
+func (e *CachedMapEngine) Unsubscribe(ch string) error {
+	// Evict from cache on unsubscribe
+	e.cache.Evict(ch)
+
+	// Clear stream initialized flag
+	e.streamInitializedMu.Lock()
+	delete(e.streamInitialized, ch)
+	e.streamInitializedMu.Unlock()
+
+	return e.backend.Unsubscribe(ch)
+}
+
+// Publish updates the state and broadcasts the change to subscribers.
+// Write path: backend first, then update local cache for read-your-own-writes.
+// Uses per-channel lock to ensure serialized cache updates under concurrency.
+func (e *CachedMapEngine) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
+	// Write to backend (source of truth).
+	// Backend calls HandlePublication which updates the cache with proper gap detection.
+	return e.backend.Publish(ctx, ch, key, opts)
+}
+
+// Remove removes a key from the state and notifies subscribers.
+// Backend calls HandlePublication which updates the cache with proper gap detection.
+func (e *CachedMapEngine) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
+	return e.backend.Remove(ctx, ch, key, opts)
+}
+
+// ReadState retrieves the current key-value state for a channel.
+// By default, reads from backend for consistency (safe for CAS operations).
+// If opts.Cached is true (internal subscription flow), reads from cache for performance.
+func (e *CachedMapEngine) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+	// Default: read from backend for consistency (safe for CAS, always fresh).
+	// Application code should always get fresh data.
+	if !opts.Cached {
+		return e.backend.ReadState(ctx, ch, opts)
+	}
+
+	// Cached path - only used by internal subscription flow for optimized delivery.
+	// Mark as loading BEFORE ensureLoaded to buffer any concurrent pub/sub messages.
+	// This handles the race where pub/sub starts delivering before cache is fully loaded.
+	e.cache.MarkLoading(ch)
+
+	// Ensure channel is loaded into cache
+	if err := e.ensureLoaded(ctx, ch); err != nil {
+		e.cache.ClearLoading(ch)
+		return nil, StreamPosition{}, "", err
+	}
+
+	// Read from cache
+	return e.cache.GetState(ch, opts)
+}
+
+// ReadStream retrieves publications from the channel's history stream.
+// First call per channel always reads from backend to ensure we catch publications
+// that happened between state load and pub/sub subscription (critical for presence).
+// Subsequent calls use the cached stream (kept updated via pub/sub and sync).
+func (e *CachedMapEngine) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+	// Ensure channel state is loaded into cache
+	if err := e.ensureLoaded(ctx, ch); err != nil {
+		return nil, StreamPosition{}, err
+	}
+
+	// Check if stream has been initialized for this channel
+	e.streamInitializedMu.RLock()
+	initialized := e.streamInitialized[ch]
+	e.streamInitializedMu.RUnlock()
+
+	if initialized {
+		// Stream already initialized - read from cache (eventual consistency via pub/sub and sync)
+		return e.cache.GetStream(ch, opts)
+	}
+
+	// First call for this channel - MUST read from backend.
+	// This is critical during subscription to catch publications that happened
+	// between state load and pub/sub subscription (e.g., presence notifications).
+	fullPubs, pos, err := e.backend.ReadStream(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{
+			Limit: -1, // Get full stream for caching
+		},
+	})
+	if err != nil {
+		return nil, StreamPosition{}, err
+	}
+
+	// Populate cache with backend data, preserving any entries added by HandlePublication
+	e.cache.PopulateStream(ch, fullPubs, pos.Epoch)
+
+	// Mark stream as initialized - subsequent calls will use cache
+	e.streamInitializedMu.Lock()
+	e.streamInitialized[ch] = true
+	e.streamInitializedMu.Unlock()
+
+	// Return from cache with user's filter applied
+	return e.cache.GetStream(ch, opts)
+}
+
+// Stats returns statistics about the channel's state.
+func (e *CachedMapEngine) Stats(ctx context.Context, ch string) (MapStats, error) {
+	// If loaded, return from cache
+	if e.cache.IsLoaded(ch) {
+		return e.cache.GetStats(ch)
+	}
+	// Otherwise query backend
+	return e.backend.Stats(ctx, ch)
+}
+
+// Clear deletes all data for a channel (state and stream).
+func (e *CachedMapEngine) Clear(ctx context.Context, ch string, opts MapClearOptions) error {
+	// Remove from cache
+	e.cache.Evict(ch)
+
+	// Remove sync state
+	e.syncStateMu.Lock()
+	delete(e.syncState, ch)
+	e.syncStateMu.Unlock()
+
+	// Clear stream initialized flag
+	e.streamInitializedMu.Lock()
+	delete(e.streamInitialized, ch)
+	e.streamInitializedMu.Unlock()
+
+	// Clear from backend
+	return e.backend.Clear(ctx, ch, opts)
+}
+
+// ensureLoaded loads channel data from backend into cache if not already loaded.
+// Loads both state and stream for client recovery during reconnect storms.
+// Uses resolved channel options for stream size/TTL configuration.
+func (e *CachedMapEngine) ensureLoaded(ctx context.Context, ch string) error {
+	// Resolve channel options for stream size/TTL
+	opts := e.resolveChannelOptions(ch)
+
+	return e.cache.EnsureLoaded(ctx, ch, opts, func(ctx context.Context, ch string, opts MapChannelOptions) ([]*Publication, []*Publication, StreamPosition, error) {
+		loadCtx, cancel := context.WithTimeout(ctx, e.conf.LoadTimeout)
+		defer cancel()
+
+		// Load full state from backend
+		statePubs, pos, _, err := e.backend.ReadState(loadCtx, ch, MapReadStateOptions{
+			Limit: 0, // All entries (unlimited)
+		})
+		if err != nil {
+			return nil, nil, StreamPosition{}, err
+		}
+
+		// Debug logging
+		if e.node.logEnabled(LogLevelDebug) {
+			keys := make([]string, 0, len(statePubs))
+			for _, pub := range statePubs {
+				keys = append(keys, pub.Key)
+			}
+			e.node.logger.log(newLogEntry(LogLevelDebug, "ensureLoaded from backend", map[string]any{
+				"channel":  ch,
+				"numPubs":  len(statePubs),
+				"position": pos,
+				"keys":     keys,
+			}))
+		}
+
+		// Don't pre-load stream here - it will be loaded fresh from backend
+		// when ReadStream is called. This ensures we get the latest stream data
+		// during subscription, avoiding races where publications happen between
+		// state load and stream read.
+		// The stream cache will be populated by pub/sub messages after subscription.
+		var streamPubs []*Publication
+
+		// Initialize sync offset to current position
+		e.updateSyncOffset(ch, pos.Offset)
+
+		return statePubs, streamPubs, pos, nil
+	})
+}
+
+// resolveChannelOptions resolves map channel options for a channel.
+func (e *CachedMapEngine) resolveChannelOptions(ch string) MapChannelOptions {
+	return e.node.ResolveMapChannelOptions(ch)
+}
+
+// runSyncLoop runs the background sync scheduler.
+// It checks which channels need syncing and dispatches them to workers.
+func (e *CachedMapEngine) runSyncLoop() {
+	// Start worker pool if bounded concurrency
+	if e.conf.SyncConcurrency > 0 {
+		for i := 0; i < e.conf.SyncConcurrency; i++ {
+			e.wg.Add(1)
+			go e.syncWorker()
+		}
+	}
+
+	// Scheduler tick interval - check for due channels frequently
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-e.closeCh:
+			// Close worker channel to signal workers to stop
+			if e.syncWorkerCh != nil {
+				close(e.syncWorkerCh)
+			}
+			return
+		case <-ticker.C:
+			e.dispatchDueSyncs()
+		}
+	}
+}
+
+// dispatchDueSyncs finds channels due for sync and dispatches them.
+func (e *CachedMapEngine) dispatchDueSyncs() {
+	now := time.Now()
+	channels := e.cache.LoadedChannels()
+
+	for _, ch := range channels {
+		e.syncStateMu.Lock()
+		state, exists := e.syncState[ch]
+		if !exists {
+			// New channel - initialize sync state with jittered first sync
+			state = &channelSyncState{
+				lastOffset:   0,
+				nextSyncTime: now.Add(e.jitteredInterval()),
+				syncing:      false,
+			}
+			e.syncState[ch] = state
+			e.syncStateMu.Unlock()
+			continue
+		}
+
+		// Check if due for sync and not already syncing
+		if now.Before(state.nextSyncTime) || state.syncing {
+			e.syncStateMu.Unlock()
+			continue
+		}
+
+		// Mark as syncing and schedule next sync
+		state.syncing = true
+		state.nextSyncTime = now.Add(e.jitteredInterval())
+		e.syncStateMu.Unlock()
+
+		// Dispatch sync
+		if e.syncWorkerCh != nil {
+			// Bounded concurrency - send to worker pool
+			select {
+			case e.syncWorkerCh <- ch:
+			default:
+				// Worker pool full, skip this cycle
+				e.syncStateMu.Lock()
+				if s, ok := e.syncState[ch]; ok {
+					s.syncing = false
+				}
+				e.syncStateMu.Unlock()
+			}
+		} else {
+			// Unbounded concurrency - spawn goroutine
+			e.wg.Add(1)
+			go func(channel string) {
+				defer e.wg.Done()
+				e.syncChannel(channel)
+			}(ch)
+		}
+	}
+}
+
+// syncWorker is a worker goroutine that processes sync requests.
+func (e *CachedMapEngine) syncWorker() {
+	defer e.wg.Done()
+	for ch := range e.syncWorkerCh {
+		e.syncChannel(ch)
+	}
+}
+
+// jitteredInterval returns the sync interval with random relative jitter.
+func (e *CachedMapEngine) jitteredInterval() time.Duration {
+	interval := e.conf.SyncInterval
+	if e.conf.SyncJitter > 0 {
+		// Calculate max jitter as a fraction of the interval
+		maxJitter := float64(interval) * e.conf.SyncJitter
+		// Random jitter between -maxJitter and +maxJitter
+		jitter := time.Duration((rand.Float64()*2 - 1) * maxJitter)
+		interval += jitter
+	}
+	return interval
+}
+
+// syncChannel syncs a single channel with backend.
+func (e *CachedMapEngine) syncChannel(ch string) {
+	defer func() {
+		// Mark sync as complete
+		e.syncStateMu.Lock()
+		if state, ok := e.syncState[ch]; ok {
+			state.syncing = false
+		}
+		e.syncStateMu.Unlock()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), e.conf.LoadTimeout)
+	defer cancel()
+
+	// Get last synced offset and epoch for this channel
+	since := e.getSyncOffset(ch)
+	cachedEpoch := e.cache.GetEpoch(ch)
+
+	// Fetch new publications from backend
+	pubs, pos, err := e.backend.ReadStream(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{
+			Since: &StreamPosition{Offset: since},
+			Limit: e.conf.SyncBatchSize,
+		},
+	})
+	if err != nil {
+		// Sync errors are expected during transient failures, don't log to avoid noise
+		return
+	}
+
+	// Check for epoch mismatch - backend epoch changed, need full reload
+	if cachedEpoch != "" && pos.Epoch != "" && cachedEpoch != pos.Epoch {
+		e.reloadChannel(ctx, ch)
+		return
+	}
+
+	// Check for gap in stream continuity - if first pub offset > since + 1, we missed publications
+	if len(pubs) > 0 && since > 0 && pubs[0].Offset > since+1 {
+		e.reloadChannel(ctx, ch)
+		return
+	}
+
+	// Apply each publication to cache and deliver to subscribers
+	for _, pub := range pubs {
+		// Use publication's own offset for position, preserving epoch from stream position
+		pubPos := StreamPosition{Offset: pub.Offset, Epoch: pos.Epoch}
+		_ = e.cache.ApplyPublication(ch, pub, pubPos, pub.Removed)
+
+		// Deliver to subscribers - this handles publications that were missed
+		// because this node wasn't subscribed to pub/sub when they were published.
+		if e.eventHandler != nil {
+			_ = e.eventHandler.HandlePublication(ch, pub, pubPos, false, nil)
+		}
+	}
+
+	// Update sync cursor
+	if len(pubs) > 0 {
+		e.updateSyncOffset(ch, pubs[len(pubs)-1].Offset)
+	} else if pos.Offset > since {
+		// Update cursor even if no new pubs (position advanced)
+		e.updateSyncOffset(ch, pos.Offset)
+	}
+}
+
+// reloadChannel evicts the channel from cache and reloads it from backend.
+func (e *CachedMapEngine) reloadChannel(ctx context.Context, ch string) {
+	// Evict from cache
+	e.cache.Evict(ch)
+
+	// Clear sync state
+	e.syncStateMu.Lock()
+	delete(e.syncState, ch)
+	e.syncStateMu.Unlock()
+
+	// Clear stream initialized flag so next ReadStream loads fresh from backend
+	e.streamInitializedMu.Lock()
+	delete(e.streamInitialized, ch)
+	e.streamInitializedMu.Unlock()
+
+	// Reload by ensuring it's loaded again
+	_ = e.ensureLoaded(ctx, ch)
+}
+
+// getSyncOffset returns the last synced offset for a channel.
+func (e *CachedMapEngine) getSyncOffset(ch string) uint64 {
+	e.syncStateMu.RLock()
+	defer e.syncStateMu.RUnlock()
+	if state, ok := e.syncState[ch]; ok {
+		return state.lastOffset
+	}
+	return 0
+}
+
+// updateSyncOffset updates the sync offset for a channel.
+func (e *CachedMapEngine) updateSyncOffset(ch string, offset uint64) {
+	e.syncStateMu.Lock()
+	defer e.syncStateMu.Unlock()
+	if state, ok := e.syncState[ch]; ok {
+		if offset > state.lastOffset {
+			state.lastOffset = offset
+		}
+	} else {
+		e.syncState[ch] = &channelSyncState{
+			lastOffset:   offset,
+			nextSyncTime: time.Now().Add(e.jitteredInterval()),
+		}
+	}
+}
+
+// underlyingBackend returns the underlying backend MapEngine.
+// Useful for advanced operations that bypass the cache.
+func (e *CachedMapEngine) underlyingBackend() MapEngine {
+	return e.backend
+}

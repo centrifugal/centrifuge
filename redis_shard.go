@@ -4,7 +4,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"net"
 	"net/url"
 	"strconv"
@@ -391,26 +390,4 @@ func (s *RedisShard) Close() {
 
 func (s *RedisShard) string() string {
 	return strings.Join(s.finalAddress, ",")
-}
-
-// consistentIndex is an adapted function from https://github.com/dgryski/go-jump
-// package by Damian Gryski. It consistently chooses a hash bucket number in the
-// range [0, numBuckets) for the given string. numBuckets must be >= 1.
-func consistentIndex(s string, numBuckets int) int {
-	hash := fnv.New64a()
-	_, _ = hash.Write([]byte(s))
-	key := hash.Sum64()
-
-	var (
-		b int64 = -1
-		j int64
-	)
-
-	for j < int64(numBuckets) {
-		b = j
-		key = key*2862933555777941757 + 1
-		j = int64(float64(b+1) * (float64(int64(1)<<31) / float64((key>>33)+1)))
-	}
-
-	return int(b)
 }

@@ -1426,21 +1426,20 @@ func TestNodeCheckPosition(t *testing.T) {
 	require.False(t, isValid)
 }
 
-func TestNodeCheckPositionKeyed(t *testing.T) {
+func TestNodeCheckPositionMap(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	// Set up keyed engine.
-	keyedEngine, err := NewMemoryKeyedEngine(node, MemoryKeyedEngineConfig{})
+	// Set up map engine.
+	mapEngine, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
 	require.NoError(t, err)
-	node.SetKeyedEngine(keyedEngine)
+	node.SetMapEngine(mapEngine)
 
 	ctx := context.Background()
-	channel := "test_keyed"
+	channel := "test_map"
 
 	// Publish some data to create stream position.
-	result, err := keyedEngine.Publish(ctx, channel, "key1", KeyedPublishOptions{
-		
+	result, err := mapEngine.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte(`{"test": 1}`),
 		StreamSize: 100,
 		StreamTTL:  time.Hour,
@@ -1470,8 +1469,7 @@ func TestNodeCheckPositionKeyed(t *testing.T) {
 	require.False(t, isValid)
 
 	// Publish more data.
-	result2, err := keyedEngine.Publish(ctx, channel, "key2", KeyedPublishOptions{
-		
+	result2, err := mapEngine.Publish(ctx, channel, "key2", MapPublishOptions{
 		Data:       []byte(`{"test": 2}`),
 		StreamSize: 100,
 		StreamTTL:  time.Hour,
@@ -1534,4 +1532,67 @@ func TestGetPresenceManager(t *testing.T) {
 
 	_, err = node.Presence("test2")
 	require.NoError(t, err)
+}
+
+func TestGetMapEngine(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	// Create two map engines
+	defaultEngine, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	require.NoError(t, err)
+	_ = defaultEngine.RegisterBrokerEventHandler(nil)
+
+	customEngine, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	require.NoError(t, err)
+	_ = customEngine.RegisterBrokerEventHandler(nil)
+
+	// Set default engine
+	node.SetMapEngine(defaultEngine)
+
+	// Configure GetMapEngine to route "custom:*" channels to customEngine
+	node.config.GetMapEngine = func(channel string) (MapEngine, bool) {
+		if len(channel) >= 7 && channel[:7] == "custom:" {
+			return customEngine, true
+		}
+		return nil, false // Use default
+	}
+
+	ctx := context.Background()
+
+	// Publish to default channel - should use defaultEngine
+	_, err = node.MapPublish(ctx, "default:test", "key1", MapPublishOptions{
+		Data: []byte(`{"v":1}`),
+	})
+	require.NoError(t, err)
+
+	// Publish to custom channel - should use customEngine
+	_, err = node.MapPublish(ctx, "custom:test", "key1", MapPublishOptions{
+		Data: []byte(`{"v":2}`),
+	})
+	require.NoError(t, err)
+
+	// Read from default channel - should find the data
+	result, err := node.MapStateRead(ctx, "default:test", MapReadStateOptions{Key: "key1"})
+	require.NoError(t, err)
+	require.Len(t, result.Publications, 1)
+	require.Equal(t, []byte(`{"v":1}`), result.Publications[0].Data)
+
+	// Read from custom channel - should find the data
+	result, err = node.MapStateRead(ctx, "custom:test", MapReadStateOptions{Key: "key1"})
+	require.NoError(t, err)
+	require.Len(t, result.Publications, 1)
+	require.Equal(t, []byte(`{"v":2}`), result.Publications[0].Data)
+
+	// Verify isolation - default channel shouldn't find custom data
+	result, err = node.MapStateRead(ctx, "default:test", MapReadStateOptions{Key: "key1"})
+	require.NoError(t, err)
+	require.Len(t, result.Publications, 1)
+	require.Equal(t, []byte(`{"v":1}`), result.Publications[0].Data) // Still default data
+
+	// Custom channel shouldn't find default data
+	result, err = node.MapStateRead(ctx, "custom:test", MapReadStateOptions{Key: "key1"})
+	require.NoError(t, err)
+	require.Len(t, result.Publications, 1)
+	require.Equal(t, []byte(`{"v":2}`), result.Publications[0].Data) // Still custom data
 }

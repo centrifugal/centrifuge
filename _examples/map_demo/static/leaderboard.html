@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Leaderboard (PostgreSQL) - Map Subscriptions Demo</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white;
+            min-height: 100vh;
+            margin: 0;
+            padding: 40px 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 30px;
+        }
+        .pg-badge {
+            display: inline-block;
+            background: #336791;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding: 15px 20px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 12px;
+        }
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #f44;
+        }
+        .status-dot.connected {
+            background: #4f4;
+        }
+        .join-section {
+            text-align: center;
+            margin-bottom: 40px;
+            padding: 30px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 16px;
+        }
+        .join-section.hidden {
+            display: none;
+        }
+        .join-form {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .join-form input {
+            padding: 12px 16px;
+            border-radius: 8px;
+            border: none;
+            font-size: 16px;
+            width: 200px;
+        }
+        .color-picker {
+            display: flex;
+            gap: 8px;
+        }
+        .color-option {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 3px solid transparent;
+            transition: transform 0.2s;
+        }
+        .color-option:hover {
+            transform: scale(1.1);
+        }
+        .color-option.selected {
+            border-color: white;
+        }
+        .btn {
+            padding: 12px 30px;
+            border-radius: 8px;
+            border: none;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .btn-primary:hover {
+            transform: scale(1.05);
+        }
+        .btn-danger {
+            background: #f44336;
+            color: white;
+        }
+        .btn-danger:hover {
+            background: #d32f2f;
+        }
+        .game-section {
+            display: none;
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        .game-section.active {
+            display: block;
+        }
+        .click-button {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            color: white;
+            transition: transform 0.1s;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        .click-button:active {
+            transform: scale(0.95);
+        }
+        .my-score {
+            font-size: 22px;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .leaderboard {
+            background: rgba(255,255,255,0.1);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+        .leaderboard-header {
+            display: grid;
+            grid-template-columns: 60px 1fr 100px;
+            padding: 15px 20px;
+            background: rgba(255,255,255,0.1);
+            font-weight: 600;
+            font-size: 14px;
+            color: #888;
+        }
+        .leaderboard-row {
+            display: grid;
+            grid-template-columns: 60px 1fr 100px;
+            padding: 15px 20px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            transition: background 0.2s;
+        }
+        .leaderboard-row:last-child {
+            border-bottom: none;
+        }
+        .leaderboard-row.me {
+            background: rgba(79, 195, 247, 0.2);
+        }
+        .leaderboard-row:hover {
+            background: rgba(255,255,255,0.05);
+        }
+        .rank {
+            font-weight: bold;
+            color: #888;
+        }
+        .rank.gold { color: #ffd700; }
+        .rank.silver { color: #c0c0c0; }
+        .rank.bronze { color: #cd7f32; }
+        .player-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .player-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: white;
+        }
+        .player-name {
+            font-weight: 500;
+        }
+        .player-tag {
+            font-size: 12px;
+            background: rgba(79, 195, 247, 0.3);
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-left: 8px;
+        }
+        .score {
+            font-weight: bold;
+            font-size: 18px;
+            text-align: right;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #888;
+        }
+        .back-link {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            color: #888;
+            text-decoration: none;
+        }
+        .back-link:hover {
+            color: white;
+        }
+        .leave-btn-container {
+            margin-top: 20px;
+        }
+        .info-box {
+            background: rgba(51, 103, 145, 0.3);
+            border: 1px solid #336791;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            color: #aaa;
+        }
+        .info-box code {
+            background: rgba(255,255,255,0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Live Leaderboard <span class="pg-badge">PostgreSQL</span></h1>
+        <p class="subtitle">Persistent leaderboard using native cf_map_publish() SQL functions</p>
+
+        <div class="info-box">
+            This demo calls PostgreSQL's <code>cf_map_publish()</code> and <code>cf_map_remove()</code>
+            functions directly via HTTP endpoints. Data persists across server restarts.
+            Real-time updates are delivered via WebSocket subscription.
+        </div>
+
+        <div class="status-bar">
+            <div class="status">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Connecting...</span>
+            </div>
+            <div id="playerCount">0 players</div>
+        </div>
+
+        <div class="join-section" id="joinSection">
+            <h3>Join the Competition</h3>
+            <div class="join-form">
+                <input type="text" id="playerName" placeholder="Your name" maxlength="20">
+                <div class="color-picker" id="colorPicker">
+                    <div class="color-option selected" style="background: #e91e63" data-color="#e91e63"></div>
+                    <div class="color-option" style="background: #9c27b0" data-color="#9c27b0"></div>
+                    <div class="color-option" style="background: #3f51b5" data-color="#3f51b5"></div>
+                    <div class="color-option" style="background: #00bcd4" data-color="#00bcd4"></div>
+                    <div class="color-option" style="background: #4caf50" data-color="#4caf50"></div>
+                    <div class="color-option" style="background: #ff9800" data-color="#ff9800"></div>
+                </div>
+                <button class="btn btn-primary" onclick="joinGame()">Join Game</button>
+            </div>
+        </div>
+
+        <div class="game-section" id="gameSection">
+            <button class="click-button" id="clickButton" onclick="handleClick()">
+                CLICK ME!
+            </button>
+            <div class="my-score">Score: <span id="myScore">0</span></div>
+            <div class="leave-btn-container">
+                <button class="btn btn-danger" onclick="leaveGame()">Leave Game</button>
+            </div>
+        </div>
+
+        <div class="leaderboard" id="leaderboard">
+            <div class="leaderboard-header">
+                <div>Rank</div>
+                <div>Player</div>
+                <div style="text-align: right">Score</div>
+            </div>
+            <div id="leaderboardRows">
+                <div class="empty-state">No players yet. Be the first to join!</div>
+            </div>
+        </div>
+    </div>
+
+    <a href="/" class="back-link">← Back to demos</a>
+
+    <script src="http://localhost:2000/centrifuge.js"></script>
+    <script>
+        const userId = localStorage.getItem('leaderboard_userId') || (() => {
+            const id = 'user_' + Math.random().toString(36).substr(2, 8);
+            localStorage.setItem('leaderboard_userId', id);
+            return id;
+        })();
+        let selectedColor = '#e91e63';
+        let myEntry = null;
+        let inGame = false;
+
+        // Leaderboard entries.
+        const entries = new Map();
+
+        // Color picker.
+        document.querySelectorAll('.color-option').forEach(el => {
+            el.addEventListener('click', () => {
+                document.querySelectorAll('.color-option').forEach(o => o.classList.remove('selected'));
+                el.classList.add('selected');
+                selectedColor = el.dataset.color;
+            });
+        });
+
+        function getPlayerName() {
+            return document.getElementById('playerName').value.trim() || 'Player ' + userId.substr(5, 4).toUpperCase();
+        }
+
+        function renderLeaderboard() {
+            const rowsContainer = document.getElementById('leaderboardRows');
+
+            // Sort by score descending.
+            const sorted = Array.from(entries.values()).sort((a, b) => b.score - a.score);
+
+            if (sorted.length === 0) {
+                rowsContainer.innerHTML = '<div class="empty-state">No players yet. Be the first to join!</div>';
+                document.getElementById('playerCount').textContent = '0 players';
+                return;
+            }
+
+            document.getElementById('playerCount').textContent = sorted.length + ' player' + (sorted.length === 1 ? '' : 's');
+
+            rowsContainer.innerHTML = sorted.map((entry, index) => {
+                const isMe = entry.userId === userId;
+                const rankClass = index === 0 ? 'gold' : index === 1 ? 'silver' : index === 2 ? 'bronze' : '';
+
+                return `
+                    <div class="leaderboard-row ${isMe ? 'me' : ''}">
+                        <div class="rank ${rankClass}">#${index + 1}</div>
+                        <div class="player-info">
+                            <div class="player-avatar" style="background: ${entry.color}">${entry.name.charAt(0).toUpperCase()}</div>
+                            <span class="player-name">${entry.name}</span>
+                            ${isMe ? '<span class="player-tag">YOU</span>' : ''}
+                        </div>
+                        <div class="score">${entry.score}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Connect to Centrifuge.
+        const centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket', {
+            name: userId
+        });
+
+        centrifuge.on('connected', () => {
+            document.getElementById('statusDot').classList.add('connected');
+            document.getElementById('statusText').textContent = 'Connected';
+        });
+
+        centrifuge.on('disconnected', () => {
+            document.getElementById('statusDot').classList.remove('connected');
+            document.getElementById('statusText').textContent = 'Disconnected';
+        });
+
+        // Subscribe to leaderboard channel with map mode and ordering.
+        const sub = centrifuge.newMapSubscription('leaderboard', {
+            limit: 100,
+            ordered: true
+        });
+
+        sub.on('subscribed', (ctx) => {
+            console.log('Subscribed to leaderboard');
+
+            // Process snapshot (persistent data from PostgreSQL).
+            if (ctx.state) {
+                for (const pub of ctx.state) {
+                    if (pub.key && pub.data) {
+                        entries.set(pub.key, pub.data);
+                        if (pub.data.userId === userId) {
+                            myEntry = pub.data;
+                            showGameSection();
+                        }
+                    }
+                }
+            }
+            renderLeaderboard();
+        });
+
+        sub.on('publication', (ctx) => {
+            if (!ctx.key) return;
+
+            if (ctx.removed) {
+                entries.delete(ctx.key);
+                if (ctx.key === userId) {
+                    myEntry = null;
+                    hideGameSection();
+                }
+            } else if (ctx.data) {
+                entries.set(ctx.key, ctx.data);
+                if (ctx.data.userId === userId) {
+                    myEntry = ctx.data;
+                    document.getElementById('myScore').textContent = ctx.data.score;
+                }
+            }
+            renderLeaderboard();
+        });
+
+        sub.subscribe();
+        centrifuge.connect();
+
+        function showGameSection() {
+            document.getElementById('joinSection').classList.add('hidden');
+            document.getElementById('gameSection').classList.add('active');
+            document.getElementById('clickButton').style.background = selectedColor;
+            if (myEntry) {
+                document.getElementById('myScore').textContent = myEntry.score;
+                document.getElementById('clickButton').style.background = myEntry.color;
+            }
+            inGame = true;
+        }
+
+        function hideGameSection() {
+            document.getElementById('joinSection').classList.remove('hidden');
+            document.getElementById('gameSection').classList.remove('active');
+            inGame = false;
+        }
+
+        // HTTP API calls to PostgreSQL via cf_map_publish()
+        async function joinGame() {
+            try {
+                const response = await fetch('/api/leaderboard/join', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        userId: userId,
+                        name: getPlayerName(),
+                        color: selectedColor
+                    })
+                });
+
+                if (!response.ok) {
+                    const error = await response.text();
+                    throw new Error(error);
+                }
+
+                const result = await response.json();
+                console.log('Joined via cf_map_publish:', result);
+
+                myEntry = result.entry;
+                entries.set(userId, result.entry);
+                showGameSection();
+                renderLeaderboard();
+            } catch (err) {
+                console.error('Error joining game:', err);
+                alert('Failed to join game: ' + err.message);
+            }
+        }
+
+        async function leaveGame() {
+            try {
+                const response = await fetch('/api/leaderboard/leave', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: userId })
+                });
+
+                if (!response.ok) {
+                    const error = await response.text();
+                    throw new Error(error);
+                }
+
+                console.log('Left via cf_map_remove');
+                entries.delete(userId);
+                myEntry = null;
+                hideGameSection();
+                renderLeaderboard();
+            } catch (err) {
+                console.error('Error leaving game:', err);
+            }
+        }
+
+        async function handleClick() {
+            if (!inGame) return;
+
+            try {
+                const response = await fetch('/api/leaderboard/click', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: userId })
+                });
+
+                if (!response.ok) {
+                    const error = await response.text();
+                    throw new Error(error);
+                }
+
+                const result = await response.json();
+                myEntry = result.entry;
+                document.getElementById('myScore').textContent = result.entry.score;
+                entries.set(userId, result.entry);
+                renderLeaderboard();
+            } catch (err) {
+                console.error('Error handling click:', err);
+            }
+        }
+
+        // Keyboard support.
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && inGame) {
+                e.preventDefault();
+                handleClick();
+            }
+        });
+    </script>
+</body>
+</html>

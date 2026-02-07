@@ -116,4 +116,10 @@ var (
 		Message:   "concurrent pagination",
 		Temporary: true,
 	}
+	// ErrorStateTooLarge means that the state is too large for immediate join.
+	// Client should use paginated join (Scenario A) instead.
+	ErrorStateTooLarge = &Error{
+		Code:    114,
+		Message: "state too large for immediate join",
+	}
 )

@@ -10,6 +10,8 @@ type Publication struct {
 	// Offset is an incremental position number inside a history stream.
 	// Zero value means that channel does not maintain Publication stream.
 	Offset uint64
+	// Epoch is the stream epoch. Used together with Offset for position tracking.
+	Epoch string
 	// Data to be published to a channel (to be delivered to subscribers).
 	Data []byte
 	// Info is optional information about client connection published this data.
@@ -138,6 +140,20 @@ type PublishOptions struct {
 	// publication. Use it if version may be reused in the future. For example, if
 	// version comes from in-memory system which can lose data, or due to eviction, etc.
 	VersionEpoch string
+
+	// Key is the key for keyed publications (used in keyed subscriptions).
+	Key string
+	// Removed indicates this is a removal event (used in keyed subscriptions).
+	Removed bool
+	// Score is used for ordered keyed snapshots (leaderboards, priority queues).
+	Score int64
+
+	// Offset is the stream offset for keyed publications. When set, this offset
+	// is used instead of broker-assigned offset (used for keyed engine fan-out).
+	Offset uint64
+	// Epoch is the stream epoch for keyed publications. When set along with Offset,
+	// the broker will include position information in the message for fan-out.
+	Epoch string
 }
 
 // Broker is responsible for PUB/SUB mechanics.

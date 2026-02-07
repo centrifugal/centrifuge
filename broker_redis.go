@@ -790,10 +790,15 @@ func (b *RedisBroker) Publish(ch string, data []byte, opts PublishOptions) (Stre
 
 func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts PublishOptions) (StreamPosition, bool, error) {
 	protoPub := &protocol.Publication{
-		Data: data,
-		Info: infoToProto(opts.ClientInfo),
-		Tags: opts.Tags,
-		Time: time.Now().UnixMilli(),
+		Data:    data,
+		Info:    infoToProto(opts.ClientInfo),
+		Tags:    opts.Tags,
+		Time:    time.Now().UnixMilli(),
+		Key:     opts.Key,
+		Removed: opts.Removed,
+		Score:   opts.Score,
+		Offset:  opts.Offset,
+		Epoch:   opts.Epoch,
 	}
 	if opts.HistorySize <= 0 || opts.HistoryTTL <= 0 {
 		// In no history case we communicate delta flag over Publication field. This field is then
@@ -1391,6 +1396,14 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 			// position info is prepended to Publication payload. In this case we should attach
 			// it to unmarshalled Publication.
 			pub.Offset = sp.Offset
+		}
+		// Use Publication's Offset/Epoch for StreamPosition when available (keyed engine fan-out).
+		// This takes precedence over metadata prefix since keyed publications carry position in the message.
+		if pub.Offset > 0 {
+			sp.Offset = pub.Offset
+		}
+		if pub.Epoch != "" {
+			sp.Epoch = pub.Epoch
 		}
 		if pub.Delta {
 			// In at most once scenario we are passing delta in Publication itself. But need to clean it

@@ -45,8 +45,8 @@ type Node struct {
 	controller Controller
 	// broker is responsible for PUB/SUB and history streaming mechanics.
 	broker Broker
-	// keyedEngine is responsible for keyed state and stream operations.
-	keyedEngine KeyedEngine
+	// mapEngine is responsible for keyed state and stream operations.
+	mapEngine MapEngine
 	// presenceManager is responsible for presence information management.
 	presenceManager PresenceManager
 	// nodes contains registry of known nodes.
@@ -266,23 +266,23 @@ func (n *Node) SetPresenceManager(m PresenceManager) {
 	n.presenceManager = m
 }
 
-// SetKeyedEngine allows setting KeyedEngine to use.
-func (n *Node) SetKeyedEngine(e KeyedEngine) {
-	n.keyedEngine = e
+// SetMapEngine allows setting MapEngine to use.
+func (n *Node) SetMapEngine(e MapEngine) {
+	n.mapEngine = e
 }
 
-// ResolveKeyedChannelOptions returns channel options for a keyed channel,
-// using the configured GetKeyedChannelOptions callback or defaults.
-func (n *Node) ResolveKeyedChannelOptions(channel string) KeyedChannelOptions {
-	if n.config.GetKeyedChannelOptions != nil {
-		return n.config.GetKeyedChannelOptions(channel)
+// ResolveMapChannelOptions returns channel options for a map channel,
+// using the configured GetMapChannelOptions callback or defaults.
+func (n *Node) ResolveMapChannelOptions(channel string) MapChannelOptions {
+	if n.config.GetMapChannelOptions != nil {
+		return n.config.GetMapChannelOptions(channel)
 	}
-	return DefaultKeyedChannelOptions()
+	return DefaultMapChannelOptions()
 }
 
-// KeyedEngine returns node's KeyedEngine. Can be nil if not configured.
-func (n *Node) KeyedEngine() KeyedEngine {
-	return n.keyedEngine
+// MapEngine returns node's MapEngine. Can be nil if not configured.
+func (n *Node) MapEngine() MapEngine {
+	return n.mapEngine
 }
 
 // Hub returns node's Hub.
@@ -761,18 +761,6 @@ func (n *Node) handlePublication(ch string, sp StreamPosition, pub, prevPub, loc
 	n.metrics.incMessagesReceived("publication", ch)
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
-
-	// Debug logging for keyed publications
-	if pub != nil && pub.Key != "" && n.logEnabled(LogLevelDebug) {
-		n.logger.log(newLogEntry(LogLevelDebug, "handlePublication keyed", map[string]any{
-			"channel":        ch,
-			"key":            pub.Key,
-			"offset":         pub.Offset,
-			"numSubscribers": numSubscribers,
-			"willBroadcast":  hasCurrentSubscribers,
-		}))
-	}
-
 	if !hasCurrentSubscribers {
 		return nil
 	}
@@ -1108,9 +1096,9 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 
 		// Subscribe to appropriate engine based on subscription type.
 		if sub.keyed {
-			if n.keyedEngine != nil {
+			if mapEngine := n.getMapEngine(ch); mapEngine != nil {
 				n.metrics.incActionCount("keyed_engine_subscribe", ch)
-				err := n.keyedEngine.Subscribe(ch)
+				err := mapEngine.Subscribe(ch)
 				if err != nil {
 					_, _, _ = n.hub.removeSub(ch, sub.client)
 					if n.config.GetChannelMediumOptions != nil {
@@ -1149,7 +1137,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 }
 
 // removeSubscription removes subscription of connection on channel
-// from Hub and Broker (or KeyedEngine for keyed channels).
+// from Hub and Broker (or MapEngine for map channels).
 func (n *Node) removeSubscription(ch string, c *Client) error {
 	n.metrics.incActionCount("remove_subscription", ch)
 	mu := n.subLock(ch)
@@ -1173,9 +1161,9 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 			if noSubscribers {
 				// Unsubscribe from appropriate engine based on channel type.
 				if wasKeyed {
-					if n.keyedEngine != nil {
+					if mapEngine := n.getMapEngine(ch); mapEngine != nil {
 						n.metrics.incActionCount("keyed_engine_unsubscribe", ch)
-						err := n.keyedEngine.Unsubscribe(ch)
+						err := mapEngine.Unsubscribe(ch)
 						if err != nil {
 							time.Sleep(500 * time.Millisecond)
 							return err
@@ -1336,9 +1324,9 @@ var (
 	presenceGroup      singleflight.Group
 	presenceStatsGroup singleflight.Group
 	historyGroup       singleflight.Group
-	keyedSnapshotGroup singleflight.Group
-	keyedStreamGroup   singleflight.Group
-	keyedStatsGroup    singleflight.Group
+	mapStateGroup      singleflight.Group
+	mapStreamGroup     singleflight.Group
+	mapStatsGroup      singleflight.Group
 )
 
 // PresenceResult wraps presence.
@@ -1410,12 +1398,14 @@ func pubToProto(pub *Publication) *protocol.Publication {
 	}
 	return &protocol.Publication{
 		Offset:  pub.Offset,
+		Epoch:   pub.Epoch,
 		Data:    pub.Data,
 		Info:    infoToProto(pub.Info),
 		Tags:    pub.Tags,
 		Channel: pub.Channel,
 		Removed: pub.Removed,
 		Key:     pub.Key,
+		Score:   pub.Score,
 	}
 }
 
@@ -1425,6 +1415,7 @@ func pubFromProto(pub *protocol.Publication) *Publication {
 	}
 	return &Publication{
 		Offset:  pub.GetOffset(),
+		Epoch:   pub.GetEpoch(),
 		Data:    pub.Data,
 		Info:    infoFromProto(pub.GetInfo()),
 		Tags:    pub.GetTags(),
@@ -1480,6 +1471,15 @@ func (n *Node) getBroker(ch string) Broker {
 		}
 	}
 	return n.broker
+}
+
+func (n *Node) getMapEngine(ch string) MapEngine {
+	if n.config.GetMapEngine != nil {
+		if engine, ok := n.config.GetMapEngine(ch); ok {
+			return engine
+		}
+	}
+	return n.mapEngine
 }
 
 func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
@@ -1609,15 +1609,15 @@ func (n *Node) streamTop(ch string, historyMetaTTL time.Duration) (StreamPositio
 	return historyResult.StreamPosition, nil
 }
 
-func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMetaTTL time.Duration, isKeyed bool) (bool, error) {
-	if isKeyed {
-		keyedEngine := n.keyedEngine
-		if keyedEngine == nil {
-			// No KeyedEngine configured, skip position check.
+func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMetaTTL time.Duration, isMap bool) (bool, error) {
+	if isMap {
+		mapEngine := n.getMapEngine(ch)
+		if mapEngine == nil {
+			// No MapEngine configured, skip position check.
 			return true, nil
 		}
 		// Use ReadStream with Limit: 0 to only get stream top position.
-		_, streamTop, err := keyedEngine.ReadStream(context.Background(), ch, KeyedReadStreamOptions{
+		_, streamTop, err := mapEngine.ReadStream(context.Background(), ch, MapReadStreamOptions{
 			Filter:  StreamFilter{Limit: 0},
 			MetaTTL: historyMetaTTL,
 		})
@@ -1857,51 +1857,52 @@ func (n *Node) HandleControl(data []byte) error {
 	return n.handleControl(data)
 }
 
-// KeyedSnapshotResult wraps keyed snapshot result.
-type KeyedSnapshotResult struct {
+// MapStateResult wraps keyed snapshot result.
+type MapStateResult struct {
 	Publications []*Publication
 	Position     StreamPosition
 	Cursor       string
 }
 
-// KeyedSnapshotRead retrieves keyed snapshot for a channel.
-func (n *Node) KeyedSnapshotRead(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) (KeyedSnapshotResult, error) {
-	if n.keyedEngine == nil {
-		return KeyedSnapshotResult{}, ErrorNotAvailable
+// MapStateRead retrieves keyed snapshot for a channel.
+func (n *Node) MapStateRead(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
+	mapEngine := n.getMapEngine(ch)
+	if mapEngine == nil {
+		return MapStateResult{}, ErrorNotAvailable
 	}
 
-	n.metrics.incActionCount("keyed_snapshot_read", ch)
+	n.metrics.incActionCount("map_state_read", ch)
 	if n.config.UseSingleFlight {
-		key := n.keyedSnapshotKey(ch, opts)
-		result, err, _ := keyedSnapshotGroup.Do(key, func() (any, error) {
-			pubs, pos, cursor, err := n.keyedEngine.ReadSnapshot(ctx, ch, opts)
+		key := n.mapStateKey(ch, opts)
+		result, err, _ := mapStateGroup.Do(key, func() (any, error) {
+			pubs, pos, cursor, err := mapEngine.ReadState(ctx, ch, opts)
 			if err != nil {
-				return KeyedSnapshotResult{}, err
+				return MapStateResult{}, err
 			}
-			return KeyedSnapshotResult{
+			return MapStateResult{
 				Publications: pubs,
 				Position:     pos,
 				Cursor:       cursor,
 			}, nil
 		})
 		if err != nil {
-			return KeyedSnapshotResult{}, err
+			return MapStateResult{}, err
 		}
-		return result.(KeyedSnapshotResult), nil
+		return result.(MapStateResult), nil
 	}
 
-	pubs, pos, cursor, err := n.keyedEngine.ReadSnapshot(ctx, ch, opts)
+	pubs, pos, cursor, err := mapEngine.ReadState(ctx, ch, opts)
 	if err != nil {
-		return KeyedSnapshotResult{}, err
+		return MapStateResult{}, err
 	}
-	return KeyedSnapshotResult{
+	return MapStateResult{
 		Publications: pubs,
 		Position:     pos,
 		Cursor:       cursor,
 	}, nil
 }
 
-func (n *Node) keyedSnapshotKey(ch string, opts KeyedReadSnapshotOptions) string {
+func (n *Node) mapStateKey(ch string, opts MapReadStateOptions) string {
 	var builder strings.Builder
 	builder.WriteString(ch)
 	builder.WriteString(",cursor:")
@@ -1921,48 +1922,49 @@ func (n *Node) keyedSnapshotKey(ch string, opts KeyedReadSnapshotOptions) string
 	return builder.String()
 }
 
-// KeyedStreamResult wraps keyed stream result.
-type KeyedStreamResult struct {
+// MapStreamResult wraps keyed stream result.
+type MapStreamResult struct {
 	Publications []*Publication
 	Position     StreamPosition
 }
 
-// KeyedStreamRead retrieves keyed stream for a channel.
-func (n *Node) KeyedStreamRead(ctx context.Context, ch string, opts KeyedReadStreamOptions) (KeyedStreamResult, error) {
-	if n.keyedEngine == nil {
-		return KeyedStreamResult{}, ErrorNotAvailable
+// MapStreamRead retrieves keyed stream for a channel.
+func (n *Node) MapStreamRead(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
+	mapEngine := n.getMapEngine(ch)
+	if mapEngine == nil {
+		return MapStreamResult{}, ErrorNotAvailable
 	}
 
-	n.metrics.incActionCount("keyed_stream_read", ch)
+	n.metrics.incActionCount("map_stream_read", ch)
 	if n.config.UseSingleFlight {
-		key := n.keyedStreamKey(ch, opts)
-		result, err, _ := keyedStreamGroup.Do(key, func() (any, error) {
-			pubs, pos, err := n.keyedEngine.ReadStream(ctx, ch, opts)
+		key := n.mapStreamKey(ch, opts)
+		result, err, _ := mapStreamGroup.Do(key, func() (any, error) {
+			pubs, pos, err := mapEngine.ReadStream(ctx, ch, opts)
 			if err != nil {
-				return KeyedStreamResult{}, err
+				return MapStreamResult{}, err
 			}
-			return KeyedStreamResult{
+			return MapStreamResult{
 				Publications: pubs,
 				Position:     pos,
 			}, nil
 		})
 		if err != nil {
-			return KeyedStreamResult{}, err
+			return MapStreamResult{}, err
 		}
-		return result.(KeyedStreamResult), nil
+		return result.(MapStreamResult), nil
 	}
 
-	pubs, pos, err := n.keyedEngine.ReadStream(ctx, ch, opts)
+	pubs, pos, err := mapEngine.ReadStream(ctx, ch, opts)
 	if err != nil {
-		return KeyedStreamResult{}, err
+		return MapStreamResult{}, err
 	}
-	return KeyedStreamResult{
+	return MapStreamResult{
 		Publications: pubs,
 		Position:     pos,
 	}, nil
 }
 
-func (n *Node) keyedStreamKey(ch string, opts KeyedReadStreamOptions) string {
+func (n *Node) mapStreamKey(ch string, opts MapReadStreamOptions) string {
 	var builder strings.Builder
 	builder.WriteString(ch)
 	if opts.Filter.Since != nil {
@@ -1978,49 +1980,67 @@ func (n *Node) keyedStreamKey(ch string, opts KeyedReadStreamOptions) string {
 	return builder.String()
 }
 
-// KeyedStatsResult wraps keyed stats result.
-type KeyedStatsResult struct {
-	KeyedStats
+// MapStreamPosition returns the current stream position for a map channel.
+// This is useful for capturing the stream top before starting stream pagination.
+func (n *Node) MapStreamPosition(ctx context.Context, ch string, metaTTL time.Duration) (StreamPosition, error) {
+	mapEngine := n.getMapEngine(ch)
+	if mapEngine == nil {
+		return StreamPosition{}, ErrorNotAvailable
+	}
+	n.metrics.incActionCount("map_stream_position", ch)
+	// ReadStream with Limit=0 returns only the current stream position.
+	_, pos, err := mapEngine.ReadStream(ctx, ch, MapReadStreamOptions{
+		Filter:  StreamFilter{Limit: 0},
+		MetaTTL: metaTTL,
+	})
+	return pos, err
 }
 
-// KeyedStats retrieves stats for a keyed channel.
-func (n *Node) KeyedStats(ctx context.Context, ch string) (KeyedStatsResult, error) {
-	if n.keyedEngine == nil {
-		return KeyedStatsResult{}, ErrorNotAvailable
+// MapStatsResult wraps keyed stats result.
+type MapStatsResult struct {
+	MapStats
+}
+
+// MapStats retrieves stats for a map channel.
+func (n *Node) MapStats(ctx context.Context, ch string) (MapStatsResult, error) {
+	mapEngine := n.getMapEngine(ch)
+	if mapEngine == nil {
+		return MapStatsResult{}, ErrorNotAvailable
 	}
 
-	n.metrics.incActionCount("keyed_stats", ch)
+	n.metrics.incActionCount("map_stats", ch)
 	if n.config.UseSingleFlight {
-		result, err, _ := keyedStatsGroup.Do(ch, func() (any, error) {
-			stats, err := n.keyedEngine.Stats(ctx, ch)
+		result, err, _ := mapStatsGroup.Do(ch, func() (any, error) {
+			stats, err := mapEngine.Stats(ctx, ch)
 			if err != nil {
-				return KeyedStatsResult{}, err
+				return MapStatsResult{}, err
 			}
-			return KeyedStatsResult{KeyedStats: stats}, nil
+			return MapStatsResult{MapStats: stats}, nil
 		})
 		if err != nil {
-			return KeyedStatsResult{}, err
+			return MapStatsResult{}, err
 		}
-		return result.(KeyedStatsResult), nil
+		return result.(MapStatsResult), nil
 	}
 
-	stats, err := n.keyedEngine.Stats(ctx, ch)
+	stats, err := mapEngine.Stats(ctx, ch)
 	if err != nil {
-		return KeyedStatsResult{}, err
+		return MapStatsResult{}, err
 	}
-	return KeyedStatsResult{KeyedStats: stats}, nil
+	return MapStatsResult{MapStats: stats}, nil
 }
 
-// KeyedPublish publishes data to a keyed channel.
+// MapPublish publishes data to a map channel.
 // This updates the snapshot and optionally broadcasts to subscribers.
-func (n *Node) KeyedPublish(ctx context.Context, ch string, key string, opts KeyedPublishOptions) (KeyedPublishResult, error) {
-	if n.keyedEngine == nil {
-		return KeyedPublishResult{}, ErrorNotAvailable
+func (n *Node) MapPublish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
+	mapEngine := n.getMapEngine(ch)
+	if mapEngine == nil {
+		return MapPublishResult{}, ErrorNotAvailable
 	}
-	n.metrics.incActionCount("keyed_publish", ch)
-	result, err := n.keyedEngine.Publish(ctx, ch, key, opts)
+	n.metrics.incActionCount("map_publish", ch)
+	result, err := mapEngine.Publish(ctx, ch, key, opts)
 	if n.logEnabled(LogLevelDebug) {
-		n.logger.log(newLogEntry(LogLevelDebug, "KeyedPublish result", map[string]any{
+		n.logger.log(newLogEntry(LogLevelDebug, "MapPublish result", map[string]any{
 			"channel":        ch,
 			"key":            key,
 			"suppressed":     result.Suppressed,
@@ -2032,22 +2052,24 @@ func (n *Node) KeyedPublish(ctx context.Context, ch string, key string, opts Key
 	return result, err
 }
 
-// KeyedUnpublish removes a key from a keyed channel.
+// MapRemove removes a key from a map channel.
 // This removes the key from snapshot and optionally broadcasts removal to subscribers.
-func (n *Node) KeyedUnpublish(ctx context.Context, ch string, key string, opts KeyedUnpublishOptions) (KeyedPublishResult, error) {
-	if n.keyedEngine == nil {
-		return KeyedPublishResult{}, ErrorNotAvailable
+func (n *Node) MapRemove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
+	mapEngine := n.getMapEngine(ch)
+	if mapEngine == nil {
+		return MapPublishResult{}, ErrorNotAvailable
 	}
-	n.metrics.incActionCount("keyed_unpublish", ch)
-	return n.keyedEngine.Unpublish(ctx, ch, key, opts)
+	n.metrics.incActionCount("map_remove", ch)
+	return mapEngine.Remove(ctx, ch, key, opts)
 }
 
-// KeyedRemove deletes all data for a keyed channel (snapshot and stream).
+// MapClear deletes all data for a map channel (state and stream).
 // Use for cleanup when a channel is no longer needed.
-func (n *Node) KeyedRemove(ctx context.Context, ch string, opts KeyedRemoveOptions) error {
-	if n.keyedEngine == nil {
+func (n *Node) MapClear(ctx context.Context, ch string, opts MapClearOptions) error {
+	mapEngine := n.getMapEngine(ch)
+	if mapEngine == nil {
 		return ErrorNotAvailable
 	}
-	n.metrics.incActionCount("keyed_remove", ch)
-	return n.keyedEngine.Remove(ctx, ch, opts)
+	n.metrics.incActionCount("map_clear", ch)
+	return mapEngine.Clear(ctx, ch, opts)
 }

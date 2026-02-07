@@ -146,34 +146,35 @@ type SubscribeOptions struct {
 	// Important note here, since channel permissions are managed on channel level, tags filtering
 	// must be used as a bandwidth optimization, not an access control mechanism.
 	AllowTagsFilter bool
-	// EnableKeyed allows keyed subscription for this channel.
-	EnableKeyed bool
-	// KeyedPresenceAvailable indicates that presence data is available for sub-subscription.
-	KeyedPresenceAvailable bool
-	// EmitKeyedClientPresence emits presence to {channel}:clients with key=clientId
-	// and full ClientInfo. Use for tracking individual connections.
-	EmitKeyedClientPresence bool
-	// EmitKeyedUserPresence emits presence to {channel}:users with key=userId.
-	// No ClientInfo is stored (just the key for uniqueness). TTL-based leave
-	// provides debounce/grace period for quick reconnects.
-	EmitKeyedUserPresence bool
-	// CleanupOnUnsubscribe enables automatic cleanup of keyed state when the
-	// subscription ends. When enabled, all keys in the channel's snapshot that
+	// EnableMap allows map subscription for this channel.
+	EnableMap bool
+	// MapClientPresenceChannelPrefix is the prefix for client presence channels.
+	// When set, client presence will be published to {prefix}{channel} on subscribe.
+	// For example, if prefix is "$clients:" and channel is "games", presence goes to "$clients:games".
+	// Empty string means no client presence publishing.
+	MapClientPresenceChannelPrefix string
+	// MapUserPresenceChannelPrefix is the prefix for user presence channels.
+	// When set, user presence will be published to {prefix}{channel} on subscribe.
+	// For example, if prefix is "$users:" and channel is "games", presence goes to "$users:games".
+	// Empty string means no user presence publishing.
+	MapUserPresenceChannelPrefix string
+	// CleanupOnUnsubscribe enables automatic cleanup of map state when the
+	// subscription ends. When enabled, all keys in the channel's state that
 	// were published by this client (matched by client_id) will be removed
 	// when the client unsubscribes or disconnects. This is useful for ephemeral
 	// state like cursor positions or temporary resources that should not persist
 	// after the client leaves.
 	CleanupOnUnsubscribe bool
-	// KeyedStreamSize sets the maximum stream size for keyed presence channels.
-	// Used when EmitKeyedClientPresence, EmitKeyedUserPresence, or CleanupOnUnsubscribe is enabled.
+	// MapStreamSize sets the maximum stream size for map presence channels.
+	// Used when MapClientPresenceChannelPrefix, MapUserPresenceChannelPrefix, or CleanupOnUnsubscribe is enabled.
 	// Default: 1000
-	KeyedStreamSize int
-	// KeyedStreamTTL sets how long stream entries are retained for keyed presence.
+	MapStreamSize int
+	// MapStreamTTL sets how long stream entries are retained for map presence.
 	// Default: 5 minutes
-	KeyedStreamTTL time.Duration
-	// KeyedStreamMetaTTL sets how long stream metadata is retained for keyed presence.
+	MapStreamTTL time.Duration
+	// MapStreamMetaTTL sets how long stream metadata is retained for map presence.
 	// Default: 1 hour
-	KeyedStreamMetaTTL time.Duration
+	MapStreamMetaTTL time.Duration
 }
 
 // SubscribeOption is a type to represent various Subscribe options.

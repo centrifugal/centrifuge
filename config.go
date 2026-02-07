@@ -6,8 +6,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// KeyedChannelOptions contains configuration for keyed channels.
-type KeyedChannelOptions struct {
+// MapChannelOptions contains configuration for map channels.
+type MapChannelOptions struct {
 	// StreamSize is the maximum number of entries in the stream.
 	StreamSize int
 	// StreamTTL is how long stream entries are retained.
@@ -19,11 +19,11 @@ type KeyedChannelOptions struct {
 }
 
 // ChannelOptionsResolver returns channel options for a channel.
-type ChannelOptionsResolver func(channel string) KeyedChannelOptions
+type ChannelOptionsResolver func(channel string) MapChannelOptions
 
-// DefaultKeyedChannelOptions returns sensible defaults for keyed channel options.
-func DefaultKeyedChannelOptions() KeyedChannelOptions {
-	return KeyedChannelOptions{
+// DefaultMapChannelOptions returns sensible defaults for map channel options.
+func DefaultMapChannelOptions() MapChannelOptions {
+	return MapChannelOptions{
 		StreamSize: 1000,
 		StreamTTL:  5 * time.Minute,
 		MetaTTL:    time.Hour,
@@ -110,7 +110,7 @@ type Config struct {
 	RecoveryMaxPublicationLimit int
 	// UseSingleFlight allows turning on mode where singleflight will be automatically used
 	// for Node.History (including recovery), Node.Presence/Node.PresenceStats,
-	// and Node.KeyedSnapshotRead/Node.KeyedStreamRead/Node.KeyedStats calls.
+	// and Node.MapStateRead/Node.MapStreamRead/Node.MapStats calls.
 	UseSingleFlight bool
 	// HistoryMetaTTL sets a time of stream meta key expiration in Redis. Stream
 	// meta key is a Redis HASH that contains top offset in channel and epoch value.
@@ -146,6 +146,13 @@ type Config struct {
 	// know about custom PresenceManager instances. When GetPresenceManager returns false as the second
 	// argument then Node will use the default PresenceManager for the channel.
 	GetPresenceManager func(channel string) (PresenceManager, bool)
+	// GetMapEngine when set allows returning a custom MapEngine to use for a specific channel.
+	// This enables sharding map state across multiple databases based on channel. If not set
+	// then the default Node's MapEngine (set via SetMapEngine) is always used for all channels.
+	// It's the responsibility of an application to properly initialize and shutdown all MapEngine
+	// instances. When GetMapEngine returns false as the second argument then Node will use the
+	// default MapEngine for the channel.
+	GetMapEngine func(channel string) (MapEngine, bool)
 	// Tell Centrifuge how to transform connect error codes to disconnect objects for unidirectional
 	// transports. If not set or code not found in the mapping then Centrifuge falls back to the default
 	// mapping defined internally.
@@ -161,12 +168,30 @@ type Config struct {
 	// ClientTimerScheduler if set will be used for scheduling client timers.
 	// This is an EXPERIMENTAL API.
 	ClientTimerScheduler TimerScheduler
-	// KeyedMaxPaginationLimit sets the maximum number of items a client can request
-	// per page in keyed subscription pagination requests. Zero means no limit.
-	KeyedMaxPaginationLimit int
-	// GetKeyedChannelOptions returns channel options for keyed channels.
-	// If nil, DefaultKeyedChannelOptions() is used for all channels.
-	GetKeyedChannelOptions func(channel string) KeyedChannelOptions
+	// MapMaxPaginationLimit sets the maximum number of items a client can request
+	// per page in map subscription pagination requests. Zero means no limit.
+	MapMaxPaginationLimit int
+	// MapMinStreamPaginationLimit sets the minimum number of items for stream pagination.
+	// This prevents excessive round trips when clients send very small limits.
+	// Zero means no minimum (clients can request any limit).
+	MapMinStreamPaginationLimit int
+	// MapMaxImmediateJoinStateSize sets the maximum number of state entries allowed
+	// for immediate join (Scenario B). If state exceeds this, ErrorStateTooLarge is returned.
+	// Zero means no limit (immediate join always allowed).
+	MapMaxImmediateJoinStateSize int
+	// MapRecoveryMaxPublicationLimit sets the maximum number of stream publications
+	// to recover during map subscription live transition. If limit is reached,
+	// ErrorUnrecoverablePosition is returned. Zero means no limit.
+	MapRecoveryMaxPublicationLimit int
+	// MapStateToLiveEnabled controls whether server can transition directly from
+	// STATE to LIVE phase on the last state page, skipping STREAM phase entirely.
+	// When enabled, if stream hasn't advanced much during state pagination,
+	// server goes LIVE immediately, reducing round trips for slowly-updating channels.
+	// Default is true.
+	MapStateToLiveEnabled bool
+	// GetMapChannelOptions returns channel options for map channels.
+	// If nil, DefaultMapChannelOptions() is used for all channels.
+	GetMapChannelOptions func(channel string) MapChannelOptions
 }
 
 const (

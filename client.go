@@ -104,7 +104,7 @@ func (c *Client) OnSubscribe(h SubscribeHandler) {
 // OnPresenceSubscribe allows setting PresenceSubscribeHandler.
 // PresenceSubscribeHandler called when client wants to subscribe to presence
 // on a channel (watch who is online). This is a separate permission scope from
-// data subscriptions (OnSubscribe). Presence channels use KeyedEngine internally.
+// data subscriptions (OnSubscribe). Presence channels use MapEngine internally.
 func (c *Client) OnPresenceSubscribe(h PresenceSubscribeHandler) {
 	c.eventHub.presenceSubscribeHandler = h
 }
@@ -154,23 +154,25 @@ const (
 	flagServerSide
 	flagClientSideRefresh
 	flagDeltaAllowed
-	flagKeyed                   // Channel uses keyed subscription (presence via KeyedEngine)
-	flagKeyedPresence           // Presence subscription (:clients or :users suffix)
-	flagEmitKeyedClientPresence // Emit to {channel}:clients, key=clientId, full ClientInfo
-	flagEmitKeyedUserPresence   // Emit to {channel}:users, key=userId, no info
+	flagMap                   // Channel uses map subscription (presence via MapEngine)
+	flagMapPresence           // Presence subscription (:clients or :users suffix)
+	flagMapClientPresence // Emit to {channel}:clients, key=clientId, full ClientInfo
+	flagMapUserPresence   // Emit to {channel}:users, key=userId, no info
 	flagCleanupOnUnsubscribe    // Clean up keys by client_id when subscription ends
 )
 
 // ChannelContext contains extra context for channel connection subscribed to.
 // Note: this struct is aligned to consume less memory.
 type ChannelContext struct {
-	subscribingCh     chan struct{}
-	info              []byte
-	streamPosition    StreamPosition
-	expireAt          int64
-	positionCheckTime int64
-	metaTTLSeconds    int64
-	flags             uint16
+	subscribingCh                  chan struct{}
+	info                           []byte
+	streamPosition                 StreamPosition
+	expireAt                       int64
+	positionCheckTime              int64
+	metaTTLSeconds                 int64
+	flags                          uint16
+	mapClientPresenceChannelPrefix string
+	mapUserPresenceChannelPrefix   string
 	// Source is a source of subscription application can set in SubscribeHandler.
 	Source uint8
 }
@@ -291,10 +293,10 @@ type Client struct {
 	replyWithoutQueue bool
 	unusable          bool
 
-	// keyedSubscribing tracks keyed subscriptions that are still loading (not yet live).
-	keyedSubscribing map[string]*keyedSubscribeState
-	// keyedPaginationLocks tracks channels currently being paginated to prevent concurrent pagination.
-	keyedPaginationLocks map[string]struct{}
+	// mapSubscribing tracks map subscriptions that are still loading (not yet live).
+	mapSubscribing map[string]*mapSubscribeState
+	// mapPaginationLocks tracks channels currently being paginated to prevent concurrent pagination.
+	mapPaginationLocks map[string]struct{}
 }
 
 // ClientCloseFunc must be called on Transport handler close to clean up Client.
@@ -706,8 +708,8 @@ func (c *Client) writeEncodedPushData(data []byte, ch string, frameType protocol
 func (c *Client) updateChannelPresence(ch string, chCtx ChannelContext) error {
 	// Check if any presence is enabled for this channel.
 	hasAnyPresence := channelHasFlag(chCtx.flags, flagEmitPresence) ||
-		channelHasFlag(chCtx.flags, flagEmitKeyedClientPresence) ||
-		channelHasFlag(chCtx.flags, flagEmitKeyedUserPresence)
+		channelHasFlag(chCtx.flags, flagMapClientPresence) ||
+		channelHasFlag(chCtx.flags, flagMapUserPresence)
 	if !hasAnyPresence {
 		return nil
 	}
@@ -733,8 +735,8 @@ func (c *Client) updateChannelPresence(ch string, chCtx ChannelContext) error {
 		}
 	}
 
-	if channelHasFlag(chCtx.flags, flagKeyed) {
-		err := c.updateKeyedPresence(ch, info, chCtx.flags)
+	if channelHasFlag(chCtx.flags, flagMap) {
+		err := c.updateMapPresence(ch, info, chCtx)
 		if err != nil {
 			return err
 		}
@@ -887,8 +889,8 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx Channe
 	position := chCtx.streamPosition
 	c.mu.Unlock()
 
-	isKeyed := channelHasFlag(chCtx.flags, flagKeyed)
-	validPosition, err := c.node.checkPosition(ch, position, historyMetaTTL, isKeyed)
+	isMap := channelHasFlag(chCtx.flags, flagMap)
+	validPosition, err := c.node.checkPosition(ch, position, historyMetaTTL, isMap)
 	if err != nil {
 		// Check later.
 		return true
@@ -1120,7 +1122,7 @@ func (c *Client) close(disconnect Disconnect) error {
 	}
 	c.mu.Unlock()
 
-	// Unsubscribe from all channels (handles both normal and keyed subscriptions).
+	// Unsubscribe from all channels (handles both normal and map subscriptions).
 	for channel := range channels {
 		err := c.unsubscribe(channel, unsubscribeDisconnect, &disconnect)
 		if err != nil {
@@ -1128,8 +1130,8 @@ func (c *Client) close(disconnect Disconnect) error {
 		}
 	}
 
-	// Clean up any in-progress keyed subscriptions that aren't in channels yet.
-	c.cleanupKeyedSubscribingAll()
+	// Clean up any in-progress map subscriptions that aren't in channels yet.
+	c.cleanupMapSubscribingAll()
 
 	c.mu.RLock()
 	authenticated := c.authenticated
@@ -1789,8 +1791,9 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 	}
 
 	// Route presence subscriptions to dedicated handler (separate permission scope).
-	if req.KeyedPresence {
-		return c.handlePresenceSubscribe(req, cmd, started, rw)
+	// Type 2 = MAP_CLIENTS_PRESENCE, Type 3 = MAP_USERS_PRESENCE
+	if req.Type == 2 || req.Type == 3 {
+		return c.handleMapPresenceSubscribe(req, cmd, started, rw)
 	}
 
 	if c.eventHub.subscribeHandler == nil {
@@ -1812,36 +1815,37 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 		return replyError
 	}
 
-	// For keyed subscription continuation requests (pagination or non-snapshot phase with existing state),
+	// For map subscription continuation requests (pagination or non-state phase with existing state),
 	// bypass the OnSubscribe callback - we already authorized on the first request.
-	if req.Keyed {
+	// Type 1 = MAP (map data subscription)
+	if req.Type == 1 {
 		c.mu.RLock()
-		state, hasState := c.keyedSubscribing[req.Channel]
+		state, hasState := c.mapSubscribing[req.Channel]
 		c.mu.RUnlock()
 
 		// Cursor set means pagination continuation - requires state.
-		if req.KeyedCursor != "" {
+		if req.Cursor != "" {
 			if !hasState {
 				// Continuation without prior state is invalid.
 				return ErrorPermissionDenied
 			}
 			reply := SubscribeReply{Options: state.options}
-			if handleErr := c.handleKeyedSubscribe(req, reply, cmd, started, rw); handleErr != nil {
+			if handleErr := c.handleMapSubscribe(req, reply, cmd, started, rw); handleErr != nil {
 				c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
 			}
 			return nil
 		}
 
-		// Non-snapshot phase with existing state means continuation.
-		if req.KeyedPhase != KeyedPhaseSnapshot && hasState {
+		// Non-state phase with existing state means continuation.
+		if req.Phase != MapPhaseState && hasState {
 			reply := SubscribeReply{Options: state.options}
-			if handleErr := c.handleKeyedSubscribe(req, reply, cmd, started, rw); handleErr != nil {
+			if handleErr := c.handleMapSubscribe(req, reply, cmd, started, rw); handleErr != nil {
 				c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
 			}
 			return nil
 		}
 
-		// Otherwise (initial snapshot, or direct live without prior state) - go through OnSubscribe callback.
+		// Otherwise (initial state, or direct live without prior state) - go through OnSubscribe callback.
 	}
 
 	event := SubscribeEvent{
@@ -1851,7 +1855,7 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 		Positioned:  req.Positioned,
 		Recoverable: req.Recoverable,
 		JoinLeave:   req.JoinLeave,
-		Keyed:       req.Keyed,
+		Map:         req.Type == 1,
 	}
 
 	cb := func(reply SubscribeReply, err error) {
@@ -1865,15 +1869,15 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 			return
 		}
 
-		// Route keyed subscriptions to keyed handler.
-		if req.Keyed {
-			if !reply.Options.EnableKeyed {
-				// Client requested keyed subscription but server doesn't support it.
+		// Route map subscriptions to map handler.
+		if req.Type == 1 {
+			if !reply.Options.EnableMap {
+				// Client requested map subscription but server doesn't support it.
 				c.onSubscribeError(req.Channel)
 				c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, ErrorBadRequest, started, rw)
 				return
 			}
-			if handleErr := c.handleKeyedSubscribe(req, reply, cmd, started, rw); handleErr != nil {
+			if handleErr := c.handleMapSubscribe(req, reply, cmd, started, rw); handleErr != nil {
 				c.onSubscribeError(req.Channel)
 				c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
 			}
@@ -2952,15 +2956,16 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 
 	c.mu.Lock()
 
-	// Check for keyed subscription continuation (pagination or live join).
-	// These requests should be allowed even if keyedSubscribing entry exists.
-	// Note: KeyedPresence subscriptions are routed to handlePresenceSubscribe before this.
-	if cmd.Keyed {
-		_, inKeyedSubscribing := c.keyedSubscribing[channel]
+	// Check for map subscription continuation (pagination or live join).
+	// These requests should be allowed even if mapSubscribing entry exists.
+	// Type 1 = map data, Type 2 = clients presence, Type 3 = users presence.
+	// All map-based subscriptions (type >= 1) share the same validation logic.
+	if cmd.Type >= 1 {
+		_, inMapSubscribing := c.mapSubscribing[channel]
 		_, inChannels := c.channels[channel]
 
-		// Allow continuation requests (cursor set or non-snapshot phase).
-		if inKeyedSubscribing && (cmd.KeyedCursor != "" || cmd.KeyedPhase != KeyedPhaseSnapshot) {
+		// Allow continuation requests (cursor set or non-state phase).
+		if inMapSubscribing && (cmd.Cursor != "" || cmd.Phase != MapPhaseState) {
 			c.mu.Unlock()
 			return nil, nil
 		}
@@ -2972,15 +2977,15 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 			return ErrorAlreadySubscribed, nil
 		}
 
-		// If already in keyed subscribing and this is an initial request, reject.
-		if inKeyedSubscribing && cmd.KeyedCursor == "" && cmd.KeyedPhase == KeyedPhaseSnapshot {
+		// If already in map subscribing and this is an initial request, reject.
+		if inMapSubscribing && cmd.Cursor == "" && cmd.Phase == MapPhaseState {
 			c.mu.Unlock()
 			c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribing on channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
 			return ErrorAlreadySubscribed, nil
 		}
 
-		// New keyed subscription - check channel limit.
-		numChannels := len(c.channels) + len(c.keyedSubscribing)
+		// New map subscription - check channel limit.
+		numChannels := len(c.channels) + len(c.mapSubscribing)
 		if channelLimit > 0 && numChannels >= channelLimit {
 			c.mu.Unlock()
 			c.node.logger.log(newLogEntry(LogLevelInfo, "maximum limit of channels per client reached", map[string]any{"limit": channelLimit, "user": c.user, "client": c.uid}))
@@ -2988,8 +2993,8 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 		}
 		c.mu.Unlock()
 		return nil, nil
-	} // TODO: it would be better to combine with normal flow, including having subscribingCh for keyed subs also.
-	// TODO: also, normal sub flow should look at len(c.keyedSubscribing) also.
+	} // TODO: it would be better to combine with normal flow, including having subscribingCh for map subs also.
+	// TODO: also, normal sub flow should look at len(c.mapSubscribing) also.
 
 	// Regular subscription validation.
 	numChannels := len(c.channels)
@@ -3790,15 +3795,15 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	subscribingCh := chCtx.subscribingCh
 	isSubscribed := channelHasFlag(chCtx.flags, flagSubscribed)
 	serverSide := channelHasFlag(chCtx.flags, flagServerSide)
-	// Also check for in-progress keyed subscriptions.
-	keyedState, hasKeyedState := c.keyedSubscribing[channel]
-	var keyedSubscribingCh chan struct{}
+	// Also check for in-progress map subscriptions.
+	keyedState, hasKeyedState := c.mapSubscribing[channel]
+	var mapSubscribingCh chan struct{}
 	if hasKeyedState {
-		keyedSubscribingCh = keyedState.subscribingCh
+		mapSubscribingCh = keyedState.subscribingCh
 	}
 	c.mu.RUnlock()
 
-	// If channel is not in channels map, check if it's only in keyedSubscribing.
+	// If channel is not in channels map, check if it's only in mapSubscribing.
 	if !ok && !hasKeyedState {
 		return nil
 	}
@@ -3836,11 +3841,11 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		}
 	}
 
-	// Wait for keyed subscription in progress.
-	if hasKeyedState && keyedSubscribingCh != nil {
+	// Wait for map subscription in progress.
+	if hasKeyedState && mapSubscribingCh != nil {
 		maxWaitTimeout := 5 * time.Second
 		select {
-		case <-keyedSubscribingCh:
+		case <-mapSubscribingCh:
 			c.mu.RLock()
 			chCtx, ok = c.channels[channel]
 			c.mu.RUnlock()
@@ -3849,10 +3854,10 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 			}
 		case <-time.After(maxWaitTimeout):
 			c.mu.Lock()
-			if state, exists := c.keyedSubscribing[channel]; exists && state.subscribingCh != nil {
+			if state, exists := c.mapSubscribing[channel]; exists && state.subscribingCh != nil {
 				close(state.subscribingCh)
 			}
-			delete(c.keyedSubscribing, channel)
+			delete(c.mapSubscribing, channel)
 			c.mu.Unlock()
 			go func() {
 				_ = c.close(DisconnectServerError)
@@ -3870,12 +3875,12 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		}
 		delete(c.channels, channel)
 	}
-	// Clean up keyed subscribing state.
-	if state, exists := c.keyedSubscribing[channel]; exists {
+	// Clean up map subscribing state.
+	if state, exists := c.mapSubscribing[channel]; exists {
 		if state.subscribingCh != nil {
 			close(state.subscribingCh)
 		}
-		delete(c.keyedSubscribing, channel)
+		delete(c.mapSubscribing, channel)
 	}
 	if disconnect == nil && c.perChannelWriter != nil {
 		c.perChannelWriter.delWriter(channel, false)
@@ -3884,16 +3889,16 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 
 	// Remove presence if any presence flag is enabled.
 	hasAnyPresence := channelHasFlag(chCtx.flags, flagEmitPresence) ||
-		channelHasFlag(chCtx.flags, flagEmitKeyedClientPresence) ||
-		channelHasFlag(chCtx.flags, flagEmitKeyedUserPresence)
+		channelHasFlag(chCtx.flags, flagMapClientPresence) ||
+		channelHasFlag(chCtx.flags, flagMapUserPresence)
 
-	// Also need to run keyed cleanup if CleanupOnUnsubscribe is enabled.
-	needsKeyedCleanup := hasAnyPresence || channelHasFlag(chCtx.flags, flagCleanupOnUnsubscribe)
+	// Also need to run map cleanup if CleanupOnUnsubscribe is enabled.
+	needsMapCleanup := hasAnyPresence || channelHasFlag(chCtx.flags, flagCleanupOnUnsubscribe)
 
-	if needsKeyedCleanup && channelHasFlag(chCtx.flags, flagSubscribed) {
+	if needsMapCleanup && channelHasFlag(chCtx.flags, flagSubscribed) {
 		var err error
-		if channelHasFlag(chCtx.flags, flagKeyed) {
-			err = c.removeKeyedPresence(channel, chCtx.flags)
+		if channelHasFlag(chCtx.flags, flagMap) {
+			err = c.removeMapPresence(channel, chCtx)
 			if err != nil {
 				c.node.logger.log(newErrorLogEntry(err, "error removing channel presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			}
