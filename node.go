@@ -296,6 +296,11 @@ func (n *Node) Run() error {
 	if err := n.broker.RegisterBrokerEventHandler(n); err != nil {
 		return err
 	}
+	if n.mapBroker != nil {
+		if err := n.mapBroker.RegisterEventHandler(n); err != nil {
+			return err
+		}
+	}
 	err := n.initMetrics()
 	if err != nil {
 		n.logger.log(newErrorLogEntry(err, "error on init metrics", map[string]any{"error": err.Error()}))
@@ -338,6 +343,11 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	}
 	if n.presenceManager != nil {
 		if closer, ok := n.presenceManager.(Closer); ok {
+			defer func() { _ = closer.Close(ctx) }()
+		}
+	}
+	if n.mapBroker != nil {
+		if closer, ok := n.mapBroker.(Closer); ok {
 			defer func() { _ = closer.Close(ctx) }()
 		}
 	}
@@ -1092,7 +1102,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 		// Subscribe to appropriate engine based on subscription type.
 		if sub.isMap {
 			if mapBroker := n.getMapBroker(ch); mapBroker != nil {
-				n.metrics.incActionCount("keyed_engine_subscribe", ch)
+				n.metrics.incActionCount("map_broker_subscribe", ch)
 				err := mapBroker.Subscribe(ch)
 				if err != nil {
 					_, _, _ = n.hub.removeSub(ch, sub.client)
@@ -1157,7 +1167,7 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 				// Unsubscribe from appropriate engine based on channel type.
 				if wasKeyed {
 					if mapBroker := n.getMapBroker(ch); mapBroker != nil {
-						n.metrics.incActionCount("keyed_engine_unsubscribe", ch)
+						n.metrics.incActionCount("map_broker_unsubscribe", ch)
 						err := mapBroker.Unsubscribe(ch)
 						if err != nil {
 							time.Sleep(500 * time.Millisecond)
@@ -2033,6 +2043,7 @@ func (n *Node) MapPublish(ctx context.Context, ch string, key string, opts MapPu
 		return MapPublishResult{}, ErrorNotAvailable
 	}
 	n.metrics.incActionCount("map_publish", ch)
+	n.metrics.incMessagesSent("map_publication", ch)
 	result, err := mapBroker.Publish(ctx, ch, key, opts)
 	if n.logEnabled(LogLevelDebug) {
 		n.logger.log(newLogEntry(LogLevelDebug, "MapPublish result", map[string]any{

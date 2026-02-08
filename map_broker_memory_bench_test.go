@@ -12,7 +12,7 @@ func setupMemoryMapBrokerBench(b *testing.B) (*MemoryMapBroker, func()) {
 	b.Helper()
 	node, _ := New(Config{})
 	engine, _ := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
-	_ = engine.RegisterBrokerEventHandler(nil)
+	_ = engine.RegisterEventHandler(nil)
 	return engine, func() {
 		_ = node.Shutdown(context.Background())
 	}

@@ -15,7 +15,7 @@ func BenchmarkCachedEngine_ReadState_Cached(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
-	_ = backend.RegisterBrokerEventHandler(nil)
+	_ = backend.RegisterEventHandler(nil)
 
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
@@ -59,7 +59,7 @@ func BenchmarkCachedEngine_ReadState_ColdLoad(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
-	_ = backend.RegisterBrokerEventHandler(nil)
+	_ = backend.RegisterEventHandler(nil)
 
 	ctx := context.Background()
 
@@ -102,7 +102,7 @@ func BenchmarkCachedEngine_ReadState_Parallel(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
-	_ = backend.RegisterBrokerEventHandler(nil)
+	_ = backend.RegisterEventHandler(nil)
 
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
@@ -142,7 +142,7 @@ func BenchmarkCachedEngine_ReadState_Paginated(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
-	_ = backend.RegisterBrokerEventHandler(nil)
+	_ = backend.RegisterEventHandler(nil)
 
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
@@ -190,7 +190,7 @@ func BenchmarkCachedEngine_Publish(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
-	_ = backend.RegisterBrokerEventHandler(nil)
+	_ = backend.RegisterEventHandler(nil)
 
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
@@ -222,7 +222,7 @@ func BenchmarkCachedEngine_Publish_Parallel(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
-	_ = backend.RegisterBrokerEventHandler(nil)
+	_ = backend.RegisterEventHandler(nil)
 
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
@@ -260,7 +260,7 @@ func BenchmarkMapCache_EnsureLoaded(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
-	_ = backend.RegisterBrokerEventHandler(nil)
+	_ = backend.RegisterEventHandler(nil)
 
 	ctx := context.Background()
 
@@ -335,7 +335,7 @@ func BenchmarkReadState_Direct_vs_Cached(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
-	_ = backend.RegisterBrokerEventHandler(nil)
+	_ = backend.RegisterEventHandler(nil)
 
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
@@ -383,7 +383,7 @@ func BenchmarkPublish_Direct_vs_Cached(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
-	_ = backend.RegisterBrokerEventHandler(nil)
+	_ = backend.RegisterEventHandler(nil)
 
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
@@ -427,7 +427,7 @@ func BenchmarkCachedEngine_SyncChannel(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
-	_ = backend.RegisterBrokerEventHandler(nil)
+	_ = backend.RegisterEventHandler(nil)
 
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
@@ -473,7 +473,7 @@ func BenchmarkCachedEngine_ManyChannels(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
-	_ = backend.RegisterBrokerEventHandler(nil)
+	_ = backend.RegisterEventHandler(nil)
 
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{

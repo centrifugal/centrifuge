@@ -77,6 +77,10 @@ const (
 // MapBroker is the interface for managing map subscription state.
 // See "MapBroker Overview" above for detailed documentation.
 type MapBroker interface {
+	// RegisterEventHandler registers a BrokerEventHandler to handle publications
+	// received from pub/sub. Called by Node.Run() during startup.
+	RegisterEventHandler(BrokerEventHandler) error
+
 	// Subscribe registers this server node to receive pub/sub messages for the channel.
 	// Called when a client subscribes to a map channel on this node.
 	Subscribe(ch string) error

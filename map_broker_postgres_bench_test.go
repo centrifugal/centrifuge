@@ -23,7 +23,7 @@ func setupPostgresMapBrokerBench(b *testing.B) (*PostgresMapBroker, func()) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	_ = engine.RegisterBrokerEventHandler(nil)
+	_ = engine.RegisterEventHandler(nil)
 
 	// Clean up tables
 	ctx := context.Background()
@@ -500,7 +500,7 @@ func setupPostgresMapBrokerOutboxBench(b *testing.B) (*PostgresMapBroker, func()
 	if err != nil {
 		b.Fatal(err)
 	}
-	_ = engine.RegisterBrokerEventHandler(nil)
+	_ = engine.RegisterEventHandler(nil)
 
 	// Clean up tables
 	ctx := context.Background()
@@ -547,7 +547,7 @@ func setupPostgresMapBrokerOutboxBenchWithHandler(b *testing.B, handler BrokerEv
 	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_outbox WHERE channel LIKE 'bench_%'")
 
 	// Register handler which starts workers
-	_ = engine.RegisterBrokerEventHandler(handler)
+	_ = engine.RegisterEventHandler(handler)
 
 	return engine, func() {
 		_ = engine.Close(context.Background())

@@ -14,7 +14,7 @@ import (
 func newTestCachedMapBroker(tb testing.TB, n *Node) (*CachedMapBroker, *MemoryMapBroker) {
 	backend, err := NewMemoryMapBroker(n, MemoryMapBrokerConfig{})
 	require.NoError(tb, err)
-	err = backend.RegisterBrokerEventHandler(nil)
+	err = backend.RegisterEventHandler(nil)
 	require.NoError(tb, err)
 
 	cached, err := NewCachedMapBroker(n, backend, CachedMapBrokerConfig{
@@ -131,7 +131,7 @@ func TestMapCache_LRUEviction(t *testing.T) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = backend.RegisterBrokerEventHandler(nil)
+	err = backend.RegisterEventHandler(nil)
 	require.NoError(t, err)
 
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
@@ -995,7 +995,7 @@ func TestCachedMapBroker_HandlePublication_GapFilling(t *testing.T) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = backend.RegisterBrokerEventHandler(nil)
+	err = backend.RegisterEventHandler(nil)
 	require.NoError(t, err)
 
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
@@ -1092,7 +1092,7 @@ func TestCachedMapBroker_HandlePublication_EpochMismatch(t *testing.T) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = backend.RegisterBrokerEventHandler(nil)
+	err = backend.RegisterEventHandler(nil)
 	require.NoError(t, err)
 
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
@@ -1156,7 +1156,7 @@ func TestCachedMapBroker_HandlePublication_NoGap(t *testing.T) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = backend.RegisterBrokerEventHandler(nil)
+	err = backend.RegisterEventHandler(nil)
 	require.NoError(t, err)
 
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
@@ -1274,7 +1274,7 @@ func TestCachedMapBroker_SnapshotAndStreamRecovery(t *testing.T) {
 	// Create backend with data
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = backend.RegisterBrokerEventHandler(nil)
+	err = backend.RegisterEventHandler(nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -1541,7 +1541,7 @@ func TestCachedMapBroker_ChannelOptionsInheritance(t *testing.T) {
 
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = backend.RegisterBrokerEventHandler(nil)
+	err = backend.RegisterEventHandler(nil)
 	require.NoError(t, err)
 
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
@@ -1628,7 +1628,7 @@ func TestCachedMapBroker_OptionsFromBackendLoad(t *testing.T) {
 	// Create backend with data
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = backend.RegisterBrokerEventHandler(nil)
+	err = backend.RegisterEventHandler(nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()

@@ -19,7 +19,7 @@ func newTestNodeWithMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
 
 	engine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = engine.RegisterBrokerEventHandler(nil)
+	err = engine.RegisterEventHandler(nil)
 	require.NoError(t, err)
 
 	node.SetMapBroker(engine)
@@ -1410,7 +1410,7 @@ func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
 
 	engine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = engine.RegisterBrokerEventHandler(nil)
+	err = engine.RegisterEventHandler(nil)
 	require.NoError(t, err)
 	node.SetMapBroker(engine)
 
@@ -1481,7 +1481,7 @@ func TestMapSubscribe_StateToLive_WithStreamPublications(t *testing.T) {
 
 	engine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = engine.RegisterBrokerEventHandler(nil)
+	err = engine.RegisterEventHandler(nil)
 	require.NoError(t, err)
 	node.SetMapBroker(engine)
 
@@ -1547,7 +1547,7 @@ func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
 
 	engine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = engine.RegisterBrokerEventHandler(nil)
+	err = engine.RegisterEventHandler(nil)
 	require.NoError(t, err)
 	node.SetMapBroker(engine)
 
@@ -1892,7 +1892,7 @@ func TestMapSubscribe_StateToLive_Disabled(t *testing.T) {
 
 	engine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = engine.RegisterBrokerEventHandler(nil)
+	err = engine.RegisterEventHandler(nil)
 	require.NoError(t, err)
 	node.SetMapBroker(engine)
 

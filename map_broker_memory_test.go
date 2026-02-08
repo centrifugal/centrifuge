@@ -12,7 +12,7 @@ import (
 func newTestMemoryMapBroker(tb testing.TB, n *Node) *MemoryMapBroker {
 	e, err := NewMemoryMapBroker(n, MemoryMapBrokerConfig{})
 	require.NoError(tb, err)
-	err = e.RegisterBrokerEventHandler(nil)
+	err = e.RegisterEventHandler(nil)
 	require.NoError(tb, err)
 	tb.Cleanup(func() {
 		_ = n.Shutdown(context.Background())

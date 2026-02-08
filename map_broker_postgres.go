@@ -307,8 +307,8 @@ func (e *PostgresMapBroker) ensureChannelMeta(ctx context.Context, ch string) (S
 	return StreamPosition{Offset: uint64(topOffset), Epoch: actualEpoch}, nil
 }
 
-// RegisterBrokerEventHandler registers the event handler and starts background workers.
-func (e *PostgresMapBroker) RegisterBrokerEventHandler(h BrokerEventHandler) error {
+// RegisterEventHandler registers the event handler and starts background workers.
+func (e *PostgresMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 	e.eventHandler = h
 
 	if e.running.Swap(true) {
@@ -349,11 +349,6 @@ func (e *PostgresMapBroker) RegisterBrokerEventHandler(h BrokerEventHandler) err
 	}
 
 	return nil
-}
-
-// RegisterEventHandler is an alias for RegisterBrokerEventHandler.
-func (e *PostgresMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
-	return e.RegisterBrokerEventHandler(h)
 }
 
 // Close shuts down the engine.

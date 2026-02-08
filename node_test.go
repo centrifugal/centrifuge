@@ -1541,11 +1541,11 @@ func TestGetMapBroker(t *testing.T) {
 	// Create two map engines
 	defaultEngine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	_ = defaultEngine.RegisterBrokerEventHandler(nil)
+	_ = defaultEngine.RegisterEventHandler(nil)
 
 	customEngine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	_ = customEngine.RegisterBrokerEventHandler(nil)
+	_ = customEngine.RegisterEventHandler(nil)
 
 	// Set default engine
 	node.SetMapBroker(defaultEngine)

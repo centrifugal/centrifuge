@@ -55,8 +55,8 @@ func NewMemoryMapBroker(n *Node, _ MemoryMapBrokerConfig) (*MemoryMapBroker, err
 	return e, nil
 }
 
-// RegisterBrokerEventHandler runs memory map engine.
-func (e *MemoryMapBroker) RegisterBrokerEventHandler(h BrokerEventHandler) error {
+// RegisterEventHandler registers event handler and runs memory map engine.
+func (e *MemoryMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 	e.eventHandler = h
 	e.mapHub.setEventHandler(h)
 	go e.expireResultCache()
@@ -220,11 +220,6 @@ func (e *MemoryMapBroker) ReadState(ctx context.Context, ch string, opts MapRead
 // Stats returns state statistics.
 func (e *MemoryMapBroker) Stats(ctx context.Context, ch string) (MapStats, error) {
 	return e.mapHub.getStats(ch)
-}
-
-// RegisterEventHandler registers event handler.
-func (e *MemoryMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
-	return e.RegisterBrokerEventHandler(h)
 }
 
 func (e *MemoryMapBroker) getResultFromCache(ch string, key string) (StreamPosition, bool) {

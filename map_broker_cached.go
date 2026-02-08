@@ -474,13 +474,12 @@ func (e *CachedMapBroker) ensureLoaded(ctx context.Context, ch string) error {
 			return nil, nil, StreamPosition{}, err
 		}
 
-		// Debug logging
-		if e.node.logEnabled(LogLevelDebug) {
+		if e.node.logEnabled(LogLevelTrace) {
 			keys := make([]string, 0, len(statePubs))
 			for _, pub := range statePubs {
 				keys = append(keys, pub.Key)
 			}
-			e.node.logger.log(newLogEntry(LogLevelDebug, "ensureLoaded from backend", map[string]any{
+			e.node.logger.log(newLogEntry(LogLevelTrace, "ensureLoaded from backend", map[string]any{
 				"channel":  ch,
 				"numPubs":  len(statePubs),
 				"position": pos,

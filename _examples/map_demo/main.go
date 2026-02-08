@@ -128,7 +128,7 @@ func main() {
 
 	// Set up map engine (memory, Redis, or PostgreSQL based on flags).
 	// When -cache flag is set, wraps Redis/Postgres engines with CachedMapBroker.
-	mapBroker, registerHandler, err := setupMapBroker(node, *redisAddr, *postgresAddr, *enableCache)
+	mapBroker, err := setupMapBroker(node, *redisAddr, *postgresAddr, *enableCache)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -216,11 +216,6 @@ func main() {
 	})
 
 	if err := node.Run(); err != nil {
-		log.Fatal(err)
-	}
-
-	// Register broker event handler for the map engine.
-	if err := registerHandler(node); err != nil {
 		log.Fatal(err)
 	}
 
@@ -920,10 +915,8 @@ func handleInventoryRestock(_ *centrifuge.Client, node *centrifuge.Node, data []
 // setupMapBroker creates either a memory, Redis, or PostgreSQL map engine.
 // When enableCache is true, wraps Redis/Postgres engines with CachedMapBroker
 // for read-your-own-writes consistency and low-latency reads.
-// Returns the engine and a function to register the broker event handler.
-func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enableCache bool) (centrifuge.MapBroker, func(centrifuge.BrokerEventHandler) error, error) {
+func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enableCache bool) (centrifuge.MapBroker, error) {
 	var backend centrifuge.MapBroker
-	var registerHandler func(centrifuge.BrokerEventHandler) error
 
 	// PostgreSQL takes priority if specified
 	if postgresAddr != "" {
@@ -938,7 +931,7 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enabl
 				Address: redisAddr,
 			})
 			if err != nil {
-				return nil, nil, fmt.Errorf("error creating Redis shard for broker: %w", err)
+				return nil, fmt.Errorf("error creating Redis shard for broker: %w", err)
 			}
 
 			broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
@@ -946,7 +939,7 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enabl
 				Prefix: "map_demo",
 			})
 			if err != nil {
-				return nil, nil, fmt.Errorf("error creating Redis broker: %w", err)
+				return nil, fmt.Errorf("error creating Redis broker: %w", err)
 			}
 			node.SetBroker(broker)
 			pgConfig.Broker = broker
@@ -956,10 +949,9 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enabl
 
 		engine, err := centrifuge.NewPostgresMapBroker(node, pgConfig)
 		if err != nil {
-			return nil, nil, fmt.Errorf("error creating PostgreSQL map engine: %w", err)
+			return nil, fmt.Errorf("error creating PostgreSQL map engine: %w", err)
 		}
 		backend = engine
-		registerHandler = engine.RegisterEventHandler
 	} else if redisAddr != "" {
 		// Redis if specified
 		log.Printf("Using Redis map engine at %s", redisAddr)
@@ -968,7 +960,7 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enabl
 			Address: redisAddr,
 		})
 		if err != nil {
-			return nil, nil, fmt.Errorf("error creating Redis shard: %w", err)
+			return nil, fmt.Errorf("error creating Redis shard: %w", err)
 		}
 
 		engine, err := centrifuge.NewRedisMapBroker(node, centrifuge.RedisMapBrokerConfig{
@@ -976,18 +968,17 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enabl
 			Prefix: "map_demo",
 		})
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		backend = engine
-		registerHandler = engine.RegisterEventHandler
 	} else {
 		// Default to memory - cache not applicable (already in-memory)
 		log.Println("Using in-memory map engine")
 		engine, err := centrifuge.NewMemoryMapBroker(node, centrifuge.MemoryMapBrokerConfig{})
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		return engine, engine.RegisterBrokerEventHandler, nil
+		return engine, nil
 	}
 
 	// Wrap with cache layer if enabled (only for Redis/Postgres)
@@ -1003,10 +994,10 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enabl
 			SyncBatchSize: 1000,
 		})
 		if err != nil {
-			return nil, nil, fmt.Errorf("error creating cached map engine: %w", err)
+			return nil, fmt.Errorf("error creating cached map engine: %w", err)
 		}
-		return cached, cached.RegisterEventHandler, nil
+		return cached, nil
 	}
 
-	return backend, registerHandler, nil
+	return backend, nil
 }

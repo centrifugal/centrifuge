@@ -44,7 +44,7 @@ func newTestPostgresMapBrokerWithOutbox(tb testing.TB, n *Node) *PostgresMapBrok
 	ctx := context.Background()
 	cleanupTestTables(ctx, e)
 
-	err = e.RegisterBrokerEventHandler(nil)
+	err = e.RegisterEventHandler(nil)
 	require.NoError(tb, err)
 
 	tb.Cleanup(func() {
@@ -768,7 +768,7 @@ func TestPostgresMapBroker_WALReader(t *testing.T) {
 	receivedCh := make(chan struct{}, 10)
 
 	// Register event handler to capture publications
-	err = engine.RegisterBrokerEventHandler(&testBrokerEventHandler{
+	err = engine.RegisterEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			if ch != channel {
 				return nil
@@ -882,7 +882,7 @@ func TestPostgresMapBroker_WALReaderOrdering(t *testing.T) {
 
 	const numMessages = 10
 
-	err = engine.RegisterBrokerEventHandler(&testBrokerEventHandler{
+	err = engine.RegisterEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			// Only count messages for our specific channel
 			if ch != channel {
@@ -966,7 +966,7 @@ func TestPostgresMapBroker_WALReaderMetadata(t *testing.T) {
 	var receivedMu sync.Mutex
 	receivedCh := make(chan struct{}, 1)
 
-	err = engine.RegisterBrokerEventHandler(&testBrokerEventHandler{
+	err = engine.RegisterEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			// Only count messages for our specific channel
 			if ch != channel {
@@ -1104,7 +1104,7 @@ func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 
 	// Register event handler on broker directly (before node.Run which would override it)
 	// This captures publications from broker
-	err = broker.RegisterBrokerEventHandler(&testBrokerEventHandler{
+	err = broker.RegisterEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			if ch != channel {
 				return nil
@@ -1148,7 +1148,7 @@ func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 	})
 
 	// Register nil handler on engine (not used with broker, but required)
-	err = engine.RegisterBrokerEventHandler(nil)
+	err = engine.RegisterEventHandler(nil)
 	require.NoError(t, err)
 
 	// Wait for WAL reader to claim at least one shard
@@ -1225,7 +1225,7 @@ func TestPostgresMapBroker_OutboxOrdering(t *testing.T) {
 
 	const numMessages = 10
 
-	err = engine.RegisterBrokerEventHandler(&testBrokerEventHandler{
+	err = engine.RegisterEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			if ch != channel {
 				return nil
@@ -1341,7 +1341,7 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 	var receivedMu sync.Mutex
 	doneCh := make(chan struct{})
 
-	err = engine2.RegisterBrokerEventHandler(&testBrokerEventHandler{
+	err = engine2.RegisterEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			if ch != channel {
 				return nil
@@ -1414,7 +1414,7 @@ func TestPostgresMapBroker_OutboxMarkProcessed(t *testing.T) {
 	var receivedMu sync.Mutex
 	doneCh := make(chan struct{})
 
-	err = engine.RegisterBrokerEventHandler(&testBrokerEventHandler{
+	err = engine.RegisterEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			if ch != channel {
 				return nil
@@ -1499,7 +1499,7 @@ func TestPostgresMapBroker_OutboxConcurrentPublish(t *testing.T) {
 	var receivedMu sync.Mutex
 	doneCh := make(chan struct{})
 
-	err = engine.RegisterBrokerEventHandler(&testBrokerEventHandler{
+	err = engine.RegisterEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			if ch != channel {
 				return nil
@@ -1598,7 +1598,7 @@ func TestPostgresMapBroker_OutboxWithBroker(t *testing.T) {
 	receivedCh := make(chan struct{}, 10)
 
 	// Register event handler on broker
-	err = broker.RegisterBrokerEventHandler(&testBrokerEventHandler{
+	err = broker.RegisterEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			if ch != channel {
 				return nil
@@ -1637,7 +1637,7 @@ func TestPostgresMapBroker_OutboxWithBroker(t *testing.T) {
 		_ = node.Shutdown(context.Background())
 	})
 
-	err = engine.RegisterBrokerEventHandler(nil)
+	err = engine.RegisterEventHandler(nil)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
