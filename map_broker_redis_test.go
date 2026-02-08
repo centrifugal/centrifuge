@@ -17,16 +17,12 @@ func randomChannel(prefix string) string {
 	return fmt.Sprintf("%s_%d_%d", prefix, time.Now().UnixNano(), rand.Intn(100000))
 }
 
-func newTestSnapshotRedisEngine(tb testing.TB, n *Node) *RedisMapEngine {
+func newTestStateRedisEngine(tb testing.TB, n *Node) *RedisMapBroker {
 	redisConf := testSingleRedisConf(6379)
 	shard, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
-	e, err := NewRedisMapEngine(n, RedisMapEngineConfig{
-		Shards:             []*RedisShard{shard},
-		PresenceTTL:        60 * time.Second,
-		PresenceStreamSize: 100,
-		PresenceStreamTTL:  300 * time.Second,
-		PresenceMetaTTL:    3600 * time.Second,
+	e, err := NewRedisMapBroker(n, RedisMapBrokerConfig{
+		Shards: []*RedisShard{shard},
 	})
 	require.NoError(tb, err)
 	tb.Cleanup(func() {
@@ -35,9 +31,9 @@ func newTestSnapshotRedisEngine(tb testing.TB, n *Node) *RedisMapEngine {
 	return e
 }
 
-// snapshotToMap converts []SnapshotEntry to map for easier testing.
+// stateToMap converts []StateEntry to map for easier testing.
 // It extracts the raw data from the Publication protobuf payload.
-func snapshotToMap(pubs []*Publication) map[string][]byte {
+func stateToMap(pubs []*Publication) map[string][]byte {
 	result := make(map[string][]byte, len(pubs))
 	for _, pub := range pubs {
 		// Extract data from Publication
@@ -46,10 +42,10 @@ func snapshotToMap(pubs []*Publication) map[string][]byte {
 	return result
 }
 
-// TestRedisMapEngine_StatefulChannel tests stateful channel with keyed state and revisions.
-func TestRedisMapEngine_StatefulChannel(t *testing.T) {
+// TestRedisMapBroker_StatefulChannel tests stateful channel with keyed state and revisions.
+func TestRedisMapBroker_StatefulChannel(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_stateful")
@@ -79,20 +75,20 @@ func TestRedisMapEngine_StatefulChannel(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Read snapshot
+	// Read state
 	entries, streamPos, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, streamPos.Epoch)
 	require.Greater(t, streamPos.Offset, uint64(0))
 
-	// Verify snapshot contains latest values
-	snapshot := snapshotToMap(entries)
-	require.Len(t, snapshot, 2)
-	require.Equal(t, []byte("data1_updated"), snapshot["key1"])
-	require.Equal(t, []byte("data2"), snapshot["key2"])
+	// Verify state contains latest values
+	state := stateToMap(entries)
+	require.Len(t, state, 2)
+	require.Equal(t, []byte("data1_updated"), state["key1"])
+	require.Equal(t, []byte("data2"), state["key2"])
 
 	// Read stream to verify all publications are in history
 	pubs, _, err := engine.ReadStream(ctx, channel, MapReadStreamOptions{
@@ -104,10 +100,10 @@ func TestRedisMapEngine_StatefulChannel(t *testing.T) {
 	require.Len(t, pubs, 3) // All 3 publications in stream
 }
 
-// TestRedisMapEngine_StatefulChannelOrdered tests ordered stateful channel.
-func TestRedisMapEngine_StatefulChannelOrdered(t *testing.T) {
+// TestRedisMapBroker_StatefulChannelOrdered tests ordered stateful channel.
+func TestRedisMapBroker_StatefulChannelOrdered(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_ordered")
@@ -125,27 +121,27 @@ func TestRedisMapEngine_StatefulChannelOrdered(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Read ordered snapshot (descending by score)
+	// Read ordered state (descending by score)
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       100,
+		Ordered:  true,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.Len(t, entries, 5)
 
 	// Verify all keys present
-	snapshot := snapshotToMap(entries)
+	state := stateToMap(entries)
 	for i := 0; i < 5; i++ {
 		key := fmt.Sprintf("key%d", i)
-		require.Contains(t, snapshot, key)
+		require.Contains(t, state, key)
 	}
 }
 
-// TestRedisMapEngine_SnapshotRevision tests that snapshot values include revisions.
-func TestRedisMapEngine_SnapshotRevision(t *testing.T) {
+// TestRedisMapBroker_StateRevision tests that state values include revisions.
+func TestRedisMapBroker_StateRevision(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_revision")
@@ -171,9 +167,9 @@ func TestRedisMapEngine_SnapshotRevision(t *testing.T) {
 	require.Equal(t, uint64(2), res2.Position.Offset)
 	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch) // Same epoch
 
-	// Read snapshot - entries now include per-entry revisions
+	// Read state - entries now include per-entry revisions
 	entries, streamPos, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -181,9 +177,9 @@ func TestRedisMapEngine_SnapshotRevision(t *testing.T) {
 	require.Equal(t, res2.Position.Epoch, streamPos.Epoch)
 
 	// Verify payloads
-	snapshot := snapshotToMap(entries)
-	require.Equal(t, []byte("data1"), snapshot["key1"])
-	require.Equal(t, []byte("data2"), snapshot["key2"])
+	state := stateToMap(entries)
+	require.Equal(t, []byte("data1"), state["key1"])
+	require.Equal(t, []byte("data2"), state["key2"])
 
 	// Verify per-entry offsets (epoch is in streamPos, same for all)
 	require.NotEmpty(t, streamPos.Epoch)
@@ -192,125 +188,10 @@ func TestRedisMapEngine_SnapshotRevision(t *testing.T) {
 	}
 }
 
-//// TestRedisMapEngine_ConvergedMembership tests presence with revisions and ordering.
-//func TestRedisMapEngine_ConvergedMembership(t *testing.T) {
-//	node, _ := New(Config{})
-//	engine := newTestSnapshotRedisEngine(t, node)
-//
-//	ctx := context.Background()
-//	channel := randomChannel("test_presence")
-//
-//	// Add presence for multiple clients
-//	client1 := ClientInfo{
-//		ClientID: "client1",
-//		UserID:   "user1",
-//	}
-//	client2 := ClientInfo{
-//		ClientID: "client2",
-//		UserID:   "user1", // Same user, different client
-//	}
-//	client3 := ClientInfo{
-//		ClientID: "client3",
-//		UserID:   "user2",
-//	}
-//
-//	err := engine.AddMember(ctx, channel, client1, EnginePresenceOptions{})
-//	require.NoError(t, err)
-//
-//	err = engine.AddMember(ctx, channel, client2, EnginePresenceOptions{})
-//	require.NoError(t, err)
-//
-//	err = engine.AddMember(ctx, channel, client3, EnginePresenceOptions{})
-//	require.NoError(t, err)
-//
-//	// Get presence
-//	presence, err := engine.Members(ctx, channel)
-//	require.NoError(t, err)
-//	require.Len(t, presence, 3)
-//	require.Equal(t, "user1", presence["client1"].UserID)
-//	require.Equal(t, "user1", presence["client2"].UserID)
-//	require.Equal(t, "user2", presence["client3"].UserID)
-//
-//	// Get presence stats (uses generic aggregations)
-//	stats, err := engine.Stats(ctx, channel)
-//	require.NoError(t, err)
-//	require.Equal(t, 3, stats.NumKeys)
-//	require.Equal(t, 2, stats.NumAggregationKeys) // user1 and user2
-//
-//	// Remove one client from user1
-//	err = engine.RemoveMember(ctx, channel, client1, EnginePresenceOptions{})
-//	require.NoError(t, err)
-//
-//	// Get presence again
-//	presence, err = engine.Members(ctx, channel)
-//	require.NoError(t, err)
-//	require.Len(t, presence, 2)
-//	require.NotContains(t, presence, "client1")
-//
-//	// Stats should show user1 still present (client2 is still there)
-//	stats, err = engine.Stats(ctx, channel)
-//	require.NoError(t, err)
-//	require.Equal(t, 2, stats.NumKeys)
-//	require.Equal(t, 2, stats.NumAggregationKeys) // Still 2 users
-//
-//	// Remove second client from user1
-//	err = engine.RemoveMember(ctx, channel, client2, EnginePresenceOptions{})
-//	require.NoError(t, err)
-//
-//	// Now user1 should be gone from aggregation
-//	stats, err = engine.Stats(ctx, channel)
-//	require.NoError(t, err)
-//	require.Equal(t, 1, stats.NumKeys)
-//	require.Equal(t, 1, stats.NumAggregationKeys) // Only user2 remains
-//}
-
-//// TestRedisMapEngine_PresenceStream tests presence event stream (joins/leaves).
-//func TestRedisMapEngine_PresenceStream(t *testing.T) {
-//	node, _ := New(Config{})
-//	engine := newTestSnapshotRedisEngine(t, node)
-//
-//	ctx := context.Background()
-//	channel := randomChannel("test_presence_stream")
-//
-//	client := ClientInfo{
-//		ClientID: "client1",
-//		UserID:   "user1",
-//	}
-//
-//	// Add presence
-//	err := engine.AddMember(ctx, channel, client, EnginePresenceOptions{})
-//	require.NoError(t, err)
-//
-//	// Remove presence
-//	err = engine.RemoveMember(ctx, channel, client, EnginePresenceOptions{})
-//	require.NoError(t, err)
-//
-//	// Read presence stream
-//	events, streamPos, err := engine.ReadPresenceStream(ctx, channel, MapReadStreamOptions{
-//		Filter: StreamFilter{
-//			Limit: -1, // Get all
-//		},
-//	})
-//	require.NoError(t, err)
-//	require.Len(t, events, 2) // Join and leave
-//	require.NotEmpty(t, streamPos.Epoch)
-//	require.Greater(t, streamPos.Offset, uint64(0))
-//
-//	// Verify event types
-//	require.False(t, events[0].Removed)
-//	require.True(t, events[1].Removed)
-//	require.Equal(t, "client1", events[0].Info.ClientID)
-//	require.Equal(t, "client1", events[1].Info.ClientID)
-//
-//	// Verify events have ordered offsets
-//	require.Equal(t, uint64(1), events[0].Offset)
-//	require.Equal(t, uint64(2), events[1].Offset)
-//}
-
-// TestRedisMapEngine_SnapshotPagination tests cursor-based snapshot pagination.
-func TestRedisMapEngine_SnapshotPagination(t *testing.T) {
+// TestRedisMapBroker_StatePagination tests cursor-based state pagination.
+func TestRedisMapBroker_StatePagination(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_pagination")
@@ -326,11 +207,11 @@ func TestRedisMapEngine_SnapshotPagination(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Read snapshot with limit - HSCAN COUNT is a hint, not a guarantee
+	// Read state with limit - HSCAN COUNT is a hint, not a guarantee
 	// For small hashes, Redis may return all entries in one go
 	page1, pos1, cursor, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       3,
-		Cursor:      "",
+		Limit:    3,
+		Cursor:   "",
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -345,8 +226,8 @@ func TestRedisMapEngine_SnapshotPagination(t *testing.T) {
 	// Continue reading until cursor is "0" (end of iteration)
 	for cursor != "" && cursor != "0" {
 		page, pos, newCursor, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-			Limit:       3,
-			Cursor:      cursor,
+			Limit:    3,
+			Cursor:   cursor,
 			StateTTL: 300 * time.Second,
 		})
 		require.NoError(t, err)
@@ -364,10 +245,10 @@ func TestRedisMapEngine_SnapshotPagination(t *testing.T) {
 	require.Len(t, allKeys, 10)
 }
 
-// TestRedisMapEngine_EpochHandling tests epoch changes and snapshot invalidation.
-func TestRedisMapEngine_EpochHandling(t *testing.T) {
+// TestRedisMapBroker_EpochHandling tests epoch changes and state invalidation.
+func TestRedisMapBroker_EpochHandling(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_epoch")
@@ -382,9 +263,9 @@ func TestRedisMapEngine_EpochHandling(t *testing.T) {
 	require.NoError(t, err)
 	epoch1 := res1.Position.Epoch
 
-	// Read snapshot
+	// Read state
 	entries, streamPos1, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -397,10 +278,10 @@ func TestRedisMapEngine_EpochHandling(t *testing.T) {
 	require.NotEmpty(t, epoch1)
 }
 
-// TestRedisMapEngine_Idempotency tests idempotent publishing.
-func TestRedisMapEngine_Idempotency(t *testing.T) {
+// TestRedisMapBroker_Idempotency tests idempotent publishing.
+func TestRedisMapBroker_Idempotency(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_idempotency")
@@ -433,21 +314,21 @@ func TestRedisMapEngine_Idempotency(t *testing.T) {
 	require.Equal(t, res1.Position.Offset, res2.Position.Offset) // Same offset
 	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch)   // Same epoch
 
-	// Snapshot should still have original data (second publish was cached/skipped)
+	// State should still have original data (second publish was cached/skipped)
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
-	snapshot := snapshotToMap(entries)
-	require.Len(t, snapshot, 1)
-	require.Equal(t, []byte("data1"), snapshot["key1"])
+	state := stateToMap(entries)
+	require.Len(t, state, 1)
+	require.Equal(t, []byte("data1"), state["key1"])
 }
 
-// TestRedisMapEngine_VersionedPublishing tests version-based idempotency.
-func TestRedisMapEngine_VersionedPublishing(t *testing.T) {
+// TestRedisMapBroker_VersionedPublishing tests version-based idempotency.
+func TestRedisMapBroker_VersionedPublishing(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_version")
@@ -489,20 +370,20 @@ func TestRedisMapEngine_VersionedPublishing(t *testing.T) {
 	require.False(t, res3.Suppressed)
 	require.Equal(t, uint64(2), res3.Position.Offset) // New offset
 
-	// Snapshot should have v3 data
+	// State should have v3 data
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
-	snapshot := snapshotToMap(entries)
-	require.Equal(t, []byte("data_v3"), snapshot["key1"])
+	state := stateToMap(entries)
+	require.Equal(t, []byte("data_v3"), state["key1"])
 }
 
-// TestRedisMapEngine_MultipleChannels tests multiple channels independently.
-func TestRedisMapEngine_MultipleChannels(t *testing.T) {
+// TestRedisMapBroker_MultipleChannels tests multiple channels independently.
+func TestRedisMapBroker_MultipleChannels(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel1 := randomChannel("test_multi1")
@@ -526,29 +407,29 @@ func TestRedisMapEngine_MultipleChannels(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Read channel1 snapshot
+	// Read channel1 state
 	entries1, _, _, err := engine.ReadState(ctx, channel1, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
-	snapshot1 := snapshotToMap(entries1)
-	require.Len(t, snapshot1, 1)
-	require.Equal(t, []byte("data1"), snapshot1["key1"])
+	state1 := stateToMap(entries1)
+	require.Len(t, state1, 1)
+	require.Equal(t, []byte("data1"), state1["key1"])
 
-	// Read channel2 snapshot
+	// Read channel2 state
 	entries2, _, _, err := engine.ReadState(ctx, channel2, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
-	snapshot2 := snapshotToMap(entries2)
-	require.Len(t, snapshot2, 1)
-	require.Equal(t, []byte("data2"), snapshot2["key2"])
+	state2 := stateToMap(entries2)
+	require.Len(t, state2, 1)
+	require.Equal(t, []byte("data2"), state2["key2"])
 }
 
-// TestParseSnapshotValue tests the snapshot value parsing helper.
-func TestParseSnapshotValue(t *testing.T) {
+// TestParseStateValue tests the state value parsing helper.
+func TestParseStateValue(t *testing.T) {
 	tests := []struct {
 		name        string
 		input       []byte
@@ -558,7 +439,7 @@ func TestParseSnapshotValue(t *testing.T) {
 		wantErr     bool
 	}{
 		{
-			name:        "valid snapshot value",
+			name:        "valid state value",
 			input:       []byte("42:node-1:hello"),
 			wantOffset:  42,
 			wantEpoch:   "node-1",
@@ -597,7 +478,7 @@ func TestParseSnapshotValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			offset, epoch, payload, err := parseSnapshotValue(tt.input)
+			offset, epoch, payload, err := parseStateValue(tt.input)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -610,10 +491,10 @@ func TestParseSnapshotValue(t *testing.T) {
 	}
 }
 
-// TestRedisMapEngine_ReadStream2 tests the 2-call version of ReadStream.
-func TestRedisMapEngine_ReadStream2(t *testing.T) {
+// TestRedisMapBroker_ReadStream2 tests the 2-call version of ReadStream.
+func TestRedisMapBroker_ReadStream2(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_readstream2")
@@ -692,10 +573,10 @@ func TestRedisMapEngine_ReadStream2(t *testing.T) {
 	require.NotEmpty(t, streamPosMeta.Epoch)
 }
 
-// TestRedisMapEngine_ReadStreamZero2 tests the 2-call zero-alloc version of ReadStream.
-func TestRedisMapEngine_ReadStreamZero2(t *testing.T) {
+// TestRedisMapBroker_ReadStreamZero2 tests the 2-call zero-alloc version of ReadStream.
+func TestRedisMapBroker_ReadStreamZero2(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_readstreamzero2")
@@ -774,10 +655,10 @@ func TestRedisMapEngine_ReadStreamZero2(t *testing.T) {
 	require.NotEmpty(t, streamPosMeta.Epoch)
 }
 
-// TestRedisMapEngine_ReadStream2_Compatibility tests that ReadStream2 returns same results as ReadStream.
-func TestRedisMapEngine_ReadStream2_Compatibility(t *testing.T) {
+// TestRedisMapBroker_ReadStream2_Compatibility tests that ReadStream2 returns same results as ReadStream.
+func TestRedisMapBroker_ReadStream2_Compatibility(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_compat")
@@ -833,9 +714,9 @@ func TestRedisMapEngine_ReadStream2_Compatibility(t *testing.T) {
 	}
 }
 
-// TestRedisMapEngine_CleanupGeneratesRemovalEvents verifies that the Lua cleanup script
+// TestRedisMapBroker_CleanupGeneratesRemovalEvents verifies that the Lua cleanup script
 // correctly generates removal events (key + removed + timestamp) when entries expire by TTL.
-func TestRedisMapEngine_CleanupGeneratesRemovalEvents(t *testing.T) {
+func TestRedisMapBroker_CleanupGeneratesRemovalEvents(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
@@ -850,13 +731,9 @@ func TestRedisMapEngine_CleanupGeneratesRemovalEvents(t *testing.T) {
 	redisConf := testSingleRedisConf(6379)
 	shard, err := NewRedisShard(node, redisConf)
 	require.NoError(t, err)
-	engine, err := NewRedisMapEngine(node, RedisMapEngineConfig{
-		Shards:             []*RedisShard{shard},
-		PresenceTTL:        60 * time.Second,
-		PresenceStreamSize: 100,
-		PresenceStreamTTL:  300 * time.Second,
-		PresenceMetaTTL:    3600 * time.Second,
-		CleanupBatchSize:   100,
+	engine, err := NewRedisMapBroker(node, RedisMapBrokerConfig{
+		Shards:           []*RedisShard{shard},
+		CleanupBatchSize: 100,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -892,7 +769,7 @@ func TestRedisMapEngine_CleanupGeneratesRemovalEvents(t *testing.T) {
 	require.False(t, pubs[0].Removed)
 	require.False(t, pubs[1].Removed)
 
-	// Verify snapshot has 2 entries.
+	// Verify state has 2 entries.
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
@@ -934,13 +811,13 @@ func TestRedisMapEngine_CleanupGeneratesRemovalEvents(t *testing.T) {
 	require.True(t, removedKeys["key1"], "key1 should be removed")
 	require.True(t, removedKeys["key2"], "key2 should be removed")
 
-	// Verify snapshot is now empty.
+	// Verify state is now empty.
 	entries, _, _, err = engine.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.Len(t, entries, 0, "Snapshot should be empty after cleanup")
+	require.Len(t, entries, 0, "State should be empty after cleanup")
 
 	// Verify stats show 0 keys.
 	stats, err := engine.Stats(ctx, channel)
@@ -948,9 +825,9 @@ func TestRedisMapEngine_CleanupGeneratesRemovalEvents(t *testing.T) {
 	require.Equal(t, 0, stats.NumKeys, "Stats should show 0 keys")
 }
 
-// TestRedisMapEngine_CleanupPartialExpiry verifies that cleanup only removes expired entries,
+// TestRedisMapBroker_CleanupPartialExpiry verifies that cleanup only removes expired entries,
 // leaving non-expired ones untouched.
-func TestRedisMapEngine_CleanupPartialExpiry(t *testing.T) {
+func TestRedisMapBroker_CleanupPartialExpiry(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
@@ -965,13 +842,9 @@ func TestRedisMapEngine_CleanupPartialExpiry(t *testing.T) {
 	redisConf := testSingleRedisConf(6379)
 	shard, err := NewRedisShard(node, redisConf)
 	require.NoError(t, err)
-	engine, err := NewRedisMapEngine(node, RedisMapEngineConfig{
-		Shards:             []*RedisShard{shard},
-		PresenceTTL:        60 * time.Second,
-		PresenceStreamSize: 100,
-		PresenceStreamTTL:  300 * time.Second,
-		PresenceMetaTTL:    3600 * time.Second,
-		CleanupBatchSize:   100,
+	engine, err := NewRedisMapBroker(node, RedisMapBrokerConfig{
+		Shards:           []*RedisShard{shard},
+		CleanupBatchSize: 100,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -1028,9 +901,9 @@ func TestRedisMapEngine_CleanupPartialExpiry(t *testing.T) {
 	require.Equal(t, "key_short", lastPub.Key)
 }
 
-// TestRedisMapEngine_CleanupRefreshedTTL verifies that refreshing a key's TTL
+// TestRedisMapBroker_CleanupRefreshedTTL verifies that refreshing a key's TTL
 // (by re-publishing with a longer TTL) prevents it from being cleaned up.
-func TestRedisMapEngine_CleanupRefreshedTTL(t *testing.T) {
+func TestRedisMapBroker_CleanupRefreshedTTL(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
@@ -1045,13 +918,9 @@ func TestRedisMapEngine_CleanupRefreshedTTL(t *testing.T) {
 	redisConf := testSingleRedisConf(6379)
 	shard, err := NewRedisShard(node, redisConf)
 	require.NoError(t, err)
-	engine, err := NewRedisMapEngine(node, RedisMapEngineConfig{
-		Shards:             []*RedisShard{shard},
-		PresenceTTL:        60 * time.Second,
-		PresenceStreamSize: 100,
-		PresenceStreamTTL:  300 * time.Second,
-		PresenceMetaTTL:    3600 * time.Second,
-		CleanupBatchSize:   100,
+	engine, err := NewRedisMapBroker(node, RedisMapBrokerConfig{
+		Shards:           []*RedisShard{shard},
+		CleanupBatchSize: 100,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -1108,9 +977,9 @@ func TestRedisMapEngine_CleanupRefreshedTTL(t *testing.T) {
 	}
 }
 
-// TestRedisMapEngine_CleanupRegistration verifies that the cleanup registration ZSET
+// TestRedisMapBroker_CleanupRegistration verifies that the cleanup registration ZSET
 // is properly maintained (entries added on publish, removed when channel is fully cleaned).
-func TestRedisMapEngine_CleanupRegistration(t *testing.T) {
+func TestRedisMapBroker_CleanupRegistration(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
@@ -1125,13 +994,9 @@ func TestRedisMapEngine_CleanupRegistration(t *testing.T) {
 	redisConf := testSingleRedisConf(6379)
 	shard, err := NewRedisShard(node, redisConf)
 	require.NoError(t, err)
-	engine, err := NewRedisMapEngine(node, RedisMapEngineConfig{
-		Shards:             []*RedisShard{shard},
-		PresenceTTL:        60 * time.Second,
-		PresenceStreamSize: 100,
-		PresenceStreamTTL:  300 * time.Second,
-		PresenceMetaTTL:    3600 * time.Second,
-		CleanupBatchSize:   100,
+	engine, err := NewRedisMapBroker(node, RedisMapBrokerConfig{
+		Shards:           []*RedisShard{shard},
+		CleanupBatchSize: 100,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -1180,13 +1045,13 @@ func TestRedisMapEngine_CleanupRegistration(t *testing.T) {
 }
 
 // Old aggregation and cleanup tests using removed API (AddMember/RemoveMember) have been
-// replaced by TestRedisMapEngine_Cleanup* tests above using the current Publish API.
+// replaced by TestRedisMapBroker_Cleanup* tests above using the current Publish API.
 
-// TestRedisMapEngine_OrderedSnapshotOrdering tests that ordered snapshots return entries
+// TestRedisMapBroker_OrderedStateOrdering tests that ordered  state return entries
 // in correct score order (ascending by score).
-func TestRedisMapEngine_OrderedSnapshotOrdering(t *testing.T) {
+func TestRedisMapBroker_OrderedStateOrdering(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_ordering")
@@ -1216,10 +1081,10 @@ func TestRedisMapEngine_OrderedSnapshotOrdering(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Read ordered snapshot - should be sorted by score (ascending)
+	// Read ordered state - should be sorted by score (ascending)
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       100,
+		Ordered:  true,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1234,11 +1099,11 @@ func TestRedisMapEngine_OrderedSnapshotOrdering(t *testing.T) {
 	t.Logf("SUCCESS: Entries returned in correct descending score order: %v", expectedOrder)
 }
 
-// TestRedisMapEngine_OrderedSnapshotPagination tests that pagination over ordered snapshots
+// TestRedisMapBroker_OrderedStatePagination tests that pagination over ordered state
 // maintains correct ordering across pages.
-func TestRedisMapEngine_OrderedSnapshotPagination(t *testing.T) {
+func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_pagination")
@@ -1262,8 +1127,8 @@ func TestRedisMapEngine_OrderedSnapshotPagination(t *testing.T) {
 
 	// Read first page (limit=5, no cursor)
 	page1, pos1, cursor1, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       5,
+		Ordered:  true,
+		Limit:    5,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1278,9 +1143,9 @@ func TestRedisMapEngine_OrderedSnapshotPagination(t *testing.T) {
 
 	// Read second page (using cursor)
 	page2, pos2, cursor2, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Cursor:      cursor1,
-		Limit:       5,
+		Ordered:  true,
+		Cursor:   cursor1,
+		Limit:    5,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1295,9 +1160,9 @@ func TestRedisMapEngine_OrderedSnapshotPagination(t *testing.T) {
 
 	// Read third page (using cursor)
 	page3, _, cursor3, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Cursor:      cursor2,
-		Limit:       5,
+		Ordered:  true,
+		Cursor:   cursor2,
+		Limit:    5,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1311,9 +1176,9 @@ func TestRedisMapEngine_OrderedSnapshotPagination(t *testing.T) {
 
 	// Read fourth page (using cursor)
 	page4, _, cursor4, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Cursor:      cursor3,
-		Limit:       5,
+		Ordered:  true,
+		Cursor:   cursor3,
+		Limit:    5,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1345,10 +1210,10 @@ func TestRedisMapEngine_OrderedSnapshotPagination(t *testing.T) {
 	t.Logf("SUCCESS: Pagination maintains correct ordering across 4 pages")
 }
 
-// TestRedisMapEngine_OrderedSnapshotWithNegativeScores tests ordering with negative scores.
-func TestRedisMapEngine_OrderedSnapshotWithNegativeScores(t *testing.T) {
+// TestRedisMapBroker_OrderedStateWithNegativeScores tests ordering with negative scores.
+func TestRedisMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_negative")
@@ -1377,10 +1242,10 @@ func TestRedisMapEngine_OrderedSnapshotWithNegativeScores(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Read ordered snapshot
+	// Read ordered state
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       100,
+		Ordered:  true,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1395,10 +1260,10 @@ func TestRedisMapEngine_OrderedSnapshotWithNegativeScores(t *testing.T) {
 	t.Logf("SUCCESS: Negative scores handled correctly in descending ordering")
 }
 
-// TestRedisMapEngine_OrderedSnapshotWithSameScores tests ordering stability when scores are equal.
-func TestRedisMapEngine_OrderedSnapshotWithSameScores(t *testing.T) {
+// TestRedisMapBroker_OrderedStateWithSameScores tests ordering stability when scores are equal.
+func TestRedisMapBroker_OrderedStateWithSameScores(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_same_scores")
@@ -1418,10 +1283,10 @@ func TestRedisMapEngine_OrderedSnapshotWithSameScores(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Read ordered snapshot
+	// Read ordered state
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       100,
+		Ordered:  true,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1437,10 +1302,10 @@ func TestRedisMapEngine_OrderedSnapshotWithSameScores(t *testing.T) {
 	t.Logf("SUCCESS: Equal scores maintain reverse lexicographic ordering")
 }
 
-// TestRedisMapEngine_OrderedSnapshotPaginationBoundaries tests edge cases in cursor-based pagination.
-func TestRedisMapEngine_OrderedSnapshotPaginationBoundaries(t *testing.T) {
+// TestRedisMapBroker_OrderedStatePaginationBoundaries tests edge cases in cursor-based pagination.
+func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_boundaries")
@@ -1460,8 +1325,8 @@ func TestRedisMapEngine_OrderedSnapshotPaginationBoundaries(t *testing.T) {
 
 	// Test 1: Zero limit (should return all)
 	all, _, cursor, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       0,
+		Ordered:  true,
+		Limit:    0,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1470,8 +1335,8 @@ func TestRedisMapEngine_OrderedSnapshotPaginationBoundaries(t *testing.T) {
 
 	// Test 2: Limit larger than entries (should return all)
 	largeLimit, _, cursor2, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       100,
+		Ordered:  true,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1480,8 +1345,8 @@ func TestRedisMapEngine_OrderedSnapshotPaginationBoundaries(t *testing.T) {
 
 	// Test 3: Pagination with limit=3 through all entries
 	page1, _, c1, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       3,
+		Ordered:  true,
+		Limit:    3,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1490,9 +1355,9 @@ func TestRedisMapEngine_OrderedSnapshotPaginationBoundaries(t *testing.T) {
 
 	// Continue to get remaining entries
 	page2, _, c2, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       3,
-		Cursor:      c1,
+		Ordered:  true,
+		Limit:    3,
+		Cursor:   c1,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1500,9 +1365,9 @@ func TestRedisMapEngine_OrderedSnapshotPaginationBoundaries(t *testing.T) {
 	require.NotEmpty(t, c2)
 
 	page3, _, c3, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       3,
-		Cursor:      c2,
+		Ordered:  true,
+		Limit:    3,
+		Cursor:   c2,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1511,9 +1376,9 @@ func TestRedisMapEngine_OrderedSnapshotPaginationBoundaries(t *testing.T) {
 
 	// Last page should have 1 entry
 	page4, _, c4, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       3,
-		Cursor:      c3,
+		Ordered:  true,
+		Limit:    3,
+		Cursor:   c3,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1531,10 +1396,10 @@ func TestRedisMapEngine_OrderedSnapshotPaginationBoundaries(t *testing.T) {
 	t.Logf("SUCCESS: Cursor-based pagination boundary cases handled correctly")
 }
 
-// TestRedisMapEngine_OrderedSnapshotFullPagination tests complete cursor-based pagination loop.
-func TestRedisMapEngine_OrderedSnapshotFullPagination(t *testing.T) {
+// TestRedisMapBroker_OrderedStateFullPagination tests complete cursor-based pagination loop.
+func TestRedisMapBroker_OrderedStateFullPagination(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_full_pagination")
@@ -1562,9 +1427,9 @@ func TestRedisMapEngine_OrderedSnapshotFullPagination(t *testing.T) {
 
 	for {
 		entries, _, nextCursor, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-			Ordered:     true,
-			Cursor:      cursor,
-			Limit:       pageSize,
+			Ordered:  true,
+			Cursor:   cursor,
+			Limit:    pageSize,
 			StateTTL: 300 * time.Second,
 		})
 		require.NoError(t, err)
@@ -1598,11 +1463,11 @@ func TestRedisMapEngine_OrderedSnapshotFullPagination(t *testing.T) {
 	t.Logf("SUCCESS: Full cursor-based pagination through %d entries in descending order completed correctly", totalEntries)
 }
 
-// TestRedisMapEngine_OrderedSnapshotUpdatePreservesOrder tests that updating an entry's score
-// changes its position in the ordered snapshot.
-func TestRedisMapEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
+// TestRedisMapBroker_OrderedStateUpdatePreservesOrder tests that updating an entry's score
+// changes its position in the ordered state.
+func TestRedisMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_update")
@@ -1622,8 +1487,8 @@ func TestRedisMapEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
 
 	// Read initial order (descending: 50, 40, 30, 20, 10)
 	entries1, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       100,
+		Ordered:  true,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1643,8 +1508,8 @@ func TestRedisMapEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
 
 	// Read updated order
 	entries2, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       100,
+		Ordered:  true,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1659,10 +1524,10 @@ func TestRedisMapEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
 	t.Logf("SUCCESS: Updating score correctly reorders entries in descending order")
 }
 
-// TestRedisMapEngine_KeyModeIfNew tests KeyModeIfNew - only write if key doesn't exist.
-func TestRedisMapEngine_KeyModeIfNew(t *testing.T) {
+// TestRedisMapBroker_KeyModeIfNew tests KeyModeIfNew - only write if key doesn't exist.
+func TestRedisMapBroker_KeyModeIfNew(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_keymode_if_new")
@@ -1692,9 +1557,9 @@ func TestRedisMapEngine_KeyModeIfNew(t *testing.T) {
 	require.Equal(t, SuppressReasonKeyExists, res2.SuppressReason)
 	require.Equal(t, uint64(1), res2.Position.Offset, "Offset should not change")
 
-	// Verify snapshot still has original data
+	// Verify state still has original data
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1709,10 +1574,10 @@ func TestRedisMapEngine_KeyModeIfNew(t *testing.T) {
 	require.Len(t, pubs, 1)
 }
 
-// TestRedisMapEngine_KeyModeIfExists tests KeyModeIfExists - only write if key exists.
-func TestRedisMapEngine_KeyModeIfExists(t *testing.T) {
+// TestRedisMapBroker_KeyModeIfExists tests KeyModeIfExists - only write if key exists.
+func TestRedisMapBroker_KeyModeIfExists(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_keymode_if_exists")
@@ -1751,9 +1616,9 @@ func TestRedisMapEngine_KeyModeIfExists(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res3.Suppressed, "Third publish should not be suppressed (key exists)")
 
-	// Verify snapshot has updated data
+	// Verify state has updated data
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1761,10 +1626,10 @@ func TestRedisMapEngine_KeyModeIfExists(t *testing.T) {
 	require.Equal(t, []byte("heartbeat2"), entries[0].Data)
 }
 
-// TestRedisMapEngine_KeyModeReplace tests default KeyModeReplace behavior.
-func TestRedisMapEngine_KeyModeReplace(t *testing.T) {
+// TestRedisMapBroker_KeyModeReplace tests default KeyModeReplace behavior.
+func TestRedisMapBroker_KeyModeReplace(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 
 	ctx := context.Background()
 	channel := randomChannel("test_keymode_replace")
@@ -1791,9 +1656,9 @@ func TestRedisMapEngine_KeyModeReplace(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res2.Suppressed, "Replace should never be suppressed")
 
-	// Verify snapshot has updated data
+	// Verify state has updated data
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1801,26 +1666,26 @@ func TestRedisMapEngine_KeyModeReplace(t *testing.T) {
 	require.Equal(t, []byte("value2"), entries[0].Data)
 }
 
-// TestRedisMapEngine_Aggregation - REMOVED: aggregation feature was removed.
-// TestRedisMapEngine_AggregationAutoDiscovery - REMOVED: aggregation feature was removed.
+// TestRedisMapBroker_Aggregation - REMOVED: aggregation feature was removed.
+// TestRedisMapBroker_AggregationAutoDiscovery - REMOVED: aggregation feature was removed.
 
 // =============================================================================
 // Pagination Continuity Tests
 //
 // These tests verify that key-based cursor pagination ensures no entries are
-// permanently lost when the snapshot changes during iteration.
-// The invariant is: snapshot_entries + stream_changes = complete_data
-// Uses simulateClientRecovery helper from map_engine_memory_test.go
+// permanently lost when the state changes during iteration.
+// The invariant is: state_entries + stream_changes = complete_data
+// Uses simulateClientRecovery helper from map_broker_memory_test.go
 // =============================================================================
 
-// TestRedisMapEngine_UnorderedContinuity_EntryRemoved tests that removing
+// TestRedisMapBroker_UnorderedContinuity_EntryRemoved tests that removing
 // an entry during unordered pagination doesn't cause data loss.
-// The invariant is: snapshot_entries + stream_changes = complete_data.
+// The invariant is: state_entries + stream_changes = complete_data.
 // Note: HSCAN COUNT is only a hint — Redis may return more entries than requested
 // (especially for small hashes stored as listpack), so we don't assert exact page sizes.
-func TestRedisMapEngine_UnorderedContinuity_EntryRemoved(t *testing.T) {
+func TestRedisMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 	ctx := context.Background()
 	channel := randomChannel("test_unordered_continuity_remove")
 
@@ -1853,13 +1718,13 @@ func TestRedisMapEngine_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	require.Contains(t, result, "key_11", "key_11 should not be skipped")
 }
 
-// TestRedisMapEngine_UnorderedContinuity_EntryAdded tests that adding
+// TestRedisMapBroker_UnorderedContinuity_EntryAdded tests that adding
 // an entry during unordered pagination doesn't cause issues.
 // Note: HSCAN COUNT is only a hint — Redis may return more entries than requested
 // (especially for small hashes stored as listpack), so we don't assert exact page sizes.
-func TestRedisMapEngine_UnorderedContinuity_EntryAdded(t *testing.T) {
+func TestRedisMapBroker_UnorderedContinuity_EntryAdded(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 	ctx := context.Background()
 	channel := randomChannel("test_unordered_continuity_add")
 
@@ -1892,11 +1757,11 @@ func TestRedisMapEngine_UnorderedContinuity_EntryAdded(t *testing.T) {
 	require.Equal(t, []byte("data_05b"), result["key_05b"])
 }
 
-// TestRedisMapEngine_OrderedContinuity_HigherScoreAdded tests that adding
+// TestRedisMapBroker_OrderedContinuity_HigherScoreAdded tests that adding
 // an entry with higher score during ordered pagination doesn't cause data loss.
-func TestRedisMapEngine_OrderedContinuity_HigherScoreAdded(t *testing.T) {
+func TestRedisMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_continuity_higher")
 
@@ -1916,8 +1781,8 @@ func TestRedisMapEngine_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 
 	// Read first page (should get keys with highest scores: key_20, key_19, ..., key_11)
 	pubs1, _, cursor1, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       10,
+		Ordered:  true,
+		Limit:    10,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1954,11 +1819,11 @@ func TestRedisMapEngine_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	}
 }
 
-// TestRedisMapEngine_OrderedContinuity_LowerScoreAdded tests that adding
+// TestRedisMapBroker_OrderedContinuity_LowerScoreAdded tests that adding
 // an entry with lower score during ordered pagination works correctly.
-func TestRedisMapEngine_OrderedContinuity_LowerScoreAdded(t *testing.T) {
+func TestRedisMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_continuity_lower")
 
@@ -1978,8 +1843,8 @@ func TestRedisMapEngine_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 
 	// Read first page
 	_, _, cursor1, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       10,
+		Ordered:  true,
+		Limit:    10,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -1998,9 +1863,9 @@ func TestRedisMapEngine_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 
 	// Continue reading with cursor - just verify it works
 	pubs2, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       10,
-		Cursor:      cursor1,
+		Ordered:  true,
+		Limit:    10,
+		Cursor:   cursor1,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -2013,11 +1878,11 @@ func TestRedisMapEngine_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	require.Contains(t, result, "key_bottom", "key_bottom should be present")
 }
 
-// TestRedisMapEngine_OrderedContinuity_ScoreChanged tests that changing
+// TestRedisMapBroker_OrderedContinuity_ScoreChanged tests that changing
 // an entry's score during pagination (causing reordering) doesn't lose data.
-func TestRedisMapEngine_OrderedContinuity_ScoreChanged(t *testing.T) {
+func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_continuity_score_change")
 
@@ -2037,8 +1902,8 @@ func TestRedisMapEngine_OrderedContinuity_ScoreChanged(t *testing.T) {
 
 	// Read first page (key_20 down to key_11)
 	pubs1, streamPos1, cursor1, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       10,
+		Ordered:  true,
+		Limit:    10,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -2059,23 +1924,23 @@ func TestRedisMapEngine_OrderedContinuity_ScoreChanged(t *testing.T) {
 
 	// Read second page - key_05 jumped out of this range
 	pubs2, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       10,
-		Cursor:      cursor1,
+		Ordered:  true,
+		Limit:    10,
+		Cursor:   cursor1,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
 
 	// Combine and filter
-	snapshotData := make(map[string][]byte)
+	stateData := make(map[string][]byte)
 	for _, pub := range pubs1 {
 		if pub.Offset <= streamPos1.Offset {
-			snapshotData[pub.Key] = pub.Data
+			stateData[pub.Key] = pub.Data
 		}
 	}
 	for _, pub := range pubs2 {
 		if pub.Offset <= streamPos1.Offset {
-			snapshotData[pub.Key] = pub.Data
+			stateData[pub.Key] = pub.Data
 		}
 	}
 
@@ -2090,22 +1955,22 @@ func TestRedisMapEngine_OrderedContinuity_ScoreChanged(t *testing.T) {
 
 	for _, pub := range streamPubs {
 		if pub.Removed {
-			delete(snapshotData, pub.Key)
+			delete(stateData, pub.Key)
 		} else {
-			snapshotData[pub.Key] = pub.Data
+			stateData[pub.Key] = pub.Data
 		}
 	}
 
 	// Verify: should have 20 keys, key_05 should have updated data
-	require.Len(t, snapshotData, 20, "Should have 20 keys")
-	require.Equal(t, []byte("data_05_updated"), snapshotData["key_05"], "key_05 should have updated data from stream")
+	require.Len(t, stateData, 20, "Should have 20 keys")
+	require.Equal(t, []byte("data_05_updated"), stateData["key_05"], "key_05 should have updated data from stream")
 }
 
-// TestRedisMapEngine_OrderedContinuity_EntryRemoved tests that removing
+// TestRedisMapBroker_OrderedContinuity_EntryRemoved tests that removing
 // an entry during ordered pagination doesn't cause data loss.
-func TestRedisMapEngine_OrderedContinuity_EntryRemoved(t *testing.T) {
+func TestRedisMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_continuity_remove")
 
@@ -2125,40 +1990,40 @@ func TestRedisMapEngine_OrderedContinuity_EntryRemoved(t *testing.T) {
 
 	// Read first page (key_20 down to key_11)
 	pubs1, streamPos1, cursor1, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       10,
+		Ordered:  true,
+		Limit:    10,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
 
 	// CONCURRENT MODIFICATION: Remove key_10 (first entry of next page)
 	_, err = engine.Remove(ctx, channel, "key_10", MapRemoveOptions{
-		
+
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 	})
 	require.NoError(t, err)
 
 	// Read remaining pages
-	allSnapshotData := make(map[string][]byte)
+	allStateData := make(map[string][]byte)
 	for _, pub := range pubs1 {
 		if pub.Offset <= streamPos1.Offset {
-			allSnapshotData[pub.Key] = pub.Data
+			allStateData[pub.Key] = pub.Data
 		}
 	}
 
 	cursor := cursor1
 	for cursor != "" {
 		pubs, _, nextCursor, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-			Ordered:     true,
-			Limit:       10,
-			Cursor:      cursor,
+			Ordered:  true,
+			Limit:    10,
+			Cursor:   cursor,
 			StateTTL: 300 * time.Second,
 		})
 		require.NoError(t, err)
 		for _, pub := range pubs {
 			if pub.Offset <= streamPos1.Offset {
-				allSnapshotData[pub.Key] = pub.Data
+				allStateData[pub.Key] = pub.Data
 			}
 		}
 		cursor = nextCursor
@@ -2175,25 +2040,25 @@ func TestRedisMapEngine_OrderedContinuity_EntryRemoved(t *testing.T) {
 
 	for _, pub := range streamPubs {
 		if pub.Removed {
-			delete(allSnapshotData, pub.Key)
+			delete(allStateData, pub.Key)
 		} else {
-			allSnapshotData[pub.Key] = pub.Data
+			allStateData[pub.Key] = pub.Data
 		}
 	}
 
 	// Verify: should have 19 keys (key_10 removed)
-	require.Len(t, allSnapshotData, 19, "Should have 19 keys after removal")
-	require.NotContains(t, allSnapshotData, "key_10", "key_10 should be removed")
+	require.Len(t, allStateData, 19, "Should have 19 keys after removal")
+	require.NotContains(t, allStateData, "key_10", "key_10 should be removed")
 
 	// Verify key_09 wasn't skipped (the key that shifted up when key_10 was removed)
-	require.Contains(t, allSnapshotData, "key_09", "key_09 should not be skipped")
+	require.Contains(t, allStateData, "key_09", "key_09 should not be skipped")
 }
 
-// TestRedisMapEngine_OrderedContinuity_MultipleChanges tests recovery
+// TestRedisMapBroker_OrderedContinuity_MultipleChanges tests recovery
 // with multiple concurrent changes during pagination.
-func TestRedisMapEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
+func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+	engine := newTestStateRedisEngine(t, node)
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_continuity_multi")
 
@@ -2213,8 +2078,8 @@ func TestRedisMapEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 
 	// Read first page
 	_, _, cursor1, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       10,
+		Ordered:  true,
+		Limit:    10,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -2233,7 +2098,7 @@ func TestRedisMapEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 
 	// 2. Remove an entry from middle
 	_, err = engine.Remove(ctx, channel, "key_15", MapRemoveOptions{
-		
+
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 	})
@@ -2252,9 +2117,9 @@ func TestRedisMapEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 
 	// Read second page
 	_, _, cursor2, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       10,
-		Cursor:      cursor1,
+		Ordered:  true,
+		Limit:    10,
+		Cursor:   cursor1,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -2274,9 +2139,9 @@ func TestRedisMapEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 	cursor := cursor2
 	for cursor != "" {
 		_, _, nextCursor, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-			Ordered:     true,
-			Limit:       10,
-			Cursor:      cursor,
+			Ordered:  true,
+			Limit:    10,
+			Cursor:   cursor,
 			StateTTL: 300 * time.Second,
 		})
 		require.NoError(t, err)

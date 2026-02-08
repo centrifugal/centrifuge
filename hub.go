@@ -551,7 +551,7 @@ type subInfo struct {
 	deltaType  DeltaType
 	useID      bool
 	tagsFilter *tagsFilter
-	keyed      bool // true for keyed channel subscriptions
+	isMap      bool // true for map subscriptions.
 }
 
 type subShard struct {
@@ -563,9 +563,9 @@ type subShard struct {
 	metrics         *metrics
 	shardIndex      int
 
-	chanIDs       map[string]int64
-	lastChanID    atomic.Int64
-	keyedChannels map[string]bool // tracks which channels are keyed subscriptions
+	chanIDs     map[string]int64
+	lastChanID  atomic.Int64
+	mapChannels map[string]bool // tracks which channels are keyed subscriptions
 }
 
 func newSubShard(logger *logger, metrics *metrics, maxTimeLagMilli int64, shardIndex int) *subShard {
@@ -576,7 +576,7 @@ func newSubShard(logger *logger, metrics *metrics, maxTimeLagMilli int64, shardI
 		maxTimeLagMilli: maxTimeLagMilli,
 		shardIndex:      shardIndex,
 		chanIDs:         make(map[string]int64),
-		keyedChannels:   make(map[string]bool),
+		mapChannels:     make(map[string]bool),
 	}
 }
 
@@ -592,8 +592,8 @@ func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
 	if !ok {
 		s.subs[ch] = make(map[string]subInfo)
 		// Track if this channel is keyed (first subscriber determines this).
-		if sub.keyed {
-			s.keyedChannels[ch] = true
+		if sub.isMap {
+			s.mapChannels[ch] = true
 		}
 	}
 	s.subs[ch][uid] = sub
@@ -649,8 +649,8 @@ func (s *subShard) removeSub(ch string, c *Client) (bool, bool, bool) {
 	// clean up subs map if it's needed.
 	if len(s.subs[ch]) == 0 {
 		delete(s.subs, ch)
-		wasKeyed := s.keyedChannels[ch]
-		delete(s.keyedChannels, ch)
+		wasKeyed := s.mapChannels[ch]
+		delete(s.mapChannels, ch)
 		return true, true, wasKeyed
 	}
 

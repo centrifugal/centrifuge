@@ -27,15 +27,15 @@ type Publication struct {
 	// This is a case for wildcard subscriptions. Client SDK then should use this channel
 	// in PublicationContext.
 	Channel string
-	// Key is used for keyed snapshots (state and presence/membership).
+	// Key is used for map subscriptions (state and presence/membership).
 	// For presence: Key = ClientID.
-	// For keyed state: Key = arbitrary string key.
+	// For map state: Key = arbitrary string key.
 	Key string
 	// Removed indicates this is a remove/leave event (true) vs add/join event (false).
-	// Used in keyed snapshots and presence streams to distinguish event types.
+	// Used in map subscriptions to distinguish event types.
 	Removed bool
-	// Score is used for ordered keyed snapshots (leaderboards, priority queues).
-	// Higher scores appear first when Ordered=true in ReadSnapshot.
+	// Score is used for ordered map subscriptions (leaderboards, priority queues).
+	// Higher scores appear first when Ordered=true in ReadState.
 	Score int64
 }
 
@@ -141,17 +141,17 @@ type PublishOptions struct {
 	// version comes from in-memory system which can lose data, or due to eviction, etc.
 	VersionEpoch string
 
-	// Key is the key for keyed publications (used in keyed subscriptions).
+	// Key is the key for map subscriptions.
 	Key string
-	// Removed indicates this is a removal event (used in keyed subscriptions).
+	// Removed indicates this is a removal event (used in map subscriptions).
 	Removed bool
-	// Score is used for ordered keyed snapshots (leaderboards, priority queues).
+	// Score is used for ordered map subscriptions (leaderboards, priority queues).
 	Score int64
 
-	// Offset is the stream offset for keyed publications. When set, this offset
-	// is used instead of broker-assigned offset (used for keyed engine fan-out).
+	// Offset is the stream offset for map publications. When set, this offset
+	// is used instead of broker-assigned offset (used for map engine fan-out).
 	Offset uint64
-	// Epoch is the stream epoch for keyed publications. When set along with Offset,
+	// Epoch is the stream epoch for map publications. When set along with Offset,
 	// the broker will include position information in the message for fan-out.
 	Epoch string
 }

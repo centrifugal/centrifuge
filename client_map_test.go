@@ -9,20 +9,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newTestNodeWithMapEngine creates a test node with a memory map engine.
-func newTestNodeWithMapEngine(t *testing.T) (*Node, *MemoryMapEngine) {
+// newTestNodeWithMapBroker creates a test node with a memory map engine.
+func newTestNodeWithMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
 	node, err := New(Config{
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
 	})
 	require.NoError(t, err)
 
-	engine, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	engine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	err = engine.RegisterBrokerEventHandler(nil)
 	require.NoError(t, err)
 
-	node.SetMapEngine(engine)
+	node.SetMapBroker(engine)
 
 	err = node.Run()
 	require.NoError(t, err)
@@ -62,8 +62,8 @@ func subscribeMapClientExpectError(t testing.TB, client *Client, req *protocol.S
 	return rwWrapper.replies[0].Error
 }
 
-func TestMapSubscribe_SnapshotPhase(t *testing.T) {
-	node, engine := newTestNodeWithMapEngine(t)
+func TestMapSubscribe_StatePhase(t *testing.T) {
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_keyed"
 	ctx := context.Background()
@@ -97,16 +97,13 @@ func TestMapSubscribe_SnapshotPhase(t *testing.T) {
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// Verify map engine is set.
-	require.NotNil(t, node.MapEngine(), "MapEngine should be set")
-
-	// Send snapshot phase request.
+	// Send state phase request.
 	rwWrapper := testReplyWriterWrapper()
 	err = client.handleSubscribe(&protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseState,
-		Limit: 100,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   100,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 
 	require.NoError(t, err)
@@ -121,8 +118,8 @@ func TestMapSubscribe_SnapshotPhase(t *testing.T) {
 	require.Greater(t, result.Offset, uint64(0))
 }
 
-func TestMapSubscribe_SnapshotPagination(t *testing.T) {
-	node, engine := newTestNodeWithMapEngine(t)
+func TestMapSubscribe_StatePagination(t *testing.T) {
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_map_pagination"
 	ctx := context.Background()
@@ -152,15 +149,15 @@ func TestMapSubscribe_SnapshotPagination(t *testing.T) {
 
 	// First page.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseState,
-		Limit: 5,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   5,
 	})
 
 	require.True(t, result.Type == 1)
 	require.Equal(t, MapPhaseState, result.Phase)
-	require.Len(t, result.State, 5) // State entries in State field
+	require.Len(t, result.State, 5)    // State entries in State field
 	require.NotEmpty(t, result.Cursor) // More pages available.
 
 	epoch := result.Epoch
@@ -182,7 +179,7 @@ func TestMapSubscribe_SnapshotPagination(t *testing.T) {
 }
 
 func TestMapSubscribe_StreamPhase(t *testing.T) {
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_stream"
 	ctx := context.Background()
@@ -214,12 +211,12 @@ func TestMapSubscribe_StreamPhase(t *testing.T) {
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// First, do snapshot to authorize.
+	// First, do state to authorize.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseState,
-		Limit: 100,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   100,
 	})
 
 	// Now do stream phase from offset 2.
@@ -242,7 +239,7 @@ func TestMapSubscribe_StreamPhase(t *testing.T) {
 }
 
 func TestMapSubscribe_LivePhase(t *testing.T) {
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_live"
 	ctx := context.Background()
@@ -268,21 +265,21 @@ func TestMapSubscribe_LivePhase(t *testing.T) {
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// First do snapshot to authorize.
+	// First do state to authorize.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseState,
-		Limit: 100,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   100,
 	})
 
 	// Now join live.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:     channel,
-		Type: 1,
-		Phase:  MapPhaseLive,
-		Offset: res.Position.Offset,
-		Epoch:  res.Position.Epoch,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+		Offset:  res.Position.Offset,
+		Epoch:   res.Position.Epoch,
 	})
 
 	require.True(t, result.Type == 1)
@@ -297,7 +294,7 @@ func TestMapSubscribe_LivePhase(t *testing.T) {
 }
 
 func TestMapSubscribe_DirectLive(t *testing.T) {
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_direct_live"
 	ctx := context.Background()
@@ -325,9 +322,9 @@ func TestMapSubscribe_DirectLive(t *testing.T) {
 
 	// Go directly to live without pagination.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseLive,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
 	})
 
 	require.True(t, result.Type == 1)
@@ -337,7 +334,7 @@ func TestMapSubscribe_DirectLive(t *testing.T) {
 }
 
 func TestMapSubscribe_FullTwoPhase(t *testing.T) {
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_two_phase"
 	ctx := context.Background()
@@ -365,25 +362,25 @@ func TestMapSubscribe_FullTwoPhase(t *testing.T) {
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// Phase 1: Snapshot.
-	snapshotResult := subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseState,
-		Limit: 100,
+	// Phase 1: State.
+	stateResult := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   100,
 	})
 
-	require.True(t, snapshotResult.Type == 1)
-	require.Equal(t, MapPhaseState, snapshotResult.Phase)
-	require.Len(t, snapshotResult.State, 5) // State entries in State field
+	require.True(t, stateResult.Type == 1)
+	require.Equal(t, MapPhaseState, stateResult.Phase)
+	require.Len(t, stateResult.State, 5) // State entries in State field
 
 	// Phase 2: Live.
 	liveResult := subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:     channel,
-		Type: 1,
-		Phase:  MapPhaseLive,
-		Offset: snapshotResult.Offset,
-		Epoch:  snapshotResult.Epoch,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+		Offset:  stateResult.Offset,
+		Epoch:   stateResult.Epoch,
 	})
 
 	require.True(t, liveResult.Type == 1)
@@ -392,7 +389,7 @@ func TestMapSubscribe_FullTwoPhase(t *testing.T) {
 }
 
 func TestMapSubscribe_NotEnabled(t *testing.T) {
-	node, _ := newTestNodeWithMapEngine(t)
+	node, _ := newTestNodeWithMapBroker(t)
 
 	channel := "test_not_enabled"
 
@@ -412,9 +409,9 @@ func TestMapSubscribe_NotEnabled(t *testing.T) {
 	// Try keyed subscribe - should fail with BadRequest since keyed is not enabled.
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseState,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
@@ -423,7 +420,7 @@ func TestMapSubscribe_NotEnabled(t *testing.T) {
 }
 
 func TestMapSubscribe_AlreadySubscribed(t *testing.T) {
-	node, _ := newTestNodeWithMapEngine(t)
+	node, _ := newTestNodeWithMapBroker(t)
 
 	channel := "test_already_subscribed"
 
@@ -441,23 +438,23 @@ func TestMapSubscribe_AlreadySubscribed(t *testing.T) {
 
 	// First subscribe.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseLive,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
 	})
 
 	// Second subscribe should fail.
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseState,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorAlreadySubscribed, err)
 }
 
 func TestMapSubscribe_WithPresence(t *testing.T) {
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_with_presence"
 	ctx := context.Background()
@@ -475,7 +472,7 @@ func TestMapSubscribe_WithPresence(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap:             true,
+					EnableMap:                      true,
 					MapClientPresenceChannelPrefix: "$clients:",
 				},
 			}, nil)
@@ -486,9 +483,9 @@ func TestMapSubscribe_WithPresence(t *testing.T) {
 
 	// Subscribe with keyed client presence.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseLive,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
 	})
 
 	// Verify presence was added to $clients:{channel}.
@@ -508,7 +505,7 @@ func TestMapSubscribe_WithPresence(t *testing.T) {
 }
 
 func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_presence_cleanup"
 	ctx := context.Background()
@@ -517,7 +514,7 @@ func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap:             true,
+					EnableMap:                      true,
 					MapClientPresenceChannelPrefix: "$clients:",
 				},
 			}, nil)
@@ -528,9 +525,9 @@ func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 
 	// Subscribe with keyed client presence.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseLive,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
 	})
 
 	// Verify presence exists in :clients channel.
@@ -553,7 +550,7 @@ func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 }
 
 func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_presence_disconnect"
 	ctx := context.Background()
@@ -562,7 +559,7 @@ func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap:             true,
+					EnableMap:                      true,
 					MapClientPresenceChannelPrefix: "$clients:",
 				},
 			}, nil)
@@ -573,9 +570,9 @@ func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 
 	// Subscribe with keyed client presence.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseLive,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
 	})
 
 	// Verify presence exists in :clients channel.
@@ -599,7 +596,7 @@ func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 }
 
 func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_cleanup_on_unsub"
 	ctx := context.Background()
@@ -608,7 +605,7 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap:          true,
+					EnableMap:            true,
 					CleanupOnUnsubscribe: true,
 				},
 			}, nil)
@@ -620,14 +617,14 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 
 	// Subscribe with CleanupOnUnsubscribe.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseLive,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
 	})
 
 	// Publish a key with key=clientID (simulating cursor/ephemeral state).
 	_, err := engine.Publish(ctx, channel, clientID, MapPublishOptions{
-		
+
 		Data:       []byte(`{"x":100,"y":200}`),
 		StreamSize: 1000,
 		ClientInfo: &ClientInfo{ClientID: clientID, UserID: "user1"},
@@ -654,7 +651,7 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 }
 
 func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_cleanup_on_disconnect"
 	ctx := context.Background()
@@ -663,7 +660,7 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap:          true,
+					EnableMap:            true,
 					CleanupOnUnsubscribe: true,
 				},
 			}, nil)
@@ -675,14 +672,14 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 
 	// Subscribe with CleanupOnUnsubscribe.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseLive,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
 	})
 
 	// Publish a key with key=clientID.
 	_, err := engine.Publish(ctx, channel, clientID, MapPublishOptions{
-		
+
 		Data:       []byte(`{"x":100,"y":200}`),
 		StreamSize: 1000,
 		ClientInfo: &ClientInfo{ClientID: clientID, UserID: "user1"},
@@ -708,8 +705,8 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 	require.Len(t, entries, 0)
 }
 
-func TestPresenceSubscribe_Snapshot(t *testing.T) {
-	node, engine := newTestNodeWithMapEngine(t)
+func TestPresenceSubscribe_State(t *testing.T) {
+	node, engine := newTestNodeWithMapBroker(t)
 
 	ctx := context.Background()
 
@@ -739,12 +736,12 @@ func TestPresenceSubscribe_Snapshot(t *testing.T) {
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// Subscribe to presence snapshot.
+	// Subscribe to presence state.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:       presenceChannel,
-		Type: 2,
-		Phase:    MapPhaseState,
-		Limit:    100,
+		Channel: presenceChannel,
+		Type:    2,
+		Phase:   MapPhaseState,
+		Limit:   100,
 	})
 
 	require.True(t, result.Type == 1)
@@ -753,7 +750,7 @@ func TestPresenceSubscribe_Snapshot(t *testing.T) {
 }
 
 func TestPresenceSubscribe_Live(t *testing.T) {
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	ctx := context.Background()
 
@@ -773,19 +770,19 @@ func TestPresenceSubscribe_Live(t *testing.T) {
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// First do snapshot.
+	// First do state.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:       presenceChannel,
-		Type: 2,
-		Phase:    MapPhaseState,
-		Limit:    100,
+		Channel: presenceChannel,
+		Type:    2,
+		Phase:   MapPhaseState,
+		Limit:   100,
 	})
 
 	// Then go live.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:       presenceChannel,
-		Type: 2,
-		Phase:    MapPhaseLive,
+		Channel: presenceChannel,
+		Type:    2,
+		Phase:   MapPhaseLive,
 	})
 
 	require.True(t, result.Type == 1)
@@ -800,7 +797,7 @@ func TestPresenceSubscribe_Live(t *testing.T) {
 }
 
 func TestPresenceSubscribe_NotAllowed(t *testing.T) {
-	node, _ := newTestNodeWithMapEngine(t)
+	node, _ := newTestNodeWithMapBroker(t)
 
 	presenceChannel := "$clients:test_presence_not_allowed"
 
@@ -816,9 +813,9 @@ func TestPresenceSubscribe_NotAllowed(t *testing.T) {
 	// Try to subscribe to presence - should be denied.
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
-		Channel:       presenceChannel,
-		Type: 2,
-		Phase:    MapPhaseState,
+		Channel: presenceChannel,
+		Type:    2,
+		Phase:   MapPhaseState,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
@@ -827,7 +824,7 @@ func TestPresenceSubscribe_NotAllowed(t *testing.T) {
 }
 
 func TestPresenceSubscribe_NoHandler(t *testing.T) {
-	node, _ := newTestNodeWithMapEngine(t)
+	node, _ := newTestNodeWithMapBroker(t)
 
 	presenceChannel := "$clients:test_presence_no_handler"
 
@@ -839,16 +836,16 @@ func TestPresenceSubscribe_NoHandler(t *testing.T) {
 	// Try to subscribe to presence - should fail because no OnPresenceSubscribe handler.
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
-		Channel:       presenceChannel,
-		Type: 2,
-		Phase:    MapPhaseState,
+		Channel: presenceChannel,
+		Type:    2,
+		Phase:   MapPhaseState,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	// When no handler is set, the error is returned directly.
 	require.Equal(t, ErrorNotAvailable, err)
 }
 
 func TestPresenceSubscribe_AlreadySubscribed(t *testing.T) {
-	node, _ := newTestNodeWithMapEngine(t)
+	node, _ := newTestNodeWithMapBroker(t)
 
 	presenceChannel := "$clients:test_presence_already_sub"
 
@@ -862,29 +859,29 @@ func TestPresenceSubscribe_AlreadySubscribed(t *testing.T) {
 
 	// First subscribe to presence.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:       presenceChannel,
-		Type: 2,
-		Phase:    MapPhaseState,
+		Channel: presenceChannel,
+		Type:    2,
+		Phase:   MapPhaseState,
 	})
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:       presenceChannel,
-		Type: 2,
-		Phase:    MapPhaseLive,
+		Channel: presenceChannel,
+		Type:    2,
+		Phase:   MapPhaseLive,
 	})
 
 	// Third subscribe should fail with AlreadySubscribed.
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
-		Channel:       presenceChannel,
-		Type: 2,
-		Phase:    MapPhaseState,
+		Channel: presenceChannel,
+		Type:    2,
+		Phase:   MapPhaseState,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	// When already subscribed, the error is returned directly.
 	require.Equal(t, ErrorAlreadySubscribed, err)
 }
 
 func TestMapPresenceTTL(t *testing.T) {
-	node, _ := newTestNodeWithMapEngine(t)
+	node, _ := newTestNodeWithMapBroker(t)
 
 	// Default ClientPresenceUpdateInterval is 27 seconds.
 	node.config.ClientPresenceUpdateInterval = 10 * time.Second
@@ -902,7 +899,7 @@ func TestMapPresenceTTL(t *testing.T) {
 }
 
 func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_map_presence"
 	ctx := context.Background()
@@ -923,9 +920,9 @@ func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
 
 	// Subscribe with both client and user presence.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseLive,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
 	})
 
 	// Verify :clients presence was added (key=clientId, full info).
@@ -960,7 +957,7 @@ func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
 }
 
 func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_map_presence_cleanup"
 	ctx := context.Background()
@@ -981,9 +978,9 @@ func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
 
 	// Subscribe with both client and user presence.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseLive,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
 	})
 
 	// Verify presence exists in both channels.
@@ -1014,7 +1011,7 @@ func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
 }
 
 func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_multi_clients"
 	ctx := context.Background()
@@ -1037,14 +1034,14 @@ func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
 
 	// Subscribe both clients.
 	subscribeMapClient(t, client1, &protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseLive,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
 	})
 	subscribeMapClient(t, client2, &protocol.SubscribeRequest{
-		Channel:    channel,
-		Type: 1,
-		Phase: MapPhaseLive,
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
 	})
 
 	// Verify :clients has two entries (one per connection).
@@ -1075,9 +1072,9 @@ func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
 	require.Len(t, entries, 1)
 }
 
-// TestMapEngine_ReadStateByKey tests the Key filter for ReadState.
-func TestMapEngine_ReadStateByKey(t *testing.T) {
-	_, engine := newTestNodeWithMapEngine(t)
+// TestMapBroker_ReadStateByKey tests the Key filter for ReadState.
+func TestMapBroker_ReadStateByKey(t *testing.T) {
+	_, engine := newTestNodeWithMapBroker(t)
 	ctx := context.Background()
 	ch := "test_read_by_key"
 
@@ -1125,9 +1122,9 @@ func TestMapEngine_ReadStateByKey(t *testing.T) {
 	require.Len(t, pubs, 0)
 }
 
-// TestMapEngine_CASSuccess tests successful CAS update.
-func TestMapEngine_CASSuccess(t *testing.T) {
-	_, engine := newTestNodeWithMapEngine(t)
+// TestMapBroker_CASSuccess tests successful CAS update.
+func TestMapBroker_CASSuccess(t *testing.T) {
+	_, engine := newTestNodeWithMapBroker(t)
 	ctx := context.Background()
 	ch := "test_cas_success"
 
@@ -1166,9 +1163,9 @@ func TestMapEngine_CASSuccess(t *testing.T) {
 	require.Equal(t, []byte(`{"value":15}`), pubs[0].Data)
 }
 
-// TestMapEngine_CASConflict tests CAS conflict when position has changed.
-func TestMapEngine_CASConflict(t *testing.T) {
-	_, engine := newTestNodeWithMapEngine(t)
+// TestMapBroker_CASConflict tests CAS conflict when position has changed.
+func TestMapBroker_CASConflict(t *testing.T) {
+	_, engine := newTestNodeWithMapBroker(t)
 	ctx := context.Background()
 	ch := "test_cas_conflict"
 
@@ -1231,9 +1228,9 @@ func TestMapEngine_CASConflict(t *testing.T) {
 	require.Equal(t, []byte(`{"value":15}`), pubs[0].Data)
 }
 
-// TestMapEngine_CASNonExistent tests CAS on a key that doesn't exist.
-func TestMapEngine_CASNonExistent(t *testing.T) {
-	_, engine := newTestNodeWithMapEngine(t)
+// TestMapBroker_CASNonExistent tests CAS on a key that doesn't exist.
+func TestMapBroker_CASNonExistent(t *testing.T) {
+	_, engine := newTestNodeWithMapBroker(t)
 	ctx := context.Background()
 	ch := "test_cas_nonexistent"
 
@@ -1264,9 +1261,9 @@ func TestMapEngine_CASNonExistent(t *testing.T) {
 	require.Equal(t, SuppressReasonPositionMismatch, res.SuppressReason)
 }
 
-// TestMapEngine_CASWrongEpoch tests CAS with correct offset but wrong epoch.
-func TestMapEngine_CASWrongEpoch(t *testing.T) {
-	_, engine := newTestNodeWithMapEngine(t)
+// TestMapBroker_CASWrongEpoch tests CAS with correct offset but wrong epoch.
+func TestMapBroker_CASWrongEpoch(t *testing.T) {
+	_, engine := newTestNodeWithMapBroker(t)
 	ctx := context.Background()
 	ch := "test_cas_wrong_epoch"
 
@@ -1309,24 +1306,24 @@ func TestMapEngine_CASWrongEpoch(t *testing.T) {
 	require.Equal(t, []byte(`{"value":10}`), pubs[0].Data)
 }
 
-// TestMapEngine_StreamDataDifferentPayloads tests publishing with different
-// data for snapshot (full state) and stream (incremental update).
-func TestMapEngine_StreamDataDifferentPayloads(t *testing.T) {
-	_, engine := newTestNodeWithMapEngine(t)
+// TestMapBroker_StreamDataDifferentPayloads tests publishing with different
+// data for state (full state) and stream (incremental update).
+func TestMapBroker_StreamDataDifferentPayloads(t *testing.T) {
+	_, engine := newTestNodeWithMapBroker(t)
 	ctx := context.Background()
 	ch := "test_stream_data"
 
-	// Publish with different payloads: snapshot gets full state, stream gets delta
+	// Publish with different payloads: state gets full state, stream gets delta
 	_, err := engine.Publish(ctx, ch, "counter", MapPublishOptions{
-		Data:       []byte(`{"count":100}`),  // Full state → snapshot
-		StreamData: []byte(`{"delta":100}`),  // Incremental → stream
+		Data:       []byte(`{"count":100}`), // Full state → state
+		StreamData: []byte(`{"delta":100}`), // Incremental → stream
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	// Read snapshot - should have full state
+	// Read state - should have full state
 	pubs, pos, _, err := engine.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -1343,7 +1340,7 @@ func TestMapEngine_StreamDataDifferentPayloads(t *testing.T) {
 	// Update with CAS: read current position, update with different payloads
 	expectedPos := StreamPosition{Offset: pubs[0].Offset, Epoch: pos.Epoch}
 	_, err = engine.Publish(ctx, ch, "counter", MapPublishOptions{
-		Data:             []byte(`{"count":105}`), // New full state → snapshot
+		Data:             []byte(`{"count":105}`), // New full state → state
 		StreamData:       []byte(`{"delta":5}`),   // Incremental → stream
 		ExpectedPosition: &expectedPos,
 		StreamSize:       100,
@@ -1352,7 +1349,7 @@ func TestMapEngine_StreamDataDifferentPayloads(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Verify snapshot has new full state
+	// Verify state has new full state
 	pubs, _, _, err = engine.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -1368,10 +1365,10 @@ func TestMapEngine_StreamDataDifferentPayloads(t *testing.T) {
 	require.Equal(t, []byte(`{"delta":5}`), streamPubs[1].Data)
 }
 
-// TestMapEngine_StreamDataWithoutStreamData tests that when StreamData is not set,
-// Data is used for both snapshot and stream.
-func TestMapEngine_StreamDataWithoutStreamData(t *testing.T) {
-	_, engine := newTestNodeWithMapEngine(t)
+// TestMapBroker_StreamDataWithoutStreamData tests that when StreamData is not set,
+// Data is used for both state and stream.
+func TestMapBroker_StreamDataWithoutStreamData(t *testing.T) {
+	_, engine := newTestNodeWithMapBroker(t)
 	ctx := context.Background()
 	ch := "test_no_stream_data"
 
@@ -1384,7 +1381,7 @@ func TestMapEngine_StreamDataWithoutStreamData(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Read snapshot
+	// Read state
 	pubs, _, _, err := engine.ReadState(ctx, ch, MapReadStateOptions{Key: "item"})
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -1411,11 +1408,11 @@ func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	engine, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	engine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	err = engine.RegisterBrokerEventHandler(nil)
 	require.NoError(t, err)
-	node.SetMapEngine(engine)
+	node.SetMapBroker(engine)
 
 	err = node.Run()
 	require.NoError(t, err)
@@ -1482,11 +1479,11 @@ func TestMapSubscribe_StateToLive_WithStreamPublications(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	engine, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	engine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	err = engine.RegisterBrokerEventHandler(nil)
 	require.NoError(t, err)
-	node.SetMapEngine(engine)
+	node.SetMapBroker(engine)
 
 	err = node.Run()
 	require.NoError(t, err)
@@ -1548,11 +1545,11 @@ func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	engine, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	engine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	err = engine.RegisterBrokerEventHandler(nil)
 	require.NoError(t, err)
-	node.SetMapEngine(engine)
+	node.SetMapBroker(engine)
 
 	err = node.Run()
 	require.NoError(t, err)
@@ -1623,7 +1620,7 @@ func TestMapSubscribe_StreamPhaseRecovery(t *testing.T) {
 	// Test that a reconnecting client can use phase=1 (STREAM) with recover=true
 	// to catch up from its last known position without going through STATE phase.
 	// This simulates a client reconnection after disconnect.
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_stream_recovery"
 	ctx := context.Background()
@@ -1696,7 +1693,7 @@ func TestMapSubscribe_StreamPhaseRecovery(t *testing.T) {
 func TestMapSubscribe_StreamPhaseRecovery_WithoutRecoverFlag(t *testing.T) {
 	// Test that phase=1 (STREAM) without recover=true and without prior STATE
 	// phase returns permission denied.
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_stream_no_recover"
 	ctx := context.Background()
@@ -1740,7 +1737,7 @@ func TestMapSubscribe_StreamPhaseRecovery_WithoutRecoverFlag(t *testing.T) {
 func TestMapSubscribe_StreamPhaseRecovery_LargeGap(t *testing.T) {
 	// Test stream phase recovery with a larger gap that requires multiple
 	// pagination rounds before going LIVE.
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_stream_recovery_large_gap"
 	ctx := context.Background()
@@ -1823,7 +1820,7 @@ func TestMapSubscribe_StreamPhaseRecovery_LargeGap(t *testing.T) {
 func TestMapSubscribe_LivePhaseRecovery(t *testing.T) {
 	// Test that a reconnecting client can use phase=0 (LIVE) with recover=true
 	// to catch up directly without any pagination.
-	node, engine := newTestNodeWithMapEngine(t)
+	node, engine := newTestNodeWithMapBroker(t)
 
 	channel := "test_live_recovery"
 	ctx := context.Background()
@@ -1893,11 +1890,11 @@ func TestMapSubscribe_StateToLive_Disabled(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	engine, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	engine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	err = engine.RegisterBrokerEventHandler(nil)
 	require.NoError(t, err)
-	node.SetMapEngine(engine)
+	node.SetMapBroker(engine)
 
 	err = node.Run()
 	require.NoError(t, err)

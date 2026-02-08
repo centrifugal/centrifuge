@@ -1,8 +1,8 @@
-# PostgreSQL MapEngine Architecture
+# PostgreSQL MapBroker Architecture
 
 ## Overview
 
-The PostgreSQL MapEngine provides durable, transactional map state with real-time delivery. It supports two delivery modes:
+The PostgreSQL MapBroker provides durable, transactional map state with real-time delivery. It supports two delivery modes:
 
 1. **Outbox Mode (Default)** - Simple setup, works with any PostgreSQL
 2. **WAL Mode (Opt-in)** - Uses logical replication, requires PostgreSQL configuration
@@ -21,7 +21,7 @@ Outbox mode polls the `cf_map_outbox` table for new publications. This mode requ
 
 **Configuration:**
 ```go
-PostgresMapEngineConfig{
+PostgresMapBrokerConfig{
     ConnString: "postgres://...",
     PoolSize:   32,  // Must be > Outbox.NumShards
     Outbox: OutboxConfig{
@@ -46,7 +46,7 @@ WAL mode uses PostgreSQL logical replication to stream changes. This requires:
 
 **Configuration:**
 ```go
-PostgresMapEngineConfig{
+PostgresMapBrokerConfig{
     ConnString: "postgres://...",
     WAL: WALConfig{
         Enabled:           true,

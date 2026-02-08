@@ -1,5 +1,5 @@
 -- ============================================================================
--- PostgreSQL MapEngine Schema and Functions
+-- PostgreSQL MapBroker Schema and Functions
 -- ============================================================================
 
 -- Stream Table (Change History + Fan-out)

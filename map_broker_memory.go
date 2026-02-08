@@ -12,16 +12,16 @@ import (
 	"github.com/centrifugal/centrifuge/internal/priority"
 )
 
-// MemoryMapEngine is builtin default MapEngine which allows running Centrifuge-based
+// MemoryMapBroker is builtin default MapBroker which allows running Centrifuge-based
 // server without any external storage. All data managed inside process memory.
 //
-// With this MapEngine you can only run single Centrifuge node. If you need to scale
-// you should consider using another MapEngine implementation instead – for example
-// RedisMapEngine.
-type MemoryMapEngine struct {
+// With this MapBroker you can only run single Centrifuge node. If you need to scale
+// you should consider using another MapBroker implementation instead – for example
+// RedisMapBroker.
+type MemoryMapBroker struct {
 	node              *Node
 	eventHandler      BrokerEventHandler
-	mapHub          *mapHub
+	mapHub            *mapHub
 	closeOnce         sync.Once
 	closeCh           chan struct{}
 	pubLocks          map[int]*sync.Mutex
@@ -31,13 +31,13 @@ type MemoryMapEngine struct {
 	resultExpireQueue priority.Queue
 }
 
-var _ MapEngine = (*MemoryMapEngine)(nil)
+var _ MapBroker = (*MemoryMapBroker)(nil)
 
-// MemoryMapEngineConfig is a memory map engine config.
-type MemoryMapEngineConfig struct{}
+// MemoryMapBrokerConfig is a memory map engine config.
+type MemoryMapBrokerConfig struct{}
 
-// NewMemoryMapEngine initializes MemoryMapEngine.
-func NewMemoryMapEngine(n *Node, _ MemoryMapEngineConfig) (*MemoryMapEngine, error) {
+// NewMemoryMapBroker initializes MemoryMapBroker.
+func NewMemoryMapBroker(n *Node, _ MemoryMapBrokerConfig) (*MemoryMapBroker, error) {
 	pubLocks := make(map[int]*sync.Mutex, numPubLocks)
 	for i := 0; i < numPubLocks; i++ {
 		pubLocks[i] = &sync.Mutex{}
@@ -45,9 +45,9 @@ func NewMemoryMapEngine(n *Node, _ MemoryMapEngineConfig) (*MemoryMapEngine, err
 	closeCh := make(chan struct{})
 	mapHub := newMapHub(n.config.HistoryMetaTTL, closeCh)
 	mapHub.setChannelOptionsResolver(n.ResolveMapChannelOptions)
-	e := &MemoryMapEngine{
+	e := &MemoryMapBroker{
 		node:        n,
-		mapHub:    mapHub,
+		mapHub:      mapHub,
 		pubLocks:    pubLocks,
 		closeCh:     closeCh,
 		resultCache: map[string]StreamPosition{},
@@ -56,7 +56,7 @@ func NewMemoryMapEngine(n *Node, _ MemoryMapEngineConfig) (*MemoryMapEngine, err
 }
 
 // RegisterBrokerEventHandler runs memory map engine.
-func (e *MemoryMapEngine) RegisterBrokerEventHandler(h BrokerEventHandler) error {
+func (e *MemoryMapBroker) RegisterBrokerEventHandler(h BrokerEventHandler) error {
 	e.eventHandler = h
 	e.mapHub.setEventHandler(h)
 	go e.expireResultCache()
@@ -65,34 +65,34 @@ func (e *MemoryMapEngine) RegisterBrokerEventHandler(h BrokerEventHandler) error
 }
 
 // Close shuts down the engine.
-func (e *MemoryMapEngine) Close(_ context.Context) error {
+func (e *MemoryMapBroker) Close(_ context.Context) error {
 	e.closeOnce.Do(func() {
 		close(e.closeCh)
 	})
 	return nil
 }
 
-func (e *MemoryMapEngine) pubLock(ch string) *sync.Mutex {
+func (e *MemoryMapBroker) pubLock(ch string) *sync.Mutex {
 	return e.pubLocks[index(ch, numPubLocks)]
 }
 
-func (e *MemoryMapEngine) Clear(ctx context.Context, ch string, opts MapClearOptions) error {
+func (e *MemoryMapBroker) Clear(ctx context.Context, ch string, opts MapClearOptions) error {
 	// TODO: implement.
 	return nil
 }
 
 // Subscribe is noop here.
-func (e *MemoryMapEngine) Subscribe(_ string) error {
+func (e *MemoryMapBroker) Subscribe(_ string) error {
 	return nil
 }
 
 // Unsubscribe is noop here.
-func (e *MemoryMapEngine) Unsubscribe(_ string) error {
+func (e *MemoryMapBroker) Unsubscribe(_ string) error {
 	return nil
 }
 
 // Publish publishes data to channel with optional key for keyed state.
-func (e *MemoryMapEngine) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
+func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
 	mu := e.pubLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
@@ -111,8 +111,8 @@ func (e *MemoryMapEngine) Publish(ctx context.Context, ch string, key string, op
 
 	now := time.Now().UnixMilli()
 
-	// Snapshot publication stores full state (Data).
-	snapshotPub := &Publication{
+	// state publication stores full state (Data).
+	statePub := &Publication{
 		Data:  opts.Data,
 		Info:  opts.ClientInfo,
 		Tags:  opts.Tags,
@@ -133,11 +133,11 @@ func (e *MemoryMapEngine) Publish(ctx context.Context, ch string, key string, op
 			Score: opts.Score,
 		}
 	} else {
-		streamPub = snapshotPub
+		streamPub = statePub
 	}
 
 	var prevPub *Publication
-	streamTop, prevPub, suppressReason, err := e.mapHub.add(ch, key, snapshotPub, streamPub, opts)
+	streamTop, prevPub, suppressReason, err := e.mapHub.add(ch, key, statePub, streamPub, opts)
 	if err != nil {
 		return MapPublishResult{}, err
 	}
@@ -151,7 +151,7 @@ func (e *MemoryMapEngine) Publish(ctx context.Context, ch string, key string, op
 		return result, nil
 	}
 
-	snapshotPub.Offset = streamTop.Offset
+	statePub.Offset = streamTop.Offset
 	streamPub.Offset = streamTop.Offset
 
 	if opts.IdempotencyKey != "" {
@@ -174,7 +174,7 @@ func (e *MemoryMapEngine) Publish(ctx context.Context, ch string, key string, op
 }
 
 // Remove removes a key from keyed state.
-func (e *MemoryMapEngine) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
+func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
 	mu := e.pubLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
@@ -208,33 +208,33 @@ func (e *MemoryMapEngine) Remove(ctx context.Context, ch string, key string, opt
 }
 
 // ReadStream retrieves publications from stream.
-func (e *MemoryMapEngine) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *MemoryMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
 	return e.mapHub.getStream(ch, opts)
 }
 
-// ReadState retrieves keyed snapshot with revisions.
-func (e *MemoryMapEngine) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+// ReadState retrieves keyed state with revisions.
+func (e *MemoryMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
 	return e.mapHub.getState(ch, opts)
 }
 
-// Stats returns snapshot statistics.
-func (e *MemoryMapEngine) Stats(ctx context.Context, ch string) (MapStats, error) {
+// Stats returns state statistics.
+func (e *MemoryMapBroker) Stats(ctx context.Context, ch string) (MapStats, error) {
 	return e.mapHub.getStats(ch)
 }
 
 // RegisterEventHandler registers event handler.
-func (e *MemoryMapEngine) RegisterEventHandler(h BrokerEventHandler) error {
+func (e *MemoryMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 	return e.RegisterBrokerEventHandler(h)
 }
 
-func (e *MemoryMapEngine) getResultFromCache(ch string, key string) (StreamPosition, bool) {
+func (e *MemoryMapBroker) getResultFromCache(ch string, key string) (StreamPosition, bool) {
 	e.resultCacheMu.RLock()
 	defer e.resultCacheMu.RUnlock()
 	res, ok := e.resultCache[ch+"_"+key]
 	return res, ok
 }
 
-func (e *MemoryMapEngine) saveResultToCache(ch string, key string, sp StreamPosition, resultExpireSeconds int64) {
+func (e *MemoryMapBroker) saveResultToCache(ch string, key string, sp StreamPosition, resultExpireSeconds int64) {
 	e.resultCacheMu.Lock()
 	defer e.resultCacheMu.Unlock()
 	cacheKey := ch + "_" + key
@@ -246,7 +246,7 @@ func (e *MemoryMapEngine) saveResultToCache(ch string, key string, sp StreamPosi
 	}
 }
 
-func (e *MemoryMapEngine) expireResultCache() {
+func (e *MemoryMapBroker) expireResultCache() {
 	var nextExpireCheck int64
 	for {
 		select {
@@ -299,18 +299,18 @@ type mapHub struct {
 // mapChannel represents keyed state for a single channel.
 type mapChannel struct {
 	stream          *memstream.Stream
-	snapshot        map[string]*snapshotEntry // key -> entry
+	state           map[string]*stateEntry // key -> entry
 	ordered         bool
-	scores          map[string]int64 // key -> score (for ordered snapshots)
-	sortedKeys      []string         // cached sorted keys by score (descending) for ordered snapshots
+	scores          map[string]int64 // key -> score (for ordered state)
+	sortedKeys      []string         // cached sorted keys by score (descending) for ordered state
 	sortedKeysDirty bool             // true if sortedKeys needs rebuilding
 }
 
-type snapshotEntry struct {
+type stateEntry struct {
 	Key         string
 	Revision    StreamPosition
 	Publication *Publication
-	Score       int64 // For ordered snapshots
+	Score       int64 // For ordered state
 	ExpireAt    int64 // Unix timestamp for key TTL expiration (0 = no expiration)
 }
 
@@ -433,8 +433,8 @@ type expiredKeyEvent struct {
 	streamPos StreamPosition
 }
 
-// expireKeys handles TTL-based expiration of individual snapshot keys.
-// When a key expires, it removes it from the snapshot, updates aggregation counts,
+// expireKeys handles TTL-based expiration of individual state keys.
+// When a key expires, it removes it from the state, updates aggregation counts,
 // and publishes a removal event.
 func (h *mapHub) expireKeys() {
 	var nextKeyExpireCheck int64
@@ -497,7 +497,7 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 			continue
 		}
 
-		entry, ok := channel.snapshot[key]
+		entry, ok := channel.state[key]
 		if !ok {
 			delete(h.keyExpires, chKey)
 			continue
@@ -514,7 +514,7 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 		}
 
 		// Remove the expired key
-		delete(channel.snapshot, key)
+		delete(channel.state, key)
 		delete(h.keyExpires, chKey)
 		channel.sortedKeysDirty = true
 		if channel.ordered {
@@ -572,7 +572,7 @@ func (h *mapHub) parseChKey(chKey string) (string, string) {
 	return "", ""
 }
 
-func (h *mapHub) add(ch string, key string, snapshotPub *Publication, streamPub *Publication, opts MapPublishOptions) (StreamPosition, *Publication, SuppressReason, error) {
+func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Publication, opts MapPublishOptions) (StreamPosition, *Publication, SuppressReason, error) {
 	h.Lock()
 	defer h.Unlock()
 
@@ -580,7 +580,7 @@ func (h *mapHub) add(ch string, key string, snapshotPub *Publication, streamPub 
 	if opts.UseDelta && key != "" {
 		// Get previous publication for delta
 		if channel, ok := h.channels[ch]; ok {
-			if entry, ok := channel.snapshot[key]; ok {
+			if entry, ok := channel.state[key]; ok {
 				prevPub = entry.Publication
 			}
 		}
@@ -589,17 +589,17 @@ func (h *mapHub) add(ch string, key string, snapshotPub *Publication, streamPub 
 	channel, ok := h.channels[ch]
 	if !ok {
 		channel = &mapChannel{
-			stream:   memstream.New(),
-			snapshot: make(map[string]*snapshotEntry),
-			ordered:  opts.Ordered,
-			scores:   make(map[string]int64),
+			stream:  memstream.New(),
+			state:   make(map[string]*stateEntry),
+			ordered: opts.Ordered,
+			scores:  make(map[string]int64),
 		}
 		h.channels[ch] = channel
 	}
 
 	// Check KeyMode condition before proceeding
 	if key != "" && opts.KeyMode != KeyModeReplace {
-		existingEntry, keyExists := channel.snapshot[key]
+		existingEntry, keyExists := channel.state[key]
 		if opts.KeyMode == KeyModeIfNew && keyExists {
 			// KeyModeIfNew but key already exists - suppress publish
 			// But optionally refresh TTL if RefreshTTLOnSuppress is set
@@ -634,7 +634,7 @@ func (h *mapHub) add(ch string, key string, snapshotPub *Publication, streamPub 
 
 	// CAS check: verify expected position (offset + epoch)
 	if key != "" && opts.ExpectedPosition != nil {
-		existing, exists := channel.snapshot[key]
+		existing, exists := channel.state[key]
 		var pos StreamPosition
 		if channel.stream != nil {
 			pos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
@@ -707,7 +707,7 @@ func (h *mapHub) add(ch string, key string, snapshotPub *Publication, streamPub 
 		}
 	}
 
-	// Handle keyed snapshot
+	// Handle keyed state
 	if key != "" {
 		// Calculate expiration time
 		var expireAt int64
@@ -715,19 +715,19 @@ func (h *mapHub) add(ch string, key string, snapshotPub *Publication, streamPub 
 			expireAt = time.Now().Unix() + int64(opts.KeyTTL.Seconds())
 		}
 
-		// Store snapshotPub in snapshot (contains full state Data)
-		snapshotPub.Offset = streamPosition.Offset
-		entry := &snapshotEntry{
+		// Store statePub in state (contains full state Data)
+		statePub.Offset = streamPosition.Offset
+		entry := &stateEntry{
 			Key:         key,
 			Revision:    streamPosition,
-			Publication: snapshotPub,
+			Publication: statePub,
 			Score:       opts.Score,
 			ExpireAt:    expireAt,
 		}
 
-		channel.snapshot[key] = entry
+		channel.state[key] = entry
 
-		// Mark sorted keys as dirty for any snapshot change
+		// Mark sorted keys as dirty for any state change
 		channel.sortedKeysDirty = true
 		if opts.Ordered {
 			channel.scores[key] = opts.Score
@@ -760,7 +760,7 @@ func (h *mapHub) remove(ch string, key string, opts MapRemoveOptions) (StreamPos
 
 	// Get the entry before removing to extract Info if present
 	var info *ClientInfo
-	entry, keyExists := channel.snapshot[key]
+	entry, keyExists := channel.state[key]
 	if keyExists {
 		// Get ClientInfo from Publication (for presence)
 		info = entry.Publication.Info
@@ -777,8 +777,8 @@ func (h *mapHub) remove(ch string, key string, opts MapRemoveOptions) (StreamPos
 	}
 	_ = info // Info is used below in stream addition
 
-	// Remove from snapshot
-	delete(channel.snapshot, key)
+	// Remove from state
+	delete(channel.state, key)
 	channel.sortedKeysDirty = true // Mark dirty for any removal
 	if channel.ordered {
 		delete(channel.scores, key)
@@ -915,7 +915,7 @@ func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) ([]*Publication
 }
 
 func (h *mapHub) getState(ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
-	// Always use write lock since we cache sorted keys for all snapshots
+	// Always use write lock since we cache sorted keys for all state
 	h.Lock()
 	defer h.Unlock()
 
@@ -942,7 +942,7 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) ([]*Publication, 
 		}
 	}
 
-	// Check if client requested specific snapshot revision
+	// Check if client requested specific state revision
 	if opts.Revision != nil {
 		if streamPosition.Epoch != opts.Revision.Epoch {
 			// Epoch changed, client needs to restart from beginning
@@ -952,7 +952,7 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) ([]*Publication, 
 
 	// Handle single key lookup (Key filter)
 	if opts.Key != "" {
-		entry, exists := channel.snapshot[opts.Key]
+		entry, exists := channel.state[opts.Key]
 		if !exists {
 			return []*Publication{}, streamPosition, "", nil
 		}
@@ -962,13 +962,13 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) ([]*Publication, 
 	var pubs []*Publication
 
 	// Rebuild sorted keys if dirty (applies to both ordered and non-ordered)
-	if channel.sortedKeysDirty || len(channel.sortedKeys) != len(channel.snapshot) {
-		channel.sortedKeys = make([]string, 0, len(channel.snapshot))
-		for key := range channel.snapshot {
+	if channel.sortedKeysDirty || len(channel.sortedKeys) != len(channel.state) {
+		channel.sortedKeys = make([]string, 0, len(channel.state))
+		for key := range channel.state {
 			channel.sortedKeys = append(channel.sortedKeys, key)
 		}
 
-		// Sort by score (descending) for ordered snapshots, lexicographically for non-ordered
+		// Sort by score (descending) for ordered state, lexicographically for non-ordered
 		// For ordered: use (score DESC, key DESC) to match Redis native ZREVRANGE ordering
 		if opts.Ordered && channel.ordered {
 			sort.Slice(channel.sortedKeys, func(i, j int) bool {
@@ -1039,7 +1039,7 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) ([]*Publication, 
 	pubs = make([]*Publication, endIdx-startIdx)
 	for i := startIdx; i < endIdx; i++ {
 		key := channel.sortedKeys[i]
-		entry := channel.snapshot[key]
+		entry := channel.state[key]
 		// Return the stored Publication pointer directly - it already has Key and Offset set
 		pubs[i-startIdx] = entry.Publication
 	}
@@ -1047,7 +1047,7 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) ([]*Publication, 
 	return pubs, streamPosition, cursor, nil
 }
 
-// makeOrderedCursor creates a cursor for ordered snapshots: "score\x00key"
+// makeOrderedCursor creates a cursor for ordered state: "score\x00key"
 func (h *mapHub) makeOrderedCursor(score int64, key string) string {
 	return strconv.FormatInt(score, 10) + "\x00" + key
 }
@@ -1073,8 +1073,8 @@ func (h *mapHub) findUnorderedCursorPosition(sortedKeys []string, cursor string)
 	})
 }
 
-// findOrderedCursorPosition finds the position after the cursor (score, key) in ordered snapshot.
-// For ordered snapshots sorted by (score DESC, key DESC), finds first entry where:
+// findOrderedCursorPosition finds the position after the cursor (score, key) in ordered state.
+// For ordered state sorted by (score DESC, key DESC), finds first entry where:
 // - score < cursorScore, OR
 // - score == cursorScore AND key < cursorKey
 func (h *mapHub) findOrderedCursorPosition(channel *mapChannel, cursor string) int {
@@ -1100,7 +1100,7 @@ func (h *mapHub) getStats(ch string) (MapStats, error) {
 	}
 
 	return MapStats{
-		NumKeys: len(channel.snapshot),
+		NumKeys: len(channel.state),
 	}, nil
 }
 
@@ -1110,9 +1110,9 @@ func (h *mapHub) createStreamPosition(ch string) StreamPosition {
 	if !ok {
 		stream := memstream.New()
 		h.channels[ch] = &mapChannel{
-			stream:   stream,
-			snapshot: make(map[string]*snapshotEntry),
-			scores:   make(map[string]int64),
+			stream: stream,
+			state:  make(map[string]*stateEntry),
+			scores: make(map[string]int64),
 		}
 		return StreamPosition{
 			Offset: 0,
@@ -1138,115 +1138,3 @@ func (h *mapHub) updateMetaTTL(ch string, metaTTL time.Duration) {
 		h.nextRemoveCheck = removeAt
 	}
 }
-
-//// AddMember adds a client to presence in a channel.
-//func (e *MemoryMapEngine) AddMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error {
-//	mu := e.pubLock(ch)
-//	mu.Lock()
-//	defer mu.Unlock()
-//
-//	data, err := json.Marshal(info)
-//	if err != nil {
-//		return err
-//	}
-//
-//	keyedOpts := MapPublishOptions{
-//		StreamSize: 10000,             // Default stream size for presence
-//		StreamTTL:  300 * time.Second, // Default TTL
-//		KeyTTL:     60 * time.Second,  // Presence TTL (auto-expire)
-//	}
-//
-//	streamTop, _, _, err := e.mapHub.add(ch, info.ClientID, &Publication{
-//		Key:  info.ClientID,
-//		Data: data,
-//		Info: &info,
-//	}, keyedOpts)
-//	if err != nil {
-//		return err
-//	}
-//
-//	if opts.Publish && e.eventHandler != nil {
-//		pub := &Publication{
-//			Key:    info.ClientID,
-//			Data:   data,
-//			Info:   &info,
-//			Offset: streamTop.Offset,
-//			Time:   time.Now().UnixMilli(),
-//		}
-//		return e.eventHandler.HandlePublication(ch, pub, streamTop, false, nil)
-//	}
-//
-//	return nil
-//}
-//
-//// RemoveMember removes a client from presence in a channel.
-//func (e *MemoryMapEngine) RemoveMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error {
-//	mu := e.pubLock(ch)
-//	mu.Lock()
-//	defer mu.Unlock()
-//
-//	removeOpts := MapRemoveOptions{
-//		Publish:    opts.Publish,
-//		StreamSize: 10000,
-//		StreamTTL:  300 * time.Second,
-//	}
-//
-//	streamTop, err := e.mapHub.remove(ch, info.ClientID, removeOpts)
-//	if err != nil {
-//		return err
-//	}
-//
-//	if opts.Publish && e.eventHandler != nil {
-//		pub := &Publication{
-//			Key:     info.ClientID,
-//			Removed: true,
-//			Info:    &info,
-//			Offset:  streamTop.Offset,
-//			Time:    time.Now().UnixMilli(),
-//		}
-//		return e.eventHandler.HandlePublication(ch, pub, streamTop, false, nil)
-//	}
-//
-//	return nil
-//}
-//
-//// Members returns all members in a presence channel.
-//func (e *MemoryMapEngine) Members(ctx context.Context, ch string) (map[string]*ClientInfo, error) {
-//	entries, _, _, err := e.mapHub.getState(ch, MapReadStateOptions{
-//		Limit: 0, // Get all
-//	})
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	members := make(map[string]*ClientInfo, len(entries))
-//	for _, pub := range entries {
-//		if pub.Info != nil {
-//			members[pub.Key] = pub.Info
-//		} else {
-//			// Fallback: unmarshal from Data if Info is not set
-//			var info ClientInfo
-//			if err := json.Unmarshal(pub.Data, &info); err != nil {
-//				continue
-//			}
-//			members[pub.Key] = &info
-//		}
-//	}
-//
-//	return members, nil
-//}
-//
-//// ReadPresenceSnapshot retrieves presence snapshot with revisions.
-//func (e *MemoryMapEngine) ReadPresenceSnapshot(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, error) {
-//	pubs, streamPos, _, err := e.mapHub.getState(ch, opts)
-//	if err != nil {
-//		return nil, StreamPosition{}, err
-//	}
-//	// getState already returns Publications with Key and Offset set
-//	return pubs, streamPos, nil
-//}
-//
-//// ReadPresenceStream retrieves presence event stream.
-//func (e *MemoryMapEngine) ReadPresenceStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
-//	return e.mapHub.getStream(ch, opts)
-//}

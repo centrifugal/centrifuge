@@ -1,4 +1,4 @@
--- Read history from unified snapshot structure.
+-- Read state history stream.
 -- KEYS[1] = stream key
 -- KEYS[2] = meta key
 -- ARGV[1] = include_publications ("0" or "1")

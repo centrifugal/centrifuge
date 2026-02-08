@@ -40,15 +40,15 @@ func DefaultMapCacheConfig() MapCacheConfig {
 
 // ChannelLoader loads channel data from backend storage.
 // Receives resolved channel options to load correct amount of stream history.
-// Returns snapshot publications, stream publications (for recovery), and current position.
-type ChannelLoader func(ctx context.Context, ch string, opts MapChannelOptions) (snapshot []*Publication, stream []*Publication, pos StreamPosition, err error)
+// Returns state publications, stream publications (for recovery), and current position.
+type ChannelLoader func(ctx context.Context, ch string, opts MapChannelOptions) (state []*Publication, stream []*Publication, pos StreamPosition, err error)
 
 // MapCache provides in-memory caching for keyed channel data.
 // It supports lazy loading, LRU eviction, and applying updates.
 type MapCache interface {
 	// EnsureLoaded ensures the channel is loaded into cache.
 	// Uses singleflight to prevent thundering herd on concurrent loads.
-	// Channel options determine stream size/TTL and snapshot key TTL.
+	// Channel options determine stream size/TTL and state key TTL.
 	EnsureLoaded(ctx context.Context, ch string, opts MapChannelOptions, loader ChannelLoader) error
 
 	// Evict removes a channel from the cache.
@@ -127,7 +127,7 @@ type mapCacheImpl struct {
 // cachedChannel holds cached data for a single channel.
 type cachedChannel struct {
 	stream          *memstream.Stream
-	snapshot        map[string]*cachedSnapshotEntry
+	state           map[string]*cachedStateEntry
 	ordered         bool
 	scores          map[string]int64
 	sortedKeys      []string
@@ -136,8 +136,8 @@ type cachedChannel struct {
 	options         MapChannelOptions // Per-channel options for TTL/size
 }
 
-// cachedSnapshotEntry represents a single entry in the cached snapshot.
-type cachedSnapshotEntry struct {
+// cachedStateEntry represents a single entry in the cached state.
+type cachedStateEntry struct {
 	Key         string
 	Publication *Publication
 	Score       int64
@@ -190,8 +190,8 @@ func (c *mapCacheImpl) EnsureLoaded(ctx context.Context, ch string, opts MapChan
 		c.loading[ch] = true
 		c.mu.Unlock()
 
-		// Load from backend (snapshot + stream for recovery)
-		snapshotPubs, streamPubs, pos, err := loader(ctx, ch, opts)
+		// Load from backend (state + stream for recovery)
+		statePubs, streamPubs, pos, err := loader(ctx, ch, opts)
 		if err != nil {
 			// Clean up loading state on error
 			c.mu.Lock()
@@ -211,20 +211,20 @@ func (c *mapCacheImpl) EnsureLoaded(ctx context.Context, ch string, opts MapChan
 		// Create channel entry with per-channel options
 		channel := &cachedChannel{
 			stream:   memstream.New(),
-			snapshot: make(map[string]*cachedSnapshotEntry),
+			state:    make(map[string]*cachedStateEntry),
 			scores:   make(map[string]int64),
 			position: pos,
 			options:  opts,
 		}
 
-		// Populate snapshot and detect if ordered (any non-zero score means ordered)
-		for _, pub := range snapshotPubs {
-			entry := &cachedSnapshotEntry{
+		// Populate state and detect if ordered (any non-zero score means ordered)
+		for _, pub := range statePubs {
+			entry := &cachedStateEntry{
 				Key:         pub.Key,
 				Publication: pub,
 				Score:       pub.Score,
 			}
-			channel.snapshot[pub.Key] = entry
+			channel.state[pub.Key] = entry
 			if pub.Score != 0 {
 				channel.ordered = true
 				channel.scores[pub.Key] = pub.Score
@@ -371,7 +371,7 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) ([]*Publica
 
 	// Handle single key lookup
 	if opts.Key != "" {
-		entry, exists := channel.snapshot[opts.Key]
+		entry, exists := channel.state[opts.Key]
 		if !exists {
 			return []*Publication{}, channel.position, "", nil
 		}
@@ -379,9 +379,9 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) ([]*Publica
 	}
 
 	// Rebuild sorted keys if dirty
-	if channel.sortedKeysDirty || len(channel.sortedKeys) != len(channel.snapshot) {
-		channel.sortedKeys = make([]string, 0, len(channel.snapshot))
-		for key := range channel.snapshot {
+	if channel.sortedKeysDirty || len(channel.sortedKeys) != len(channel.state) {
+		channel.sortedKeys = make([]string, 0, len(channel.state))
+		for key := range channel.state {
 			channel.sortedKeys = append(channel.sortedKeys, key)
 		}
 
@@ -442,7 +442,7 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) ([]*Publica
 	pubs := make([]*Publication, endIdx-startIdx)
 	for i := startIdx; i < endIdx; i++ {
 		key := channel.sortedKeys[i]
-		entry := channel.snapshot[key]
+		entry := channel.state[key]
 		pubs[i-startIdx] = entry.Publication
 	}
 
@@ -556,7 +556,7 @@ func (c *mapCacheImpl) GetStats(ch string) (MapStats, error) {
 	}
 
 	return MapStats{
-		NumKeys: len(channel.snapshot),
+		NumKeys: len(channel.state),
 	}, nil
 }
 
@@ -627,12 +627,12 @@ func (c *mapCacheImpl) applyPublicationLocked(ch string, pub *Publication, pos S
 		channel.stream.Add(streamPub, streamSize, streamTTL, "")
 	}
 
-	// Update snapshot
+	// Update state
 	if removed {
-		delete(channel.snapshot, pub.Key)
+		delete(channel.state, pub.Key)
 		delete(channel.scores, pub.Key)
 	} else {
-		channel.snapshot[pub.Key] = &cachedSnapshotEntry{
+		channel.state[pub.Key] = &cachedStateEntry{
 			Key:         pub.Key,
 			Publication: pub,
 			Score:       pub.Score,
@@ -737,7 +737,7 @@ func (c *mapCacheImpl) PopulateStream(ch string, pubs []*Publication, epoch stri
 	c.lastAccess[ch] = time.Now()
 }
 
-// ApplySnapshot replaces the entire snapshot for a channel.
+// ApplyState replaces the entire state for a channel.
 func (c *mapCacheImpl) ApplyState(ch string, pubs []*Publication, pos StreamPosition, opts *MapChannelOptions) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -757,7 +757,7 @@ func (c *mapCacheImpl) ApplyState(ch string, pubs []*Publication, pos StreamPosi
 
 	channel := &cachedChannel{
 		stream:          memstream.New(),
-		snapshot:        make(map[string]*cachedSnapshotEntry),
+		state:           make(map[string]*cachedStateEntry),
 		scores:          make(map[string]int64),
 		position:        pos,
 		sortedKeysDirty: true,
@@ -765,7 +765,7 @@ func (c *mapCacheImpl) ApplyState(ch string, pubs []*Publication, pos StreamPosi
 	}
 
 	for _, pub := range pubs {
-		channel.snapshot[pub.Key] = &cachedSnapshotEntry{
+		channel.state[pub.Key] = &cachedStateEntry{
 			Key:         pub.Key,
 			Publication: pub,
 			Score:       pub.Score,
@@ -844,7 +844,7 @@ func (c *mapCacheImpl) evictIdleChannels() {
 	}
 }
 
-// makeOrderedCursor creates a cursor for ordered snapshots.
+// makeOrderedCursor creates a cursor for ordered state.
 func (c *mapCacheImpl) makeOrderedCursor(score int64, key string) string {
 	return strconv.FormatInt(score, 10) + "\x00" + key
 }
@@ -867,7 +867,7 @@ func (c *mapCacheImpl) findUnorderedCursorPosition(sortedKeys []string, cursor s
 	})
 }
 
-// findOrderedCursorPosition finds the position after the cursor in ordered snapshot.
+// findOrderedCursorPosition finds the position after the cursor in ordered state.
 func (c *mapCacheImpl) findOrderedCursorPosition(channel *cachedChannel, cursor string) int {
 	cursorScore, cursorKey := c.parseOrderedCursor(cursor)
 

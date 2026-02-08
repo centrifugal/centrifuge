@@ -45,8 +45,8 @@ type Node struct {
 	controller Controller
 	// broker is responsible for PUB/SUB and history streaming mechanics.
 	broker Broker
-	// mapEngine is responsible for keyed state and stream operations.
-	mapEngine MapEngine
+	// mapBroker is responsible for map subscriptions.
+	mapBroker MapBroker
 	// presenceManager is responsible for presence information management.
 	presenceManager PresenceManager
 	// nodes contains registry of known nodes.
@@ -266,9 +266,9 @@ func (n *Node) SetPresenceManager(m PresenceManager) {
 	n.presenceManager = m
 }
 
-// SetMapEngine allows setting MapEngine to use.
-func (n *Node) SetMapEngine(e MapEngine) {
-	n.mapEngine = e
+// SetMapBroker allows setting MapBroker to use.
+func (n *Node) SetMapBroker(e MapBroker) {
+	n.mapBroker = e
 }
 
 // ResolveMapChannelOptions returns channel options for a map channel,
@@ -278,11 +278,6 @@ func (n *Node) ResolveMapChannelOptions(channel string) MapChannelOptions {
 		return n.config.GetMapChannelOptions(channel)
 	}
 	return DefaultMapChannelOptions()
-}
-
-// MapEngine returns node's MapEngine. Can be nil if not configured.
-func (n *Node) MapEngine() MapEngine {
-	return n.mapEngine
 }
 
 // Hub returns node's Hub.
@@ -1095,10 +1090,10 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 		}
 
 		// Subscribe to appropriate engine based on subscription type.
-		if sub.keyed {
-			if mapEngine := n.getMapEngine(ch); mapEngine != nil {
+		if sub.isMap {
+			if mapBroker := n.getMapBroker(ch); mapBroker != nil {
 				n.metrics.incActionCount("keyed_engine_subscribe", ch)
-				err := mapEngine.Subscribe(ch)
+				err := mapBroker.Subscribe(ch)
 				if err != nil {
 					_, _, _ = n.hub.removeSub(ch, sub.client)
 					if n.config.GetChannelMediumOptions != nil {
@@ -1137,7 +1132,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 }
 
 // removeSubscription removes subscription of connection on channel
-// from Hub and Broker (or MapEngine for map channels).
+// from Hub and Broker (or MapBroker for map channels).
 func (n *Node) removeSubscription(ch string, c *Client) error {
 	n.metrics.incActionCount("remove_subscription", ch)
 	mu := n.subLock(ch)
@@ -1161,9 +1156,9 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 			if noSubscribers {
 				// Unsubscribe from appropriate engine based on channel type.
 				if wasKeyed {
-					if mapEngine := n.getMapEngine(ch); mapEngine != nil {
+					if mapBroker := n.getMapBroker(ch); mapBroker != nil {
 						n.metrics.incActionCount("keyed_engine_unsubscribe", ch)
-						err := mapEngine.Unsubscribe(ch)
+						err := mapBroker.Unsubscribe(ch)
 						if err != nil {
 							time.Sleep(500 * time.Millisecond)
 							return err
@@ -1473,13 +1468,13 @@ func (n *Node) getBroker(ch string) Broker {
 	return n.broker
 }
 
-func (n *Node) getMapEngine(ch string) MapEngine {
-	if n.config.GetMapEngine != nil {
-		if engine, ok := n.config.GetMapEngine(ch); ok {
+func (n *Node) getMapBroker(ch string) MapBroker {
+	if n.config.GetMapBroker != nil {
+		if engine, ok := n.config.GetMapBroker(ch); ok {
 			return engine
 		}
 	}
-	return n.mapEngine
+	return n.mapBroker
 }
 
 func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
@@ -1611,13 +1606,13 @@ func (n *Node) streamTop(ch string, historyMetaTTL time.Duration) (StreamPositio
 
 func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMetaTTL time.Duration, isMap bool) (bool, error) {
 	if isMap {
-		mapEngine := n.getMapEngine(ch)
-		if mapEngine == nil {
-			// No MapEngine configured, skip position check.
+		mapBroker := n.getMapBroker(ch)
+		if mapBroker == nil {
+			// No MapBroker configured, skip position check.
 			return true, nil
 		}
 		// Use ReadStream with Limit: 0 to only get stream top position.
-		_, streamTop, err := mapEngine.ReadStream(context.Background(), ch, MapReadStreamOptions{
+		_, streamTop, err := mapBroker.ReadStream(context.Background(), ch, MapReadStreamOptions{
 			Filter:  StreamFilter{Limit: 0},
 			MetaTTL: historyMetaTTL,
 		})
@@ -1866,8 +1861,8 @@ type MapStateResult struct {
 
 // MapStateRead retrieves keyed snapshot for a channel.
 func (n *Node) MapStateRead(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
-	mapEngine := n.getMapEngine(ch)
-	if mapEngine == nil {
+	mapBroker := n.getMapBroker(ch)
+	if mapBroker == nil {
 		return MapStateResult{}, ErrorNotAvailable
 	}
 
@@ -1875,7 +1870,7 @@ func (n *Node) MapStateRead(ctx context.Context, ch string, opts MapReadStateOpt
 	if n.config.UseSingleFlight {
 		key := n.mapStateKey(ch, opts)
 		result, err, _ := mapStateGroup.Do(key, func() (any, error) {
-			pubs, pos, cursor, err := mapEngine.ReadState(ctx, ch, opts)
+			pubs, pos, cursor, err := mapBroker.ReadState(ctx, ch, opts)
 			if err != nil {
 				return MapStateResult{}, err
 			}
@@ -1891,7 +1886,7 @@ func (n *Node) MapStateRead(ctx context.Context, ch string, opts MapReadStateOpt
 		return result.(MapStateResult), nil
 	}
 
-	pubs, pos, cursor, err := mapEngine.ReadState(ctx, ch, opts)
+	pubs, pos, cursor, err := mapBroker.ReadState(ctx, ch, opts)
 	if err != nil {
 		return MapStateResult{}, err
 	}
@@ -1930,8 +1925,8 @@ type MapStreamResult struct {
 
 // MapStreamRead retrieves keyed stream for a channel.
 func (n *Node) MapStreamRead(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
-	mapEngine := n.getMapEngine(ch)
-	if mapEngine == nil {
+	mapBroker := n.getMapBroker(ch)
+	if mapBroker == nil {
 		return MapStreamResult{}, ErrorNotAvailable
 	}
 
@@ -1939,7 +1934,7 @@ func (n *Node) MapStreamRead(ctx context.Context, ch string, opts MapReadStreamO
 	if n.config.UseSingleFlight {
 		key := n.mapStreamKey(ch, opts)
 		result, err, _ := mapStreamGroup.Do(key, func() (any, error) {
-			pubs, pos, err := mapEngine.ReadStream(ctx, ch, opts)
+			pubs, pos, err := mapBroker.ReadStream(ctx, ch, opts)
 			if err != nil {
 				return MapStreamResult{}, err
 			}
@@ -1954,7 +1949,7 @@ func (n *Node) MapStreamRead(ctx context.Context, ch string, opts MapReadStreamO
 		return result.(MapStreamResult), nil
 	}
 
-	pubs, pos, err := mapEngine.ReadStream(ctx, ch, opts)
+	pubs, pos, err := mapBroker.ReadStream(ctx, ch, opts)
 	if err != nil {
 		return MapStreamResult{}, err
 	}
@@ -1983,13 +1978,13 @@ func (n *Node) mapStreamKey(ch string, opts MapReadStreamOptions) string {
 // MapStreamPosition returns the current stream position for a map channel.
 // This is useful for capturing the stream top before starting stream pagination.
 func (n *Node) MapStreamPosition(ctx context.Context, ch string, metaTTL time.Duration) (StreamPosition, error) {
-	mapEngine := n.getMapEngine(ch)
-	if mapEngine == nil {
+	mapBroker := n.getMapBroker(ch)
+	if mapBroker == nil {
 		return StreamPosition{}, ErrorNotAvailable
 	}
 	n.metrics.incActionCount("map_stream_position", ch)
 	// ReadStream with Limit=0 returns only the current stream position.
-	_, pos, err := mapEngine.ReadStream(ctx, ch, MapReadStreamOptions{
+	_, pos, err := mapBroker.ReadStream(ctx, ch, MapReadStreamOptions{
 		Filter:  StreamFilter{Limit: 0},
 		MetaTTL: metaTTL,
 	})
@@ -2003,15 +1998,15 @@ type MapStatsResult struct {
 
 // MapStats retrieves stats for a map channel.
 func (n *Node) MapStats(ctx context.Context, ch string) (MapStatsResult, error) {
-	mapEngine := n.getMapEngine(ch)
-	if mapEngine == nil {
+	mapBroker := n.getMapBroker(ch)
+	if mapBroker == nil {
 		return MapStatsResult{}, ErrorNotAvailable
 	}
 
 	n.metrics.incActionCount("map_stats", ch)
 	if n.config.UseSingleFlight {
 		result, err, _ := mapStatsGroup.Do(ch, func() (any, error) {
-			stats, err := mapEngine.Stats(ctx, ch)
+			stats, err := mapBroker.Stats(ctx, ch)
 			if err != nil {
 				return MapStatsResult{}, err
 			}
@@ -2023,7 +2018,7 @@ func (n *Node) MapStats(ctx context.Context, ch string) (MapStatsResult, error) 
 		return result.(MapStatsResult), nil
 	}
 
-	stats, err := mapEngine.Stats(ctx, ch)
+	stats, err := mapBroker.Stats(ctx, ch)
 	if err != nil {
 		return MapStatsResult{}, err
 	}
@@ -2033,12 +2028,12 @@ func (n *Node) MapStats(ctx context.Context, ch string) (MapStatsResult, error) 
 // MapPublish publishes data to a map channel.
 // This updates the snapshot and optionally broadcasts to subscribers.
 func (n *Node) MapPublish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
-	mapEngine := n.getMapEngine(ch)
-	if mapEngine == nil {
+	mapBroker := n.getMapBroker(ch)
+	if mapBroker == nil {
 		return MapPublishResult{}, ErrorNotAvailable
 	}
 	n.metrics.incActionCount("map_publish", ch)
-	result, err := mapEngine.Publish(ctx, ch, key, opts)
+	result, err := mapBroker.Publish(ctx, ch, key, opts)
 	if n.logEnabled(LogLevelDebug) {
 		n.logger.log(newLogEntry(LogLevelDebug, "MapPublish result", map[string]any{
 			"channel":        ch,
@@ -2055,21 +2050,21 @@ func (n *Node) MapPublish(ctx context.Context, ch string, key string, opts MapPu
 // MapRemove removes a key from a map channel.
 // This removes the key from snapshot and optionally broadcasts removal to subscribers.
 func (n *Node) MapRemove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
-	mapEngine := n.getMapEngine(ch)
-	if mapEngine == nil {
+	mapBroker := n.getMapBroker(ch)
+	if mapBroker == nil {
 		return MapPublishResult{}, ErrorNotAvailable
 	}
 	n.metrics.incActionCount("map_remove", ch)
-	return mapEngine.Remove(ctx, ch, key, opts)
+	return mapBroker.Remove(ctx, ch, key, opts)
 }
 
 // MapClear deletes all data for a map channel (state and stream).
 // Use for cleanup when a channel is no longer needed.
 func (n *Node) MapClear(ctx context.Context, ch string, opts MapClearOptions) error {
-	mapEngine := n.getMapEngine(ch)
-	if mapEngine == nil {
+	mapBroker := n.getMapBroker(ch)
+	if mapBroker == nil {
 		return ErrorNotAvailable
 	}
 	n.metrics.incActionCount("map_clear", ch)
-	return mapEngine.Clear(ctx, ch, opts)
+	return mapBroker.Clear(ctx, ch, opts)
 }

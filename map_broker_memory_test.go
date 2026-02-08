@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestMemoryMapEngine(tb testing.TB, n *Node) *MemoryMapEngine {
-	e, err := NewMemoryMapEngine(n, MemoryMapEngineConfig{})
+func newTestMemoryMapBroker(tb testing.TB, n *Node) *MemoryMapBroker {
+	e, err := NewMemoryMapBroker(n, MemoryMapBrokerConfig{})
 	require.NoError(tb, err)
 	err = e.RegisterBrokerEventHandler(nil)
 	require.NoError(tb, err)
@@ -20,8 +20,8 @@ func newTestMemoryMapEngine(tb testing.TB, n *Node) *MemoryMapEngine {
 	return e
 }
 
-// snapshotToMapMemory converts []SnapshotEntry to map for easier testing.
-func snapshotToMapMemory(pubs []*Publication) map[string][]byte {
+// stateToMapMemory converts []StateEntry to map for easier testing.
+func stateToMapMemory(pubs []*Publication) map[string][]byte {
 	result := make(map[string][]byte, len(pubs))
 	for _, pub := range pubs {
 		// Extract data from Publication
@@ -30,10 +30,10 @@ func snapshotToMapMemory(pubs []*Publication) map[string][]byte {
 	return result
 }
 
-// TestMemoryMapEngine_StatefulChannel tests stateful channel with keyed state and revisions.
-func TestMemoryMapEngine_StatefulChannel(t *testing.T) {
+// TestMemoryMapBroker_StatefulChannel tests stateful channel with keyed state and revisions.
+func TestMemoryMapBroker_StatefulChannel(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_stateful"
@@ -63,20 +63,20 @@ func TestMemoryMapEngine_StatefulChannel(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Read snapshot
+	// Read state
 	entries, streamPos, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, streamPos.Epoch)
 	require.Greater(t, streamPos.Offset, uint64(0))
 
-	// Verify snapshot contains latest values
-	snapshot := snapshotToMapMemory(entries)
-	require.Len(t, snapshot, 2)
-	require.Equal(t, []byte("data1_updated"), snapshot["key1"])
-	require.Equal(t, []byte("data2"), snapshot["key2"])
+	// Verify state contains latest values
+	state := stateToMapMemory(entries)
+	require.Len(t, state, 2)
+	require.Equal(t, []byte("data1_updated"), state["key1"])
+	require.Equal(t, []byte("data2"), state["key2"])
 
 	// Read stream to verify all publications are in history
 	pubs, _, err := engine.ReadStream(ctx, channel, MapReadStreamOptions{
@@ -88,10 +88,10 @@ func TestMemoryMapEngine_StatefulChannel(t *testing.T) {
 	require.Len(t, pubs, 3) // All 3 publications in stream
 }
 
-// TestMemoryMapEngine_StatefulChannelOrdered tests ordered stateful channel.
-func TestMemoryMapEngine_StatefulChannelOrdered(t *testing.T) {
+// TestMemoryMapBroker_StatefulChannelOrdered tests ordered stateful channel.
+func TestMemoryMapBroker_StatefulChannelOrdered(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_ordered"
@@ -109,27 +109,27 @@ func TestMemoryMapEngine_StatefulChannelOrdered(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Read ordered snapshot (descending by score)
+	// Read ordered state (descending by score)
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       100,
+		Ordered:  true,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.Len(t, entries, 5)
 
 	// Verify all keys present
-	snapshot := snapshotToMapMemory(entries)
+	state := stateToMapMemory(entries)
 	for i := 0; i < 5; i++ {
 		key := fmt.Sprintf("key%d", i)
-		require.Contains(t, snapshot, key)
+		require.Contains(t, state, key)
 	}
 }
 
-// TestMemoryMapEngine_SnapshotRevision tests that snapshot values include revisions.
-func TestMemoryMapEngine_SnapshotRevision(t *testing.T) {
+// TestMemoryMapBroker_StateRevision tests that state values include revisions.
+func TestMemoryMapBroker_StateRevision(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_revision"
@@ -155,9 +155,9 @@ func TestMemoryMapEngine_SnapshotRevision(t *testing.T) {
 	require.Equal(t, uint64(2), res2.Position.Offset)
 	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch) // Same epoch
 
-	// Read snapshot - entries now include per-entry revisions
+	// Read state - entries now include per-entry revisions
 	entries, streamPos, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -165,9 +165,9 @@ func TestMemoryMapEngine_SnapshotRevision(t *testing.T) {
 	require.Equal(t, res2.Position.Epoch, streamPos.Epoch)
 
 	// Verify payloads
-	snapshot := snapshotToMapMemory(entries)
-	require.Equal(t, []byte("data1"), snapshot["key1"])
-	require.Equal(t, []byte("data2"), snapshot["key2"])
+	state := stateToMapMemory(entries)
+	require.Equal(t, []byte("data1"), state["key1"])
+	require.Equal(t, []byte("data2"), state["key2"])
 
 	// Verify per-entry offsets (epoch is in streamPos, same for all)
 	require.NotEmpty(t, streamPos.Epoch)
@@ -177,10 +177,10 @@ func TestMemoryMapEngine_SnapshotRevision(t *testing.T) {
 }
 
 //
-//// TestMemoryMapEngine_Membership tests presence with revisions.
-//func TestMemoryMapEngine_Membership(t *testing.T) {
+//// TestMemoryMapBroker_Membership tests presence with revisions.
+//func TestMemoryMapBroker_Membership(t *testing.T) {
 //	node, _ := New(Config{})
-//	engine := newTestMemoryMapEngine(t, node)
+//	engine := newTestMemoryMapBroker(t, node)
 //
 //	ctx := context.Background()
 //	channel := "test_presence"
@@ -232,10 +232,10 @@ func TestMemoryMapEngine_SnapshotRevision(t *testing.T) {
 //	require.NotContains(t, presence, "client1")
 //}
 //
-//// TestMemoryMapEngine_PresenceStream tests presence event stream (joins/leaves).
-//func TestMemoryMapEngine_PresenceStream(t *testing.T) {
+//// TestMemoryMapBroker_PresenceStream tests presence event stream (joins/leaves).
+//func TestMemoryMapBroker_PresenceStream(t *testing.T) {
 //	node, _ := New(Config{})
-//	engine := newTestMemoryMapEngine(t, node)
+//	engine := newTestMemoryMapBroker(t, node)
 //
 //	ctx := context.Background()
 //	channel := "test_presence_stream"
@@ -275,10 +275,10 @@ func TestMemoryMapEngine_SnapshotRevision(t *testing.T) {
 //	require.Equal(t, uint64(2), events[1].Offset)
 //}
 
-// TestMemoryMapEngine_SnapshotPagination tests cursor-based snapshot pagination.
-func TestMemoryMapEngine_SnapshotPagination(t *testing.T) {
+// TestMemoryMapBroker_StatePagination tests cursor-based state pagination.
+func TestMemoryMapBroker_StatePagination(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_pagination"
@@ -294,10 +294,10 @@ func TestMemoryMapEngine_SnapshotPagination(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Read snapshot with limit
+	// Read state with limit
 	page1, pos1, cursor, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       3,
-		Cursor:      "",
+		Limit:    3,
+		Cursor:   "",
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -312,8 +312,8 @@ func TestMemoryMapEngine_SnapshotPagination(t *testing.T) {
 	// Continue reading until cursor is empty
 	for cursor != "" {
 		page, pos, newCursor, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-			Limit:       3,
-			Cursor:      cursor,
+			Limit:    3,
+			Cursor:   cursor,
 			StateTTL: 300 * time.Second,
 		})
 		require.NoError(t, err)
@@ -331,10 +331,10 @@ func TestMemoryMapEngine_SnapshotPagination(t *testing.T) {
 	require.Len(t, allKeys, 10)
 }
 
-// TestMemoryMapEngine_EpochHandling tests epoch changes and snapshot invalidation.
-func TestMemoryMapEngine_EpochHandling(t *testing.T) {
+// TestMemoryMapBroker_EpochHandling tests epoch changes and state invalidation.
+func TestMemoryMapBroker_EpochHandling(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_epoch"
@@ -349,9 +349,9 @@ func TestMemoryMapEngine_EpochHandling(t *testing.T) {
 	require.NoError(t, err)
 	epoch1 := res1.Position.Epoch
 
-	// Read snapshot
+	// Read state
 	entries, streamPos1, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -362,17 +362,17 @@ func TestMemoryMapEngine_EpochHandling(t *testing.T) {
 	require.NotEmpty(t, epoch1)
 }
 
-// TestMemoryMapEngine_EpochMismatchWhenChannelNotExists tests that we return
+// TestMemoryMapBroker_EpochMismatchWhenChannelNotExists tests that we return
 // ErrorUnrecoverablePosition when client sends an epoch but the channel doesn't exist
 // (e.g., after server restart). This is the server restart recovery scenario.
-func TestMemoryMapEngine_EpochMismatchWhenChannelNotExists(t *testing.T) {
+func TestMemoryMapBroker_EpochMismatchWhenChannelNotExists(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_nonexistent_channel"
 
-	// Client tries to read snapshot with an old epoch, but channel doesn't exist
+	// Client tries to read state with an old epoch, but channel doesn't exist
 	// (simulates reconnection after server restart)
 	_, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
 		Revision: &StreamPosition{
@@ -384,11 +384,11 @@ func TestMemoryMapEngine_EpochMismatchWhenChannelNotExists(t *testing.T) {
 	require.ErrorIs(t, err, ErrorUnrecoverablePosition)
 }
 
-// TestMemoryMapEngine_NoEpochWhenChannelNotExists tests that we return success
+// TestMemoryMapBroker_NoEpochWhenChannelNotExists tests that we return success
 // when client doesn't send an epoch and the channel doesn't exist (fresh subscription).
-func TestMemoryMapEngine_NoEpochWhenChannelNotExists(t *testing.T) {
+func TestMemoryMapBroker_NoEpochWhenChannelNotExists(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_fresh_channel"
@@ -398,22 +398,22 @@ func TestMemoryMapEngine_NoEpochWhenChannelNotExists(t *testing.T) {
 		Limit: 100,
 	})
 	require.NoError(t, err)
-	require.Empty(t, entries) // No entries in non-existent channel
+	require.Empty(t, entries)            // No entries in non-existent channel
 	require.NotEmpty(t, streamPos.Epoch) // Should get a new epoch
-	require.Empty(t, cursor) // No cursor for empty result
+	require.Empty(t, cursor)             // No cursor for empty result
 }
 
-// TestMemoryMapEngine_Idempotency tests idempotent publishing.
-func TestMemoryMapEngine_Idempotency(t *testing.T) {
+// TestMemoryMapBroker_Idempotency tests idempotent publishing.
+func TestMemoryMapBroker_Idempotency(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_idempotency"
 
 	// Publish with idempotency key
 	res1, err := engine.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
+		Data:                []byte("data1"),
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
 		StreamSize:          100,
@@ -426,7 +426,7 @@ func TestMemoryMapEngine_Idempotency(t *testing.T) {
 
 	// Publish again with same idempotency key
 	res2, err := engine.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1_different"),
+		Data:                []byte("data1_different"),
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
 		StreamSize:          100,
@@ -434,26 +434,26 @@ func TestMemoryMapEngine_Idempotency(t *testing.T) {
 		KeyTTL:              300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res2.Suppressed)                                 // Suppressed due to idempotency
+	require.True(t, res2.Suppressed) // Suppressed due to idempotency
 	require.Equal(t, SuppressReasonIdempotency, res2.SuppressReason)
 	require.Equal(t, res1.Position.Offset, res2.Position.Offset) // Same offset
 	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch)   // Same epoch
 
-	// Snapshot should still have original data (second publish was cached/skipped)
+	// State should still have original data (second publish was cached/skipped)
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
-	snapshot := snapshotToMapMemory(entries)
-	require.Len(t, snapshot, 1)
-	require.Equal(t, []byte("data1"), snapshot["key1"])
+	state := stateToMapMemory(entries)
+	require.Len(t, state, 1)
+	require.Equal(t, []byte("data1"), state["key1"])
 }
 
-// TestMemoryMapEngine_VersionedPublishing tests version-based idempotency.
-func TestMemoryMapEngine_VersionedPublishing(t *testing.T) {
+// TestMemoryMapBroker_VersionedPublishing tests version-based idempotency.
+func TestMemoryMapBroker_VersionedPublishing(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_version"
@@ -479,7 +479,7 @@ func TestMemoryMapEngine_VersionedPublishing(t *testing.T) {
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res2.Suppressed)                                 // Suppressed due to out-of-order version
+	require.True(t, res2.Suppressed) // Suppressed due to out-of-order version
 	require.Equal(t, SuppressReasonVersion, res2.SuppressReason)
 	require.Equal(t, res1.Position.Offset, res2.Position.Offset) // Same offset (suppressed)
 
@@ -495,20 +495,20 @@ func TestMemoryMapEngine_VersionedPublishing(t *testing.T) {
 	require.False(t, res3.Suppressed)
 	require.Equal(t, uint64(2), res3.Position.Offset) // New offset
 
-	// Snapshot should have v3 data
+	// State should have v3 data
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
-	snapshot := snapshotToMapMemory(entries)
-	require.Equal(t, []byte("data_v3"), snapshot["key1"])
+	state := stateToMapMemory(entries)
+	require.Equal(t, []byte("data_v3"), state["key1"])
 }
 
-// TestMemoryMapEngine_MultipleChannels tests multiple channels independently.
-func TestMemoryMapEngine_MultipleChannels(t *testing.T) {
+// TestMemoryMapBroker_MultipleChannels tests multiple channels independently.
+func TestMemoryMapBroker_MultipleChannels(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel1 := "test_multi1"
@@ -532,32 +532,32 @@ func TestMemoryMapEngine_MultipleChannels(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Read channel1 snapshot
+	// Read channel1 state
 	entries1, _, _, err := engine.ReadState(ctx, channel1, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
-	snapshot1 := snapshotToMapMemory(entries1)
-	require.Len(t, snapshot1, 1)
-	require.Equal(t, []byte("data1"), snapshot1["key1"])
+	state1 := stateToMapMemory(entries1)
+	require.Len(t, state1, 1)
+	require.Equal(t, []byte("data1"), state1["key1"])
 
-	// Read channel2 snapshot
+	// Read channel2 state
 	entries2, _, _, err := engine.ReadState(ctx, channel2, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
-	snapshot2 := snapshotToMapMemory(entries2)
-	require.Len(t, snapshot2, 1)
-	require.Equal(t, []byte("data2"), snapshot2["key2"])
+	state2 := stateToMapMemory(entries2)
+	require.Len(t, state2, 1)
+	require.Equal(t, []byte("data2"), state2["key2"])
 }
 
-// TestMemoryMapEngine_OrderedSnapshotOrdering tests that ordered snapshots return entries
+// TestMemoryMapBroker_OrderedStateOrdering tests that ordered state return entries
 // in correct score order (descending by score).
-func TestMemoryMapEngine_OrderedSnapshotOrdering(t *testing.T) {
+func TestMemoryMapBroker_OrderedStateOrdering(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_ordered_ordering"
@@ -577,7 +577,7 @@ func TestMemoryMapEngine_OrderedSnapshotOrdering(t *testing.T) {
 
 	for _, tc := range testCases {
 		_, err := engine.Publish(ctx, channel, tc.key, MapPublishOptions{
-		Data:       []byte(tc.data),
+			Data:       []byte(tc.data),
 			Ordered:    true,
 			Score:      tc.score,
 			StreamSize: 100,
@@ -587,10 +587,10 @@ func TestMemoryMapEngine_OrderedSnapshotOrdering(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Read ordered snapshot - should be sorted by score (descending)
+	// Read ordered state - should be sorted by score (descending)
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       100,
+		Ordered:  true,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -605,11 +605,11 @@ func TestMemoryMapEngine_OrderedSnapshotOrdering(t *testing.T) {
 	t.Logf("SUCCESS: Entries returned in correct descending score order: %v", expectedOrder)
 }
 
-// TestMemoryMapEngine_OrderedSnapshotPagination tests that pagination over ordered snapshots
+// TestMemoryMapBroker_OrderedStatePagination tests that pagination over ordered state
 // maintains correct ordering across pages.
-func TestMemoryMapEngine_OrderedSnapshotPagination(t *testing.T) {
+func TestMemoryMapBroker_OrderedStatePagination(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_ordered_pagination"
@@ -621,7 +621,7 @@ func TestMemoryMapEngine_OrderedSnapshotPagination(t *testing.T) {
 		data := fmt.Sprintf("data_%02d", i)
 
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-		Data:       []byte(data),
+			Data:       []byte(data),
 			Ordered:    true,
 			Score:      score,
 			StreamSize: 100,
@@ -633,8 +633,8 @@ func TestMemoryMapEngine_OrderedSnapshotPagination(t *testing.T) {
 
 	// Read first page (limit=5, no cursor)
 	page1, pos1, cursor1, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       5,
+		Ordered:  true,
+		Limit:    5,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -649,9 +649,9 @@ func TestMemoryMapEngine_OrderedSnapshotPagination(t *testing.T) {
 
 	// Read second page (using cursor)
 	page2, pos2, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Cursor:      cursor1,
-		Limit:       5,
+		Ordered:  true,
+		Cursor:   cursor1,
+		Limit:    5,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -667,10 +667,10 @@ func TestMemoryMapEngine_OrderedSnapshotPagination(t *testing.T) {
 	t.Logf("SUCCESS: Pagination maintains correct ordering across pages")
 }
 
-// TestMemoryMapEngine_OrderedSnapshotWithNegativeScores tests ordering with negative scores.
-func TestMemoryMapEngine_OrderedSnapshotWithNegativeScores(t *testing.T) {
+// TestMemoryMapBroker_OrderedStateWithNegativeScores tests ordering with negative scores.
+func TestMemoryMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_ordered_negative"
@@ -689,7 +689,7 @@ func TestMemoryMapEngine_OrderedSnapshotWithNegativeScores(t *testing.T) {
 
 	for _, tc := range testCases {
 		_, err := engine.Publish(ctx, channel, tc.key, MapPublishOptions{
-		Data:       []byte("data"),
+			Data:       []byte("data"),
 			Ordered:    true,
 			Score:      tc.score,
 			StreamSize: 100,
@@ -699,10 +699,10 @@ func TestMemoryMapEngine_OrderedSnapshotWithNegativeScores(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Read ordered snapshot
+	// Read ordered state
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       100,
+		Ordered:  true,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -717,11 +717,11 @@ func TestMemoryMapEngine_OrderedSnapshotWithNegativeScores(t *testing.T) {
 	t.Logf("SUCCESS: Negative scores handled correctly in descending ordering")
 }
 
-// TestMemoryMapEngine_OrderedSnapshotUpdatePreservesOrder tests that updating an entry's score
-// changes its position in the ordered snapshot.
-func TestMemoryMapEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
+// TestMemoryMapBroker_OrderedStateUpdatePreservesOrder tests that updating an entry's score
+// changes its position in the ordered state.
+func TestMemoryMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_ordered_update"
@@ -741,8 +741,8 @@ func TestMemoryMapEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
 
 	// Read initial order (descending: 50, 40, 30, 20, 10)
 	entries1, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       100,
+		Ordered:  true,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -762,8 +762,8 @@ func TestMemoryMapEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
 
 	// Read updated order
 	entries2, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       100,
+		Ordered:  true,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -778,10 +778,10 @@ func TestMemoryMapEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
 	t.Logf("SUCCESS: Updating score correctly reorders entries in descending order")
 }
 
-// TestMemoryMapEngine_Remove tests removing keys from snapshot.
-func TestMemoryMapEngine_Remove(t *testing.T) {
+// TestMemoryMapBroker_Remove tests removing keys from state.
+func TestMemoryMapBroker_Remove(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_remove"
@@ -803,9 +803,9 @@ func TestMemoryMapEngine_Remove(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Verify snapshot has 2 keys
+	// Verify state has 2 keys
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -813,15 +813,15 @@ func TestMemoryMapEngine_Remove(t *testing.T) {
 
 	// Remove key1
 	_, err = engine.Remove(ctx, channel, "key1", MapRemoveOptions{
-		
+
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	// Verify snapshot has 1 key
+	// Verify state has 1 key
 	entries, _, _, err = engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -840,10 +840,10 @@ func TestMemoryMapEngine_Remove(t *testing.T) {
 	require.Equal(t, "key1", pubs[2].Key)
 }
 
-// TestMemoryMapEngine_KeyModeIfNew tests KeyModeIfNew - only write if key doesn't exist.
-func TestMemoryMapEngine_KeyModeIfNew(t *testing.T) {
+// TestMemoryMapBroker_KeyModeIfNew tests KeyModeIfNew - only write if key doesn't exist.
+func TestMemoryMapBroker_KeyModeIfNew(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_keymode_if_new"
@@ -873,9 +873,9 @@ func TestMemoryMapEngine_KeyModeIfNew(t *testing.T) {
 	require.Equal(t, SuppressReasonKeyExists, res2.SuppressReason)
 	require.Equal(t, uint64(1), res2.Position.Offset, "Offset should not change")
 
-	// Verify snapshot still has original data
+	// Verify state still has original data
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -890,10 +890,10 @@ func TestMemoryMapEngine_KeyModeIfNew(t *testing.T) {
 	require.Len(t, pubs, 1)
 }
 
-// TestMemoryMapEngine_KeyModeIfExists tests KeyModeIfExists - only write if key exists.
-func TestMemoryMapEngine_KeyModeIfExists(t *testing.T) {
+// TestMemoryMapBroker_KeyModeIfExists tests KeyModeIfExists - only write if key exists.
+func TestMemoryMapBroker_KeyModeIfExists(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_keymode_if_exists"
@@ -932,9 +932,9 @@ func TestMemoryMapEngine_KeyModeIfExists(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res3.Suppressed, "Third publish should not be suppressed (key exists)")
 
-	// Verify snapshot has updated data
+	// Verify state has updated data
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -942,10 +942,10 @@ func TestMemoryMapEngine_KeyModeIfExists(t *testing.T) {
 	require.Equal(t, []byte("heartbeat2"), entries[0].Data)
 }
 
-// TestMemoryMapEngine_KeyModeReplace tests default KeyModeReplace behavior.
-func TestMemoryMapEngine_KeyModeReplace(t *testing.T) {
+// TestMemoryMapBroker_KeyModeReplace tests default KeyModeReplace behavior.
+func TestMemoryMapBroker_KeyModeReplace(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_keymode_replace"
@@ -972,9 +972,9 @@ func TestMemoryMapEngine_KeyModeReplace(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res2.Suppressed, "Replace should never be suppressed")
 
-	// Verify snapshot has updated data
+	// Verify state has updated data
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -986,25 +986,25 @@ func TestMemoryMapEngine_KeyModeReplace(t *testing.T) {
 // Pagination Continuity Tests
 //
 // These tests verify that key-based cursor pagination ensures no entries are
-// permanently lost when the snapshot changes during iteration.
-// The invariant is: snapshot_entries + stream_changes = complete_data
+// permanently lost when the state changes during iteration.
+// The invariant is: state_entries + stream_changes = complete_data
 // =============================================================================
 
 // simulateClientRecovery simulates what a client does:
-// 1. Read snapshot pages, capturing streamPos from first page
+// 1. Read state pages, capturing streamPos from first page
 // 2. Filter out entries with offset > streamPos (added during iteration)
 // 3. Read stream from streamPos to get all changes
 // 4. Apply stream changes (updates, removals) to get final state
 func simulateClientRecovery(
 	t *testing.T,
-	engine MapEngine,
+	engine MapBroker,
 	channel string,
 	ordered bool,
 	pageSize int,
 ) map[string][]byte {
 	ctx := context.Background()
 
-	// Step 1: Read all snapshot pages
+	// Step 1: Read all state pages
 	allEntries := make(map[string]*Publication)
 	var firstStreamPos StreamPosition
 	cursor := ""
@@ -1062,11 +1062,11 @@ func simulateClientRecovery(
 	return result
 }
 
-// TestMemoryMapEngine_UnorderedContinuity_EntryRemoved tests that removing
+// TestMemoryMapBroker_UnorderedContinuity_EntryRemoved tests that removing
 // an entry during unordered pagination doesn't cause data loss.
-func TestMemoryMapEngine_UnorderedContinuity_EntryRemoved(t *testing.T) {
+func TestMemoryMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 	ctx := context.Background()
 	channel := "test_unordered_continuity_remove"
 
@@ -1074,7 +1074,7 @@ func TestMemoryMapEngine_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-		Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -1093,7 +1093,7 @@ func TestMemoryMapEngine_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	// This would cause key_11 to shift into position 10, potentially being skipped
 	// with integer offset pagination
 	_, err = engine.Remove(ctx, channel, "key_10", MapRemoveOptions{
-		
+
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 	})
@@ -1106,16 +1106,16 @@ func TestMemoryMapEngine_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Combine snapshot entries, filter by streamPos1
-	snapshotKeys := make(map[string]bool)
+	// Combine state entries, filter by streamPos1
+	stateKeys := make(map[string]bool)
 	for _, pub := range pubs1 {
 		if pub.Offset <= streamPos1.Offset {
-			snapshotKeys[pub.Key] = true
+			stateKeys[pub.Key] = true
 		}
 	}
 	for _, pub := range pubs2 {
 		if pub.Offset <= streamPos1.Offset {
-			snapshotKeys[pub.Key] = true
+			stateKeys[pub.Key] = true
 		}
 	}
 	// Continue if more pages
@@ -1128,7 +1128,7 @@ func TestMemoryMapEngine_UnorderedContinuity_EntryRemoved(t *testing.T) {
 		require.NoError(t, err)
 		for _, pub := range pubs {
 			if pub.Offset <= streamPos1.Offset {
-				snapshotKeys[pub.Key] = true
+				stateKeys[pub.Key] = true
 			}
 		}
 		cursor = nextCursor
@@ -1146,23 +1146,23 @@ func TestMemoryMapEngine_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	// Apply stream changes
 	for _, pub := range streamPubs {
 		if pub.Removed {
-			delete(snapshotKeys, pub.Key)
+			delete(stateKeys, pub.Key)
 		}
 	}
 
 	// Verify: should have 19 keys (key_10 was removed)
-	require.Len(t, snapshotKeys, 19, "Should have 19 keys after removal")
-	require.NotContains(t, snapshotKeys, "key_10", "key_10 should be removed")
+	require.Len(t, stateKeys, 19, "Should have 19 keys after removal")
+	require.NotContains(t, stateKeys, "key_10", "key_10 should be removed")
 
 	// Verify key_11 wasn't skipped (this was the bug with integer offsets)
-	require.Contains(t, snapshotKeys, "key_11", "key_11 should not be skipped")
+	require.Contains(t, stateKeys, "key_11", "key_11 should not be skipped")
 }
 
-// TestMemoryMapEngine_UnorderedContinuity_EntryAdded tests that adding
+// TestMemoryMapBroker_UnorderedContinuity_EntryAdded tests that adding
 // an entry during unordered pagination doesn't cause issues.
-func TestMemoryMapEngine_UnorderedContinuity_EntryAdded(t *testing.T) {
+func TestMemoryMapBroker_UnorderedContinuity_EntryAdded(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 	ctx := context.Background()
 	channel := "test_unordered_continuity_add"
 
@@ -1170,7 +1170,7 @@ func TestMemoryMapEngine_UnorderedContinuity_EntryAdded(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-		Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -1202,11 +1202,11 @@ func TestMemoryMapEngine_UnorderedContinuity_EntryAdded(t *testing.T) {
 	require.Equal(t, []byte("data_05b"), result["key_05b"])
 }
 
-// TestMemoryMapEngine_OrderedContinuity_HigherScoreAdded tests that adding
+// TestMemoryMapBroker_OrderedContinuity_HigherScoreAdded tests that adding
 // an entry with higher score during ordered pagination doesn't cause data loss.
-func TestMemoryMapEngine_OrderedContinuity_HigherScoreAdded(t *testing.T) {
+func TestMemoryMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 	ctx := context.Background()
 	channel := "test_ordered_continuity_higher"
 
@@ -1214,7 +1214,7 @@ func TestMemoryMapEngine_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-		Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -1261,11 +1261,11 @@ func TestMemoryMapEngine_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	}
 }
 
-// TestMemoryMapEngine_OrderedContinuity_LowerScoreAdded tests that adding
+// TestMemoryMapBroker_OrderedContinuity_LowerScoreAdded tests that adding
 // an entry with lower score during ordered pagination works correctly.
-func TestMemoryMapEngine_OrderedContinuity_LowerScoreAdded(t *testing.T) {
+func TestMemoryMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 	ctx := context.Background()
 	channel := "test_ordered_continuity_lower"
 
@@ -1273,7 +1273,7 @@ func TestMemoryMapEngine_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-		Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -1316,11 +1316,11 @@ func TestMemoryMapEngine_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	require.Contains(t, result, "key_bottom", "key_bottom should be present")
 }
 
-// TestMemoryMapEngine_OrderedContinuity_ScoreChanged tests that changing
+// TestMemoryMapBroker_OrderedContinuity_ScoreChanged tests that changing
 // an entry's score during pagination (causing reordering) doesn't lose data.
-func TestMemoryMapEngine_OrderedContinuity_ScoreChanged(t *testing.T) {
+func TestMemoryMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 	ctx := context.Background()
 	channel := "test_ordered_continuity_score_change"
 
@@ -1328,7 +1328,7 @@ func TestMemoryMapEngine_OrderedContinuity_ScoreChanged(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-		Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -1366,15 +1366,15 @@ func TestMemoryMapEngine_OrderedContinuity_ScoreChanged(t *testing.T) {
 	require.NoError(t, err)
 
 	// Combine and filter
-	snapshotData := make(map[string][]byte)
+	stateData := make(map[string][]byte)
 	for _, pub := range pubs1 {
 		if pub.Offset <= streamPos1.Offset {
-			snapshotData[pub.Key] = pub.Data
+			stateData[pub.Key] = pub.Data
 		}
 	}
 	for _, pub := range pubs2 {
 		if pub.Offset <= streamPos1.Offset {
-			snapshotData[pub.Key] = pub.Data
+			stateData[pub.Key] = pub.Data
 		}
 	}
 
@@ -1389,22 +1389,22 @@ func TestMemoryMapEngine_OrderedContinuity_ScoreChanged(t *testing.T) {
 
 	for _, pub := range streamPubs {
 		if pub.Removed {
-			delete(snapshotData, pub.Key)
+			delete(stateData, pub.Key)
 		} else {
-			snapshotData[pub.Key] = pub.Data
+			stateData[pub.Key] = pub.Data
 		}
 	}
 
 	// Verify: should have 20 keys, key_05 should have updated data
-	require.Len(t, snapshotData, 20, "Should have 20 keys")
-	require.Equal(t, []byte("data_05_updated"), snapshotData["key_05"], "key_05 should have updated data from stream")
+	require.Len(t, stateData, 20, "Should have 20 keys")
+	require.Equal(t, []byte("data_05_updated"), stateData["key_05"], "key_05 should have updated data from stream")
 }
 
-// TestMemoryMapEngine_OrderedContinuity_EntryRemoved tests that removing
+// TestMemoryMapBroker_OrderedContinuity_EntryRemoved tests that removing
 // an entry during ordered pagination doesn't cause data loss.
-func TestMemoryMapEngine_OrderedContinuity_EntryRemoved(t *testing.T) {
+func TestMemoryMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 	ctx := context.Background()
 	channel := "test_ordered_continuity_remove"
 
@@ -1412,7 +1412,7 @@ func TestMemoryMapEngine_OrderedContinuity_EntryRemoved(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-		Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -1430,17 +1430,17 @@ func TestMemoryMapEngine_OrderedContinuity_EntryRemoved(t *testing.T) {
 
 	// CONCURRENT MODIFICATION: Remove key_10 (first entry of next page)
 	_, err = engine.Remove(ctx, channel, "key_10", MapRemoveOptions{
-		
+
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 	})
 	require.NoError(t, err)
 
 	// Read remaining pages
-	allSnapshotData := make(map[string][]byte)
+	allStateData := make(map[string][]byte)
 	for _, pub := range pubs1 {
 		if pub.Offset <= streamPos1.Offset {
-			allSnapshotData[pub.Key] = pub.Data
+			allStateData[pub.Key] = pub.Data
 		}
 	}
 
@@ -1454,7 +1454,7 @@ func TestMemoryMapEngine_OrderedContinuity_EntryRemoved(t *testing.T) {
 		require.NoError(t, err)
 		for _, pub := range pubs {
 			if pub.Offset <= streamPos1.Offset {
-				allSnapshotData[pub.Key] = pub.Data
+				allStateData[pub.Key] = pub.Data
 			}
 		}
 		cursor = nextCursor
@@ -1471,25 +1471,25 @@ func TestMemoryMapEngine_OrderedContinuity_EntryRemoved(t *testing.T) {
 
 	for _, pub := range streamPubs {
 		if pub.Removed {
-			delete(allSnapshotData, pub.Key)
+			delete(allStateData, pub.Key)
 		} else {
-			allSnapshotData[pub.Key] = pub.Data
+			allStateData[pub.Key] = pub.Data
 		}
 	}
 
 	// Verify: should have 19 keys (key_10 removed)
-	require.Len(t, allSnapshotData, 19, "Should have 19 keys after removal")
-	require.NotContains(t, allSnapshotData, "key_10", "key_10 should be removed")
+	require.Len(t, allStateData, 19, "Should have 19 keys after removal")
+	require.NotContains(t, allStateData, "key_10", "key_10 should be removed")
 
 	// Verify key_09 wasn't skipped (the key that shifted up when key_10 was removed)
-	require.Contains(t, allSnapshotData, "key_09", "key_09 should not be skipped")
+	require.Contains(t, allStateData, "key_09", "key_09 should not be skipped")
 }
 
-// TestMemoryMapEngine_OrderedContinuity_MultipleChanges tests recovery
+// TestMemoryMapBroker_OrderedContinuity_MultipleChanges tests recovery
 // with multiple concurrent changes during pagination.
-func TestMemoryMapEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
+func TestMemoryMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 	ctx := context.Background()
 	channel := "test_ordered_continuity_multi"
 
@@ -1497,7 +1497,7 @@ func TestMemoryMapEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 	for i := 1; i <= 30; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-		Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -1526,7 +1526,7 @@ func TestMemoryMapEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 
 	// 2. Remove an entry from middle
 	_, err = engine.Remove(ctx, channel, "key_15", MapRemoveOptions{
-		
+
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 	})
@@ -1587,10 +1587,10 @@ func TestMemoryMapEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 	require.Equal(t, []byte("data_05_moved"), result["key_05"], "key_05 should have updated data")
 }
 
-// TestMemoryMapEngine_CursorFormat tests that cursor format is correct.
-func TestMemoryMapEngine_CursorFormat(t *testing.T) {
+// TestMemoryMapBroker_CursorFormat tests that cursor format is correct.
+func TestMemoryMapBroker_CursorFormat(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestMemoryMapEngine(t, node)
+	engine := newTestMemoryMapBroker(t, node)
 	ctx := context.Background()
 
 	t.Run("unordered cursor is key-based", func(t *testing.T) {
@@ -1600,7 +1600,7 @@ func TestMemoryMapEngine_CursorFormat(t *testing.T) {
 		for i := 0; i < 20; i++ {
 			key := fmt.Sprintf("key_%02d", i)
 			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-		Data:       []byte("data"),
+				Data:       []byte("data"),
 				StreamSize: 100,
 				StreamTTL:  300 * time.Second,
 			})
@@ -1640,7 +1640,7 @@ func TestMemoryMapEngine_CursorFormat(t *testing.T) {
 		for i := 1; i <= 20; i++ {
 			key := fmt.Sprintf("key_%02d", i)
 			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-		Data:       []byte("data"),
+				Data:       []byte("data"),
 				Ordered:    true,
 				Score:      int64(i * 100),
 				StreamSize: 100,

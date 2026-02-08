@@ -273,7 +273,7 @@ Possible causes:
 
 ### PostgreSQL Engine Options
 
-When using `PostgresMapEngineConfig`:
+When using `PostgresMapBrokerConfig`:
 
 | Option               | Description                          | Default    |
 |----------------------|--------------------------------------|------------|

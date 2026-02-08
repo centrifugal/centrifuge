@@ -8,19 +8,19 @@ import (
 	"time"
 )
 
-func setupMemoryMapEngineBench(b *testing.B) (*MemoryMapEngine, func()) {
+func setupMemoryMapBrokerBench(b *testing.B) (*MemoryMapBroker, func()) {
 	b.Helper()
 	node, _ := New(Config{})
-	engine, _ := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	engine, _ := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	_ = engine.RegisterBrokerEventHandler(nil)
 	return engine, func() {
 		_ = node.Shutdown(context.Background())
 	}
 }
 
-// BenchmarkMemoryMapEngine_PublishStreamOnly benchmarks publishing to stream without snapshots.
-func BenchmarkMemoryMapEngine_PublishStreamOnly(b *testing.B) {
-	engine, cleanup := setupMemoryMapEngineBench(b)
+// BenchmarkMemoryMapBroker_PublishStreamOnly benchmarks publishing to stream without state.
+func BenchmarkMemoryMapBroker_PublishStreamOnly(b *testing.B) {
+	engine, cleanup := setupMemoryMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -35,7 +35,7 @@ func BenchmarkMemoryMapEngine_PublishStreamOnly(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			data := []byte(fmt.Sprintf("message_%d", i))
 			_, err := engine.Publish(ctx, channel, "", MapPublishOptions{
-			Data: data,
+				Data:       data,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 			})
@@ -46,9 +46,9 @@ func BenchmarkMemoryMapEngine_PublishStreamOnly(b *testing.B) {
 	})
 }
 
-// BenchmarkMemoryMapEngine_PublishMapStateSimple benchmarks simple keyed state.
-func BenchmarkMemoryMapEngine_PublishMapStateSimple(b *testing.B) {
-	engine, cleanup := setupMemoryMapEngineBench(b)
+// BenchmarkMemoryMapBroker_PublishMapStateSimple benchmarks simple keyed state.
+func BenchmarkMemoryMapBroker_PublishMapStateSimple(b *testing.B) {
+	engine, cleanup := setupMemoryMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -64,7 +64,7 @@ func BenchmarkMemoryMapEngine_PublishMapStateSimple(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+				Data:       data,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 				KeyTTL:     300 * time.Second,
@@ -76,9 +76,9 @@ func BenchmarkMemoryMapEngine_PublishMapStateSimple(b *testing.B) {
 	})
 }
 
-// BenchmarkMemoryMapEngine_PublishMapStateOrdered benchmarks ordered keyed state.
-func BenchmarkMemoryMapEngine_PublishMapStateOrdered(b *testing.B) {
-	engine, cleanup := setupMemoryMapEngineBench(b)
+// BenchmarkMemoryMapBroker_PublishMapStateOrdered benchmarks ordered keyed state.
+func BenchmarkMemoryMapBroker_PublishMapStateOrdered(b *testing.B) {
+	engine, cleanup := setupMemoryMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -94,7 +94,7 @@ func BenchmarkMemoryMapEngine_PublishMapStateOrdered(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+				Data:       data,
 				Ordered:    true,
 				Score:      i,
 				StreamSize: 10000,
@@ -108,9 +108,9 @@ func BenchmarkMemoryMapEngine_PublishMapStateOrdered(b *testing.B) {
 	})
 }
 
-// BenchmarkMemoryMapEngine_PublishCombined benchmarks publishing with stream + snapshot.
-func BenchmarkMemoryMapEngine_PublishCombined(b *testing.B) {
-	engine, cleanup := setupMemoryMapEngineBench(b)
+// BenchmarkMemoryMapBroker_PublishCombined benchmarks publishing with stream + state.
+func BenchmarkMemoryMapBroker_PublishCombined(b *testing.B) {
+	engine, cleanup := setupMemoryMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -126,7 +126,7 @@ func BenchmarkMemoryMapEngine_PublishCombined(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+				Data:       data,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 				KeyTTL:     300 * time.Second,
@@ -138,9 +138,9 @@ func BenchmarkMemoryMapEngine_PublishCombined(b *testing.B) {
 	})
 }
 
-// BenchmarkMemoryMapEngine_ReadStream benchmarks reading from stream.
-func BenchmarkMemoryMapEngine_ReadStream(b *testing.B) {
-	engine, cleanup := setupMemoryMapEngineBench(b)
+// BenchmarkMemoryMapBroker_ReadStream benchmarks reading from stream.
+func BenchmarkMemoryMapBroker_ReadStream(b *testing.B) {
+	engine, cleanup := setupMemoryMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -151,7 +151,7 @@ func BenchmarkMemoryMapEngine_ReadStream(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		data := []byte(fmt.Sprintf("message_%d", i))
 		res, err := engine.Publish(ctx, channel, "", MapPublishOptions{
-			Data: data,
+			Data:       data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 		})
@@ -181,20 +181,20 @@ func BenchmarkMemoryMapEngine_ReadStream(b *testing.B) {
 	})
 }
 
-// BenchmarkMemoryMapEngine_ReadStateFull benchmarks reading full unordered snapshot.
-func BenchmarkMemoryMapEngine_ReadStateFull(b *testing.B) {
-	engine, cleanup := setupMemoryMapEngineBench(b)
+// BenchmarkMemoryMapBroker_ReadStateFull benchmarks reading full unordered state.
+func BenchmarkMemoryMapBroker_ReadStateFull(b *testing.B) {
+	engine, cleanup := setupMemoryMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := "bench_read_snapshot"
+	channel := "bench_read_state"
 
-	// Prepopulate snapshot with 1000 entries
+	// Prepopulate state with 1000 entries
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+			Data:       data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -210,7 +210,7 @@ func BenchmarkMemoryMapEngine_ReadStateFull(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-				Limit:       0, // Read all
+				Limit:    0, // Read all
 				StateTTL: 300 * time.Second,
 			})
 			if err != nil {
@@ -220,20 +220,20 @@ func BenchmarkMemoryMapEngine_ReadStateFull(b *testing.B) {
 	})
 }
 
-// BenchmarkMemoryMapEngine_ReadStatePaginated benchmarks paginated snapshot reads.
-func BenchmarkMemoryMapEngine_ReadStatePaginated(b *testing.B) {
-	engine, cleanup := setupMemoryMapEngineBench(b)
+// BenchmarkMemoryMapBroker_ReadStatePaginated benchmarks paginated state reads.
+func BenchmarkMemoryMapBroker_ReadStatePaginated(b *testing.B) {
+	engine, cleanup := setupMemoryMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := "bench_read_snapshot_paginated"
+	channel := "bench_read_state_paginated"
 
-	// Prepopulate snapshot with 1000 entries
+	// Prepopulate state with 1000 entries
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+			Data:       data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -249,8 +249,8 @@ func BenchmarkMemoryMapEngine_ReadStatePaginated(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-				Cursor:      "0",
-				Limit:       100, // Read 100 at a time
+				Cursor:   "0",
+				Limit:    100, // Read 100 at a time
 				StateTTL: 300 * time.Second,
 			})
 			if err != nil {
@@ -260,20 +260,20 @@ func BenchmarkMemoryMapEngine_ReadStatePaginated(b *testing.B) {
 	})
 }
 
-// BenchmarkMemoryMapEngine_ReadStateOrdered benchmarks reading ordered snapshot.
-func BenchmarkMemoryMapEngine_ReadStateOrdered(b *testing.B) {
-	engine, cleanup := setupMemoryMapEngineBench(b)
+// BenchmarkMemoryMapBroker_ReadStateOrdered benchmarks reading ordered state.
+func BenchmarkMemoryMapBroker_ReadStateOrdered(b *testing.B) {
+	engine, cleanup := setupMemoryMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := "bench_read_snapshot_ordered"
+	channel := "bench_read_state_ordered"
 
-	// Prepopulate ordered snapshot with 1000 entries
+	// Prepopulate ordered state with 1000 entries
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+			Data:       data,
 			Ordered:    true,
 			Score:      int64(i),
 			StreamSize: 10000,
@@ -291,8 +291,8 @@ func BenchmarkMemoryMapEngine_ReadStateOrdered(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-				Ordered:     true,
-				Limit:       100,
+				Ordered:  true,
+				Limit:    100,
 				StateTTL: 300 * time.Second,
 			})
 			if err != nil {
@@ -302,20 +302,20 @@ func BenchmarkMemoryMapEngine_ReadStateOrdered(b *testing.B) {
 	})
 }
 
-// BenchmarkMemoryMapEngine_Stats benchmarks reading snapshot statistics.
-func BenchmarkMemoryMapEngine_Stats(b *testing.B) {
-	engine, cleanup := setupMemoryMapEngineBench(b)
+// BenchmarkMemoryMapBroker_Stats benchmarks reading state statistics.
+func BenchmarkMemoryMapBroker_Stats(b *testing.B) {
+	engine, cleanup := setupMemoryMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
 	channel := "bench_stats"
 
-	// Prepopulate snapshot with 1000 entries
+	// Prepopulate state with 1000 entries
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+			Data:       data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -338,9 +338,9 @@ func BenchmarkMemoryMapEngine_Stats(b *testing.B) {
 	})
 }
 
-// BenchmarkMemoryMapEngine_Remove benchmarks removing keys.
-func BenchmarkMemoryMapEngine_Remove(b *testing.B) {
-	engine, cleanup := setupMemoryMapEngineBench(b)
+// BenchmarkMemoryMapBroker_Remove benchmarks removing keys.
+func BenchmarkMemoryMapBroker_Remove(b *testing.B) {
+	engine, cleanup := setupMemoryMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -351,7 +351,7 @@ func BenchmarkMemoryMapEngine_Remove(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+			Data:       data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -380,9 +380,9 @@ func BenchmarkMemoryMapEngine_Remove(b *testing.B) {
 	})
 }
 
-// BenchmarkMemoryMapEngine_IdempotentPublish benchmarks idempotent publishing.
-func BenchmarkMemoryMapEngine_IdempotentPublish(b *testing.B) {
-	engine, cleanup := setupMemoryMapEngineBench(b)
+// BenchmarkMemoryMapBroker_IdempotentPublish benchmarks idempotent publishing.
+func BenchmarkMemoryMapBroker_IdempotentPublish(b *testing.B) {
+	engine, cleanup := setupMemoryMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -398,7 +398,7 @@ func BenchmarkMemoryMapEngine_IdempotentPublish(b *testing.B) {
 			data := []byte(fmt.Sprintf("message_%d", i))
 			idempotencyKey := fmt.Sprintf("key_%d", i)
 			_, err := engine.Publish(ctx, channel, "", MapPublishOptions{
-			Data: data,
+				Data:                data,
 				IdempotencyKey:      idempotencyKey,
 				IdempotentResultTTL: 60 * time.Second,
 				StreamSize:          10000,
@@ -411,9 +411,9 @@ func BenchmarkMemoryMapEngine_IdempotentPublish(b *testing.B) {
 	})
 }
 
-// BenchmarkMemoryMapEngine_VersionedPublish benchmarks version-based publishing.
-func BenchmarkMemoryMapEngine_VersionedPublish(b *testing.B) {
-	engine, cleanup := setupMemoryMapEngineBench(b)
+// BenchmarkMemoryMapBroker_VersionedPublish benchmarks version-based publishing.
+func BenchmarkMemoryMapBroker_VersionedPublish(b *testing.B) {
+	engine, cleanup := setupMemoryMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -429,7 +429,7 @@ func BenchmarkMemoryMapEngine_VersionedPublish(b *testing.B) {
 			key := fmt.Sprintf("key%d", i%100) // Reuse 100 keys
 			data := []byte(fmt.Sprintf("data_%d", i))
 			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+				Data:       data,
 				Version:    uint64(i),
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
@@ -442,9 +442,9 @@ func BenchmarkMemoryMapEngine_VersionedPublish(b *testing.B) {
 	})
 }
 
-// BenchmarkMemoryMapEngine_PublishWithDelta benchmarks publishing with delta compression.
-func BenchmarkMemoryMapEngine_PublishWithDelta(b *testing.B) {
-	engine, cleanup := setupMemoryMapEngineBench(b)
+// BenchmarkMemoryMapBroker_PublishWithDelta benchmarks publishing with delta compression.
+func BenchmarkMemoryMapBroker_PublishWithDelta(b *testing.B) {
+	engine, cleanup := setupMemoryMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -455,7 +455,7 @@ func BenchmarkMemoryMapEngine_PublishWithDelta(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("initial_data%d", i))
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+			Data:       data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -475,7 +475,7 @@ func BenchmarkMemoryMapEngine_PublishWithDelta(b *testing.B) {
 			key := fmt.Sprintf("key%d", i%100) // Reuse 100 keys
 			data := []byte(fmt.Sprintf("updated_data_%d", i))
 			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+				Data:       data,
 				UseDelta:   true,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,

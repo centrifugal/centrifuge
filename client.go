@@ -104,7 +104,7 @@ func (c *Client) OnSubscribe(h SubscribeHandler) {
 // OnPresenceSubscribe allows setting PresenceSubscribeHandler.
 // PresenceSubscribeHandler called when client wants to subscribe to presence
 // on a channel (watch who is online). This is a separate permission scope from
-// data subscriptions (OnSubscribe). Presence channels use MapEngine internally.
+// data subscriptions (OnSubscribe). Presence channels use MapBroker internally.
 func (c *Client) OnPresenceSubscribe(h PresenceSubscribeHandler) {
 	c.eventHub.presenceSubscribeHandler = h
 }
@@ -154,11 +154,11 @@ const (
 	flagServerSide
 	flagClientSideRefresh
 	flagDeltaAllowed
-	flagMap                   // Channel uses map subscription (presence via MapEngine)
-	flagMapPresence           // Presence subscription (:clients or :users suffix)
-	flagMapClientPresence // Emit to {channel}:clients, key=clientId, full ClientInfo
-	flagMapUserPresence   // Emit to {channel}:users, key=userId, no info
-	flagCleanupOnUnsubscribe    // Clean up keys by client_id when subscription ends
+	flagMap                  // Channel uses map subscription (presence via MapBroker)
+	flagMapPresence          // Presence subscription (:clients or :users suffix)
+	flagMapClientPresence    // Emit to {channel}:clients, key=clientId, full ClientInfo
+	flagMapUserPresence      // Emit to {channel}:users, key=userId, no info
+	flagCleanupOnUnsubscribe // Clean up keys by client_id when subscription ends
 )
 
 // ChannelContext contains extra context for channel connection subscribed to.

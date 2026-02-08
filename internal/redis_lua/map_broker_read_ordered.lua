@@ -1,34 +1,34 @@
--- Read ordered keyed snapshot with key-based cursor pagination for continuity.
+-- Read ordered keyed state with key-based cursor pagination for continuity.
 -- Uses (score, key) cursor instead of integer offset to ensure no entries are
--- skipped when the snapshot changes during pagination.
+-- skipped when the state changes during pagination.
 --
 -- Ordering: (score DESC, key DESC) - matches Redis native ZREVRANGE ordering.
 -- This allows direct use of Redis commands without Lua filtering.
 --
--- KEYS[1] = snapshot hash key
--- KEYS[2] = snapshot order zset key
--- KEYS[3] = snapshot expire zset key
+-- KEYS[1] = state hash key
+-- KEYS[2] = state order zset key
+-- KEYS[3] = state expire zset key
 -- KEYS[4] = meta key
--- KEYS[5] = snapshot meta key
+-- KEYS[5] = state meta key
 -- ARGV[1] = limit (0 = no limit, return all)
 -- ARGV[2] = cursor_score (empty string for first page, score part of cursor)
 -- ARGV[3] = cursor_key (empty string for first page, key part of cursor)
 -- ARGV[4] = now (current timestamp for expiration cleanup)
 -- ARGV[5] = meta_ttl (seconds, 0 to disable)
--- ARGV[6] = snapshot_ttl (seconds, 0 to disable - refreshes TTL on read)
+-- ARGV[6] = state_ttl (seconds, 0 to disable - refreshes TTL on read)
 
 local hash_key = KEYS[1]
 local order_key = KEYS[2]
 local expire_key = KEYS[3]
 local meta_key = KEYS[4]
-local snapshot_meta_key = KEYS[5]
+local state_meta_key = KEYS[5]
 
 local limit = tonumber(ARGV[1])
 local cursor_score_str = ARGV[2]
 local cursor_key = ARGV[3]
 local now_str = ARGV[4]
 local meta_ttl = tonumber(ARGV[5])
-local snapshot_ttl = tonumber(ARGV[6])
+local state_ttl = tonumber(ARGV[6])
 
 -- Update meta epoch + TTL and get current stream offset
 local epoch = redis.call("hget", meta_key, "e")
@@ -46,26 +46,26 @@ if meta_ttl > 0 then
     redis.call("expire", meta_key, meta_ttl)
 end
 
--- Validate snapshot epoch against stream epoch
-if snapshot_meta_key ~= '' then
-    local snapshot_meta_exists = redis.call("exists", snapshot_meta_key)
-    if snapshot_meta_exists == 0 then
+-- Validate state epoch against stream epoch
+if state_meta_key ~= '' then
+    local state_meta_exists = redis.call("exists", state_meta_key)
+    if state_meta_exists == 0 then
         return {stream_offset, epoch, {}, {}, "", ""}
     end
 
-    local snapshot_epoch = redis.call("hget", snapshot_meta_key, "epoch")
-    if snapshot_epoch ~= epoch then
+    local state_epoch = redis.call("hget", state_meta_key, "epoch")
+    if state_epoch ~= epoch then
         return {stream_offset, epoch, {}, {}, "", ""}
     end
 end
 
--- Refresh snapshot TTL on read (LRU behavior)
-if snapshot_ttl > 0 then
-    redis.call("expire", hash_key, snapshot_ttl)
-    redis.call("expire", order_key, snapshot_ttl)
-    redis.call("expire", expire_key, snapshot_ttl)
-    if snapshot_meta_key ~= '' then
-        redis.call("expire", snapshot_meta_key, snapshot_ttl)
+-- Refresh state TTL on read (LRU behavior)
+if state_ttl > 0 then
+    redis.call("expire", hash_key, state_ttl)
+    redis.call("expire", order_key, state_ttl)
+    redis.call("expire", expire_key, state_ttl)
+    if state_meta_key ~= '' then
+        redis.call("expire", state_meta_key, state_ttl)
     end
 end
 

@@ -127,12 +127,12 @@ func main() {
 	}
 
 	// Set up map engine (memory, Redis, or PostgreSQL based on flags).
-	// When -cache flag is set, wraps Redis/Postgres engines with CachedMapEngine.
-	mapEngine, registerHandler, err := setupMapEngine(node, *redisAddr, *postgresAddr, *enableCache)
+	// When -cache flag is set, wraps Redis/Postgres engines with CachedMapBroker.
+	mapBroker, registerHandler, err := setupMapBroker(node, *redisAddr, *postgresAddr, *enableCache)
 	if err != nil {
 		log.Fatal(err)
 	}
-	node.SetMapEngine(mapEngine)
+	node.SetMapBroker(mapBroker)
 
 	// Set up PostgreSQL pool for native leaderboard operations.
 	if *postgresAddr != "" {
@@ -917,17 +917,17 @@ func handleInventoryRestock(_ *centrifuge.Client, node *centrifuge.Node, data []
 	cb(centrifuge.RPCReply{}, &centrifuge.Error{Code: 4002, Message: "too many conflicts"})
 }
 
-// setupMapEngine creates either a memory, Redis, or PostgreSQL map engine.
-// When enableCache is true, wraps Redis/Postgres engines with CachedMapEngine
+// setupMapBroker creates either a memory, Redis, or PostgreSQL map engine.
+// When enableCache is true, wraps Redis/Postgres engines with CachedMapBroker
 // for read-your-own-writes consistency and low-latency reads.
 // Returns the engine and a function to register the broker event handler.
-func setupMapEngine(node *centrifuge.Node, redisAddr, postgresAddr string, enableCache bool) (centrifuge.MapEngine, func(centrifuge.BrokerEventHandler) error, error) {
-	var backend centrifuge.MapEngine
+func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enableCache bool) (centrifuge.MapBroker, func(centrifuge.BrokerEventHandler) error, error) {
+	var backend centrifuge.MapBroker
 	var registerHandler func(centrifuge.BrokerEventHandler) error
 
 	// PostgreSQL takes priority if specified
 	if postgresAddr != "" {
-		pgConfig := centrifuge.PostgresMapEngineConfig{
+		pgConfig := centrifuge.PostgresMapBrokerConfig{
 			ConnString: postgresAddr,
 		}
 
@@ -954,7 +954,7 @@ func setupMapEngine(node *centrifuge.Node, redisAddr, postgresAddr string, enabl
 			log.Printf("Using PostgreSQL map engine (single-node, local delivery only)")
 		}
 
-		engine, err := centrifuge.NewPostgresMapEngine(node, pgConfig)
+		engine, err := centrifuge.NewPostgresMapBroker(node, pgConfig)
 		if err != nil {
 			return nil, nil, fmt.Errorf("error creating PostgreSQL map engine: %w", err)
 		}
@@ -971,10 +971,9 @@ func setupMapEngine(node *centrifuge.Node, redisAddr, postgresAddr string, enabl
 			return nil, nil, fmt.Errorf("error creating Redis shard: %w", err)
 		}
 
-		engine, err := centrifuge.NewRedisMapEngine(node, centrifuge.RedisMapEngineConfig{
-			Shards:          []*centrifuge.RedisShard{redisShard},
-			Prefix:          "map_demo",
-			CleanupInterval: 5 * time.Second, // Enable cleanup worker to remove expired presence entries.
+		engine, err := centrifuge.NewRedisMapBroker(node, centrifuge.RedisMapBrokerConfig{
+			Shards: []*centrifuge.RedisShard{redisShard},
+			Prefix: "map_demo",
 		})
 		if err != nil {
 			return nil, nil, err
@@ -984,7 +983,7 @@ func setupMapEngine(node *centrifuge.Node, redisAddr, postgresAddr string, enabl
 	} else {
 		// Default to memory - cache not applicable (already in-memory)
 		log.Println("Using in-memory map engine")
-		engine, err := centrifuge.NewMemoryMapEngine(node, centrifuge.MemoryMapEngineConfig{})
+		engine, err := centrifuge.NewMemoryMapBroker(node, centrifuge.MemoryMapBrokerConfig{})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -994,7 +993,7 @@ func setupMapEngine(node *centrifuge.Node, redisAddr, postgresAddr string, enabl
 	// Wrap with cache layer if enabled (only for Redis/Postgres)
 	if enableCache {
 		log.Println("Enabling memory cache layer")
-		cached, err := centrifuge.NewCachedMapEngine(node, backend, centrifuge.CachedMapEngineConfig{
+		cached, err := centrifuge.NewCachedMapBroker(node, backend, centrifuge.CachedMapBrokerConfig{
 			Cache: centrifuge.MapCacheConfig{
 				MaxChannels:        10000,
 				ChannelIdleTimeout: 5 * time.Minute,

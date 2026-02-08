@@ -17,7 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// PostgresMapEngine is MapEngine implementation using PostgreSQL for persistent
+// PostgresMapBroker is MapBroker implementation using PostgreSQL for persistent
 // map subscriptions. It provides durability, CAS operations, and transactional
 // publishing from SQL.
 //
@@ -29,9 +29,9 @@ import (
 //
 // Use cases: collaborative boards, document editing, inventory/booking systems,
 // game lobbies with persistent state.
-type PostgresMapEngine struct {
+type PostgresMapBroker struct {
 	node         *Node
-	conf         PostgresMapEngineConfig
+	conf         PostgresMapBrokerConfig
 	pool         *pgxpool.Pool // Primary pool for writes
 	readPool     *pgxpool.Pool // Replica pool for reads (optional)
 	eventHandler BrokerEventHandler
@@ -52,7 +52,7 @@ type PostgresMapEngine struct {
 	outboxClaimedShardMu sync.RWMutex
 }
 
-var _ MapEngine = (*PostgresMapEngine)(nil)
+var _ MapBroker = (*PostgresMapBroker)(nil)
 
 // OutboxConfig configures the outbox-based delivery mode (default).
 // Outbox mode polls the cf_map_outbox table for new publications.
@@ -128,8 +128,8 @@ type WALConfig struct {
 	HeartbeatInterval time.Duration
 }
 
-// PostgresMapEngineConfig configures the PostgreSQL map engine.
-type PostgresMapEngineConfig struct {
+// PostgresMapBrokerConfig configures the PostgreSQL map engine.
+type PostgresMapBrokerConfig struct {
 	// ConnString is the primary PostgreSQL connection string for writes.
 	// Example: "postgres://user:pass@localhost:5432/dbname?sslmode=disable"
 	ConnString string
@@ -164,7 +164,7 @@ type PostgresMapEngineConfig struct {
 	WAL WALConfig
 }
 
-func (c *PostgresMapEngineConfig) setDefaults() {
+func (c *PostgresMapBrokerConfig) setDefaults() {
 	if c.PoolSize <= 0 {
 		c.PoolSize = 32
 	}
@@ -211,8 +211,8 @@ func (c *PostgresMapEngineConfig) setDefaults() {
 	}
 }
 
-// NewPostgresMapEngine creates a new PostgreSQL map engine.
-func NewPostgresMapEngine(n *Node, conf PostgresMapEngineConfig) (*PostgresMapEngine, error) {
+// NewPostgresMapBroker creates a new PostgreSQL map engine.
+func NewPostgresMapBroker(n *Node, conf PostgresMapBrokerConfig) (*PostgresMapBroker, error) {
 	conf.setDefaults()
 
 	if conf.ConnString == "" {
@@ -248,7 +248,7 @@ func NewPostgresMapEngine(n *Node, conf PostgresMapEngineConfig) (*PostgresMapEn
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	e := &PostgresMapEngine{
+	e := &PostgresMapBroker{
 		node:                n,
 		conf:                conf,
 		pool:                pool,
@@ -263,12 +263,12 @@ func NewPostgresMapEngine(n *Node, conf PostgresMapEngineConfig) (*PostgresMapEn
 }
 
 // getReadPool returns the read pool (only primary - replica can't be used from atomicity perspective).
-func (e *PostgresMapEngine) getReadPool() *pgxpool.Pool {
+func (e *PostgresMapBroker) getReadPool() *pgxpool.Pool {
 	return e.pool
 }
 
 // pgGenerateEpoch creates a random 4-character epoch string.
-// This matches the format used by MemoryMapEngine's memstream.
+// This matches the format used by MemoryMapBroker's memstream.
 func pgGenerateEpoch() string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	b := make([]byte, 4)
@@ -281,9 +281,9 @@ func pgGenerateEpoch() string {
 }
 
 // ensureChannelMeta creates the channel meta if it doesn't exist and returns the stream position.
-// This ensures that empty channels have an epoch, matching MemoryMapEngine behavior.
+// This ensures that empty channels have an epoch, matching MemoryMapBroker behavior.
 // Uses a single query with CTE for efficiency.
-func (e *PostgresMapEngine) ensureChannelMeta(ctx context.Context, ch string) (StreamPosition, error) {
+func (e *PostgresMapBroker) ensureChannelMeta(ctx context.Context, ch string) (StreamPosition, error) {
 	epoch := pgGenerateEpoch()
 
 	var topOffset int64
@@ -308,7 +308,7 @@ func (e *PostgresMapEngine) ensureChannelMeta(ctx context.Context, ch string) (S
 }
 
 // RegisterBrokerEventHandler registers the event handler and starts background workers.
-func (e *PostgresMapEngine) RegisterBrokerEventHandler(h BrokerEventHandler) error {
+func (e *PostgresMapBroker) RegisterBrokerEventHandler(h BrokerEventHandler) error {
 	e.eventHandler = h
 
 	if e.running.Swap(true) {
@@ -352,12 +352,12 @@ func (e *PostgresMapEngine) RegisterBrokerEventHandler(h BrokerEventHandler) err
 }
 
 // RegisterEventHandler is an alias for RegisterBrokerEventHandler.
-func (e *PostgresMapEngine) RegisterEventHandler(h BrokerEventHandler) error {
+func (e *PostgresMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 	return e.RegisterBrokerEventHandler(h)
 }
 
 // Close shuts down the engine.
-func (e *PostgresMapEngine) Close(_ context.Context) error {
+func (e *PostgresMapBroker) Close(_ context.Context) error {
 	e.closeOnce.Do(func() {
 		e.cancelFunc() // Cancel context to unblock WaitForNotification
 		close(e.closeCh)
@@ -371,7 +371,7 @@ func (e *PostgresMapEngine) Close(_ context.Context) error {
 
 // Subscribe subscribes to broker PUB/SUB when broker is configured.
 // For single-node (no broker), this is a no-op since WAL reader delivers locally.
-func (e *PostgresMapEngine) Subscribe(ch string) error {
+func (e *PostgresMapBroker) Subscribe(ch string) error {
 	if e.conf.Broker != nil {
 		return e.conf.Broker.Subscribe(ch)
 	}
@@ -379,7 +379,7 @@ func (e *PostgresMapEngine) Subscribe(ch string) error {
 }
 
 // Unsubscribe unsubscribes from broker PUB/SUB when broker is configured.
-func (e *PostgresMapEngine) Unsubscribe(ch string) error {
+func (e *PostgresMapBroker) Unsubscribe(ch string) error {
 	if e.conf.Broker != nil {
 		return e.conf.Broker.Unsubscribe(ch)
 	}
@@ -408,7 +408,7 @@ func parseSuppressReason(reason *string) SuppressReason {
 }
 
 // Publish publishes data to a map channel using the cf_map_publish SQL function.
-func (e *PostgresMapEngine) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
+func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
 	// Apply channel options defaults from node config.
 	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = applyChannelOptionsDefaults(
 		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL,
@@ -492,7 +492,7 @@ func (e *PostgresMapEngine) Publish(ctx context.Context, ch string, key string, 
 		}
 	}
 
-	// Prepare key version (stored in snapshot)
+	// Prepare key version (stored in state)
 	var keyVersion *int64
 	var keyVersionEpoch *string
 	if opts.Version > 0 {
@@ -583,7 +583,7 @@ func (e *PostgresMapEngine) Publish(ctx context.Context, ch string, key string, 
 }
 
 // Remove removes a key from keyed state using the cf_map_remove SQL function.
-func (e *PostgresMapEngine) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
+func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
 	// Apply channel options defaults from node config.
 	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, _ = applyChannelOptionsDefaults(
 		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, 0,
@@ -665,11 +665,11 @@ func (e *PostgresMapEngine) Remove(ctx context.Context, ch string, key string, o
 	return MapPublishResult{Position: newPos}, nil
 }
 
-// ReadState retrieves keyed snapshot with revisions.
-func (e *PostgresMapEngine) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+// ReadState retrieves keyed state with revisions.
+func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
 	pool := e.getReadPool()
 
-	// Use REPEATABLE READ transaction to ensure atomic read of meta + snapshot.
+	// Use REPEATABLE READ transaction to ensure atomic read of meta + state.
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return nil, StreamPosition{}, "", err
@@ -689,7 +689,7 @@ func (e *PostgresMapEngine) ReadState(ctx context.Context, ch string, opts MapRe
 			return nil, StreamPosition{}, "", ErrorUnrecoverablePosition
 		}
 		// Rollback read-only tx, then create channel meta with epoch.
-		// This matches MemoryMapEngine behavior where empty channels have an epoch.
+		// This matches MemoryMapBroker behavior where empty channels have an epoch.
 		_ = tx.Rollback(ctx)
 		pos, err := e.ensureChannelMeta(ctx, ch)
 		if err != nil {
@@ -744,7 +744,7 @@ func (e *PostgresMapEngine) ReadState(ctx context.Context, ch string, opts MapRe
 		return []*Publication{&p}, streamPos, "", nil
 	}
 
-	// Paginated snapshot read.
+	// Paginated state read.
 	var query string
 	if opts.Ordered {
 		query = `
@@ -823,7 +823,7 @@ func (e *PostgresMapEngine) ReadState(ctx context.Context, ch string, opts MapRe
 }
 
 // ReadStream retrieves publications from stream.
-func (e *PostgresMapEngine) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
 	pool := e.getReadPool()
 
 	// Use REPEATABLE READ transaction to ensure atomic read of meta + stream.
@@ -841,7 +841,7 @@ func (e *PostgresMapEngine) ReadStream(ctx context.Context, ch string, opts MapR
 	`, ch).Scan(&topOffset, &epoch)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Channel doesn't exist yet - create it with an epoch.
-		// This matches MemoryMapEngine behavior where empty channels have an epoch.
+		// This matches MemoryMapBroker behavior where empty channels have an epoch.
 		_ = tx.Rollback(ctx)
 		pos, err := e.ensureChannelMeta(ctx, ch)
 		if err != nil {
@@ -933,8 +933,8 @@ func (e *PostgresMapEngine) ReadStream(ctx context.Context, ch string, opts MapR
 	return pubs, streamPos, nil
 }
 
-// Stats returns snapshot statistics.
-func (e *PostgresMapEngine) Stats(ctx context.Context, ch string) (MapStats, error) {
+// Stats returns state statistics.
+func (e *PostgresMapBroker) Stats(ctx context.Context, ch string) (MapStats, error) {
 	pool := e.getReadPool()
 
 	var count int
@@ -950,7 +950,7 @@ func (e *PostgresMapEngine) Stats(ctx context.Context, ch string) (MapStats, err
 }
 
 // Clear deletes all data for a channel.
-func (e *PostgresMapEngine) Clear(ctx context.Context, ch string, _ MapClearOptions) error {
+func (e *PostgresMapBroker) Clear(ctx context.Context, ch string, _ MapClearOptions) error {
 	_, err := e.pool.Exec(ctx, `
 		DELETE FROM cf_map_stream WHERE channel = $1;
 		DELETE FROM cf_map_state WHERE channel = $1;
@@ -966,7 +966,7 @@ func (e *PostgresMapEngine) Clear(ctx context.Context, ch string, _ MapClearOpti
 
 // walShardReader represents a reader for a specific shard of the WAL stream.
 type walShardReader struct {
-	engine      *PostgresMapEngine
+	engine      *PostgresMapBroker
 	shardID     int
 	conn        *pgconn.PgConn
 	running     atomic.Bool
@@ -975,7 +975,7 @@ type walShardReader struct {
 }
 
 // runWALReaderForShard attempts to claim and read a shard using advisory locks.
-func (e *PostgresMapEngine) runWALReaderForShard(shardID int) {
+func (e *PostgresMapBroker) runWALReaderForShard(shardID int) {
 	ctx := e.cancelCtx
 	lockID := e.conf.WAL.AdvisoryLockBaseID + int64(shardID)
 	backoff := time.Second
@@ -1053,7 +1053,7 @@ func (e *PostgresMapEngine) runWALReaderForShard(shardID int) {
 }
 
 // runWALReaderLoop runs the logical replication reader for a shard.
-func (e *PostgresMapEngine) runWALReaderLoop(ctx context.Context, shardID int, lockConn *pgxpool.Conn) error {
+func (e *PostgresMapBroker) runWALReaderLoop(ctx context.Context, shardID int, lockConn *pgxpool.Conn) error {
 	slotName := fmt.Sprintf("cf_map_shard_%d", shardID)
 	publication := fmt.Sprintf("cf_map_stream_shard_%d", shardID)
 
@@ -1208,7 +1208,7 @@ func (e *PostgresMapEngine) runWALReaderLoop(ctx context.Context, shardID int, l
 }
 
 // processWALMessage processes a single WAL message and publishes to broker.
-func (e *PostgresMapEngine) processWALMessage(ctx context.Context, walData []byte, relations map[uint32]*pglogrepl.RelationMessage) error {
+func (e *PostgresMapBroker) processWALMessage(ctx context.Context, walData []byte, relations map[uint32]*pglogrepl.RelationMessage) error {
 	logicalMsg, err := pglogrepl.Parse(walData)
 	if err != nil {
 		return fmt.Errorf("parse logical message: %w", err)
@@ -1234,7 +1234,7 @@ func (e *PostgresMapEngine) processWALMessage(ctx context.Context, walData []byt
 }
 
 // processInsertMessage processes an INSERT into cf_map_stream and publishes to broker.
-func (e *PostgresMapEngine) processInsertMessage(ctx context.Context, rel *pglogrepl.RelationMessage, tuple *pglogrepl.TupleData) error {
+func (e *PostgresMapBroker) processInsertMessage(ctx context.Context, rel *pglogrepl.RelationMessage, tuple *pglogrepl.TupleData) error {
 	if tuple == nil {
 		return nil
 	}
@@ -1351,27 +1351,27 @@ func findSubstring(s, substr string) int {
 	return -1
 }
 
-func (e *PostgresMapEngine) logError(msg string, err error, shardID int) {
+func (e *PostgresMapBroker) logError(msg string, err error, shardID int) {
 	if e.node != nil {
 		e.node.logger.log(newErrorLogEntry(err, msg, map[string]any{"shard": shardID}))
 	}
 }
 
-func (e *PostgresMapEngine) logInfo(msg string, shardID int) {
+func (e *PostgresMapBroker) logInfo(msg string, shardID int) {
 	if e.node != nil && e.node.logEnabled(LogLevelInfo) {
 		e.node.logger.log(newLogEntry(LogLevelInfo, msg, map[string]any{"shard": shardID}))
 	}
 }
 
 // IsWALShardClaimed returns whether this node currently holds the WAL reader lock for a shard.
-func (e *PostgresMapEngine) IsWALShardClaimed(shardID int) bool {
+func (e *PostgresMapBroker) IsWALShardClaimed(shardID int) bool {
 	e.walClaimedShardMu.RLock()
 	defer e.walClaimedShardMu.RUnlock()
 	return e.walClaimedShards[shardID]
 }
 
 // WALClaimedShards returns a list of currently claimed WAL reader shard IDs.
-func (e *PostgresMapEngine) WALClaimedShards() []int {
+func (e *PostgresMapBroker) WALClaimedShards() []int {
 	e.walClaimedShardMu.RLock()
 	defer e.walClaimedShardMu.RUnlock()
 	shards := make([]int, 0, len(e.walClaimedShards))
@@ -1382,14 +1382,14 @@ func (e *PostgresMapEngine) WALClaimedShards() []int {
 }
 
 // IsOutboxShardClaimed returns whether this node currently holds the outbox worker lock for a shard.
-func (e *PostgresMapEngine) IsOutboxShardClaimed(shardID int) bool {
+func (e *PostgresMapBroker) IsOutboxShardClaimed(shardID int) bool {
 	e.outboxClaimedShardMu.RLock()
 	defer e.outboxClaimedShardMu.RUnlock()
 	return e.outboxClaimedShards[shardID]
 }
 
 // OutboxClaimedShards returns a list of currently claimed outbox worker shard IDs.
-func (e *PostgresMapEngine) OutboxClaimedShards() []int {
+func (e *PostgresMapBroker) OutboxClaimedShards() []int {
 	e.outboxClaimedShardMu.RLock()
 	defer e.outboxClaimedShardMu.RUnlock()
 	shards := make([]int, 0, len(e.outboxClaimedShards))
@@ -1400,7 +1400,7 @@ func (e *PostgresMapEngine) OutboxClaimedShards() []int {
 }
 
 // ClaimedShards returns a list of currently claimed shard IDs (WAL or outbox depending on mode).
-func (e *PostgresMapEngine) ClaimedShards() []int {
+func (e *PostgresMapBroker) ClaimedShards() []int {
 	if e.conf.WAL.Enabled {
 		return e.WALClaimedShards()
 	}
@@ -1408,7 +1408,7 @@ func (e *PostgresMapEngine) ClaimedShards() []int {
 }
 
 // runTTLExpirationWorker expires keys with TTL and emits removal events.
-func (e *PostgresMapEngine) runTTLExpirationWorker() {
+func (e *PostgresMapBroker) runTTLExpirationWorker() {
 	ticker := time.NewTicker(e.conf.TTLCheckInterval)
 	defer ticker.Stop()
 	ctx := e.cancelCtx
@@ -1425,7 +1425,7 @@ func (e *PostgresMapEngine) runTTLExpirationWorker() {
 	}
 }
 
-func (e *PostgresMapEngine) expireKeys(ctx context.Context) {
+func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 	// Find expired keys (don't delete yet - let Remove handle deletion).
 	rows, err := e.pool.Query(ctx, `
 		SELECT channel, key FROM cf_map_state
@@ -1450,7 +1450,7 @@ func (e *PostgresMapEngine) expireKeys(ctx context.Context) {
 		expiredKeys = append(expiredKeys, expiredKey{channel: ch, key: key})
 	}
 
-	// Now unpublish each expired key (this deletes from snapshot and emits to stream).
+	// Now unpublish each expired key (this deletes from state and emits to stream).
 	for _, ek := range expiredKeys {
 		// Get channel options for this channel.
 		opts := e.node.ResolveMapChannelOptions(ek.channel)
@@ -1465,7 +1465,7 @@ func (e *PostgresMapEngine) expireKeys(ctx context.Context) {
 }
 
 // runStreamCleanupWorker cleans up expired stream/meta/idempotency entries.
-func (e *PostgresMapEngine) runStreamCleanupWorker() {
+func (e *PostgresMapBroker) runStreamCleanupWorker() {
 	ticker := time.NewTicker(e.conf.CleanupInterval)
 	defer ticker.Stop()
 	ctx := e.cancelCtx
@@ -1482,7 +1482,7 @@ func (e *PostgresMapEngine) runStreamCleanupWorker() {
 	}
 }
 
-func (e *PostgresMapEngine) cleanupExpiredEntries(ctx context.Context) {
+func (e *PostgresMapBroker) cleanupExpiredEntries(ctx context.Context) {
 	// Remove expired stream entries
 	_, _ = e.pool.Exec(ctx, `
 		DELETE FROM cf_map_stream
@@ -1507,7 +1507,7 @@ func (e *PostgresMapEngine) cleanupExpiredEntries(ctx context.Context) {
 // ============================================================================
 
 // runOutboxWorkerForShard attempts to claim and process a shard using advisory locks.
-func (e *PostgresMapEngine) runOutboxWorkerForShard(shardID int) {
+func (e *PostgresMapBroker) runOutboxWorkerForShard(shardID int) {
 	ctx := e.cancelCtx
 	lockID := e.conf.Outbox.AdvisoryLockBaseID + int64(shardID)
 	backoff := time.Second
@@ -1585,7 +1585,7 @@ func (e *PostgresMapEngine) runOutboxWorkerForShard(shardID int) {
 }
 
 // processOutboxLoop is the main processing loop for an outbox worker.
-func (e *PostgresMapEngine) processOutboxLoop(ctx context.Context, shardID int, conn *pgxpool.Conn) error {
+func (e *PostgresMapBroker) processOutboxLoop(ctx context.Context, shardID int, conn *pgxpool.Conn) error {
 	pollInterval := e.conf.Outbox.PollInterval
 
 	for {
@@ -1638,7 +1638,7 @@ type outboxRow struct {
 }
 
 // processOutboxBatch fetches and processes a batch of outbox entries.
-func (e *PostgresMapEngine) processOutboxBatch(ctx context.Context, shardID int) (int, error) {
+func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int) (int, error) {
 	batchSize := e.conf.Outbox.BatchSize
 	markProcessed := e.conf.Outbox.MarkProcessed
 
@@ -1739,7 +1739,7 @@ func (e *PostgresMapEngine) processOutboxBatch(ctx context.Context, shardID int)
 
 // handleOutboxEntry processes a single outbox entry by publishing to broker/locally.
 // This shares the same delivery logic as the WAL reader.
-func (e *PostgresMapEngine) handleOutboxEntry(_ context.Context, entry outboxRow) error {
+func (e *PostgresMapBroker) handleOutboxEntry(_ context.Context, entry outboxRow) error {
 	// Handle nullable score
 	var score int64
 	if entry.score != nil {
@@ -1796,7 +1796,7 @@ func (e *PostgresMapEngine) handleOutboxEntry(_ context.Context, entry outboxRow
 
 // runOutboxCleanupWorker periodically cleans up old processed outbox rows.
 // Only used when MarkProcessed mode is enabled.
-func (e *PostgresMapEngine) runOutboxCleanupWorker() {
+func (e *PostgresMapBroker) runOutboxCleanupWorker() {
 	ticker := time.NewTicker(e.conf.Outbox.CleanupInterval)
 	defer ticker.Stop()
 	ctx := e.cancelCtx
@@ -1813,7 +1813,7 @@ func (e *PostgresMapEngine) runOutboxCleanupWorker() {
 	}
 }
 
-func (e *PostgresMapEngine) cleanupProcessedOutboxEntries(ctx context.Context) {
+func (e *PostgresMapBroker) cleanupProcessedOutboxEntries(ctx context.Context) {
 	// Delete processed entries older than CleanupAge
 	_, _ = e.pool.Exec(ctx, `
 		DELETE FROM cf_map_outbox

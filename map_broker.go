@@ -5,9 +5,9 @@ import (
 	"time"
 )
 
-// MapEngine Overview
+// MapBroker Overview.
 //
-// MapEngine manages synchronized state for map subscriptions. It provides:
+// MapBroker manages synchronized state for map subscriptions. It provides:
 //
 //   - State storage: Key-value state where each key maps to a publication.
 //     Clients receive the full state when subscribing.
@@ -74,9 +74,9 @@ const (
 	KeyModeIfExists KeyMode = "if_exists"
 )
 
-// MapEngine is the interface for managing map subscription state.
-// See "MapEngine Overview" above for detailed documentation.
-type MapEngine interface {
+// MapBroker is the interface for managing map subscription state.
+// See "MapBroker Overview" above for detailed documentation.
+type MapBroker interface {
 	// Subscribe registers this server node to receive pub/sub messages for the channel.
 	// Called when a client subscribes to a map channel on this node.
 	Subscribe(ch string) error
@@ -284,7 +284,7 @@ type MapReadStateOptions struct {
 	// This is an internal option used by the subscription flow for optimized delivery.
 	// Application code should NOT set this - leave it false to always read fresh data
 	// from the backend (safe for CAS operations, always consistent).
-	// Only affects CachedMapEngine; other engines ignore this option.
+	// Only affects CachedMapBroker; other engines ignore this option.
 	Cached bool
 }
 

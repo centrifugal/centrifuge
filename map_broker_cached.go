@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// CachedMapEngineConfig configures the cached map engine wrapper.
-type CachedMapEngineConfig struct {
+// CachedMapBrokerConfig configures the cached map engine wrapper.
+type CachedMapBrokerConfig struct {
 	// Cache configuration for the in-memory cache layer.
 	Cache MapCacheConfig
 
@@ -38,9 +38,9 @@ type CachedMapEngineConfig struct {
 	LoadTimeout time.Duration
 }
 
-// DefaultCachedMapEngineConfig returns the default configuration.
-func DefaultCachedMapEngineConfig() CachedMapEngineConfig {
-	return CachedMapEngineConfig{
+// DefaultCachedMapBrokerConfig returns the default configuration.
+func DefaultCachedMapBrokerConfig() CachedMapBrokerConfig {
+	return CachedMapBrokerConfig{
 		Cache:           DefaultMapCacheConfig(),
 		SyncInterval:    30 * time.Second,
 		SyncJitter:      0.1, // 10% jitter
@@ -50,7 +50,7 @@ func DefaultCachedMapEngineConfig() CachedMapEngineConfig {
 	}
 }
 
-func (c CachedMapEngineConfig) setDefaults() CachedMapEngineConfig {
+func (c CachedMapBrokerConfig) setDefaults() CachedMapBrokerConfig {
 	if c.SyncInterval <= 0 {
 		c.SyncInterval = 30 * time.Second
 	}
@@ -72,17 +72,17 @@ func (c CachedMapEngineConfig) setDefaults() CachedMapEngineConfig {
 	return c
 }
 
-// CachedMapEngine wraps a MapEngine with an in-memory cache layer.
+// CachedMapBroker wraps a MapBroker with an in-memory cache layer.
 // It provides:
 // - Read-your-own-writes consistency on the publishing node
 // - Low-latency reads from memory instead of database
 // - Cross-node eventual consistency via stream synchronization
 // - Backward compatibility - existing engines work unchanged
-type CachedMapEngine struct {
+type CachedMapBroker struct {
 	node         *Node
-	backend      MapEngine
+	backend      MapBroker
 	cache        *mapCacheImpl
-	conf         CachedMapEngineConfig
+	conf         CachedMapBrokerConfig
 	eventHandler BrokerEventHandler
 
 	// Stream synchronization - per-channel state
@@ -113,12 +113,12 @@ type channelSyncState struct {
 	syncing      bool // Prevents concurrent syncs of the same channel
 }
 
-var _ MapEngine = (*CachedMapEngine)(nil)
+var _ MapBroker = (*CachedMapBroker)(nil)
 
-// NewCachedMapEngine creates a cached wrapper around any MapEngine.
+// NewCachedMapBroker creates a cached wrapper around any MapBroker.
 // The cache layer provides read-your-own-writes consistency and low-latency
 // reads while the backend provides durability and cross-node consistency.
-func NewCachedMapEngine(n *Node, backend MapEngine, conf CachedMapEngineConfig) (*CachedMapEngine, error) {
+func NewCachedMapBroker(n *Node, backend MapBroker, conf CachedMapBrokerConfig) (*CachedMapBroker, error) {
 	if backend == nil {
 		return nil, errors.New("cached map engine: backend is required")
 	}
@@ -126,7 +126,7 @@ func NewCachedMapEngine(n *Node, backend MapEngine, conf CachedMapEngineConfig) 
 
 	cache := newMapCache(conf.Cache)
 
-	e := &CachedMapEngine{
+	e := &CachedMapBroker{
 		node:              n,
 		backend:           backend,
 		cache:             cache,
@@ -148,11 +148,11 @@ func NewCachedMapEngine(n *Node, backend MapEngine, conf CachedMapEngineConfig) 
 // cachedEventHandler wraps the original event handler to intercept publications
 // and update the cache before forwarding to the original handler.
 type cachedEventHandler struct {
-	engine  *CachedMapEngine
+	engine  *CachedMapBroker
 	cache   *mapCacheImpl
-	backend MapEngine
+	backend MapBroker
 	handler BrokerEventHandler
-	conf    CachedMapEngineConfig
+	conf    CachedMapBrokerConfig
 }
 
 func (h *cachedEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
@@ -244,7 +244,7 @@ type backendRegistrar interface {
 // RegisterEventHandler registers the event handler and starts background workers.
 // It also registers a wrapper handler with the backend to intercept publications
 // and update the cache.
-func (e *CachedMapEngine) RegisterEventHandler(h BrokerEventHandler) error {
+func (e *CachedMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 	e.eventHandler = h
 
 	// Create wrapper that updates cache and forwards to original handler
@@ -270,7 +270,7 @@ func (e *CachedMapEngine) RegisterEventHandler(h BrokerEventHandler) error {
 }
 
 // Close shuts down the cached engine.
-func (e *CachedMapEngine) Close(ctx context.Context) error {
+func (e *CachedMapBroker) Close(ctx context.Context) error {
 	e.closeOnce.Do(func() {
 		close(e.closeCh)
 		// Wait for sync workers to finish
@@ -282,7 +282,7 @@ func (e *CachedMapEngine) Close(ctx context.Context) error {
 
 // withChannelLock executes fn while holding the per-channel lock.
 // This ensures ordered cache updates for concurrent writes to the same channel.
-func (e *CachedMapEngine) withChannelLock(ch string, fn func()) {
+func (e *CachedMapBroker) withChannelLock(ch string, fn func()) {
 	e.channelLocksMu.Lock()
 	lock, ok := e.channelLocks[ch]
 	if !ok {
@@ -297,7 +297,7 @@ func (e *CachedMapEngine) withChannelLock(ch string, fn func()) {
 }
 
 // Subscribe registers this server node to receive pub/sub messages for the channel.
-func (e *CachedMapEngine) Subscribe(ch string) error {
+func (e *CachedMapBroker) Subscribe(ch string) error {
 	// Check if channel is already loaded - we'll need to evict BEFORE subscribing
 	// to force a fresh load, catching any publications we might have missed.
 	wasLoaded := e.cache.IsLoaded(ch)
@@ -330,7 +330,7 @@ func (e *CachedMapEngine) Subscribe(ch string) error {
 }
 
 // Unsubscribe removes this server node from receiving pub/sub messages for the channel.
-func (e *CachedMapEngine) Unsubscribe(ch string) error {
+func (e *CachedMapBroker) Unsubscribe(ch string) error {
 	// Evict from cache on unsubscribe
 	e.cache.Evict(ch)
 
@@ -345,7 +345,7 @@ func (e *CachedMapEngine) Unsubscribe(ch string) error {
 // Publish updates the state and broadcasts the change to subscribers.
 // Write path: backend first, then update local cache for read-your-own-writes.
 // Uses per-channel lock to ensure serialized cache updates under concurrency.
-func (e *CachedMapEngine) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
+func (e *CachedMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
 	// Write to backend (source of truth).
 	// Backend calls HandlePublication which updates the cache with proper gap detection.
 	return e.backend.Publish(ctx, ch, key, opts)
@@ -353,14 +353,14 @@ func (e *CachedMapEngine) Publish(ctx context.Context, ch string, key string, op
 
 // Remove removes a key from the state and notifies subscribers.
 // Backend calls HandlePublication which updates the cache with proper gap detection.
-func (e *CachedMapEngine) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
+func (e *CachedMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
 	return e.backend.Remove(ctx, ch, key, opts)
 }
 
 // ReadState retrieves the current key-value state for a channel.
 // By default, reads from backend for consistency (safe for CAS operations).
 // If opts.Cached is true (internal subscription flow), reads from cache for performance.
-func (e *CachedMapEngine) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+func (e *CachedMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
 	// Default: read from backend for consistency (safe for CAS, always fresh).
 	// Application code should always get fresh data.
 	if !opts.Cached {
@@ -386,7 +386,7 @@ func (e *CachedMapEngine) ReadState(ctx context.Context, ch string, opts MapRead
 // First call per channel always reads from backend to ensure we catch publications
 // that happened between state load and pub/sub subscription (critical for presence).
 // Subsequent calls use the cached stream (kept updated via pub/sub and sync).
-func (e *CachedMapEngine) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *CachedMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
 	// Ensure channel state is loaded into cache
 	if err := e.ensureLoaded(ctx, ch); err != nil {
 		return nil, StreamPosition{}, err
@@ -427,7 +427,7 @@ func (e *CachedMapEngine) ReadStream(ctx context.Context, ch string, opts MapRea
 }
 
 // Stats returns statistics about the channel's state.
-func (e *CachedMapEngine) Stats(ctx context.Context, ch string) (MapStats, error) {
+func (e *CachedMapBroker) Stats(ctx context.Context, ch string) (MapStats, error) {
 	// If loaded, return from cache
 	if e.cache.IsLoaded(ch) {
 		return e.cache.GetStats(ch)
@@ -437,7 +437,7 @@ func (e *CachedMapEngine) Stats(ctx context.Context, ch string) (MapStats, error
 }
 
 // Clear deletes all data for a channel (state and stream).
-func (e *CachedMapEngine) Clear(ctx context.Context, ch string, opts MapClearOptions) error {
+func (e *CachedMapBroker) Clear(ctx context.Context, ch string, opts MapClearOptions) error {
 	// Remove from cache
 	e.cache.Evict(ch)
 
@@ -458,7 +458,7 @@ func (e *CachedMapEngine) Clear(ctx context.Context, ch string, opts MapClearOpt
 // ensureLoaded loads channel data from backend into cache if not already loaded.
 // Loads both state and stream for client recovery during reconnect storms.
 // Uses resolved channel options for stream size/TTL configuration.
-func (e *CachedMapEngine) ensureLoaded(ctx context.Context, ch string) error {
+func (e *CachedMapBroker) ensureLoaded(ctx context.Context, ch string) error {
 	// Resolve channel options for stream size/TTL
 	opts := e.resolveChannelOptions(ch)
 
@@ -503,13 +503,13 @@ func (e *CachedMapEngine) ensureLoaded(ctx context.Context, ch string) error {
 }
 
 // resolveChannelOptions resolves map channel options for a channel.
-func (e *CachedMapEngine) resolveChannelOptions(ch string) MapChannelOptions {
+func (e *CachedMapBroker) resolveChannelOptions(ch string) MapChannelOptions {
 	return e.node.ResolveMapChannelOptions(ch)
 }
 
 // runSyncLoop runs the background sync scheduler.
 // It checks which channels need syncing and dispatches them to workers.
-func (e *CachedMapEngine) runSyncLoop() {
+func (e *CachedMapBroker) runSyncLoop() {
 	// Start worker pool if bounded concurrency
 	if e.conf.SyncConcurrency > 0 {
 		for i := 0; i < e.conf.SyncConcurrency; i++ {
@@ -537,7 +537,7 @@ func (e *CachedMapEngine) runSyncLoop() {
 }
 
 // dispatchDueSyncs finds channels due for sync and dispatches them.
-func (e *CachedMapEngine) dispatchDueSyncs() {
+func (e *CachedMapBroker) dispatchDueSyncs() {
 	now := time.Now()
 	channels := e.cache.LoadedChannels()
 
@@ -592,7 +592,7 @@ func (e *CachedMapEngine) dispatchDueSyncs() {
 }
 
 // syncWorker is a worker goroutine that processes sync requests.
-func (e *CachedMapEngine) syncWorker() {
+func (e *CachedMapBroker) syncWorker() {
 	defer e.wg.Done()
 	for ch := range e.syncWorkerCh {
 		e.syncChannel(ch)
@@ -600,7 +600,7 @@ func (e *CachedMapEngine) syncWorker() {
 }
 
 // jitteredInterval returns the sync interval with random relative jitter.
-func (e *CachedMapEngine) jitteredInterval() time.Duration {
+func (e *CachedMapBroker) jitteredInterval() time.Duration {
 	interval := e.conf.SyncInterval
 	if e.conf.SyncJitter > 0 {
 		// Calculate max jitter as a fraction of the interval
@@ -613,7 +613,7 @@ func (e *CachedMapEngine) jitteredInterval() time.Duration {
 }
 
 // syncChannel syncs a single channel with backend.
-func (e *CachedMapEngine) syncChannel(ch string) {
+func (e *CachedMapBroker) syncChannel(ch string) {
 	defer func() {
 		// Mark sync as complete
 		e.syncStateMu.Lock()
@@ -677,7 +677,7 @@ func (e *CachedMapEngine) syncChannel(ch string) {
 }
 
 // reloadChannel evicts the channel from cache and reloads it from backend.
-func (e *CachedMapEngine) reloadChannel(ctx context.Context, ch string) {
+func (e *CachedMapBroker) reloadChannel(ctx context.Context, ch string) {
 	// Evict from cache
 	e.cache.Evict(ch)
 
@@ -696,7 +696,7 @@ func (e *CachedMapEngine) reloadChannel(ctx context.Context, ch string) {
 }
 
 // getSyncOffset returns the last synced offset for a channel.
-func (e *CachedMapEngine) getSyncOffset(ch string) uint64 {
+func (e *CachedMapBroker) getSyncOffset(ch string) uint64 {
 	e.syncStateMu.RLock()
 	defer e.syncStateMu.RUnlock()
 	if state, ok := e.syncState[ch]; ok {
@@ -706,7 +706,7 @@ func (e *CachedMapEngine) getSyncOffset(ch string) uint64 {
 }
 
 // updateSyncOffset updates the sync offset for a channel.
-func (e *CachedMapEngine) updateSyncOffset(ch string, offset uint64) {
+func (e *CachedMapBroker) updateSyncOffset(ch string, offset uint64) {
 	e.syncStateMu.Lock()
 	defer e.syncStateMu.Unlock()
 	if state, ok := e.syncState[ch]; ok {
@@ -721,8 +721,8 @@ func (e *CachedMapEngine) updateSyncOffset(ch string, offset uint64) {
 	}
 }
 
-// underlyingBackend returns the underlying backend MapEngine.
+// underlyingBackend returns the underlying backend MapBroker.
 // Useful for advanced operations that bypass the cache.
-func (e *CachedMapEngine) underlyingBackend() MapEngine {
+func (e *CachedMapBroker) underlyingBackend() MapBroker {
 	return e.backend
 }

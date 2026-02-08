@@ -1,25 +1,25 @@
--- Read unordered keyed snapshot with cursor-based pagination.
--- KEYS[1] = snapshot hash key
--- KEYS[2] = snapshot expire zset key (optional, empty '' to disable expiration cleanup)
+-- Read unordered keyed state with cursor-based pagination.
+-- KEYS[1] = state hash key
+-- KEYS[2] = state expire zset key (optional, empty '' to disable expiration cleanup)
 -- KEYS[3] = meta key
--- KEYS[4] = snapshot meta key
+-- KEYS[4] = state meta key
 -- ARGV[1] = cursor (use "0" to start, returned cursor for next page)
 -- ARGV[2] = limit (0 = return all via HGETALL, >0 = use HSCAN)
 -- ARGV[3] = now (current timestamp)
 -- ARGV[4] = meta_ttl (seconds, 0 to disable)
--- ARGV[5] = snapshot_ttl (seconds, 0 to disable - refreshes TTL on read)
+-- ARGV[5] = state_ttl (seconds, 0 to disable - refreshes TTL on read)
 
 local hash_key = KEYS[1]
 local expire_key = KEYS[2]
 local meta_key = KEYS[3]
-local snapshot_meta_key = KEYS[4]
+local state_meta_key = KEYS[4]
 
 local cursor = ARGV[1]
 local limit = tonumber(ARGV[2])
 local now_str = ARGV[3]
 local now = tonumber(now_str)
 local meta_ttl = tonumber(ARGV[4])
-local snapshot_ttl = tonumber(ARGV[5])
+local state_ttl = tonumber(ARGV[5])
 
 -- Update meta TTL and get current offset
 local epoch = redis.call("hget", meta_key, "e")
@@ -37,34 +37,34 @@ if meta_ttl > 0 then
     redis.call("expire", meta_key, meta_ttl)
 end
 
--- Validate snapshot epoch against stream epoch
-if snapshot_meta_key ~= '' then
-    local snapshot_meta_exists = redis.call("exists", snapshot_meta_key)
-    if snapshot_meta_exists == 0 then
-        -- No snapshot metadata = snapshot is invalid/evicted
+-- Validate state epoch against stream epoch
+if state_meta_key ~= '' then
+    local state_meta_exists = redis.call("exists", state_meta_key)
+    if state_meta_exists == 0 then
+        -- No state metadata = state is invalid/evicted
         return {offset, epoch, "0", {}}
     end
 
-    local snapshot_epoch = redis.call("hget", snapshot_meta_key, "epoch")
-    if snapshot_epoch ~= epoch then
-        -- Epoch mismatch = snapshot is stale (from old epoch)
+    local state_epoch = redis.call("hget", state_meta_key, "epoch")
+    if state_epoch ~= epoch then
+        -- Epoch mismatch = state is stale (from old epoch)
         return {offset, epoch, "0", {}}
     end
 end
 
 -- IMPORTANT: We do NOT cleanup expired entries here.
--- Expired entries MUST be removed by the cleanup worker (broker_snapshot_cleanup.lua)
+-- Expired entries MUST be removed by the cleanup worker (broker_state_cleanup.lua)
 -- which generates LEAVE events to the stream, updates user tracking, etc.
 -- Inline cleanup would bypass LEAVE event generation, breaking convergence guarantees.
 
--- Refresh snapshot TTL on read (LRU behavior)
-if snapshot_ttl > 0 then
-    redis.call("expire", hash_key, snapshot_ttl)
+-- Refresh state TTL on read (LRU behavior)
+if state_ttl > 0 then
+    redis.call("expire", hash_key, state_ttl)
     if expire_key ~= '' then
-        redis.call("expire", expire_key, snapshot_ttl)
+        redis.call("expire", expire_key, state_ttl)
     end
-    if snapshot_meta_key ~= '' then
-        redis.call("expire", snapshot_meta_key, snapshot_ttl)
+    if state_meta_key ~= '' then
+        redis.call("expire", state_meta_key, state_ttl)
     end
 end
 

@@ -21,16 +21,16 @@ func getPostgresConnString(tb testing.TB) string {
 	return connString
 }
 
-// newTestPostgresMapEngine creates a test engine with default outbox mode.
-func newTestPostgresMapEngine(tb testing.TB, n *Node) *PostgresMapEngine {
-	return newTestPostgresMapEngineWithOutbox(tb, n)
+// newTestPostgresMapBroker creates a test engine with default outbox mode.
+func newTestPostgresMapBroker(tb testing.TB, n *Node) *PostgresMapBroker {
+	return newTestPostgresMapBrokerWithOutbox(tb, n)
 }
 
-// newTestPostgresMapEngineWithOutbox creates a test engine with outbox mode (default).
-func newTestPostgresMapEngineWithOutbox(tb testing.TB, n *Node) *PostgresMapEngine {
+// newTestPostgresMapBrokerWithOutbox creates a test engine with outbox mode (default).
+func newTestPostgresMapBrokerWithOutbox(tb testing.TB, n *Node) *PostgresMapBroker {
 	connString := getPostgresConnString(tb)
 
-	e, err := NewPostgresMapEngine(n, PostgresMapEngineConfig{
+	e, err := NewPostgresMapBroker(n, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Outbox: OutboxConfig{
 			NumShards:    4, // Fewer shards for faster tests
@@ -54,11 +54,11 @@ func newTestPostgresMapEngineWithOutbox(tb testing.TB, n *Node) *PostgresMapEngi
 	return e
 }
 
-// newTestPostgresMapEngineWithWAL creates a test engine with WAL mode.
-func newTestPostgresMapEngineWithWAL(tb testing.TB, n *Node) *PostgresMapEngine {
+// newTestPostgresMapBrokerWithWAL creates a test engine with WAL mode.
+func newTestPostgresMapBrokerWithWAL(tb testing.TB, n *Node) *PostgresMapBroker {
 	connString := getPostgresConnString(tb)
 
-	e, err := NewPostgresMapEngine(n, PostgresMapEngineConfig{
+	e, err := NewPostgresMapBroker(n, PostgresMapBrokerConfig{
 		ConnString: connString,
 		WAL: WALConfig{
 			Enabled:           true,
@@ -79,7 +79,7 @@ func newTestPostgresMapEngineWithWAL(tb testing.TB, n *Node) *PostgresMapEngine 
 	return e
 }
 
-func cleanupTestTables(ctx context.Context, e *PostgresMapEngine) {
+func cleanupTestTables(ctx context.Context, e *PostgresMapBroker) {
 	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'test_%'")
 	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'test_%'")
 	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'test_%'")
@@ -87,8 +87,8 @@ func cleanupTestTables(ctx context.Context, e *PostgresMapEngine) {
 	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_map_outbox WHERE channel LIKE 'test_%'")
 }
 
-// snapshotToMapPostgres converts []Publication to map for easier testing.
-func snapshotToMapPostgres(pubs []*Publication) map[string][]byte {
+// stateToMapPostgres converts []Publication to map for easier testing.
+func stateToMapPostgres(pubs []*Publication) map[string][]byte {
 	result := make(map[string][]byte, len(pubs))
 	for _, pub := range pubs {
 		result[pub.Key] = pub.Data
@@ -96,10 +96,10 @@ func snapshotToMapPostgres(pubs []*Publication) map[string][]byte {
 	return result
 }
 
-// TestPostgresMapEngine_StatefulChannel tests stateful channel with keyed state and revisions.
-func TestPostgresMapEngine_StatefulChannel(t *testing.T) {
+// TestPostgresMapBroker_StatefulChannel tests stateful channel with keyed state and revisions.
+func TestPostgresMapBroker_StatefulChannel(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapEngine(t, node)
+	engine := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_stateful"
@@ -129,20 +129,20 @@ func TestPostgresMapEngine_StatefulChannel(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Read snapshot
+	// Read state
 	entries, streamPos, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, streamPos.Epoch)
 	require.Greater(t, streamPos.Offset, uint64(0))
 
-	// Verify snapshot contains latest values
-	snapshot := snapshotToMapPostgres(entries)
-	require.Len(t, snapshot, 2)
-	require.Equal(t, []byte("data1_updated"), snapshot["key1"])
-	require.Equal(t, []byte("data2"), snapshot["key2"])
+	// Verify state contains latest values
+	state := stateToMapPostgres(entries)
+	require.Len(t, state, 2)
+	require.Equal(t, []byte("data1_updated"), state["key1"])
+	require.Equal(t, []byte("data2"), state["key2"])
 
 	// Read stream to verify all publications are in history
 	pubs, _, err := engine.ReadStream(ctx, channel, MapReadStreamOptions{
@@ -154,10 +154,10 @@ func TestPostgresMapEngine_StatefulChannel(t *testing.T) {
 	require.Len(t, pubs, 3) // All 3 publications in stream
 }
 
-// TestPostgresMapEngine_StatefulChannelOrdered tests ordered stateful channel.
-func TestPostgresMapEngine_StatefulChannelOrdered(t *testing.T) {
+// TestPostgresMapBroker_StatefulChannelOrdered tests ordered stateful channel.
+func TestPostgresMapBroker_StatefulChannelOrdered(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapEngine(t, node)
+	engine := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_ordered"
@@ -175,27 +175,27 @@ func TestPostgresMapEngine_StatefulChannelOrdered(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Read ordered snapshot (descending by score)
+	// Read ordered state (descending by score)
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:     true,
-		Limit:       100,
+		Ordered:  true,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.Len(t, entries, 5)
 
 	// Verify all keys present
-	snapshot := snapshotToMapPostgres(entries)
+	state := stateToMapPostgres(entries)
 	for i := 0; i < 5; i++ {
 		key := fmt.Sprintf("key%d", i)
-		require.Contains(t, snapshot, key)
+		require.Contains(t, state, key)
 	}
 }
 
-// TestPostgresMapEngine_SnapshotRevision tests that snapshot values include revisions.
-func TestPostgresMapEngine_SnapshotRevision(t *testing.T) {
+// TestPostgresMapBroker_StateRevision tests that state values include revisions.
+func TestPostgresMapBroker_StateRevision(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapEngine(t, node)
+	engine := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_revision"
@@ -221,9 +221,9 @@ func TestPostgresMapEngine_SnapshotRevision(t *testing.T) {
 	require.Equal(t, uint64(2), res2.Position.Offset)
 	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch) // Same epoch
 
-	// Read snapshot - entries now include per-entry revisions
+	// Read state - entries now include per-entry revisions
 	entries, streamPos, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -231,9 +231,9 @@ func TestPostgresMapEngine_SnapshotRevision(t *testing.T) {
 	require.Equal(t, res2.Position.Epoch, streamPos.Epoch)
 
 	// Verify payloads
-	snapshot := snapshotToMapPostgres(entries)
-	require.Equal(t, []byte("data1"), snapshot["key1"])
-	require.Equal(t, []byte("data2"), snapshot["key2"])
+	state := stateToMapPostgres(entries)
+	require.Equal(t, []byte("data1"), state["key1"])
+	require.Equal(t, []byte("data2"), state["key2"])
 
 	// Verify per-entry offsets
 	require.NotEmpty(t, streamPos.Epoch)
@@ -242,10 +242,10 @@ func TestPostgresMapEngine_SnapshotRevision(t *testing.T) {
 	}
 }
 
-// TestPostgresMapEngine_SnapshotPagination tests cursor-based snapshot pagination.
-func TestPostgresMapEngine_SnapshotPagination(t *testing.T) {
+// TestPostgresMapBroker_StatePagination tests cursor-based state pagination.
+func TestPostgresMapBroker_StatePagination(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapEngine(t, node)
+	engine := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_pagination"
@@ -261,10 +261,10 @@ func TestPostgresMapEngine_SnapshotPagination(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Read snapshot with limit
+	// Read state with limit
 	page1, pos1, cursor, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       3,
-		Cursor:      "",
+		Limit:    3,
+		Cursor:   "",
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -279,8 +279,8 @@ func TestPostgresMapEngine_SnapshotPagination(t *testing.T) {
 	// Continue reading until cursor is empty
 	for cursor != "" {
 		page, pos, newCursor, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-			Limit:       3,
-			Cursor:      cursor,
+			Limit:    3,
+			Cursor:   cursor,
 			StateTTL: 300 * time.Second,
 		})
 		require.NoError(t, err)
@@ -298,10 +298,10 @@ func TestPostgresMapEngine_SnapshotPagination(t *testing.T) {
 	require.Len(t, allKeys, 10)
 }
 
-// TestPostgresMapEngine_StreamRecovery tests stream recovery.
-func TestPostgresMapEngine_StreamRecovery(t *testing.T) {
+// TestPostgresMapBroker_StreamRecovery tests stream recovery.
+func TestPostgresMapBroker_StreamRecovery(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapEngine(t, node)
+	engine := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_recovery"
@@ -331,10 +331,10 @@ func TestPostgresMapEngine_StreamRecovery(t *testing.T) {
 	require.Len(t, pubs, 3) // Should get messages 3, 4, 5
 }
 
-// TestPostgresMapEngine_Idempotency tests idempotent publishing.
-func TestPostgresMapEngine_Idempotency(t *testing.T) {
+// TestPostgresMapBroker_Idempotency tests idempotent publishing.
+func TestPostgresMapBroker_Idempotency(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapEngine(t, node)
+	engine := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_idempotency"
@@ -366,21 +366,21 @@ func TestPostgresMapEngine_Idempotency(t *testing.T) {
 	require.Equal(t, SuppressReasonIdempotency, res2.SuppressReason) // The idempotency check returns the original offset
 	require.Equal(t, res1.Position.Offset, res2.Position.Offset)     // Same offset
 
-	// Snapshot should still have original data
+	// State should still have original data
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
-	snapshot := snapshotToMapPostgres(entries)
-	require.Len(t, snapshot, 1)
-	require.Equal(t, []byte("data1"), snapshot["key1"])
+	state := stateToMapPostgres(entries)
+	require.Len(t, state, 1)
+	require.Equal(t, []byte("data1"), state["key1"])
 }
 
-// TestPostgresMapEngine_KeyMode tests KeyMode (IfNew, IfExists).
-func TestPostgresMapEngine_KeyMode(t *testing.T) {
+// TestPostgresMapBroker_KeyMode tests KeyMode (IfNew, IfExists).
+func TestPostgresMapBroker_KeyMode(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapEngine(t, node)
+	engine := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_keymode"
@@ -409,9 +409,9 @@ func TestPostgresMapEngine_KeyMode(t *testing.T) {
 	require.True(t, res2.Suppressed)
 	require.Equal(t, SuppressReasonKeyExists, res2.SuppressReason)
 
-	// Verify snapshot still has original data
+	// Verify state still has original data
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:       100,
+		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
@@ -442,10 +442,10 @@ func TestPostgresMapEngine_KeyMode(t *testing.T) {
 	require.False(t, res4.Suppressed)
 }
 
-// TestPostgresMapEngine_CAS tests Compare-And-Swap operations.
-func TestPostgresMapEngine_CAS(t *testing.T) {
+// TestPostgresMapBroker_CAS tests Compare-And-Swap operations.
+func TestPostgresMapBroker_CAS(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapEngine(t, node)
+	engine := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_cas"
@@ -491,14 +491,14 @@ func TestPostgresMapEngine_CAS(t *testing.T) {
 	require.Equal(t, []byte(`{"stock": 9}`), res3.CurrentPublication.Data)
 }
 
-// TestPostgresMapEngine_KeyTTL tests key TTL (this is a slower test).
-func TestPostgresMapEngine_KeyTTL(t *testing.T) {
+// TestPostgresMapBroker_KeyTTL tests key TTL (this is a slower test).
+func TestPostgresMapBroker_KeyTTL(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping TTL test in short mode")
 	}
 
 	node, _ := New(Config{})
-	engine := newTestPostgresMapEngine(t, node)
+	engine := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_key_ttl"
@@ -533,10 +533,10 @@ func TestPostgresMapEngine_KeyTTL(t *testing.T) {
 	require.Empty(t, entries)
 }
 
-// TestPostgresMapEngine_Version tests version-based ordering.
-func TestPostgresMapEngine_Version(t *testing.T) {
+// TestPostgresMapBroker_Version tests version-based ordering.
+func TestPostgresMapBroker_Version(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapEngine(t, node)
+	engine := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_version"
@@ -572,7 +572,7 @@ func TestPostgresMapEngine_Version(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res3.Suppressed)
 
-	// Verify snapshot has v3 data
+	// Verify state has v3 data
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
 		Key: "key1",
 	})
@@ -580,10 +580,10 @@ func TestPostgresMapEngine_Version(t *testing.T) {
 	require.Equal(t, []byte("data_v3"), entries[0].Data)
 }
 
-// TestPostgresMapEngine_Remove tests removing keys.
-func TestPostgresMapEngine_Remove(t *testing.T) {
+// TestPostgresMapBroker_Remove tests removing keys.
+func TestPostgresMapBroker_Remove(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapEngine(t, node)
+	engine := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_unpublish"
@@ -603,7 +603,7 @@ func TestPostgresMapEngine_Remove(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Verify snapshot has 2 keys
+	// Verify state has 2 keys
 	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
@@ -618,7 +618,7 @@ func TestPostgresMapEngine_Remove(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res.Suppressed)
 
-	// Verify snapshot has 1 key
+	// Verify state has 1 key
 	entries, _, _, err = engine.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
@@ -647,10 +647,10 @@ func TestPostgresMapEngine_Remove(t *testing.T) {
 	require.Equal(t, "key1", pubs[2].Key)
 }
 
-// TestPostgresMapEngine_Stats tests snapshot statistics.
-func TestPostgresMapEngine_Stats(t *testing.T) {
+// TestPostgresMapBroker_Stats tests state statistics.
+func TestPostgresMapBroker_Stats(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapEngine(t, node)
+	engine := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_stats"
@@ -676,10 +676,10 @@ func TestPostgresMapEngine_Stats(t *testing.T) {
 	require.Equal(t, 5, stats.NumKeys)
 }
 
-// TestPostgresMapEngine_EpochMismatch tests epoch validation.
-func TestPostgresMapEngine_EpochMismatch(t *testing.T) {
+// TestPostgresMapBroker_EpochMismatch tests epoch validation.
+func TestPostgresMapBroker_EpochMismatch(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapEngine(t, node)
+	engine := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_epoch_mismatch"
@@ -728,8 +728,8 @@ func TestPostgresMapEngine_EpochMismatch(t *testing.T) {
 	require.Len(t, entries, 1)
 }
 
-// TestPostgresMapEngine_WALReader tests logical replication WAL reader (single-node, local delivery).
-func TestPostgresMapEngine_WALReader(t *testing.T) {
+// TestPostgresMapBroker_WALReader tests logical replication WAL reader (single-node, local delivery).
+func TestPostgresMapBroker_WALReader(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
@@ -738,7 +738,7 @@ func TestPostgresMapEngine_WALReader(t *testing.T) {
 	require.NoError(t, node.Run())
 
 	// Create PostgreSQL map engine with WAL mode (single-node, local delivery)
-	engine, err := NewPostgresMapEngine(node, PostgresMapEngineConfig{
+	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		WAL: WALConfig{
 			Enabled:           true,
@@ -848,8 +848,8 @@ func TestPostgresMapEngine_WALReader(t *testing.T) {
 	require.True(t, foundRemoval, "should receive removal publication via WAL reader")
 }
 
-// TestPostgresMapEngine_WALReaderOrdering tests that WAL reader preserves publication order.
-func TestPostgresMapEngine_WALReaderOrdering(t *testing.T) {
+// TestPostgresMapBroker_WALReaderOrdering tests that WAL reader preserves publication order.
+func TestPostgresMapBroker_WALReaderOrdering(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
@@ -857,7 +857,7 @@ func TestPostgresMapEngine_WALReaderOrdering(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
-	engine, err := NewPostgresMapEngine(node, PostgresMapEngineConfig{
+	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		WAL: WALConfig{
 			Enabled:           true,
@@ -934,8 +934,8 @@ func TestPostgresMapEngine_WALReaderOrdering(t *testing.T) {
 	}
 }
 
-// TestPostgresMapEngine_WALReaderMetadata tests that WAL reader preserves metadata (tags, score, client info).
-func TestPostgresMapEngine_WALReaderMetadata(t *testing.T) {
+// TestPostgresMapBroker_WALReaderMetadata tests that WAL reader preserves metadata (tags, score, client info).
+func TestPostgresMapBroker_WALReaderMetadata(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
@@ -943,7 +943,7 @@ func TestPostgresMapEngine_WALReaderMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
-	engine, err := NewPostgresMapEngine(node, PostgresMapEngineConfig{
+	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		WAL: WALConfig{
 			Enabled:           true,
@@ -1021,10 +1021,10 @@ func TestPostgresMapEngine_WALReaderMetadata(t *testing.T) {
 	require.Equal(t, "metadata", received.Tags["type"])
 }
 
-// TestPostgresMapEngine_ConcurrentPublishOrdering tests that concurrent publishes maintain per-channel ordering.
-func TestPostgresMapEngine_ConcurrentPublishOrdering(t *testing.T) {
+// TestPostgresMapBroker_ConcurrentPublishOrdering tests that concurrent publishes maintain per-channel ordering.
+func TestPostgresMapBroker_ConcurrentPublishOrdering(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapEngine(t, node)
+	engine := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_concurrent_order"
@@ -1072,8 +1072,8 @@ func TestPostgresMapEngine_ConcurrentPublishOrdering(t *testing.T) {
 	}
 }
 
-// TestPostgresMapEngine_WALReaderWithBroker tests WAL reader with Redis broker for multi-node fan-out.
-func TestPostgresMapEngine_WALReaderWithBroker(t *testing.T) {
+// TestPostgresMapBroker_WALReaderWithBroker tests WAL reader with Redis broker for multi-node fan-out.
+func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
@@ -1126,7 +1126,7 @@ func TestPostgresMapEngine_WALReaderWithBroker(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create PostgreSQL map engine with WAL mode and broker for multi-node delivery
-	engine, err := NewPostgresMapEngine(node, PostgresMapEngineConfig{
+	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Broker:     broker,
 		WAL: WALConfig{
@@ -1188,8 +1188,8 @@ func TestPostgresMapEngine_WALReaderWithBroker(t *testing.T) {
 // Outbox Mode Tests
 // ============================================================================
 
-// TestPostgresMapEngine_OutboxOrdering tests that publications are delivered in channel_offset order.
-func TestPostgresMapEngine_OutboxOrdering(t *testing.T) {
+// TestPostgresMapBroker_OutboxOrdering tests that publications are delivered in channel_offset order.
+func TestPostgresMapBroker_OutboxOrdering(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
@@ -1198,7 +1198,7 @@ func TestPostgresMapEngine_OutboxOrdering(t *testing.T) {
 	require.NoError(t, node.Run())
 
 	// Create engine with outbox mode (default)
-	engine, err := NewPostgresMapEngine(node, PostgresMapEngineConfig{
+	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Outbox: OutboxConfig{
 			NumShards:    4,
@@ -1278,8 +1278,8 @@ func TestPostgresMapEngine_OutboxOrdering(t *testing.T) {
 	}
 }
 
-// TestPostgresMapEngine_OutboxDeliveryGuarantee tests that no messages are lost after worker restart.
-func TestPostgresMapEngine_OutboxDeliveryGuarantee(t *testing.T) {
+// TestPostgresMapBroker_OutboxDeliveryGuarantee tests that no messages are lost after worker restart.
+func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
@@ -1290,7 +1290,7 @@ func TestPostgresMapEngine_OutboxDeliveryGuarantee(t *testing.T) {
 	node1, err := New(Config{})
 	require.NoError(t, err)
 
-	engine1, err := NewPostgresMapEngine(node1, PostgresMapEngineConfig{
+	engine1, err := NewPostgresMapBroker(node1, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Outbox: OutboxConfig{
 			NumShards:    4,
@@ -1323,7 +1323,7 @@ func TestPostgresMapEngine_OutboxDeliveryGuarantee(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, node2.Run())
 
-	engine2, err := NewPostgresMapEngine(node2, PostgresMapEngineConfig{
+	engine2, err := NewPostgresMapBroker(node2, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Outbox: OutboxConfig{
 			NumShards:    4,
@@ -1381,8 +1381,8 @@ func TestPostgresMapEngine_OutboxDeliveryGuarantee(t *testing.T) {
 	require.Equal(t, 0, count, "outbox should be empty after processing")
 }
 
-// TestPostgresMapEngine_OutboxMarkProcessed tests mark-processed mode.
-func TestPostgresMapEngine_OutboxMarkProcessed(t *testing.T) {
+// TestPostgresMapBroker_OutboxMarkProcessed tests mark-processed mode.
+func TestPostgresMapBroker_OutboxMarkProcessed(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
@@ -1391,7 +1391,7 @@ func TestPostgresMapEngine_OutboxMarkProcessed(t *testing.T) {
 	require.NoError(t, node.Run())
 
 	// Create engine with mark-processed mode
-	engine, err := NewPostgresMapEngine(node, PostgresMapEngineConfig{
+	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Outbox: OutboxConfig{
 			NumShards:     4,
@@ -1465,8 +1465,8 @@ func TestPostgresMapEngine_OutboxMarkProcessed(t *testing.T) {
 	require.Equal(t, 3, processedCount, "all rows should be marked as processed")
 }
 
-// TestPostgresMapEngine_OutboxConcurrentPublish tests concurrent publishes maintain ordering.
-func TestPostgresMapEngine_OutboxConcurrentPublish(t *testing.T) {
+// TestPostgresMapBroker_OutboxConcurrentPublish tests concurrent publishes maintain ordering.
+func TestPostgresMapBroker_OutboxConcurrentPublish(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
@@ -1474,7 +1474,7 @@ func TestPostgresMapEngine_OutboxConcurrentPublish(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
-	engine, err := NewPostgresMapEngine(node, PostgresMapEngineConfig{
+	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Outbox: OutboxConfig{
 			NumShards:    4,
@@ -1569,8 +1569,8 @@ func TestPostgresMapEngine_OutboxConcurrentPublish(t *testing.T) {
 	}
 }
 
-// TestPostgresMapEngine_OutboxWithBroker tests multi-node delivery via broker.
-func TestPostgresMapEngine_OutboxWithBroker(t *testing.T) {
+// TestPostgresMapBroker_OutboxWithBroker tests multi-node delivery via broker.
+func TestPostgresMapBroker_OutboxWithBroker(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
@@ -1620,7 +1620,7 @@ func TestPostgresMapEngine_OutboxWithBroker(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create PostgreSQL map engine with broker for multi-node delivery
-	engine, err := NewPostgresMapEngine(node, PostgresMapEngineConfig{
+	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Broker:     broker,
 		Outbox: OutboxConfig{

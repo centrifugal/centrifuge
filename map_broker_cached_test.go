@@ -11,13 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestCachedMapEngine(tb testing.TB, n *Node) (*CachedMapEngine, *MemoryMapEngine) {
-	backend, err := NewMemoryMapEngine(n, MemoryMapEngineConfig{})
+func newTestCachedMapBroker(tb testing.TB, n *Node) (*CachedMapBroker, *MemoryMapBroker) {
+	backend, err := NewMemoryMapBroker(n, MemoryMapBrokerConfig{})
 	require.NoError(tb, err)
 	err = backend.RegisterBrokerEventHandler(nil)
 	require.NoError(tb, err)
 
-	cached, err := NewCachedMapEngine(n, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(n, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels:        1000,
 			ChannelIdleTimeout: 5 * time.Minute,
@@ -42,7 +42,7 @@ func newTestCachedMapEngine(tb testing.TB, n *Node) (*CachedMapEngine, *MemoryMa
 // TestMapCache_EnsureLoaded tests lazy loading.
 func TestMapCache_EnsureLoaded(t *testing.T) {
 	node, _ := New(Config{})
-	cached, backend := newTestCachedMapEngine(t, node)
+	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_ensure_loaded"
@@ -58,7 +58,7 @@ func TestMapCache_EnsureLoaded(t *testing.T) {
 	// Cache should not be loaded yet
 	require.False(t, cached.cache.IsLoaded(channel))
 
-	// Read snapshot - should trigger load
+	// Read state - should trigger load
 	pubs, pos, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -72,7 +72,7 @@ func TestMapCache_EnsureLoaded(t *testing.T) {
 // TestMapCache_EnsureLoaded_Singleflight tests that concurrent loads call loader once.
 func TestMapCache_EnsureLoaded_Singleflight(t *testing.T) {
 	node, _ := New(Config{})
-	cached, backend := newTestCachedMapEngine(t, node)
+	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_singleflight"
@@ -104,7 +104,7 @@ func TestMapCache_EnsureLoaded_Singleflight(t *testing.T) {
 // TestMapCache_Evict tests manual eviction.
 func TestMapCache_Evict(t *testing.T) {
 	node, _ := New(Config{})
-	cached, backend := newTestCachedMapEngine(t, node)
+	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_evict"
@@ -129,12 +129,12 @@ func TestMapCache_Evict(t *testing.T) {
 // TestMapCache_LRUEviction tests LRU eviction when MaxChannels is exceeded.
 func TestMapCache_LRUEviction(t *testing.T) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	err = backend.RegisterBrokerEventHandler(nil)
 	require.NoError(t, err)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels: 3, // Very small limit
 			StreamSize:  100,
@@ -165,10 +165,10 @@ func TestMapCache_LRUEviction(t *testing.T) {
 	require.LessOrEqual(t, loadedCount, 3)
 }
 
-// TestMapCache_ApplyPublication tests that publications update snapshot correctly.
+// TestMapCache_ApplyPublication tests that publications update state correctly.
 func TestMapCache_ApplyPublication(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_apply_pub"
@@ -203,7 +203,7 @@ func TestMapCache_ApplyPublication(t *testing.T) {
 // TestMapCache_ApplyPublication_Remove tests removal publications.
 func TestMapCache_ApplyPublication_Remove(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_apply_remove"
@@ -242,10 +242,10 @@ func TestMapCache_ApplyPublication_Remove(t *testing.T) {
 	require.Equal(t, "key2", pubs[0].Key)
 }
 
-// TestCachedMapEngine_Publish tests write to backend + cache.
-func TestCachedMapEngine_Publish(t *testing.T) {
+// TestCachedMapBroker_Publish tests write to backend + cache.
+func TestCachedMapBroker_Publish(t *testing.T) {
 	node, _ := New(Config{})
-	cached, backend := newTestCachedMapEngine(t, node)
+	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_publish"
@@ -267,10 +267,10 @@ func TestCachedMapEngine_Publish(t *testing.T) {
 	require.Equal(t, []byte("data1"), pubs[0].Data)
 }
 
-// TestCachedMapEngine_Publish_ReadYourOwnWrite tests immediate visibility after publish.
-func TestCachedMapEngine_Publish_ReadYourOwnWrite(t *testing.T) {
+// TestCachedMapBroker_Publish_ReadYourOwnWrite tests immediate visibility after publish.
+func TestCachedMapBroker_Publish_ReadYourOwnWrite(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_ryow"
@@ -290,10 +290,10 @@ func TestCachedMapEngine_Publish_ReadYourOwnWrite(t *testing.T) {
 	require.Equal(t, []byte("data1"), pubs[0].Data)
 }
 
-// TestCachedMapEngine_Publish_Suppressed tests that suppressed publishes don't update cache.
-func TestCachedMapEngine_Publish_Suppressed(t *testing.T) {
+// TestCachedMapBroker_Publish_Suppressed tests that suppressed publishes don't update cache.
+func TestCachedMapBroker_Publish_Suppressed(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_suppressed"
@@ -325,10 +325,10 @@ func TestCachedMapEngine_Publish_Suppressed(t *testing.T) {
 	require.Equal(t, []byte("data1"), pubs[0].Data)
 }
 
-// TestCachedMapEngine_ReadState_LazyLoad tests that first read triggers load.
-func TestCachedMapEngine_ReadState_LazyLoad(t *testing.T) {
+// TestCachedMapBroker_ReadState_LazyLoad tests that first read triggers load.
+func TestCachedMapBroker_ReadState_LazyLoad(t *testing.T) {
 	node, _ := New(Config{})
-	cached, backend := newTestCachedMapEngine(t, node)
+	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_lazy_load"
@@ -354,11 +354,11 @@ func TestCachedMapEngine_ReadState_LazyLoad(t *testing.T) {
 	require.True(t, cached.cache.IsLoaded(channel))
 }
 
-// TestCachedMapEngine_ReadState_Cached tests subsequent reads from cache
+// TestCachedMapBroker_ReadState_Cached tests subsequent reads from cache
 // and that writes through the backend's event handler update the cache immediately.
-func TestCachedMapEngine_ReadState_Cached(t *testing.T) {
+func TestCachedMapBroker_ReadState_Cached(t *testing.T) {
 	node, _ := New(Config{})
-	cached, backend := newTestCachedMapEngine(t, node)
+	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_cached_read"
@@ -391,10 +391,10 @@ func TestCachedMapEngine_ReadState_Cached(t *testing.T) {
 	require.Len(t, pubs, 2) // Both keys visible immediately
 }
 
-// TestCachedMapEngine_ReadState_Pagination tests paginated reads.
-func TestCachedMapEngine_ReadState_Pagination(t *testing.T) {
+// TestCachedMapBroker_ReadState_Pagination tests paginated reads.
+func TestCachedMapBroker_ReadState_Pagination(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_pagination"
@@ -433,10 +433,10 @@ func TestCachedMapEngine_ReadState_Pagination(t *testing.T) {
 	}
 }
 
-// TestCachedMapEngine_Stats tests stats from cache.
-func TestCachedMapEngine_Stats(t *testing.T) {
+// TestCachedMapBroker_Stats tests stats from cache.
+func TestCachedMapBroker_Stats(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_stats"
@@ -457,10 +457,10 @@ func TestCachedMapEngine_Stats(t *testing.T) {
 	require.Equal(t, 5, stats.NumKeys)
 }
 
-// TestCachedMapEngine_Remove tests removing channel from cache.
-func TestCachedMapEngine_Remove(t *testing.T) {
+// TestCachedMapBroker_Remove tests removing channel from cache.
+func TestCachedMapBroker_Remove(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_remove"
@@ -489,10 +489,10 @@ func TestCachedMapEngine_Remove(t *testing.T) {
 	require.Equal(t, uint64(0), cached.getSyncOffset(channel))
 }
 
-// TestCachedMapEngine_Sync_NewPublications tests that sync picks up new publications.
-func TestCachedMapEngine_Sync_NewPublications(t *testing.T) {
+// TestCachedMapBroker_Sync_NewPublications tests that sync picks up new publications.
+func TestCachedMapBroker_Sync_NewPublications(t *testing.T) {
 	node, _ := New(Config{})
-	cached, backend := newTestCachedMapEngine(t, node)
+	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_sync_new"
@@ -522,11 +522,11 @@ func TestCachedMapEngine_Sync_NewPublications(t *testing.T) {
 	require.Len(t, pubs, 2)
 }
 
-// TestCachedMapEngine_Sync_ReappliesOwnWrites tests that own writes are safely re-applied during sync.
+// TestCachedMapBroker_Sync_ReappliesOwnWrites tests that own writes are safely re-applied during sync.
 // This is intentional - we don't skip own writes to avoid missing cross-node writes.
-func TestCachedMapEngine_Sync_ReappliesOwnWrites(t *testing.T) {
+func TestCachedMapBroker_Sync_ReappliesOwnWrites(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_sync_reapply"
@@ -549,10 +549,10 @@ func TestCachedMapEngine_Sync_ReappliesOwnWrites(t *testing.T) {
 	require.Equal(t, []byte("data1"), pubs[0].Data)
 }
 
-// TestCachedMapEngine_ConcurrentReadWrite tests race condition safety.
-func TestCachedMapEngine_ConcurrentReadWrite(t *testing.T) {
+// TestCachedMapBroker_ConcurrentReadWrite tests race condition safety.
+func TestCachedMapBroker_ConcurrentReadWrite(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_concurrent"
@@ -600,10 +600,10 @@ func TestCachedMapEngine_ConcurrentReadWrite(t *testing.T) {
 	require.Equal(t, int64(500), readCount.Load())
 }
 
-// TestCachedMapEngine_CAS_Success tests CAS succeeds with correct position.
-func TestCachedMapEngine_CAS_Success(t *testing.T) {
+// TestCachedMapBroker_CAS_Success tests CAS succeeds with correct position.
+func TestCachedMapBroker_CAS_Success(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_cas_success"
@@ -637,10 +637,10 @@ func TestCachedMapEngine_CAS_Success(t *testing.T) {
 	require.False(t, result.Suppressed)
 }
 
-// TestCachedMapEngine_CAS_Conflict tests CAS fails with stale position.
-func TestCachedMapEngine_CAS_Conflict(t *testing.T) {
+// TestCachedMapBroker_CAS_Conflict tests CAS fails with stale position.
+func TestCachedMapBroker_CAS_Conflict(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_cas_conflict"
@@ -682,10 +682,10 @@ func TestCachedMapEngine_CAS_Conflict(t *testing.T) {
 	require.Equal(t, SuppressReasonPositionMismatch, result.SuppressReason)
 }
 
-// TestCachedMapEngine_KeyMode_IfNew tests KeyModeIfNew with cache.
-func TestCachedMapEngine_KeyMode_IfNew(t *testing.T) {
+// TestCachedMapBroker_KeyMode_IfNew tests KeyModeIfNew with cache.
+func TestCachedMapBroker_KeyMode_IfNew(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_keymode_ifnew"
@@ -718,10 +718,10 @@ func TestCachedMapEngine_KeyMode_IfNew(t *testing.T) {
 	require.Equal(t, []byte("player1"), pubs[0].Data)
 }
 
-// TestCachedMapEngine_KeyMode_IfExists tests KeyModeIfExists with cache.
-func TestCachedMapEngine_KeyMode_IfExists(t *testing.T) {
+// TestCachedMapBroker_KeyMode_IfExists tests KeyModeIfExists with cache.
+func TestCachedMapBroker_KeyMode_IfExists(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_keymode_ifexists"
@@ -761,25 +761,25 @@ func TestCachedMapEngine_KeyMode_IfExists(t *testing.T) {
 	require.Equal(t, []byte("ping2"), pubs[0].Data)
 }
 
-// TestCachedMapEngine_Backend returns the underlying backend.
-func TestCachedMapEngine_Backend(t *testing.T) {
+// TestCachedMapBroker_Backend returns the underlying backend.
+func TestCachedMapBroker_Backend(t *testing.T) {
 	node, _ := New(Config{})
-	cached, backend := newTestCachedMapEngine(t, node)
+	cached, backend := newTestCachedMapBroker(t, node)
 
 	require.Same(t, backend, cached.underlyingBackend())
 }
 
-// TestNewCachedMapEngine_NilBackend tests error on nil backend.
-func TestNewCachedMapEngine_NilBackend(t *testing.T) {
+// TestNewCachedMapBroker_NilBackend tests error on nil backend.
+func TestNewCachedMapBroker_NilBackend(t *testing.T) {
 	node, _ := New(Config{})
-	_, err := NewCachedMapEngine(node, nil, DefaultCachedMapEngineConfig())
+	_, err := NewCachedMapBroker(node, nil, DefaultCachedMapBrokerConfig())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "backend is required")
 }
 
-// TestCachedMapEngineConfig_Defaults tests default configuration.
-func TestCachedMapEngineConfig_Defaults(t *testing.T) {
-	conf := CachedMapEngineConfig{}
+// TestCachedMapBrokerConfig_Defaults tests default configuration.
+func TestCachedMapBrokerConfig_Defaults(t *testing.T) {
+	conf := CachedMapBrokerConfig{}
 	conf = conf.setDefaults()
 
 	require.Equal(t, 30*time.Second, conf.SyncInterval)
@@ -791,13 +791,13 @@ func TestCachedMapEngineConfig_Defaults(t *testing.T) {
 	require.Equal(t, 5*time.Minute, conf.Cache.ChannelIdleTimeout)
 }
 
-// TestCachedMapEngine_EpochConsistency tests that ReadState and ReadStream
+// TestCachedMapBroker_EpochConsistency tests that ReadState and ReadStream
 // return the same epoch, which is critical for client subscription flow.
 // This test would have caught the epoch mismatch bug where GetStream returned
 // memstream's auto-generated epoch instead of the backend's epoch.
-func TestCachedMapEngine_EpochConsistency(t *testing.T) {
+func TestCachedMapBroker_EpochConsistency(t *testing.T) {
 	node, _ := New(Config{})
-	cached, backend := newTestCachedMapEngine(t, node)
+	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_epoch_consistency"
@@ -815,8 +815,8 @@ func TestCachedMapEngine_EpochConsistency(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, backendPos.Epoch, "backend should have an epoch")
 
-	// Read snapshot through cache (triggers lazy load)
-	_, snapshotPos, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
+	// Read state through cache (triggers lazy load)
+	_, statePos, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
 	require.NoError(t, err)
 
 	// Read stream through cache
@@ -824,27 +824,27 @@ func TestCachedMapEngine_EpochConsistency(t *testing.T) {
 	require.NoError(t, err)
 
 	// CRITICAL: Both should return the same epoch
-	require.Equal(t, snapshotPos.Epoch, streamPos.Epoch,
+	require.Equal(t, statePos.Epoch, streamPos.Epoch,
 		"ReadState and ReadStream must return the same epoch for client subscription flow to work")
 
 	// And the epoch should match the backend's epoch
-	require.Equal(t, backendPos.Epoch, snapshotPos.Epoch,
+	require.Equal(t, backendPos.Epoch, statePos.Epoch,
 		"cache should return the backend's epoch, not a randomly generated one")
 }
 
-// TestCachedMapEngine_SubscriptionPhaseFlow simulates the client subscription
-// flow: snapshot phase → stream phase → live phase, verifying positions are consistent.
-func TestCachedMapEngine_SubscriptionPhaseFlow(t *testing.T) {
+// TestCachedMapBroker_SubscriptionPhaseFlow simulates the client subscription
+// flow: state phase → stream phase → live phase, verifying positions are consistent.
+func TestCachedMapBroker_SubscriptionPhaseFlow(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_subscription_flow"
 
 	// Phase 0: No data yet - empty channel
-	snapshot, snapshotPos, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
+	state, statePos, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
 	require.NoError(t, err)
-	require.Empty(t, snapshot)
+	require.Empty(t, state)
 
 	// Simulate server publishing some initial data
 	for i := 0; i < 5; i++ {
@@ -856,29 +856,29 @@ func TestCachedMapEngine_SubscriptionPhaseFlow(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Phase 1: Client requests snapshot (map_phase=0)
-	snapshot, snapshotPos, _, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
+	// Phase 1: Client requests state (map_phase=0)
+	state, statePos, _, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
 	require.NoError(t, err)
-	require.Len(t, snapshot, 5)
-	require.NotEmpty(t, snapshotPos.Epoch)
-	require.Greater(t, snapshotPos.Offset, uint64(0))
+	require.Len(t, state, 5)
+	require.NotEmpty(t, statePos.Epoch)
+	require.Greater(t, statePos.Offset, uint64(0))
 
 	// Client transitions to stream phase (map_phase=1)
-	// Client sends Since position from snapshot phase
+	// Client sends Since position from state phase
 	stream, streamPos, err := cached.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
-			Since: &snapshotPos, // Client uses position from snapshot phase
+			Since: &statePos, // Client uses position from state phase
 		},
 	})
 	require.NoError(t, err)
 
 	// Epochs must match for recovery to work
-	require.Equal(t, snapshotPos.Epoch, streamPos.Epoch,
-		"stream epoch must match snapshot epoch for subscription to succeed")
+	require.Equal(t, statePos.Epoch, streamPos.Epoch,
+		"stream epoch must match state epoch for subscription to succeed")
 
 	// Stream should be empty or contain only newer publications
 	// (since we're requesting from the current position)
-	require.Empty(t, stream, "no new publications since snapshot")
+	require.Empty(t, stream, "no new publications since state")
 
 	// Now simulate new publication while client is in stream phase
 	_, err = cached.Publish(ctx, channel, "key_new", MapPublishOptions{
@@ -901,14 +901,14 @@ func TestCachedMapEngine_SubscriptionPhaseFlow(t *testing.T) {
 	require.Equal(t, "key_new", stream[0].Key)
 
 	// Epoch should still be consistent
-	require.Equal(t, snapshotPos.Epoch, streamPos2.Epoch)
+	require.Equal(t, statePos.Epoch, streamPos2.Epoch)
 }
 
-// TestCachedMapEngine_CrossNodeEpochConsistency tests that when data is loaded
+// TestCachedMapBroker_CrossNodeEpochConsistency tests that when data is loaded
 // from a backend (simulating cross-node scenario), the epoch is preserved correctly.
-func TestCachedMapEngine_CrossNodeEpochConsistency(t *testing.T) {
+func TestCachedMapBroker_CrossNodeEpochConsistency(t *testing.T) {
 	node, _ := New(Config{})
-	cached, backend := newTestCachedMapEngine(t, node)
+	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_cross_node_epoch"
@@ -928,9 +928,9 @@ func TestCachedMapEngine_CrossNodeEpochConsistency(t *testing.T) {
 	require.NoError(t, err)
 
 	// This node's client subscribes - cache loads from backend
-	snapshot, cacheSnapshotPos, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
+	state, cacheSnapshotPos, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
 	require.NoError(t, err)
-	require.Len(t, snapshot, 3)
+	require.Len(t, state, 3)
 
 	// Epoch must match backend
 	require.Equal(t, backendPos.Epoch, cacheSnapshotPos.Epoch)
@@ -941,10 +941,10 @@ func TestCachedMapEngine_CrossNodeEpochConsistency(t *testing.T) {
 	require.Equal(t, backendPos.Epoch, cacheStreamPos.Epoch)
 }
 
-// TestCachedMapEngine_Sync_GapDetection tests that sync detects gaps and reloads.
-func TestCachedMapEngine_Sync_GapDetection(t *testing.T) {
+// TestCachedMapBroker_Sync_GapDetection tests that sync detects gaps and reloads.
+func TestCachedMapBroker_Sync_GapDetection(t *testing.T) {
 	node, _ := New(Config{})
-	cached, backend := newTestCachedMapEngine(t, node)
+	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_gap_detection"
@@ -982,23 +982,23 @@ func TestCachedMapEngine_Sync_GapDetection(t *testing.T) {
 	// After reload, cache should have current state
 	pubs, pos, _, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
 	require.NoError(t, err)
-	// Should have all 10 keys in snapshot (gap detection reloads full snapshot)
+	// Should have all 10 keys in state (gap detection reloads full state)
 	require.Len(t, pubs, 10)
 	// Epoch should remain the same (same channel)
 	require.Equal(t, initialEpoch, pos.Epoch)
 }
 
-// TestCachedMapEngine_HandlePublication_GapFilling tests that when HandlePublication
+// TestCachedMapBroker_HandlePublication_GapFilling tests that when HandlePublication
 // receives a publication with a gap (offset > cached + 1), it fetches missing
 // publications from backend to maintain consistency.
-func TestCachedMapEngine_HandlePublication_GapFilling(t *testing.T) {
+func TestCachedMapBroker_HandlePublication_GapFilling(t *testing.T) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	err = backend.RegisterBrokerEventHandler(nil)
 	require.NoError(t, err)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels:        1000,
 			ChannelIdleTimeout: 5 * time.Minute,
@@ -1086,16 +1086,16 @@ func TestCachedMapEngine_HandlePublication_GapFilling(t *testing.T) {
 	}
 }
 
-// TestCachedMapEngine_HandlePublication_EpochMismatch tests that when HandlePublication
+// TestCachedMapBroker_HandlePublication_EpochMismatch tests that when HandlePublication
 // receives a publication with a different epoch, the cache is evicted.
-func TestCachedMapEngine_HandlePublication_EpochMismatch(t *testing.T) {
+func TestCachedMapBroker_HandlePublication_EpochMismatch(t *testing.T) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	err = backend.RegisterBrokerEventHandler(nil)
 	require.NoError(t, err)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels:        1000,
 			ChannelIdleTimeout: 5 * time.Minute,
@@ -1150,16 +1150,16 @@ func TestCachedMapEngine_HandlePublication_EpochMismatch(t *testing.T) {
 	_ = pos
 }
 
-// TestCachedMapEngine_HandlePublication_NoGap tests that publications without gaps
+// TestCachedMapBroker_HandlePublication_NoGap tests that publications without gaps
 // are applied normally without fetching from backend.
-func TestCachedMapEngine_HandlePublication_NoGap(t *testing.T) {
+func TestCachedMapBroker_HandlePublication_NoGap(t *testing.T) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	err = backend.RegisterBrokerEventHandler(nil)
 	require.NoError(t, err)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels:        1000,
 			ChannelIdleTimeout: 5 * time.Minute,
@@ -1217,11 +1217,11 @@ func TestCachedMapEngine_HandlePublication_NoGap(t *testing.T) {
 	require.Equal(t, uint64(2), finalPos.Offset)
 }
 
-// TestCachedMapEngine_PositionAfterPublish tests that position is correctly
+// TestCachedMapBroker_PositionAfterPublish tests that position is correctly
 // updated after publishes through the cache.
-func TestCachedMapEngine_PositionAfterPublish(t *testing.T) {
+func TestCachedMapBroker_PositionAfterPublish(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_position_after_publish"
@@ -1264,21 +1264,21 @@ func TestCachedMapEngine_PositionAfterPublish(t *testing.T) {
 	require.Equal(t, pos2.Epoch, streamPos.Epoch)
 }
 
-// TestCachedMapEngine_SnapshotAndStreamRecovery tests the real-world scenario where:
-// 1. Backend has existing data (snapshot + stream history)
-// 2. Cache loads both snapshot AND stream on first access
+// TestCachedMapBroker_SnapshotAndStreamRecovery tests the real-world scenario where:
+// 1. Backend has existing data (state + stream history)
+// 2. Cache loads both state AND stream on first access
 // 3. Reconnecting clients can recover from cached stream without hitting backend
-func TestCachedMapEngine_SnapshotAndStreamRecovery(t *testing.T) {
+func TestCachedMapBroker_SnapshotAndStreamRecovery(t *testing.T) {
 	node, _ := New(Config{})
 
 	// Create backend with data
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	err = backend.RegisterBrokerEventHandler(nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	channel := "test_snapshot_stream_recovery"
+	channel := "test_state_stream_recovery"
 
 	// Step 1: Populate backend with history (simulating existing channel state)
 	// This represents data published before this node's cache was loaded
@@ -1300,7 +1300,7 @@ func TestCachedMapEngine_SnapshotAndStreamRecovery(t *testing.T) {
 	require.Equal(t, uint64(10), backendPos.Offset)
 
 	// Step 2: Create cached engine - cache is empty at this point
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels:        1000,
 			ChannelIdleTimeout: 5 * time.Minute,
@@ -1317,12 +1317,12 @@ func TestCachedMapEngine_SnapshotAndStreamRecovery(t *testing.T) {
 	// Verify cache is not loaded yet
 	require.False(t, cached.cache.IsLoaded(channel))
 
-	// Step 3: First client subscribes - triggers cache load (snapshot + stream)
-	snapshot, snapshotPos, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
+	// Step 3: First client subscribes - triggers cache load (state + stream)
+	state, statePos, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
 	require.NoError(t, err)
-	require.Len(t, snapshot, 10, "snapshot should have all 10 keys")
-	require.Equal(t, backendPos.Offset, snapshotPos.Offset)
-	require.Equal(t, backendPos.Epoch, snapshotPos.Epoch)
+	require.Len(t, state, 10, "state should have all 10 keys")
+	require.Equal(t, backendPos.Offset, statePos.Offset)
+	require.Equal(t, backendPos.Epoch, statePos.Epoch)
 
 	// Cache should now be loaded
 	require.True(t, cached.cache.IsLoaded(channel))
@@ -1380,11 +1380,11 @@ func TestCachedMapEngine_SnapshotAndStreamRecovery(t *testing.T) {
 	require.Empty(t, recoveredStream3, "up-to-date client should get empty stream")
 }
 
-// TestCachedMapEngine_StreamRecoveryAfterNewPublications tests recovery when
+// TestCachedMapBroker_StreamRecoveryAfterNewPublications tests recovery when
 // new publications arrive after cache is loaded.
-func TestCachedMapEngine_StreamRecoveryAfterNewPublications(t *testing.T) {
+func TestCachedMapBroker_StreamRecoveryAfterNewPublications(t *testing.T) {
 	node, _ := New(Config{})
-	cached, backend := newTestCachedMapEngine(t, node)
+	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_stream_recovery_new_pubs"
@@ -1404,7 +1404,7 @@ func TestCachedMapEngine_StreamRecoveryAfterNewPublications(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(5), pos5.Offset)
 
-	// Step 2: Client A connects and gets snapshot at position 5
+	// Step 2: Client A connects and gets state at position 5
 	clientAPos := pos5
 
 	// Step 3: More publications happen (client A is "disconnected")
@@ -1435,11 +1435,11 @@ func TestCachedMapEngine_StreamRecoveryAfterNewPublications(t *testing.T) {
 	_ = backend
 }
 
-// TestCachedMapEngine_StreamRecoveryWithRemovals tests that stream recovery
+// TestCachedMapBroker_StreamRecoveryWithRemovals tests that stream recovery
 // correctly includes removal publications.
-func TestCachedMapEngine_StreamRecoveryWithRemovals(t *testing.T) {
+func TestCachedMapBroker_StreamRecoveryWithRemovals(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_stream_recovery_removals"
@@ -1503,13 +1503,13 @@ func TestCachedMapEngine_StreamRecoveryWithRemovals(t *testing.T) {
 	require.Equal(t, "key7", recovered[2].Key)
 	require.False(t, recovered[2].Removed)
 
-	// Step 4: Verify snapshot reflects final state (4 keys: 1,2,4,5,6,7 minus 3)
-	snapshot, _, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
+	// Step 4: Verify state reflects final state (4 keys: 1,2,4,5,6,7 minus 3)
+	state, _, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
 	require.NoError(t, err)
-	require.Len(t, snapshot, 6) // 5 original - 1 removed + 2 added = 6
+	require.Len(t, state, 6) // 5 original - 1 removed + 2 added = 6
 
 	keyMap := make(map[string]bool)
-	for _, pub := range snapshot {
+	for _, pub := range state {
 		keyMap[pub.Key] = true
 	}
 	require.False(t, keyMap["key3"], "key3 should be removed")
@@ -1517,9 +1517,9 @@ func TestCachedMapEngine_StreamRecoveryWithRemovals(t *testing.T) {
 	require.True(t, keyMap["key7"], "key7 should be present")
 }
 
-// TestCachedMapEngine_ChannelOptionsInheritance tests that cache uses
+// TestCachedMapBroker_ChannelOptionsInheritance tests that cache uses
 // resolved channel options for stream size/TTL.
-func TestCachedMapEngine_ChannelOptionsInheritance(t *testing.T) {
+func TestCachedMapBroker_ChannelOptionsInheritance(t *testing.T) {
 	node, _ := New(Config{
 		// Configure per-channel options
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
@@ -1539,12 +1539,12 @@ func TestCachedMapEngine_ChannelOptionsInheritance(t *testing.T) {
 		},
 	})
 
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	err = backend.RegisterBrokerEventHandler(nil)
 	require.NoError(t, err)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels: 1000,
 			StreamSize:  1000, // Default cache stream size (should be overridden)
@@ -1613,9 +1613,9 @@ func TestCachedMapEngine_ChannelOptionsInheritance(t *testing.T) {
 	require.Len(t, stream2, 10, "large_stream should have all 10 entries")
 }
 
-// TestCachedMapEngine_OptionsFromBackendLoad tests that when cache loads from
+// TestCachedMapBroker_OptionsFromBackendLoad tests that when cache loads from
 // backend, it uses resolved channel options for stream size.
-func TestCachedMapEngine_OptionsFromBackendLoad(t *testing.T) {
+func TestCachedMapBroker_OptionsFromBackendLoad(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
@@ -1626,7 +1626,7 @@ func TestCachedMapEngine_OptionsFromBackendLoad(t *testing.T) {
 	})
 
 	// Create backend with data
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	err = backend.RegisterBrokerEventHandler(nil)
 	require.NoError(t, err)
@@ -1652,7 +1652,7 @@ func TestCachedMapEngine_OptionsFromBackendLoad(t *testing.T) {
 	require.Len(t, backendStream, 10, "backend should have all 10 stream entries")
 
 	// Now create cached engine - it should only load 3 stream entries per channel options
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels: 1000,
 			StreamSize:  1000, // Cache default is large
@@ -1665,7 +1665,7 @@ func TestCachedMapEngine_OptionsFromBackendLoad(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = cached.Close(context.Background()) }()
 
-	// Load cache by reading snapshot
+	// Load cache by reading state
 	_, pos, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
 	require.NoError(t, err)
 	require.Equal(t, uint64(10), pos.Offset)
@@ -1685,11 +1685,11 @@ func TestCachedMapEngine_OptionsFromBackendLoad(t *testing.T) {
 	}
 }
 
-// TestCachedMapEngine_ConcurrentWriteOrdering tests that concurrent writes
+// TestCachedMapBroker_ConcurrentWriteOrdering tests that concurrent writes
 // to the same channel are properly ordered in the cache.
-func TestCachedMapEngine_ConcurrentWriteOrdering(t *testing.T) {
+func TestCachedMapBroker_ConcurrentWriteOrdering(t *testing.T) {
 	node, _ := New(Config{})
-	cached, _ := newTestCachedMapEngine(t, node)
+	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_concurrent_ordering"
@@ -1732,11 +1732,11 @@ func TestCachedMapEngine_ConcurrentWriteOrdering(t *testing.T) {
 	wg.Wait()
 
 	// Verify all writes are in cache
-	snapshot, pos, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
+	state, pos, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
 	require.NoError(t, err)
 
 	expectedKeys := 1 + numGoroutines*numWritesPerGoroutine // init + all concurrent writes
-	require.Equal(t, expectedKeys, len(snapshot), "all keys should be in snapshot")
+	require.Equal(t, expectedKeys, len(state), "all keys should be in state")
 
 	// Verify position reflects all writes
 	require.Equal(t, uint64(expectedKeys), pos.Offset)
@@ -1764,15 +1764,15 @@ func TestCachedMapEngine_ConcurrentWriteOrdering(t *testing.T) {
 	}
 }
 
-// TestCachedMapEngine_HandlePublication_LoadingRace tests that publications
+// TestCachedMapBroker_HandlePublication_LoadingRace tests that publications
 // are not lost when loading finishes between IsLoading check and BufferPublication.
 // This is the TOCTOU (Time Of Check To Time Of Use) race condition fix.
-func TestCachedMapEngine_HandlePublication_LoadingRace(t *testing.T) {
+func TestCachedMapBroker_HandlePublication_LoadingRace(t *testing.T) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels:        1000,
 			ChannelIdleTimeout: 5 * time.Minute,
@@ -1854,14 +1854,14 @@ func TestCachedMapEngine_HandlePublication_LoadingRace(t *testing.T) {
 	require.Equal(t, int32(publishCount), raceKeyCount.Load(), "all race_key publications should be forwarded to handler")
 }
 
-// TestCachedMapEngine_ResubscribeFreshData tests that when re-subscribing to
+// TestCachedMapBroker_ResubscribeFreshData tests that when re-subscribing to
 // an already-loaded channel, we get fresh data from backend (not stale cache).
-func TestCachedMapEngine_ResubscribeFreshData(t *testing.T) {
+func TestCachedMapBroker_ResubscribeFreshData(t *testing.T) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels:        1000,
 			ChannelIdleTimeout: 5 * time.Minute,
@@ -1934,15 +1934,15 @@ func TestCachedMapEngine_ResubscribeFreshData(t *testing.T) {
 	}
 }
 
-// TestCachedMapEngine_ConcurrentPresenceScenario simulates the scenario where
+// TestCachedMapBroker_ConcurrentPresenceScenario simulates the scenario where
 // multiple clients publish presence and subscribe concurrently after server restart.
 // All clients should eventually see the same count.
-func TestCachedMapEngine_ConcurrentPresenceScenario(t *testing.T) {
+func TestCachedMapBroker_ConcurrentPresenceScenario(t *testing.T) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels:        1000,
 			ChannelIdleTimeout: 5 * time.Minute,
@@ -1989,7 +1989,7 @@ func TestCachedMapEngine_ConcurrentPresenceScenario(t *testing.T) {
 			err = cached.Subscribe(channel)
 			require.NoError(t, err)
 
-			// Read snapshot
+			// Read state
 			pubs, _, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
 			require.NoError(t, err)
 			results[clientIdx] = len(pubs)
@@ -2003,7 +2003,7 @@ func TestCachedMapEngine_ConcurrentPresenceScenario(t *testing.T) {
 	// Final read should show all clients
 	pubs, _, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true})
 	require.NoError(t, err)
-	require.Len(t, pubs, numClients, "final snapshot should have all %d clients", numClients)
+	require.Len(t, pubs, numClients, "final state should have all %d clients", numClients)
 
 	// Log the intermediate results for debugging
 	t.Logf("Intermediate results: %v", results)
@@ -2015,14 +2015,14 @@ func TestCachedMapEngine_ConcurrentPresenceScenario(t *testing.T) {
 	}
 }
 
-// TestCachedMapEngine_SubscribeAlreadyLoadedChannel tests that subscribing
+// TestCachedMapBroker_SubscribeAlreadyLoadedChannel tests that subscribing
 // to a channel that's already in cache forces a refresh.
-func TestCachedMapEngine_SubscribeAlreadyLoadedChannel(t *testing.T) {
+func TestCachedMapBroker_SubscribeAlreadyLoadedChannel(t *testing.T) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels:        1000,
 			ChannelIdleTimeout: 5 * time.Minute,
@@ -2093,9 +2093,9 @@ func TestCachedMapEngine_SubscribeAlreadyLoadedChannel(t *testing.T) {
 	require.Len(t, pubs, 3, "all entries should be visible after re-subscribe")
 }
 
-// TestCachedMapEngine_BufferPublicationRace tests that publications are not
+// TestCachedMapBroker_BufferPublicationRace tests that publications are not
 // lost when BufferPublication is called but loading has just finished.
-func TestCachedMapEngine_BufferPublicationRace(t *testing.T) {
+func TestCachedMapBroker_BufferPublicationRace(t *testing.T) {
 	// Create a custom cache that we can control for testing
 	conf := MapCacheConfig{
 		MaxChannels:        1000,

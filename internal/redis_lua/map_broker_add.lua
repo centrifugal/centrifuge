@@ -1,8 +1,8 @@
 --[[
 Unified publish script supporting:
 1. Append log with offset/epoch for continuity.
-2. Keyed snapshot (simple HASH or ordered HASH+ZSET) with optional TTL - used for both state and presence.
-3. Leave messages (remove from keyed snapshot).
+2. Keyed state (simple HASH or ordered HASH+ZSET) with optional TTL - used for both state and presence.
+3. Leave messages (remove from keyed state).
 4. Idempotency via result key.
 5. Delta or full payload publishing with simplified format.
 
@@ -16,14 +16,14 @@ Publishing format (via PUBLISH/SPUBLISH):
 -- KEYS[1] = append log stream key (optional, empty '' to disable)
 -- KEYS[2] = append log meta key (optional, empty '' to disable)
 -- KEYS[3] = result key for idempotency (optional, empty '' to disable)
--- KEYS[4] = snapshot hash key (optional, empty '' to disable) - used for both keyed state AND presence
--- KEYS[5] = snapshot order zset key (optional, empty '' to disable)
--- KEYS[6] = snapshot expire zset key (optional, empty '' to disable)
--- KEYS[7] = snapshot meta key (optional, empty '' to disable)
+-- KEYS[4] = state hash key (optional, empty '' to disable) - used for both keyed state AND presence
+-- KEYS[5] = state order zset key (optional, empty '' to disable)
+-- KEYS[6] = state expire zset key (optional, empty '' to disable)
+-- KEYS[7] = state meta key (optional, empty '' to disable)
 -- KEYS[8] = cleanup registration zset key (optional, empty '' to disable) - for scheduling cleanup
 
 -- ==== ARGV ====
--- ARGV[1]  = message_key (Key for snapshot field - Client ID for presence, state key for keyed state)
+-- ARGV[1]  = message_key (Key for state field - Client ID for presence, state key for keyed state)
 -- ARGV[2]  = message_payload (protocol.Publication for stream and publishing)
 -- ARGV[3]  = stream_size (MAXLEN)
 -- ARGV[4]  = stream_ttl (seconds)
@@ -37,23 +37,24 @@ Publishing format (via PUBLISH/SPUBLISH):
 -- ARGV[12] = version_epoch
 -- ARGV[13] = is_leave ("0" or "1")
 -- ARGV[14] = score (for ordered keyed state)
--- ARGV[15] = keyed_member_ttl (seconds for keyed snapshot TTL)
+-- ARGV[15] = keyed_member_ttl (seconds for keyed state TTL)
 -- ARGV[16] = use_hexpire ("0" or "1" - Redis 7.4+ per-field TTL)
 -- ARGV[17] = channel_for_cleanup (channel name for cleanup registration, empty '' to disable)
 -- ARGV[18] = key_mode ("" for replace/always, "if_new" only if key doesn't exist, "if_exists" only if key exists)
 -- ARGV[19] = refresh_ttl_on_suppress ("0" or "1" - refresh TTL even when suppressed by key_mode)
 -- ARGV[20] = expected_offset (for CAS, empty '' to disable)
 -- ARGV[21] = expected_epoch (for CAS, empty '' to disable)
--- ARGV[22] = snapshot_payload (for snapshot storage, empty '' to use message_payload)
+-- ARGV[22] = state_payload (for state storage, empty '' to use message_payload)
+-- ARGV[23] = nil_key (slot-aligned placeholder for unused KEYS in cluster mode, empty '' to disable)
 
 -- Local variables from KEYS
 local stream_key = KEYS[1]
 local meta_key = KEYS[2]
 local result_key = KEYS[3]
-local snapshot_hash_key = KEYS[4]
-local snapshot_order_key = KEYS[5]
-local snapshot_expire_key = KEYS[6]
-local snapshot_meta_key = KEYS[7]
+local state_hash_key = KEYS[4]
+local state_order_key = KEYS[5]
+local state_expire_key = KEYS[6]
+local state_meta_key = KEYS[7]
 local cleanup_registration_key = KEYS[8]
 
 -- Local variables from ARGV
@@ -78,13 +79,28 @@ local key_mode = ARGV[18] or ""
 local refresh_ttl_on_suppress = ARGV[19] or "0"
 local expected_offset = ARGV[20] or ""
 local expected_epoch = ARGV[21] or ""
-local snapshot_payload_arg = ARGV[22] or ""
+local state_payload_arg = ARGV[22] or ""
 
--- Determine which payload to use for snapshot storage
--- If snapshot_payload_arg is provided, use it; otherwise use message_payload
-local snapshot_payload = snapshot_payload_arg
-if snapshot_payload == "" then
-    snapshot_payload = message_payload
+-- In Redis Cluster, all KEYS must hash to the same slot. For unused keys we pass
+-- a slot-aligned placeholder instead of '' (empty string hashes to slot 0). Convert
+-- those placeholders back to '' so all existing conditional checks still work.
+local nil_key = ARGV[23] or ""
+if nil_key ~= "" then
+    if stream_key == nil_key then stream_key = '' end
+    if meta_key == nil_key then meta_key = '' end
+    if result_key == nil_key then result_key = '' end
+    if state_hash_key == nil_key then state_hash_key = '' end
+    if state_order_key == nil_key then state_order_key = '' end
+    if state_expire_key == nil_key then state_expire_key = '' end
+    if state_meta_key == nil_key then state_meta_key = '' end
+    if cleanup_registration_key == nil_key then cleanup_registration_key = '' end
+end
+
+-- Determine which payload to use for state storage
+-- If state_payload_arg is provided, use it; otherwise use message_payload
+local state_payload = state_payload_arg
+if state_payload == "" then
+    state_payload = message_payload
 end
 
 -- ==== Step 0: Idempotency check ====
@@ -124,8 +140,8 @@ if meta_key ~= '' then
     end
 
     -- ==== Step 2b: KeyMode check (BEFORE incrementing offset) ====
-    if key_mode ~= "" and message_key ~= "" and snapshot_hash_key ~= "" and is_leave ~= "1" then
-        local key_exists = redis.call("hexists", snapshot_hash_key, message_key) == 1
+    if key_mode ~= "" and message_key ~= "" and state_hash_key ~= "" and is_leave ~= "1" then
+        local key_exists = redis.call("hexists", state_hash_key, message_key) == 1
         if key_mode == "if_new" and key_exists then
             -- KeyModeIfNew but key already exists - suppress
             -- But optionally refresh TTL if refresh_ttl_on_suppress is set
@@ -135,9 +151,9 @@ if meta_key ~= '' then
                 local ttl = tonumber(keyed_member_ttl)
 
                 -- Update expire zset with new expiry time
-                if snapshot_expire_key ~= '' then
-                    redis.call("zadd", snapshot_expire_key, expire_at, message_key)
-                    redis.call("expire", snapshot_expire_key, ttl)
+                if state_expire_key ~= '' then
+                    redis.call("zadd", state_expire_key, expire_at, message_key)
+                    redis.call("expire", state_expire_key, ttl)
                 end
 
                 -- Update cleanup registration with new expiry
@@ -150,9 +166,9 @@ if meta_key ~= '' then
 
                 -- Refresh per-field TTL if using HEXPIRE
                 if use_hexpire == "1" then
-                    redis.call("hexpire", snapshot_hash_key, ttl, "FIELDS", "1", message_key)
+                    redis.call("hexpire", state_hash_key, ttl, "FIELDS", "1", message_key)
                 else
-                    redis.call("expire", snapshot_hash_key, ttl)
+                    redis.call("expire", state_hash_key, ttl)
                 end
             end
             local current_offset = redis.call("hget", meta_key, "s") or 0
@@ -166,8 +182,8 @@ if meta_key ~= '' then
     end
 
     -- ==== Step 2c: CAS position check (BEFORE incrementing offset) ====
-    if expected_offset ~= "" and expected_epoch ~= "" and message_key ~= "" and snapshot_hash_key ~= "" and is_leave ~= "1" then
-        local current_value = redis.call("hget", snapshot_hash_key, message_key)
+    if expected_offset ~= "" and expected_epoch ~= "" and message_key ~= "" and state_hash_key ~= "" and is_leave ~= "1" then
+        local current_value = redis.call("hget", state_hash_key, message_key)
 
         -- First check epoch matches current channel epoch
         if expected_epoch ~= current_epoch then
@@ -218,26 +234,26 @@ end
 
 -- ==== Step 4: Handle leave message ====
 if is_leave == "1" then
-    -- Remove from keyed snapshot (works for both state and presence)
-    if snapshot_hash_key ~= '' then
-        -- Remove from snapshot
-        redis.call("hdel", snapshot_hash_key, message_key)
-        if snapshot_order_key ~= '' then
-            redis.call("zrem", snapshot_order_key, message_key)
+    -- Remove from keyed state (works for both state and presence)
+    if state_hash_key ~= '' then
+        -- Remove from state
+        redis.call("hdel", state_hash_key, message_key)
+        if state_order_key ~= '' then
+            redis.call("zrem", state_order_key, message_key)
         end
-        if snapshot_expire_key ~= '' then
-            redis.call("zrem", snapshot_expire_key, message_key)
+        if state_expire_key ~= '' then
+            redis.call("zrem", state_expire_key, message_key)
         end
 
         -- Update cleanup registration: remove channel if no entries left, or update to next expiry
-        if cleanup_registration_key ~= '' and channel_for_cleanup ~= '' and snapshot_expire_key ~= '' then
-            local remaining = redis.call("zcard", snapshot_expire_key)
+        if cleanup_registration_key ~= '' and channel_for_cleanup ~= '' and state_expire_key ~= '' then
+            local remaining = redis.call("zcard", state_expire_key)
             if remaining == 0 then
                 -- No entries left, remove channel from cleanup registration
                 redis.call("zrem", cleanup_registration_key, channel_for_cleanup)
             else
                 -- Update to next earliest expiry
-                local next_expiry = redis.call("zrange", snapshot_expire_key, 0, 0, "WITHSCORES")
+                local next_expiry = redis.call("zrange", state_expire_key, 0, 0, "WITHSCORES")
                 if #next_expiry >= 2 then
                     redis.call("zadd", cleanup_registration_key, next_expiry[2], channel_for_cleanup)
                 else
@@ -249,22 +265,22 @@ if is_leave == "1" then
     end
 end
 
--- ==== Step 5: Add/update keyed snapshot ====
+-- ==== Step 5: Add/update keyed state ====
 -- Skip for leave messages (they already removed entries in Step 4)
-if snapshot_hash_key ~= '' and is_leave ~= "1" then
-    -- Check if snapshot is from a different epoch - clear if so
-    if snapshot_meta_key ~= '' then
-        local old_snapshot_epoch = redis.call("hget", snapshot_meta_key, "epoch")
-        if old_snapshot_epoch and old_snapshot_epoch ~= current_epoch then
-            -- Epoch changed - clear old snapshot data
-            redis.call("del", snapshot_hash_key)
-            if snapshot_order_key ~= '' then
-                redis.call("del", snapshot_order_key)
+if state_hash_key ~= '' and is_leave ~= "1" then
+    -- Check if state is from a different epoch - clear if so
+    if state_meta_key ~= '' then
+        local old_state_epoch = redis.call("hget", state_meta_key, "epoch")
+        if old_state_epoch and old_state_epoch ~= current_epoch then
+            -- Epoch changed - clear old state data
+            redis.call("del", state_hash_key)
+            if state_order_key ~= '' then
+                redis.call("del", state_order_key)
             end
-            if snapshot_expire_key ~= '' then
-                redis.call("del", snapshot_expire_key)
+            if state_expire_key ~= '' then
+                redis.call("del", state_expire_key)
             end
-            redis.call("del", snapshot_meta_key)
+            redis.call("del", state_meta_key)
             -- Remove channel from cleanup registration (no entries left after epoch change)
             if cleanup_registration_key ~= '' and channel_for_cleanup ~= '' then
                 redis.call("zrem", cleanup_registration_key, channel_for_cleanup)
@@ -276,35 +292,35 @@ if snapshot_hash_key ~= '' and is_leave ~= "1" then
     local expire_at = now + tonumber(keyed_member_ttl)
     local ttl = tonumber(keyed_member_ttl)
 
-    if snapshot_order_key ~= '' and snapshot_expire_key ~= '' then
+    if state_order_key ~= '' and state_expire_key ~= '' then
         -- Ordered keyed state (HASH + ZSET)
         -- Store revision with payload: offset:epoch:payload
-        local snapshot_value = top_offset .. ":" .. current_epoch .. ":" .. snapshot_payload
-        redis.call("hset", snapshot_hash_key, message_key, snapshot_value)
-        redis.call("zadd", snapshot_order_key, tonumber(score), message_key)
-        redis.call("zadd", snapshot_expire_key, expire_at, message_key)
-        redis.call("expire", snapshot_hash_key, ttl)
-        redis.call("expire", snapshot_order_key, ttl)
-        redis.call("expire", snapshot_expire_key, ttl)
+        local state_value = top_offset .. ":" .. current_epoch .. ":" .. state_payload
+        redis.call("hset", state_hash_key, message_key, state_value)
+        redis.call("zadd", state_order_key, tonumber(score), message_key)
+        redis.call("zadd", state_expire_key, expire_at, message_key)
+        redis.call("expire", state_hash_key, ttl)
+        redis.call("expire", state_order_key, ttl)
+        redis.call("expire", state_expire_key, ttl)
     else
-        -- Simple HASH keyed snapshot (unordered)
+        -- Simple HASH keyed state (unordered)
         -- Store revision with payload: offset:epoch:payload
-        local snapshot_value = top_offset .. ":" .. current_epoch .. ":" .. snapshot_payload
-        redis.call("hset", snapshot_hash_key, message_key, snapshot_value)
+        local state_value = top_offset .. ":" .. current_epoch .. ":" .. state_payload
+        redis.call("hset", state_hash_key, message_key, state_value)
         if ttl > 0 then
             -- Always populate expire ZSET for cleanup script to discover expirations
             -- This enables guaranteed LEAVE events even when using HEXPIRE
-            if snapshot_expire_key ~= '' then
-                redis.call("zadd", snapshot_expire_key, expire_at, message_key)
-                redis.call("expire", snapshot_expire_key, ttl)
+            if state_expire_key ~= '' then
+                redis.call("zadd", state_expire_key, expire_at, message_key)
+                redis.call("expire", state_expire_key, ttl)
             end
 
             if use_hexpire == "1" then
                 -- Redis 7.4+ HEXPIRE per-field TTL (defense in depth)
-                redis.call("hexpire", snapshot_hash_key, ttl, "FIELDS", "1", message_key)
+                redis.call("hexpire", state_hash_key, ttl, "FIELDS", "1", message_key)
             else
                 -- Still set whole-hash TTL as safety net
-                redis.call("expire", snapshot_hash_key, ttl)
+                redis.call("expire", state_hash_key, ttl)
             end
         end
     end
@@ -318,16 +334,16 @@ if snapshot_hash_key ~= '' and is_leave ~= "1" then
         end
     end
 
-    -- Update snapshot metadata with current epoch
-    if snapshot_meta_key ~= '' then
-        redis.call("hset", snapshot_meta_key, "epoch", current_epoch)
-        redis.call("hset", snapshot_meta_key, "updated_at", tostring(now))
+    -- Update state metadata with current epoch
+    if state_meta_key ~= '' then
+        redis.call("hset", state_meta_key, "epoch", current_epoch)
+        redis.call("hset", state_meta_key, "updated_at", tostring(now))
         -- Snapshot meta should persist as long as stream meta (meta_expire)
         -- Using keyed_member_ttl was wrong - it's too short for presence (30s)
         if meta_expire ~= '0' then
-            redis.call("expire", snapshot_meta_key, tonumber(meta_expire))
+            redis.call("expire", state_meta_key, tonumber(meta_expire))
         elseif tonumber(keyed_member_ttl) > 0 then
-            redis.call("expire", snapshot_meta_key, tonumber(keyed_member_ttl))
+            redis.call("expire", state_meta_key, tonumber(keyed_member_ttl))
         end
     end
 end
@@ -338,10 +354,10 @@ if stream_key ~= '' and meta_key ~= '' then
         -- Offset is 1 - could be first message ever OR epoch change
         -- Only clear if there's old data from a DIFFERENT epoch
         local should_clear = false
-        if snapshot_meta_key ~= '' then
-            local old_epoch = redis.call("hget", snapshot_meta_key, "epoch")
+        if state_meta_key ~= '' then
+            local old_epoch = redis.call("hget", state_meta_key, "epoch")
             if old_epoch and old_epoch ~= current_epoch then
-                -- Epoch changed - old snapshot exists from different epoch
+                -- Epoch changed - old state exists from different epoch
                 should_clear = true
             end
         end
@@ -350,18 +366,18 @@ if stream_key ~= '' and meta_key ~= '' then
         redis.call("del", stream_key)
 
         if should_clear then
-            -- Clear snapshot data from previous epoch
-            if snapshot_hash_key ~= '' then
-                redis.call("del", snapshot_hash_key)
+            -- Clear state data from previous epoch
+            if state_hash_key ~= '' then
+                redis.call("del", state_hash_key)
             end
-            if snapshot_order_key ~= '' then
-                redis.call("del", snapshot_order_key)
+            if state_order_key ~= '' then
+                redis.call("del", state_order_key)
             end
-            if snapshot_expire_key ~= '' then
-                redis.call("del", snapshot_expire_key)
+            if state_expire_key ~= '' then
+                redis.call("del", state_expire_key)
             end
-            if snapshot_meta_key ~= '' then
-                redis.call("del", snapshot_meta_key)
+            if state_meta_key ~= '' then
+                redis.call("del", state_meta_key)
             end
             -- Remove channel from cleanup registration (no entries left after epoch change)
             if cleanup_registration_key ~= '' and channel_for_cleanup ~= '' then

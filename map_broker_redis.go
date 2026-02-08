@@ -23,20 +23,20 @@ import (
 )
 
 var (
-	//go:embed internal/redis_lua/map_engine_add.lua
-	brokerSnapshotPublishScriptSource string
-	//go:embed internal/redis_lua/map_engine_read_ordered.lua
-	brokerSnapshotReadOrderedScriptSource string
-	//go:embed internal/redis_lua/map_engine_read_unordered.lua
-	brokerSnapshotReadUnorderedScriptSource string
-	//go:embed internal/redis_lua/map_engine_stream_read.lua
-	brokerSnapshotReadStreamScriptSource string
-	//go:embed internal/redis_lua/map_engine_read_meta.lua
-	brokerSnapshotReadMetaScriptSource string
-	//go:embed internal/redis_lua/map_engine_stats.lua
-	brokerSnapshotStatsScriptSource string
-	//go:embed internal/redis_lua/map_engine_cleanup.lua
-	brokerSnapshotCleanupScriptSource string
+	//go:embed internal/redis_lua/map_broker_add.lua
+	brokerStatePublishScriptSource string
+	//go:embed internal/redis_lua/map_broker_read_ordered.lua
+	brokerStateReadOrderedScriptSource string
+	//go:embed internal/redis_lua/map_broker_read_unordered.lua
+	brokerStateReadUnorderedScriptSource string
+	//go:embed internal/redis_lua/map_broker_stream_read.lua
+	brokerStateReadStreamScriptSource string
+	//go:embed internal/redis_lua/map_broker_read_meta.lua
+	brokerStateReadMetaScriptSource string
+	//go:embed internal/redis_lua/map_broker_stats.lua
+	brokerStateStatsScriptSource string
+	//go:embed internal/redis_lua/map_broker_cleanup.lua
+	brokerStateCleanupScriptSource string
 )
 
 type engineShardWrapper struct {
@@ -44,16 +44,20 @@ type engineShardWrapper struct {
 	subClientsMu        sync.Mutex
 	subClients          [][]rueidis.DedicatedClient
 	pubSubStartChannels [][]*pubSubStart
+
+	// [node-grouped-pubsub] state (only set when GroupPubSubByNode=true)
+	partitionToNodeIdx []int              // partition → subClients first-dimension index
+	nodePartitions     [][]int            // nodeIdx → partition indices
+	nodeClients        []rueidis.Client   // per-node clients from Nodes()
+	topologyDone       chan struct{}      // closed to signal topology change → restart all
+	topologyRebuildCh  chan struct{}      // [node-grouped-pubsub] signaled by sunsubscribe → immediate rebuild
+	eventHandler       BrokerEventHandler // stored for launching new goroutines on node growth
+	maxNodeGoroutines  int                // highest node count we've launched goroutines for
 }
 
-// RedisMapEngine is a Redis-based MapEngine that provides support for:
-// 1. Stateful channels - keyed state with revisions
-// 2. Converged membership - presence with ordering and recovery
-//
-// Both features share the same abstraction:
-// - Snapshot – a key-based snapshot
-// - Stream - a log of changes – state and update revision for each key.
-// - Revisions are ordered per channel
+// RedisMapBroker is a Redis-based MapBroker.
+// Note – it does not work properly with Redis eviction, use with disabled eviction
+// to avoid undefined state.
 //
 // Message Formats
 // ===============
@@ -76,16 +80,16 @@ type engineShardWrapper struct {
 //
 // Storage:
 // - Streams (XADD): keeps protocol.Publication
-// - Snapshots (HSET): For keyed state - may keep latest protocol.Publication or custom state.
+// - States (HSET): For keyed state - may keep latest protocol.Publication or custom state.
 //
 // Pagination:
-// - Ordered snapshots use ZRANGEBYSCORE/ZRANGEBYLEX with LIMIT — exact page sizes.
-// - Unordered snapshots use HSCAN with COUNT — COUNT is only a hint, Redis may return
-//   more entries than requested (especially for small hashes in listpack encoding).
-//   Callers should not rely on exact Limit enforcement for unordered reads.
-type RedisMapEngine struct {
+//   - Ordered state use ZRANGEBYSCORE/ZRANGEBYLEX with LIMIT — exact page sizes.
+//   - Unordered state use HSCAN with COUNT — COUNT is only a hint, Redis may return
+//     more entries than requested (especially for small hashes in listpack encoding).
+//     Callers should not rely on exact Limit enforcement for unordered reads.
+type RedisMapBroker struct {
 	node *Node
-	conf RedisMapEngineConfig
+	conf RedisMapBrokerConfig
 
 	shards []*engineShardWrapper
 
@@ -103,14 +107,17 @@ type RedisMapEngine struct {
 	messagePrefix string
 }
 
-var _ MapEngine = (*RedisMapEngine)(nil)
+var _ MapBroker = (*RedisMapBroker)(nil)
 
-// RedisMapEngineConfig is a config for RedisMapEngine.
-type RedisMapEngineConfig struct {
+// RedisMapBrokerConfig is a config for RedisMapBroker.
+type RedisMapBrokerConfig struct {
 	// Shards is a slice of RedisShard to use. At least one shard must be provided.
 	Shards []*RedisShard
 	// Prefix to use before every channel name and key in Redis.
 	Prefix string
+	// Name of engine, for observability purposes – i.e. becomes part of metrics/logs labels.
+	// By default, empty string is used.
+	Name string
 	// LoadSHA1 enables loading SHA1 from Redis via SCRIPT LOAD instead of calculating
 	// it on the client side. This is useful for FIPS compliance.
 	LoadSHA1 bool
@@ -125,6 +132,9 @@ type RedisMapEngineConfig struct {
 	// engine will use Redis Cluster with sharded PUB/SUB feature available in
 	// Redis >= 7: https://redis.io/docs/manual/pubsub/#sharded-pubsub
 	NumShardedPubSubPartitions int
+	// [node-grouped-pubsub] Groups sharded PUB/SUB connections by Redis Cluster node
+	// instead of per-partition. Reduces connections from numPartitions to numRedisNodes.
+	GroupPubSubByNode bool
 	// numSubscribeShards defines how many subscribe shards will be used.
 	numSubscribeShards int
 	// numResubscribeShards defines how many subscriber goroutines will be used for
@@ -135,28 +145,19 @@ type RedisMapEngineConfig struct {
 	numPubSubProcessors int
 
 	// CleanupInterval defines how often to run the cleanup worker that
-	// generates remove events for expired keyed snapshot entries (presence and state).
-	// Zero disables cleanup. Applies to all channels using TTL-based snapshots.
+	// generates remove events for expired keyed state entries (presence and state).
+	// Default is 5 seconds. Set to -1 to disable cleanup (make sure you understand the consequences).
+	// Applies to all channels using TTL-based state.
 	CleanupInterval time.Duration
 	// CleanupBatchSize defines max entries to process per channel per cleanup cycle.
-	// Default is 100. Applies to all keyed snapshots (presence and state).
+	// Default is 100. Applies to all keyed state (presence and state).
 	CleanupBatchSize int
-
-	// PresenceTTL is a time-to-live for presence information.
-	PresenceTTL time.Duration
-	// PresenceStreamSize defines the maximum number of presence events (joins/leaves)
-	// to keep in the presence stream for recovery.
-	PresenceStreamSize int
-	// PresenceStreamTTL defines TTL for presence stream.
-	PresenceStreamTTL time.Duration
-	// PresenceMetaTTL defines TTL for presence stream metadata (offset, epoch).
-	PresenceMetaTTL time.Duration
 }
 
-// NewRedisMapEngine initializes RedisMapEngine.
-func NewRedisMapEngine(n *Node, conf RedisMapEngineConfig) (*RedisMapEngine, error) {
+// NewRedisMapBroker initializes RedisMapBroker.
+func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, error) {
 	if len(conf.Shards) == 0 {
-		return nil, errors.New("snapshot engine: no shards provided")
+		return nil, errors.New("state engine: no shards provided")
 	}
 
 	if conf.SubscribeOnReplica {
@@ -169,9 +170,6 @@ func NewRedisMapEngine(n *Node, conf RedisMapEngineConfig) (*RedisMapEngine, err
 
 	if conf.Prefix == "" {
 		conf.Prefix = "centrifuge"
-	}
-	if conf.PresenceTTL == 0 {
-		conf.PresenceTTL = 60 * time.Second
 	}
 	if conf.IdempotentResultTTL == 0 {
 		conf.IdempotentResultTTL = 5 * time.Minute
@@ -189,44 +187,45 @@ func NewRedisMapEngine(n *Node, conf RedisMapEngineConfig) (*RedisMapEngine, err
 	if conf.CleanupBatchSize == 0 {
 		conf.CleanupBatchSize = 100
 	}
-	// CleanupInterval defaults to 0 (disabled). User must explicitly enable.
-	// When enabled, it works for ALL keyed snapshots (presence and state with TTL).
+	if conf.CleanupInterval == 0 {
+		conf.CleanupInterval = 5 * time.Second
+	}
 
 	shardWrappers := make([]*engineShardWrapper, 0, len(conf.Shards))
 	for _, s := range conf.Shards {
 		shardWrappers = append(shardWrappers, &engineShardWrapper{shard: s})
 	}
 
-	e := &RedisMapEngine{
+	e := &RedisMapBroker{
 		node:   n,
 		conf:   conf,
 		shards: shardWrappers,
 		addScript: rueidis.NewLuaScript(
-			brokerSnapshotPublishScriptSource,
+			brokerStatePublishScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
 		),
 		readOrderedScript: rueidis.NewLuaScript(
-			brokerSnapshotReadOrderedScriptSource,
+			brokerStateReadOrderedScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
 		),
 		readUnorderedScript: rueidis.NewLuaScript(
-			brokerSnapshotReadUnorderedScriptSource,
+			brokerStateReadUnorderedScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
 		),
 		readStreamScript: rueidis.NewLuaScript(
-			brokerSnapshotReadStreamScriptSource,
+			brokerStateReadStreamScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
 		),
 		readMetaScript: rueidis.NewLuaScript(
-			brokerSnapshotReadMetaScriptSource,
+			brokerStateReadMetaScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
 		),
 		presenceStatsScript: rueidis.NewLuaScript(
-			brokerSnapshotStatsScriptSource,
+			brokerStateStatsScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
 		),
 		cleanupScript: rueidis.NewLuaScript(
-			brokerSnapshotCleanupScriptSource,
+			brokerStateCleanupScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
 		),
 		closeCh: make(chan struct{}),
@@ -242,6 +241,19 @@ func NewRedisMapEngine(n *Node, conf RedisMapEngineConfig) (*RedisMapEngine, err
 		if shard.isCluster && e.conf.NumShardedPubSubPartitions == 0 {
 			return nil, errors.New("Redis Cluster requires sharded PUB/SUB (set NumShardedPubSubPartitions > 0)")
 		}
+
+		// [node-grouped-pubsub] use per-node connections instead of per-partition.
+		if e.conf.GroupPubSubByNode && e.useShardedPubSub(shard) {
+			if err := e.initNodeGroupedPubSub(wrapper, shard); err != nil {
+				return nil, fmt.Errorf("node-grouped PubSub init: %w", err)
+			}
+			if e.conf.CleanupInterval > 0 {
+				go e.runCleanupWorker(context.Background())
+			}
+
+			return e, nil
+		}
+
 		subChannels := make([][]rueidis.DedicatedClient, 0)
 		pubSubStartChannels := make([][]*pubSubStart, 0)
 
@@ -266,9 +278,6 @@ func NewRedisMapEngine(n *Node, conf RedisMapEngineConfig) (*RedisMapEngine, err
 		wrapper.pubSubStartChannels = pubSubStartChannels
 	}
 
-	// Start background cleanup worker for guaranteed remove events on expiry.
-	// Runs for both presence (PresenceStreamSize > 0) and keyed state (any channel using KeyTTL).
-	// Since we can't detect keyed state usage at init time, we always run if cleanup is enabled.
 	if e.conf.CleanupInterval > 0 {
 		go e.runCleanupWorker(context.Background())
 	}
@@ -276,30 +285,30 @@ func NewRedisMapEngine(n *Node, conf RedisMapEngineConfig) (*RedisMapEngine, err
 	return e, nil
 }
 
-// parseSnapshotValue parses a snapshot value in format: offset:epoch:payload
+// parseStateValue parses a state value in format: offset:epoch:payload
 // Returns offset, epoch, payload, and error if parsing fails.
-func parseSnapshotValue(val []byte) (uint64, string, []byte, error) {
+func parseStateValue(val []byte) (uint64, string, []byte, error) {
 	if len(val) == 0 {
-		return 0, "", nil, fmt.Errorf("empty snapshot value")
+		return 0, "", nil, fmt.Errorf("empty state value")
 	}
 
 	// Find first colon (offset separator)
 	firstColon := bytes.IndexByte(val, ':')
 	if firstColon == -1 {
-		return 0, "", nil, fmt.Errorf("missing offset separator in snapshot value")
+		return 0, "", nil, fmt.Errorf("missing offset separator in state value")
 	}
 
 	// Parse offset
 	offset, err := strconv.ParseUint(convert.BytesToString(val[:firstColon]), 10, 64)
 	if err != nil {
-		return 0, "", nil, fmt.Errorf("invalid offset in snapshot value: %w", err)
+		return 0, "", nil, fmt.Errorf("invalid offset in state value: %w", err)
 	}
 
 	// Find second colon (epoch separator)
 	remaining := val[firstColon+1:]
 	secondColon := bytes.IndexByte(remaining, ':')
 	if secondColon == -1 {
-		return 0, "", nil, fmt.Errorf("missing epoch separator in snapshot value")
+		return 0, "", nil, fmt.Errorf("missing epoch separator in state value")
 	}
 
 	// Extract epoch
@@ -311,61 +320,42 @@ func parseSnapshotValue(val []byte) (uint64, string, []byte, error) {
 	return offset, epoch, payload, nil
 }
 
-func (e *RedisMapEngine) useShardedPubSub(s *RedisShard) bool {
+func (e *RedisMapBroker) useShardedPubSub(s *RedisShard) bool {
 	return s.isCluster && e.conf.NumShardedPubSubPartitions > 0
 }
 
-func (e *RedisMapEngine) getShard(channel string) *engineShardWrapper {
+func (e *RedisMapBroker) getShard(channel string) *engineShardWrapper {
 	if len(e.shards) == 1 {
 		return e.shards[0]
 	}
 	return e.shards[consistentIndex(channel, len(e.shards))]
 }
 
-func (e *RedisMapEngine) streamKey(s *RedisShard, ch string) string {
+func (e *RedisMapBroker) streamKey(s *RedisShard, ch string) string {
 	return e.buildKey(s, ch, ":stream:")
 }
 
-func (e *RedisMapEngine) metaKey(s *RedisShard, ch string) string {
+func (e *RedisMapBroker) metaKey(s *RedisShard, ch string) string {
 	return e.buildKey(s, ch, ":meta:")
 }
 
-func (e *RedisMapEngine) snapshotHashKey(s *RedisShard, ch string) string {
-	return e.buildKey(s, ch, ":snapshot:")
+func (e *RedisMapBroker) stateHashKey(s *RedisShard, ch string) string {
+	return e.buildKey(s, ch, ":state:")
 }
 
-func (e *RedisMapEngine) snapshotOrderKey(s *RedisShard, ch string) string {
-	return e.buildKey(s, ch, ":snapshot:order:")
+func (e *RedisMapBroker) stateOrderKey(s *RedisShard, ch string) string {
+	return e.buildKey(s, ch, ":state:order:")
 }
 
-func (e *RedisMapEngine) snapshotExpireKey(s *RedisShard, ch string) string {
-	return e.buildKey(s, ch, ":snapshot:expire:")
+func (e *RedisMapBroker) stateExpireKey(s *RedisShard, ch string) string {
+	return e.buildKey(s, ch, ":state:expire:")
 }
 
-func (e *RedisMapEngine) snapshotMetaKey(s *RedisShard, ch string) string {
-	return e.buildKey(s, ch, ":snapshot:meta:")
+func (e *RedisMapBroker) stateMetaKey(s *RedisShard, ch string) string {
+	return e.buildKey(s, ch, ":state:meta:")
 }
 
-// Presence-specific key functions removed - presence now uses generic snapshot keys:
-// - snapshotHashKey instead of presenceHashKey
-// - snapshotExpireKey instead of presenceExpireKey
-// - streamKey instead of presenceStreamKey
-// - metaKey instead of presenceMetaKey
-// This unifies presence and keyed state - both are just keyed snapshots with different configs.
-
-func (e *RedisMapEngine) aggregationZSetKey(s *RedisShard, ch string) string {
-	return e.buildKey(s, ch, ":aggregation:zset:")
-}
-
-func (e *RedisMapEngine) aggregationHashKey(s *RedisShard, ch string) string {
-	return e.buildKey(s, ch, ":aggregation:hash:")
-}
-
-func (e *RedisMapEngine) aggregationMappingHashKey(s *RedisShard, ch string) string {
-	return e.buildKey(s, ch, ":aggmap:")
-}
-
-func (e *RedisMapEngine) cleanupRegistrationKey(s *RedisShard) string {
+func (e *RedisMapBroker) cleanupRegistrationKey(s *RedisShard) string {
 	// Cleanup registration key is per-shard, not per-channel
 	// Uses partition-based hash tag for cluster compatibility
 	if !s.isCluster {
@@ -379,9 +369,9 @@ func (e *RedisMapEngine) cleanupRegistrationKey(s *RedisShard) string {
 	return e.conf.Prefix + ":cleanup:channels"
 }
 
-func (e *RedisMapEngine) cleanupRegistrationKeyForChannel(s *RedisShard, ch string) string {
+func (e *RedisMapBroker) cleanupRegistrationKeyForChannel(s *RedisShard, ch string) string {
 	// Get the cleanup registration key with proper hash tag for the channel's partition
-	// Single registration ZSET works for ALL keyed snapshots (presence, state, etc.)
+	// Single registration ZSET works for ALL keyed state (presence, state, etc.)
 	if !s.isCluster {
 		return e.conf.Prefix + ":cleanup:channels"
 	}
@@ -393,7 +383,7 @@ func (e *RedisMapEngine) cleanupRegistrationKeyForChannel(s *RedisShard, ch stri
 	return e.conf.Prefix + ":cleanup:channels:{" + ch + "}"
 }
 
-func (e *RedisMapEngine) resultCacheKey(s *RedisShard, ch string, idempotencyKey string) string {
+func (e *RedisMapBroker) resultCacheKey(s *RedisShard, ch string, idempotencyKey string) string {
 	if !s.isCluster {
 		var builder strings.Builder
 		builder.Grow(len(e.conf.Prefix) + 9 + len(ch) + 1 + len(idempotencyKey))
@@ -433,7 +423,7 @@ func (e *RedisMapEngine) resultCacheKey(s *RedisShard, ch string, idempotencyKey
 }
 
 // buildKey is a helper function to build Redis keys with proper cluster hash tag support
-func (e *RedisMapEngine) buildKey(s *RedisShard, ch string, infix string) string {
+func (e *RedisMapBroker) buildKey(s *RedisShard, ch string, infix string) string {
 	if !s.isCluster {
 		var builder strings.Builder
 		builder.Grow(len(e.conf.Prefix) + len(infix) + len(ch))
@@ -469,7 +459,7 @@ func (e *RedisMapEngine) buildKey(s *RedisShard, ch string, infix string) string
 	return builder.String()
 }
 
-func (e *RedisMapEngine) messageChannelID(s *RedisShard, ch string) string {
+func (e *RedisMapBroker) messageChannelID(s *RedisShard, ch string) string {
 	if !e.useShardedPubSub(s) {
 		if s.isCluster {
 			var builder strings.Builder
@@ -504,14 +494,14 @@ func (e *RedisMapEngine) messageChannelID(s *RedisShard, ch string) string {
 }
 
 // Close closes the engine.
-func (e *RedisMapEngine) Close(_ context.Context) error {
+func (e *RedisMapBroker) Close(_ context.Context) error {
 	e.closeOnce.Do(func() {
 		close(e.closeCh)
 	})
 	return nil
 }
 
-func (e *RedisMapEngine) Clear(ctx context.Context, ch string, opts MapClearOptions) error {
+func (e *RedisMapBroker) Clear(ctx context.Context, ch string, opts MapClearOptions) error {
 	// TODO: implement.
 	return nil
 }
@@ -524,7 +514,7 @@ func boolToStr(b bool) string {
 }
 
 // Publish publishes data to a stateful channel with optional keyed state.
-func (e *RedisMapEngine) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
+func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
@@ -586,11 +576,11 @@ func (e *RedisMapEngine) Publish(ctx context.Context, ch string, key string, opt
 		return MapPublishResult{}, err
 	}
 
-	// Snapshot publication (used for snapshot storage) - always uses full state Data.
-	var snapshotBytes []byte
+	// State publication (used for state storage) - always uses full state Data.
+	var stateBytes []byte
 	if len(opts.StreamData) > 0 {
-		// Different data for snapshot vs stream - need separate serialization.
-		snapshotProtoPub := &protocol.Publication{
+		// Different data for state vs stream - need separate serialization.
+		stateProtoPub := &protocol.Publication{
 			Data:  opts.Data,
 			Info:  infoToProto(opts.ClientInfo),
 			Tags:  opts.Tags,
@@ -598,12 +588,12 @@ func (e *RedisMapEngine) Publish(ctx context.Context, ch string, key string, opt
 			Key:   key,
 			Score: opts.Score,
 		}
-		snapshotBytes, err = snapshotProtoPub.MarshalVT()
+		stateBytes, err = stateProtoPub.MarshalVT()
 		if err != nil {
 			return MapPublishResult{}, err
 		}
 	}
-	// If snapshotBytes is nil, Lua will use streamBytes for both.
+	// If stateBytes is nil, Lua will use streamBytes for both.
 
 	var resultKey string
 	var resultExpire string
@@ -616,7 +606,7 @@ func (e *RedisMapEngine) Publish(ctx context.Context, ch string, key string, opt
 		}
 	}
 
-	var streamKey, metaKey, snapshotHashKey, snapshotOrderKey, snapshotExpireKey, snapshotMetaKey string
+	var streamKey, metaKey, stateHashKey, stateOrderKey, stateExpireKey, stateMetaKey string
 
 	if opts.StreamSize > 0 && opts.StreamTTL > 0 {
 		streamKey = e.streamKey(s.shard, ch)
@@ -624,12 +614,12 @@ func (e *RedisMapEngine) Publish(ctx context.Context, ch string, key string, opt
 	}
 
 	if key != "" {
-		snapshotHashKey = e.snapshotHashKey(s.shard, ch)
-		snapshotMetaKey = e.snapshotMetaKey(s.shard, ch)
+		stateHashKey = e.stateHashKey(s.shard, ch)
+		stateMetaKey = e.stateMetaKey(s.shard, ch)
 		if opts.Ordered {
-			snapshotOrderKey = e.snapshotOrderKey(s.shard, ch)
+			stateOrderKey = e.stateOrderKey(s.shard, ch)
 		}
-		snapshotExpireKey = e.snapshotExpireKey(s.shard, ch)
+		stateExpireKey = e.stateExpireKey(s.shard, ch)
 	}
 
 	metaExpire := "0"
@@ -664,7 +654,7 @@ func (e *RedisMapEngine) Publish(ctx context.Context, ch string, key string, opt
 
 	// Setup cleanup registration if KeyTTL is set (keyed state with expiration)
 	cleanupRegKey := ""
-	if opts.KeyTTL > 0 && key != "" && snapshotExpireKey != "" {
+	if opts.KeyTTL > 0 && key != "" && stateExpireKey != "" {
 		cleanupRegKey = e.cleanupRegistrationKeyForChannel(s.shard, ch)
 	}
 
@@ -676,10 +666,43 @@ func (e *RedisMapEngine) Publish(ctx context.Context, ch string, key string, opt
 		expectedEpoch = opts.ExpectedPosition.Epoch
 	}
 
+	// In Redis Cluster, all KEYS in a Lua script must hash to the same slot. Empty string
+	// keys hash to slot 0, which differs from the hash-tagged real keys. Compute a slot-
+	// aligned nil key placeholder and substitute it for any empty KEYS. The Lua script
+	// converts these back to '' using ARGV[23].
+	nilKey := ""
+	if s.shard.isCluster {
+		nilKey = e.buildKey(s.shard, ch, ":nil:")
+		if streamKey == "" {
+			streamKey = nilKey
+		}
+		if metaKey == "" {
+			metaKey = nilKey
+		}
+		if resultKey == "" {
+			resultKey = nilKey
+		}
+		if stateHashKey == "" {
+			stateHashKey = nilKey
+		}
+		if stateOrderKey == "" {
+			stateOrderKey = nilKey
+		}
+		if stateExpireKey == "" {
+			stateExpireKey = nilKey
+		}
+		if stateMetaKey == "" {
+			stateMetaKey = nilKey
+		}
+		if cleanupRegKey == "" {
+			cleanupRegKey = nilKey
+		}
+	}
+
 	replies, err := e.addScript.Exec(ctx, shardClient,
 		[]string{
-			streamKey, metaKey, resultKey, snapshotHashKey, snapshotOrderKey, snapshotExpireKey,
-			snapshotMetaKey, cleanupRegKey,
+			streamKey, metaKey, resultKey, stateHashKey, stateOrderKey, stateExpireKey,
+			stateMetaKey, cleanupRegKey,
 		},
 		[]string{
 			key,                                // message_key
@@ -703,7 +726,8 @@ func (e *RedisMapEngine) Publish(ctx context.Context, ch string, key string, opt
 			boolToStr(opts.RefreshTTLOnSuppress), // refresh_ttl_on_suppress
 			expectedOffset,                       // expected_offset (for CAS)
 			expectedEpoch,                        // expected_epoch (for CAS)
-			convert.BytesToString(snapshotBytes), // snapshot_payload (for snapshot storage, empty to use message_payload)
+			convert.BytesToString(stateBytes),    // state_payload (for state storage, empty to use message_payload)
+			nilKey,                               // nil_key (slot-aligned placeholder for unused KEYS)
 		},
 	).ToArray()
 	if err != nil {
@@ -713,8 +737,8 @@ func (e *RedisMapEngine) Publish(ctx context.Context, ch string, key string, opt
 	return parseAddScriptResult(replies)
 }
 
-// Remove removes a key from keyed state snapshot.
-func (e *RedisMapEngine) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
+// Remove removes a key from keyed state state.
+func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
 	if key == "" {
 		return MapPublishResult{}, fmt.Errorf("key is required for unpublish")
 	}
@@ -734,10 +758,10 @@ func (e *RedisMapEngine) Remove(ctx context.Context, ch string, key string, opts
 		metaKey = e.metaKey(s.shard, ch)
 	}
 
-	// For unpublish, we use snapshot keys to track which keys exist
-	snapshotHashKey := e.snapshotHashKey(s.shard, ch)
-	snapshotExpireKey := e.snapshotExpireKey(s.shard, ch)
-	snapshotMetaKey := e.snapshotMetaKey(s.shard, ch)
+	// For unpublish, we use state keys to track which keys exist
+	stateHashKey := e.stateHashKey(s.shard, ch)
+	stateExpireKey := e.stateExpireKey(s.shard, ch)
+	stateMetaKey := e.stateMetaKey(s.shard, ch)
 
 	metaExpire := "0"
 	if opts.MetaTTL > 0 {
@@ -767,14 +791,32 @@ func (e *RedisMapEngine) Remove(ctx context.Context, ch string, key string, opts
 		return MapPublishResult{}, err
 	}
 
+	// Compute slot-aligned nil key for unused KEYS in cluster mode (see Publish for details).
+	nilKey := ""
+	resultKey := ""
+	stateOrderKey := ""
+	cleanupRegKey := ""
+	if s.shard.isCluster {
+		nilKey = e.buildKey(s.shard, ch, ":nil:")
+		resultKey = nilKey
+		stateOrderKey = nilKey
+		cleanupRegKey = nilKey
+		if streamKey == "" {
+			streamKey = nilKey
+		}
+		if metaKey == "" {
+			metaKey = nilKey
+		}
+	}
+
 	replies, err := e.addScript.Exec(ctx, shardClient,
 		[]string{
-			streamKey, metaKey, "", // Optional stream, no result key
-			snapshotHashKey,
-			"", // No order key for unpublish
-			snapshotExpireKey,
-			snapshotMetaKey,
-			"", // No cleanup registration for unpublish
+			streamKey, metaKey, resultKey,
+			stateHashKey,
+			stateOrderKey,
+			stateExpireKey,
+			stateMetaKey,
+			cleanupRegKey,
 		},
 		[]string{
 			key,                             // message_key
@@ -786,16 +828,17 @@ func (e *RedisMapEngine) Remove(ctx context.Context, ch string, key string, opts
 			e.node.ID(), // new_epoch_if_empty
 			publishCommand,
 			"", "0", "0", "", // result_key_expire, use_delta, version, version_epoch
-			"1", // is_leave (this triggers removal)
-			"0", // score
-			"0", // map_member_ttl
-			"0", // use_hexpire
-			"",  // channel_for_cleanup (not used for unpublish)
-			"",  // key_mode (not used for unpublish)
-			"0", // refresh_ttl_on_suppress (not used for unpublish)
-			"",  // expected_offset (not used for unpublish)
-			"",  // expected_epoch (not used for unpublish)
-			"",  // snapshot_payload (not used for unpublish)
+			"1",    // is_leave (this triggers removal)
+			"0",    // score
+			"0",    // map_member_ttl
+			"0",    // use_hexpire
+			"",     // channel_for_cleanup (not used for unpublish)
+			"",     // key_mode (not used for unpublish)
+			"0",    // refresh_ttl_on_suppress (not used for unpublish)
+			"",     // expected_offset (not used for unpublish)
+			"",     // expected_epoch (not used for unpublish)
+			"",     // state_payload (not used for unpublish)
+			nilKey, // nil_key (slot-aligned placeholder for unused KEYS)
 		},
 	).ToArray()
 	if err != nil {
@@ -805,45 +848,45 @@ func (e *RedisMapEngine) Remove(ctx context.Context, ch string, key string, opts
 	return parseAddScriptResult(replies)
 }
 
-// ReadState retrieves snapshot entries with per-entry revisions for a channel.
-// Each entry includes its revision so client can filter: entry.Revision <= snapshot_revision.
+// ReadState retrieves state entries with per-entry revisions for a channel.
+// Each entry includes its revision so client can filter: entry.Revision <= state_revision.
 // If opts.Revision is provided and epoch changed, returns empty entries.
 // Returns entries, stream position, next cursor for pagination, and error.
 // Cursor "0" or "" means end of iteration.
-func (e *RedisMapEngine) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
 	// Handle single key lookup (Key filter)
 	if opts.Key != "" {
 		return e.readSingleKey(ctx, ch, opts)
 	}
 	if opts.Ordered {
-		return e.readOrderedSnapshot(ctx, ch, opts)
+		return e.readOrderedState(ctx, ch, opts)
 	}
-	return e.readUnorderedSnapshot(ctx, ch, opts)
+	return e.readUnorderedState(ctx, ch, opts)
 }
 
-func (e *RedisMapEngine) ReadStateZero(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+func (e *RedisMapBroker) ReadStateZero(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
 	// Handle single key lookup (Key filter)
 	if opts.Key != "" {
 		return e.readSingleKey(ctx, ch, opts)
 	}
 	if opts.Ordered {
-		return e.readOrderedSnapshot(ctx, ch, opts)
+		return e.readOrderedState(ctx, ch, opts)
 	}
-	return e.readUnorderedSnapshotZero(ctx, ch, opts)
+	return e.readUnorderedStateZero(ctx, ch, opts)
 }
 
-// readSingleKey retrieves a single key from the snapshot using HGET instead of HSCAN.
+// readSingleKey retrieves a single key from the state using HGET instead of HSCAN.
 // This is more efficient for single key lookups and supports CAS read-modify-write patterns.
-func (e *RedisMapEngine) readSingleKey(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+func (e *RedisMapBroker) readSingleKey(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
-	snapshotHashKey := e.snapshotHashKey(s.shard, ch)
+	stateHashKey := e.stateHashKey(s.shard, ch)
 	metaKey := e.metaKey(s.shard, ch)
 
 	// Execute HGET and metadata read in pipeline
 	cmds := make([]rueidis.Completed, 0, 2)
-	cmds = append(cmds, shardClient.B().Hget().Key(snapshotHashKey).Field(opts.Key).Build())
+	cmds = append(cmds, shardClient.B().Hget().Key(stateHashKey).Field(opts.Key).Build())
 	cmds = append(cmds, shardClient.B().Hmget().Key(metaKey).Field("s", "e").Build())
 
 	results := shardClient.DoMulti(ctx, cmds...)
@@ -868,7 +911,7 @@ func (e *RedisMapEngine) readSingleKey(ctx context.Context, ch string, opts MapR
 		streamPos = StreamPosition{Offset: offsetVal, Epoch: epochVal}
 	}
 
-	// Validate epoch if client provided snapshot revision
+	// Validate epoch if client provided state revision
 	if opts.Revision != nil && opts.Revision.Epoch != streamPos.Epoch {
 		return nil, streamPos, "", ErrorUnrecoverablePosition
 	}
@@ -879,9 +922,9 @@ func (e *RedisMapEngine) readSingleKey(ctx context.Context, ch string, opts MapR
 	}
 
 	// Parse value: offset:epoch:payload
-	entryOffset, _, payload, err := parseSnapshotValue(valBytes)
+	entryOffset, _, payload, err := parseStateValue(valBytes)
 	if err != nil {
-		return nil, streamPos, "", fmt.Errorf("failed to parse snapshot value: %w", err)
+		return nil, streamPos, "", fmt.Errorf("failed to parse state value: %w", err)
 	}
 
 	// Unmarshal Publication from protobuf payload
@@ -897,13 +940,13 @@ func (e *RedisMapEngine) readSingleKey(ctx context.Context, ch string, opts MapR
 	return []*Publication{pub}, streamPos, "", nil
 }
 
-func (e *RedisMapEngine) readUnorderedSnapshot(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
-	snapshotTTL := "0"
+	stateTTL := "0"
 	if opts.StateTTL > 0 {
-		snapshotTTL = strconv.FormatInt(int64(opts.StateTTL.Seconds()), 10)
+		stateTTL = strconv.FormatInt(int64(opts.StateTTL.Seconds()), 10)
 	}
 
 	// Cursor must be "0" to start for Redis HSCAN
@@ -914,16 +957,16 @@ func (e *RedisMapEngine) readUnorderedSnapshot(ctx context.Context, ch string, o
 
 	replies, err := e.readUnorderedScript.Exec(ctx, shardClient,
 		[]string{
-			e.snapshotHashKey(s.shard, ch),
-			e.snapshotExpireKey(s.shard, ch),
+			e.stateHashKey(s.shard, ch),
+			e.stateExpireKey(s.shard, ch),
 			e.metaKey(s.shard, ch),
-			e.snapshotMetaKey(s.shard, ch),
+			e.stateMetaKey(s.shard, ch),
 		},
 		[]string{
 			cursor,
 			strconv.Itoa(opts.Limit),
 			strconv.FormatInt(time.Now().Unix(), 10),
-			snapshotTTL,
+			stateTTL,
 			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10),
 		},
 	).ToArray()
@@ -947,20 +990,20 @@ func (e *RedisMapEngine) readUnorderedSnapshot(ctx context.Context, ch string, o
 
 	streamPos := StreamPosition{Offset: streamOffset, Epoch: streamEpoch}
 
-	// Validate epoch if client provided snapshot revision
+	// Validate epoch if client provided state revision
 	if opts.Revision != nil && opts.Revision.Epoch != streamEpoch {
 		// Epoch changed, client needs to restart from beginning
 		return nil, streamPos, nextCursor, ErrorUnrecoverablePosition
 	}
 
-	// Parse snapshot values with revisions
+	// Parse state values with revisions
 	pubs := make([]*Publication, 0, len(dataArr)/2)
 	for i := 0; i < len(dataArr); i += 2 {
 		key, _ := dataArr[i].ToString()
 		val, _ := dataArr[i+1].AsBytes()
 
 		// Parse value: offset:epoch:payload
-		entryOffset, _, payload, err := parseSnapshotValue(val)
+		entryOffset, _, payload, err := parseStateValue(val)
 		if err != nil {
 			// Skip malformed entries
 			continue
@@ -981,16 +1024,16 @@ func (e *RedisMapEngine) readUnorderedSnapshot(ctx context.Context, ch string, o
 	return pubs, streamPos, nextCursor, nil
 }
 
-func (e *RedisMapEngine) readUnorderedSnapshotZero(
+func (e *RedisMapBroker) readUnorderedStateZero(
 	ctx context.Context,
 	ch string,
 	opts MapReadStateOptions,
 ) ([]*Publication, StreamPosition, string, error) {
 	s := e.getShard(ch)
 
-	snapshotTTL := "0"
+	stateTTL := "0"
 	if opts.StateTTL > 0 {
-		snapshotTTL = strconv.FormatInt(int64(opts.StateTTL.Seconds()), 10)
+		stateTTL = strconv.FormatInt(int64(opts.StateTTL.Seconds()), 10)
 	}
 
 	cursor := opts.Cursor
@@ -1008,17 +1051,17 @@ func (e *RedisMapEngine) readUnorderedSnapshotZero(
 		ctx,
 		s.shard.client,
 		[]string{
-			e.snapshotHashKey(s.shard, ch),
-			e.snapshotExpireKey(s.shard, ch),
+			e.stateHashKey(s.shard, ch),
+			e.stateExpireKey(s.shard, ch),
 			e.metaKey(s.shard, ch),
-			e.snapshotMetaKey(s.shard, ch),
+			e.stateMetaKey(s.shard, ch),
 		},
 		[]string{
 			cursor,
 			strconv.Itoa(opts.Limit),
 			strconv.FormatInt(time.Now().Unix(), 10),
 			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10),
-			snapshotTTL,
+			stateTTL,
 		},
 		func(r *bufio.Reader) error {
 			rr := resp.NewReader(r)
@@ -1083,7 +1126,7 @@ func (e *RedisMapEngine) readUnorderedSnapshotZero(
 					return err
 				}
 				// Parse value: offset:epoch:payload
-				entryOffset, _, payloadBytes, err := parseSnapshotValue(valBytes)
+				entryOffset, _, payloadBytes, err := parseStateValue(valBytes)
 				if err != nil {
 					// skip malformed entries
 					continue
@@ -1109,7 +1152,7 @@ func (e *RedisMapEngine) readUnorderedSnapshotZero(
 		return nil, StreamPosition{}, "", err
 	}
 
-	// Validate snapshot revision (unchanged semantics)
+	// Validate state revision (unchanged semantics)
 	if opts.Revision != nil &&
 		opts.Revision.Epoch != streamPos.Epoch {
 		return nil, streamPos, nextCursor, ErrorUnrecoverablePosition
@@ -1118,15 +1161,15 @@ func (e *RedisMapEngine) readUnorderedSnapshotZero(
 	return pubs, streamPos, nextCursor, nil
 }
 
-// readOrderedSnapshot uses key-based cursor pagination for continuity.
+// readOrderedState uses key-based cursor pagination for continuity.
 // Cursor format: "score\x00key" to ensure no entries are skipped during concurrent modifications.
-func (e *RedisMapEngine) readOrderedSnapshot(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
-	snapshotTTL := "0"
+	stateTTL := "0"
 	if opts.StateTTL > 0 {
-		snapshotTTL = strconv.FormatInt(int64(opts.StateTTL.Seconds()), 10)
+		stateTTL = strconv.FormatInt(int64(opts.StateTTL.Seconds()), 10)
 	}
 
 	// Parse cursor: "score\x00key" format
@@ -1138,11 +1181,11 @@ func (e *RedisMapEngine) readOrderedSnapshot(ctx context.Context, ch string, opt
 
 	replies, err := e.readOrderedScript.Exec(ctx, shardClient,
 		[]string{
-			e.snapshotHashKey(s.shard, ch),
-			e.snapshotOrderKey(s.shard, ch),
-			e.snapshotExpireKey(s.shard, ch),
+			e.stateHashKey(s.shard, ch),
+			e.stateOrderKey(s.shard, ch),
+			e.stateExpireKey(s.shard, ch),
 			e.metaKey(s.shard, ch),
-			e.snapshotMetaKey(s.shard, ch),
+			e.stateMetaKey(s.shard, ch),
 		},
 		[]string{
 			strconv.Itoa(opts.Limit),                 // ARGV[1] = limit
@@ -1150,7 +1193,7 @@ func (e *RedisMapEngine) readOrderedSnapshot(ctx context.Context, ch string, opt
 			cursorKey,                                // ARGV[3] = cursor_key
 			strconv.FormatInt(time.Now().Unix(), 10), // ARGV[4] = now
 			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10), // ARGV[5] = meta_ttl
-			snapshotTTL, // ARGV[6] = snapshot_ttl
+			stateTTL, // ARGV[6] = state_ttl
 		},
 	).ToArray()
 	if err != nil {
@@ -1172,20 +1215,20 @@ func (e *RedisMapEngine) readOrderedSnapshot(ctx context.Context, ch string, opt
 
 	streamPos := StreamPosition{Offset: streamOffset, Epoch: streamEpoch}
 
-	// Validate epoch if client provided snapshot revision
+	// Validate epoch if client provided state revision
 	if opts.Revision != nil && opts.Revision.Epoch != streamEpoch {
 		// Epoch changed, client needs to restart from beginning
 		return nil, streamPos, "", ErrorUnrecoverablePosition
 	}
 
-	// Parse snapshot values with revisions
+	// Parse state values with revisions
 	pubs := make([]*Publication, 0, len(keysArr))
 	for i := 0; i < len(keysArr); i++ {
 		key, _ := keysArr[i].ToString()
 		val, _ := valuesArr[i].AsBytes()
 
 		// Parse value: offset:epoch:payload
-		entryOffset, _, payload, err := parseSnapshotValue(val)
+		entryOffset, _, payload, err := parseStateValue(val)
 		if err != nil {
 			// Skip malformed entries
 			continue
@@ -1213,7 +1256,7 @@ func (e *RedisMapEngine) readOrderedSnapshot(ctx context.Context, ch string, opt
 	return pubs, streamPos, cursor, nil
 }
 
-// makeOrderedCursor creates a cursor for ordered snapshots: "score\x00key"
+// makeOrderedCursor creates a cursor for ordered state: "score\x00key"
 func makeOrderedCursor(score, key string) string {
 	return score + "\x00" + key
 }
@@ -1228,7 +1271,7 @@ func parseOrderedCursor(cursor string) (string, string) {
 	return "", ""
 }
 
-func (e *RedisMapEngine) ReadStreamZero(
+func (e *RedisMapBroker) ReadStreamZero(
 	ctx context.Context,
 	ch string,
 	opts MapReadStreamOptions,
@@ -1451,7 +1494,7 @@ func (e *RedisMapEngine) ReadStreamZero(
 // Call 1: Get metadata (epoch, top_offset) using simpler Lua script with ExecWithReader
 // Call 2: Read publications using native XRANGE/XREVRANGE with DoWithReader
 // Key difference: Must filter out publications with offset > top_offset (non-atomic).
-func (e *RedisMapEngine) ReadStreamZero2(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *RedisMapBroker) ReadStreamZero2(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
 	s := e.getShard(ch)
 
 	// 1. Parse options (same as ReadStream/ReadStreamZero)
@@ -1685,7 +1728,7 @@ func (e *RedisMapEngine) ReadStreamZero2(ctx context.Context, ch string, opts Ma
 }
 
 // ReadStream retrieves publication stream for a channel.
-func (e *RedisMapEngine) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
 	s := e.getShard(ch)
 
 	var includePubs = true
@@ -1839,7 +1882,7 @@ func (e *RedisMapEngine) ReadStream(ctx context.Context, ch string, opts MapRead
 // Call 1: Get metadata (epoch, top_offset) using simpler Lua script
 // Call 2: Read publications using native XRANGE/XREVRANGE
 // Key difference: Must filter out publications with offset > top_offset (non-atomic).
-func (e *RedisMapEngine) ReadStream2(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
 	s := e.getShard(ch)
 
 	// 1. Parse options (same as ReadStream)
@@ -2008,21 +2051,20 @@ func (e *RedisMapEngine) ReadStream2(ctx context.Context, ch string, opts MapRea
 
 // Stats returns short stats of current presence data.
 // This is a read-only operation - cleanup is handled by the cleanup worker.
-func (e *RedisMapEngine) Stats(ctx context.Context, ch string) (MapStats, error) {
+func (e *RedisMapBroker) Stats(ctx context.Context, ch string) (MapStats, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
 	replies, err := e.presenceStatsScript.Exec(ctx, shardClient,
 		[]string{
-			e.snapshotHashKey(s.shard, ch),
-			e.aggregationHashKey(s.shard, ch),
+			e.stateHashKey(s.shard, ch),
 		},
-		nil, // No arguments needed for read-only stats
+		nil,
 	).ToArray()
 	if err != nil {
 		return MapStats{}, err
 	}
-	if len(replies) != 2 {
+	if len(replies) != 1 {
 		return MapStats{}, errors.New("wrong number of replies from script")
 	}
 	numKeys, err := replies[0].AsInt64()
@@ -2032,13 +2074,13 @@ func (e *RedisMapEngine) Stats(ctx context.Context, ch string) (MapStats, error)
 	return MapStats{NumKeys: int(numKeys)}, nil
 }
 
-// ReadPresenceSnapshot retrieves presence snapshot with per-entry revisions for converged membership.
-// Each entry includes its revision so client can filter: entry.Revision <= snapshot_revision.
+// ReadPresenceState retrieves presence state with per-entry revisions for converged membership.
+// Each entry includes its revision so client can filter: entry.Revision <= state_revision.
 // If opts.Revision is provided and epoch changed, returns empty entries.
 // Returns Publications with Key=ClientID, Info=ClientInfo, Offset/Epoch for revision.
-func (e *RedisMapEngine) ReadPresenceSnapshot(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, error) {
-	// ReadPresenceSnapshot is just ReadState - it already returns Publications with Key and Offset set.
-	// This reuses all the snapshot reading logic.
+func (e *RedisMapBroker) ReadPresenceState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, error) {
+	// ReadPresenceState is just ReadState - it already returns Publications with Key and Offset set.
+	// This reuses all the state reading logic.
 	pubs, streamPos, _, err := e.ReadState(ctx, ch, opts)
 	if err != nil {
 		return nil, StreamPosition{}, err
@@ -2048,19 +2090,25 @@ func (e *RedisMapEngine) ReadPresenceSnapshot(ctx context.Context, ch string, op
 
 // ReadPresenceStream retrieves presence event stream (joins/leaves) for a channel.
 // Returns Publications with Info=ClientInfo and Removed flag (true for leave, false for join).
-func (e *RedisMapEngine) ReadPresenceStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *RedisMapBroker) ReadPresenceStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
 	// ReadPresenceStream is literally just ReadStream - presence streams store Publications
 	// Publication.Removed distinguishes join (false) from leave (true) events.
 	return e.ReadStream(ctx, ch, opts)
 }
 
 // RegisterEventHandler registers a BrokerEventHandler to handle messages from Pub/Sub.
-func (e *RedisMapEngine) RegisterEventHandler(h BrokerEventHandler) error {
+func (e *RedisMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 	// Run all shards.
 	for _, wrapper := range e.shards {
-		err := e.runPubSubShard(wrapper, h)
-		if err != nil {
-			return err
+		// [node-grouped-pubsub] use per-node PubSub goroutines.
+		if e.conf.GroupPubSubByNode && e.useShardedPubSub(wrapper.shard) {
+			if err := e.runNodeGroupedPubSubShard(wrapper, h); err != nil {
+				return err
+			}
+		} else {
+			if err := e.runPubSubShard(wrapper, h); err != nil {
+				return err
+			}
 		}
 	}
 	for i := 0; i < len(e.shards); i++ {
@@ -2075,7 +2123,7 @@ func (e *RedisMapEngine) RegisterEventHandler(h BrokerEventHandler) error {
 	return nil
 }
 
-func (e *RedisMapEngine) runPubSubShard(s *engineShardWrapper, h BrokerEventHandler) error {
+func (e *RedisMapBroker) runPubSubShard(s *engineShardWrapper, h BrokerEventHandler) error {
 	if e.conf.SkipPubSub {
 		return nil
 	}
@@ -2108,7 +2156,7 @@ func (e *RedisMapEngine) runPubSubShard(s *engineShardWrapper, h BrokerEventHand
 }
 
 // runForever keeps another function running indefinitely.
-func (e *RedisMapEngine) runForever(fn func()) {
+func (e *RedisMapBroker) runForever(fn func()) {
 	for {
 		select {
 		case <-e.closeCh:
@@ -2136,7 +2184,7 @@ const cleanupChannelConcurrency = 64
 // runCleanupWorker runs the background cleanup worker that generates LEAVE events
 // for expired presence entries. This ensures guaranteed delivery of LEAVE events
 // even when clients disconnect without explicit leave.
-func (e *RedisMapEngine) runCleanupWorker(ctx context.Context) {
+func (e *RedisMapBroker) runCleanupWorker(ctx context.Context) {
 	if e.conf.CleanupInterval <= 0 {
 		return
 	}
@@ -2157,7 +2205,7 @@ func (e *RedisMapEngine) runCleanupWorker(ctx context.Context) {
 }
 
 // runCleanupCycle processes all shards in parallel and cleans up expired entries.
-func (e *RedisMapEngine) runCleanupCycle(ctx context.Context) {
+func (e *RedisMapBroker) runCleanupCycle(ctx context.Context) {
 	now := time.Now().Unix()
 
 	var wg sync.WaitGroup
@@ -2176,7 +2224,7 @@ func (e *RedisMapEngine) runCleanupCycle(ctx context.Context) {
 }
 
 // cleanupShard processes all partitions within a shard in parallel.
-func (e *RedisMapEngine) cleanupShard(ctx context.Context, shard *RedisShard, now int64) {
+func (e *RedisMapBroker) cleanupShard(ctx context.Context, shard *RedisShard, now int64) {
 	var cleanupKeys []string
 	if e.useShardedPubSub(shard) {
 		cleanupKeys = make([]string, 0, e.conf.NumShardedPubSubPartitions)
@@ -2204,7 +2252,7 @@ func (e *RedisMapEngine) cleanupShard(ctx context.Context, shard *RedisShard, no
 // cleanupPartition processes all expired channels within a single partition.
 // It loops until all expired channels are handled (no artificial cap).
 // Within each batch, channels are processed concurrently for pipelining.
-func (e *RedisMapEngine) cleanupPartition(ctx context.Context, shard *RedisShard, cleanupKey string, now int64) {
+func (e *RedisMapBroker) cleanupPartition(ctx context.Context, shard *RedisShard, cleanupKey string, now int64) {
 	for {
 		if ctx.Err() != nil {
 			return
@@ -2252,7 +2300,7 @@ func (e *RedisMapEngine) cleanupPartition(ctx context.Context, shard *RedisShard
 }
 
 // getChannelsForCleanup returns channels that have expired entries (score <= now).
-func (e *RedisMapEngine) getChannelsForCleanup(ctx context.Context, client rueidis.Client, cleanupKey string, now int64) ([]string, error) {
+func (e *RedisMapBroker) getChannelsForCleanup(ctx context.Context, client rueidis.Client, cleanupKey string, now int64) ([]string, error) {
 	cmd := client.B().Zrangebyscore().Key(cleanupKey).Min("0").Max(strconv.FormatInt(now, 10)).Limit(0, cleanupChannelBatchSize).Build()
 	result, err := client.Do(ctx, cmd).AsStrSlice()
 	if err != nil {
@@ -2262,7 +2310,7 @@ func (e *RedisMapEngine) getChannelsForCleanup(ctx context.Context, client rueid
 }
 
 // cleanupChannel runs the cleanup script for a single channel.
-func (e *RedisMapEngine) cleanupChannel(ctx context.Context, shard *RedisShard, ch string, cleanupKey string, now int64) error {
+func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, ch string, cleanupKey string, now int64) error {
 	// Determine publish command
 	publishCommand := ""
 	chID := ""
@@ -2285,14 +2333,11 @@ func (e *RedisMapEngine) cleanupChannel(ctx context.Context, shard *RedisShard, 
 
 	_, err := e.cleanupScript.Exec(ctx, shard.client,
 		[]string{
-			e.snapshotHashKey(shard, ch),           // KEYS[1]: snapshot hash key
-			e.snapshotExpireKey(shard, ch),         // KEYS[2]: snapshot expire zset key
-			e.streamKey(shard, ch),                 // KEYS[3]: stream key
-			e.metaKey(shard, ch),                   // KEYS[4]: stream meta key
-			e.aggregationZSetKey(shard, ch),        // KEYS[5]: aggregation zset key
-			e.aggregationHashKey(shard, ch),        // KEYS[6]: aggregation hash key
-			cleanupKey,                             // KEYS[7]: cleanup registration zset key
-			e.aggregationMappingHashKey(shard, ch), // KEYS[8]: aggregation mapping hash key
+			e.stateHashKey(shard, ch),   // KEYS[1]: state hash key
+			e.stateExpireKey(shard, ch), // KEYS[2]: state expire zset key
+			e.streamKey(shard, ch),      // KEYS[3]: stream key
+			e.metaKey(shard, ch),        // KEYS[4]: stream meta key
+			cleanupKey,                  // KEYS[5]: cleanup registration zset key
 		},
 		[]string{
 			strconv.FormatInt(now, 10),            // ARGV[1]: now
@@ -2311,204 +2356,46 @@ func (e *RedisMapEngine) cleanupChannel(ctx context.Context, shard *RedisShard, 
 	return err
 }
 
-func (e *RedisMapEngine) runPubSub(s *engineShardWrapper, logFields map[string]any, eventHandler BrokerEventHandler, clusterShardIndex, psShardIndex int, useShardedPubSub bool, startOnce func(error)) {
-	numProcessors := e.conf.numPubSubProcessors
-	numResubscribeShards := e.conf.numResubscribeShards
-
-	shardChannel := e.pubSubShardChannelID(clusterShardIndex, psShardIndex, useShardedPubSub)
-
-	if e.node.logEnabled(LogLevelDebug) {
-		debugLogValues := map[string]any{
-			"num_processors": numProcessors,
-		}
-		if useShardedPubSub {
-			debugLogValues["cluster_shard_index"] = clusterShardIndex
-		}
-		startLogFields := map[string]any{}
-		for k, v := range logFields {
-			startLogFields[k] = v
-		}
-		if s.shard.isCluster {
-			startLogFields["cluster"] = true
-		}
-		combinedLogFields := make(map[string]any, len(startLogFields)+len(debugLogValues))
-		for k, v := range startLogFields {
-			combinedLogFields[k] = v
-		}
-		for k, v := range debugLogValues {
-			combinedLogFields[k] = v
-		}
-		e.node.logger.log(newLogEntry(LogLevelDebug, "running Redis PUB/SUB", combinedLogFields))
-		defer func() {
-			e.node.logger.log(newLogEntry(LogLevelDebug, "stopping Redis PUB/SUB", combinedLogFields))
-		}()
-	}
-
-	done := make(chan struct{})
-	var doneOnce sync.Once
-	closeDoneOnce := func() {
-		doneOnce.Do(func() {
-			close(done)
-		})
-	}
-	defer closeDoneOnce()
-
-	processors := make(map[int]chan rueidis.PubSubMessage)
-	for i := 0; i < numProcessors; i++ {
-		processingCh := make(chan rueidis.PubSubMessage, pubSubProcessorBufferSize)
-		processors[i] = processingCh
-		go func(ch chan rueidis.PubSubMessage) {
-			for {
-				select {
-				case <-done:
-					return
-				case msg := <-ch:
-					err := e.handleRedisClientMessage(s.shard.isCluster, eventHandler, msg.Channel, convert.StringToBytes(msg.Message))
-					if err != nil {
-						e.node.logger.log(newErrorLogEntry(err, "error handling client message", logFields))
-						continue
-					}
-				}
-			}
-		}(processingCh)
-	}
-
-	client := s.shard.client
-	if e.conf.SubscribeOnReplica {
-		client = s.shard.replicaClient
-	}
-
-	conn, cancel := client.Dedicate()
-	defer cancel()
-	defer conn.Close()
-
-	wait := conn.SetPubSubHooks(rueidis.PubSubHooks{
-		OnMessage: func(msg rueidis.PubSubMessage) {
-			select {
-			case processors[index(msg.Channel, numProcessors)] <- msg:
-			case <-done:
-			}
+func (e *RedisMapBroker) runPubSub(s *engineShardWrapper, logFields map[string]any, eventHandler BrokerEventHandler, clusterShardIndex, psShardIndex int, useShardedPubSub bool, startOnce func(error)) {
+	cb := pubSubCallbacks{
+		handleMessage: func(isCluster bool, handler BrokerEventHandler, ch string, data []byte) error {
+			return e.handleRedisClientMessage(isCluster, handler, ch, data)
 		},
-		OnSubscription: func(ps rueidis.PubSubSubscription) {
-			if !useShardedPubSub {
-				return
-			}
-			if ps.Kind == "sunsubscribe" && ps.Channel == shardChannel {
-				e.node.logger.log(newLogEntry(LogLevelInfo, "pub/sub restart due to slot migration", logFields))
-				closeDoneOnce()
-			}
+		shardChannelID: func(clusterIdx, psIdx int, sharded bool) string {
+			return e.pubSubShardChannelID(clusterIdx, psIdx, sharded)
 		},
-	})
-
-	var err error
-	if useShardedPubSub {
-		err = conn.Do(context.Background(), conn.B().Ssubscribe().Channel(shardChannel).Build()).Error()
-	} else {
-		err = conn.Do(context.Background(), conn.B().Subscribe().Channel(shardChannel).Build()).Error()
+		messageChannelID: func(ch string) string {
+			return e.messageChannelID(s.shard, ch)
+		},
+		shardForChannel: func(ch string) *RedisShard {
+			return e.getShard(ch).shard
+		},
 	}
-	if err != nil {
-		startOnce(err)
-		e.node.logger.log(newErrorLogEntry(err, "pub/sub subscribe error", logFields))
-		return
+	numPartitions := e.conf.NumShardedPubSubPartitions
+	if numPartitions == 0 {
+		numPartitions = 1
 	}
-
-	channels := e.node.Hub().Channels()
-
-	var wg sync.WaitGroup
-	started := time.Now()
-
-	for i := 0; i < numResubscribeShards; i++ {
-		wg.Add(1)
-		go func(subscriberIndex int) {
-			defer wg.Done()
-			estimatedCap := len(channels) / e.conf.numResubscribeShards / e.conf.numSubscribeShards
-			if useShardedPubSub {
-				estimatedCap /= e.conf.NumShardedPubSubPartitions
-			}
-			chIDs := make([]string, 0, estimatedCap)
-
-			for _, ch := range channels {
-				if e.getShard(ch).shard == s.shard && ((useShardedPubSub && consistentIndex(ch, e.conf.NumShardedPubSubPartitions) == clusterShardIndex && index(ch, e.conf.numSubscribeShards) == psShardIndex && index(ch, e.conf.numResubscribeShards) == subscriberIndex) || (index(ch, e.conf.numSubscribeShards) == psShardIndex && index(ch, e.conf.numResubscribeShards) == subscriberIndex)) {
-					chIDs = append(chIDs, e.messageChannelID(s.shard, ch))
-				}
-			}
-
-			subscribeBatch := func(batch []string) error {
-				if useShardedPubSub {
-					return conn.Do(context.Background(), conn.B().Ssubscribe().Channel(batch...).Build()).Error()
-				}
-				return conn.Do(context.Background(), conn.B().Subscribe().Channel(batch...).Build()).Error()
-			}
-
-			batch := make([]string, 0, redisSubscribeBatchLimit)
-
-			for i, ch := range chIDs {
-				if len(batch) > 0 && i%redisSubscribeBatchLimit == 0 {
-					err := subscribeBatch(batch)
-					if err != nil {
-						e.node.logger.log(newErrorLogEntry(err, "error subscribing", logFields))
-						closeDoneOnce()
-						return
-					}
-					batch = batch[:0]
-				}
-				batch = append(batch, ch)
-			}
-			if len(batch) > 0 {
-				err := subscribeBatch(batch)
-				if err != nil {
-					e.node.logger.log(newErrorLogEntry(err, "error subscribing", logFields))
-					closeDoneOnce()
-					return
-				}
-			}
-		}(i)
-	}
-
-	go func() {
-		wg.Wait()
-		if len(channels) > 0 && e.node.logEnabled(LogLevelDebug) {
-			e.logResubscribed(len(channels), time.Since(started), logFields)
-		}
-		select {
-		case <-done:
-			startOnce(errors.New("error resubscribing"))
-		default:
-			s.subClientsMu.Lock()
-			s.subClients[clusterShardIndex][psShardIndex] = conn
-			s.subClientsMu.Unlock()
-			defer func() {
-				s.subClientsMu.Lock()
-				s.subClients[clusterShardIndex][psShardIndex] = nil
-				s.subClientsMu.Unlock()
-			}()
-			startOnce(nil)
-		}
-		<-done
-	}()
-
-	select {
-	case err = <-wait:
-		startOnce(err)
-		if err != nil {
-			e.node.logger.log(newErrorLogEntry(err, "pub/sub connection error", logFields))
-		}
-	case <-done:
-	case <-s.shard.closeCh:
-	}
+	runPubSubLoop(
+		s.shard,
+		&s.subClientsMu,
+		s.subClients,
+		cb,
+		e.node,
+		e.conf.Name,
+		e.conf.SubscribeOnReplica,
+		e.conf.numPubSubProcessors,
+		e.conf.numResubscribeShards,
+		e.conf.numSubscribeShards,
+		numPartitions,
+		logFields,
+		eventHandler,
+		clusterShardIndex, psShardIndex,
+		useShardedPubSub,
+		startOnce,
+	)
 }
 
-func (e *RedisMapEngine) logResubscribed(numChannels int, elapsed time.Duration, logFields map[string]any) {
-	combinedLogFields := make(map[string]any, len(logFields)+2)
-	for k, v := range logFields {
-		combinedLogFields[k] = v
-	}
-	combinedLogFields["elapsed"] = elapsed.String()
-	combinedLogFields["num_channels"] = numChannels
-	e.node.logger.log(newLogEntry(LogLevelDebug, "resubscribed to channels", combinedLogFields))
-}
-
-func (e *RedisMapEngine) pubSubShardChannelID(clusterShardIndex int, psShardIndex int, useShardedPubSub bool) string {
+func (e *RedisMapBroker) pubSubShardChannelID(clusterShardIndex int, psShardIndex int, useShardedPubSub bool) string {
 	psShardStr := strconv.Itoa(psShardIndex)
 	if !useShardedPubSub {
 		var builder strings.Builder
@@ -2531,7 +2418,7 @@ func (e *RedisMapEngine) pubSubShardChannelID(clusterShardIndex int, psShardInde
 	return builder.String()
 }
 
-func (e *RedisMapEngine) extractChannel(isCluster bool, chID string) string {
+func (e *RedisMapBroker) extractChannel(isCluster bool, chID string) string {
 	ch := strings.TrimPrefix(chID, e.messagePrefix)
 
 	// Handle sharded PUB/SUB case: {idx}.channel
@@ -2559,7 +2446,7 @@ func (e *RedisMapEngine) extractChannel(isCluster bool, chID string) string {
 	return ch
 }
 
-func (e *RedisMapEngine) handleRedisClientMessage(isCluster bool, eventHandler BrokerEventHandler, chID string, data []byte) error {
+func (e *RedisMapBroker) handleRedisClientMessage(isCluster bool, eventHandler BrokerEventHandler, chID string, data []byte) error {
 	// Parse message: supports backward compat (no prefix), non-delta, and delta formats
 	offset, epoch, protobuf, isDelta, prevProtobuf, err := parseMessage(data)
 	if err != nil {
@@ -2598,15 +2485,19 @@ func (e *RedisMapEngine) handleRedisClientMessage(isCluster bool, eventHandler B
 }
 
 // Subscribe to a channel.
-func (e *RedisMapEngine) Subscribe(ch string) error {
+func (e *RedisMapBroker) Subscribe(ch string) error {
 	s := e.getShard(ch)
 	if e.node.logEnabled(LogLevelDebug) {
 		e.node.logger.log(newLogEntry(LogLevelDebug, "subscribe node on channel", map[string]any{"channel": ch}))
 	}
 	psShardIndex := index(ch, e.conf.numSubscribeShards)
-	var clusterShardIndex int
+	clusterShardIndex := 0
 	if e.useShardedPubSub(s.shard) {
 		clusterShardIndex = consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
+	}
+	// [node-grouped-pubsub] map partition → node index.
+	if s.partitionToNodeIdx != nil {
+		clusterShardIndex = s.partitionToNodeIdx[clusterShardIndex]
 	}
 
 	s.subClientsMu.Lock()
@@ -2627,15 +2518,19 @@ func (e *RedisMapEngine) Subscribe(ch string) error {
 }
 
 // Unsubscribe from a channel.
-func (e *RedisMapEngine) Unsubscribe(ch string) error {
+func (e *RedisMapBroker) Unsubscribe(ch string) error {
 	s := e.getShard(ch)
 	if e.node.logEnabled(LogLevelDebug) {
 		e.node.logger.log(newLogEntry(LogLevelDebug, "unsubscribe node from channel", map[string]any{"channel": ch}))
 	}
 	psShardIndex := index(ch, e.conf.numSubscribeShards)
-	var clusterShardIndex int
+	clusterShardIndex := 0
 	if e.useShardedPubSub(s.shard) {
 		clusterShardIndex = consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
+	}
+	// [node-grouped-pubsub] map partition → node index.
+	if s.partitionToNodeIdx != nil {
+		clusterShardIndex = s.partitionToNodeIdx[clusterShardIndex]
 	}
 
 	s.subClientsMu.Lock()
@@ -2806,7 +2701,7 @@ func parseAddScriptResult(replies []rueidis.RedisMessage) (MapPublishResult, err
 			currentValue, err := replies[3].AsBytes()
 			if err == nil && len(currentValue) > 0 {
 				// Parse value: offset:epoch:payload
-				entryOffset, _, payload, parseErr := parseSnapshotValue(currentValue)
+				entryOffset, _, payload, parseErr := parseStateValue(currentValue)
 				if parseErr == nil {
 					var protoPub protocol.Publication
 					if protoPub.UnmarshalVT(payload) == nil {
@@ -2820,253 +2715,3 @@ func parseAddScriptResult(replies []rueidis.RedisMessage) (MapPublishResult, err
 	}
 	return result, nil
 }
-
-//// AddMember adds a client to converged membership (presence with ordering).
-//func (e *RedisMapEngine) AddMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error {
-//	// AddMember is just Publish with a Publication that has Key=clientID, Info=clientInfo, Data=nil
-//	// This reuses all the Publish logic for keyed snapshots with aggregation support
-//
-//	protoPub := &protocol.Publication{
-//		Key:  info.ClientID,
-//		Info: infoToProto(&info),
-//		Time: time.Now().UnixMilli(),
-//	}
-//	pubBytes, err := protoPub.MarshalVT()
-//	if err != nil {
-//		return err
-//	}
-//
-//	s := e.getShard(ch)
-//	shardClient := s.shard.client
-//
-//	// Optional presence stream for recovery
-//	var streamKey, metaKey, metaExpire string
-//	if e.conf.PresenceStreamSize > 0 {
-//		streamKey = e.streamKey(s.shard, ch)
-//		metaKey = e.metaKey(s.shard, ch)
-//		if e.conf.PresenceMetaTTL > 0 {
-//			metaExpire = strconv.Itoa(int(e.conf.PresenceMetaTTL.Seconds()))
-//		} else {
-//			metaExpire = "0"
-//		}
-//	}
-//
-//	publishCommand := ""
-//	var chID string
-//	if opts.Publish {
-//		if e.useShardedPubSub(s.shard) {
-//			publishCommand = "SPUBLISH"
-//		} else {
-//			publishCommand = "PUBLISH"
-//		}
-//		chID = e.messageChannelID(s.shard, ch)
-//	}
-//
-//	// Use aggregation for user counting
-//	aggregationKey := ""
-//	aggregationValue := ""
-//	if info.UserID != "" {
-//		aggregationKey = "user_id"
-//		aggregationValue = info.UserID
-//	}
-//
-//	// Setup cleanup registration and aggregation mapping for presence with stream
-//	cleanupRegKey := ""
-//	aggMappingKey := ""
-//	if e.conf.PresenceStreamSize > 0 {
-//		cleanupRegKey = e.cleanupRegistrationKeyForChannel(s.shard, ch)
-//		if info.UserID != "" {
-//			aggMappingKey = e.aggregationMappingHashKey(s.shard, ch)
-//		}
-//	}
-//
-//	_, err = e.addScript.Exec(ctx, shardClient,
-//		[]string{
-//			streamKey, metaKey, "", // Optional presence stream, no result key
-//			e.snapshotHashKey(s.shard, ch),
-//			"", // No order key for presence
-//			e.snapshotExpireKey(s.shard, ch),
-//			e.aggregationZSetKey(s.shard, ch),
-//			e.aggregationHashKey(s.shard, ch),
-//			"",            // No snapshot meta key for presence (uses stream meta directly)
-//			cleanupRegKey, // KEYS[10]: cleanup registration zset key
-//			aggMappingKey, // KEYS[11]: aggregation mapping hash key
-//		},
-//		[]string{
-//			info.ClientID,                   // message_key
-//			convert.BytesToString(pubBytes), // message_payload (Publication for stream, publishing, and snapshot)
-//			strconv.Itoa(e.conf.PresenceStreamSize),
-//			strconv.FormatInt(int64(e.conf.PresenceStreamTTL.Seconds()), 10),
-//			chID, // channel (for Lua to publish)
-//			metaExpire,
-//			e.node.ID(),
-//			publishCommand,   // Lua will publish
-//			"", "0", "0", "", // result_key_expire, use_delta, version, version_epoch
-//			"0", // is_leave
-//			"0", // score
-//			strconv.FormatInt(int64(e.conf.PresenceTTL.Seconds()), 10),
-//			"0",              // use_hexpire
-//			aggregationKey,   // aggregation_key (e.g., "user_id")
-//			aggregationValue, // aggregation_value (e.g., actual user ID)
-//			"",               // message_key_payload (not used - message_payload is Publication)
-//			ch,               // channel_for_cleanup (channel name for registration)
-//		},
-//	).ToArray()
-//	return err
-//}
-//
-//// RemoveMember removes a client from converged membership.
-//func (e *RedisMapEngine) RemoveMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error {
-//	// RemoveMember is just Publish with a Publication that has Removed=true
-//	// This reuses all the Publish logic for keyed snapshots with aggregation support
-//
-//	protoPub := &protocol.Publication{
-//		Key:     info.ClientID,
-//		Info:    infoToProto(&info),
-//		Removed: true,
-//		Time:    time.Now().UnixMilli(),
-//	}
-//	pubBytes, err := protoPub.MarshalVT()
-//	if err != nil {
-//		return err
-//	}
-//
-//	s := e.getShard(ch)
-//	shardClient := s.shard.client
-//
-//	// Optional presence stream for recovery
-//	var streamKey, metaKey, metaExpire string
-//	if e.conf.PresenceStreamSize > 0 {
-//		streamKey = e.streamKey(s.shard, ch)
-//		metaKey = e.metaKey(s.shard, ch)
-//		if e.conf.PresenceMetaTTL > 0 {
-//			metaExpire = strconv.Itoa(int(e.conf.PresenceMetaTTL.Seconds()))
-//		} else {
-//			metaExpire = "0"
-//		}
-//	}
-//
-//	publishCommand := ""
-//	var chID string
-//	if opts.Publish {
-//		if e.useShardedPubSub(s.shard) {
-//			publishCommand = "SPUBLISH"
-//		} else {
-//			publishCommand = "PUBLISH"
-//		}
-//		chID = e.messageChannelID(s.shard, ch)
-//	}
-//
-//	// Use aggregation for user counting
-//	aggregationKey := ""
-//	aggregationValue := ""
-//	if info.UserID != "" {
-//		aggregationKey = "user_id"
-//		aggregationValue = info.UserID
-//	}
-//
-//	// Cleanup registration for proper cleanup handling
-//	cleanupRegKey := ""
-//	aggMappingKey := ""
-//	if e.conf.PresenceStreamSize > 0 {
-//		cleanupRegKey = e.cleanupRegistrationKeyForChannel(s.shard, ch)
-//		if info.UserID != "" {
-//			aggMappingKey = e.aggregationMappingHashKey(s.shard, ch)
-//		}
-//	}
-//
-//	_, err = e.addScript.Exec(ctx, shardClient,
-//		[]string{
-//			streamKey, metaKey, "", // Optional presence stream, no result key
-//			e.snapshotHashKey(s.shard, ch),
-//			"", // No order key for presence
-//			e.snapshotExpireKey(s.shard, ch),
-//			e.aggregationZSetKey(s.shard, ch),
-//			e.aggregationHashKey(s.shard, ch),
-//			"",            // No snapshot meta key for presence
-//			cleanupRegKey, // KEYS[10]: cleanup registration key (to update after remove)
-//			aggMappingKey, // KEYS[11]: aggregation mapping hash key
-//		},
-//		[]string{
-//			info.ClientID,                   // message_key
-//			convert.BytesToString(pubBytes), // message_payload (Publication with Removed=true for stream and publishing)
-//			strconv.Itoa(e.conf.PresenceStreamSize),
-//			strconv.FormatInt(int64(e.conf.PresenceStreamTTL.Seconds()), 10),
-//			chID, // channel (for Lua to publish)
-//			metaExpire,
-//			e.node.ID(),
-//			publishCommand,   // Lua will publish
-//			"", "0", "0", "", // result_key_expire, use_delta, version, version_epoch
-//			"1", // is_leave
-//			"0", // score
-//			strconv.FormatInt(int64(e.conf.PresenceTTL.Seconds()), 10),
-//			"0",              // use_hexpire
-//			aggregationKey,   // aggregation_key
-//			aggregationValue, // aggregation_value
-//			"",               // message_key_payload (not used - message_payload is Publication)
-//			ch,               // channel_for_cleanup (needed to update cleanup registration)
-//		},
-//	).ToArray()
-//	return err
-//}
-//
-//// Members returns actual presence information for a channel.
-//func (e *RedisMapEngine) Members(ctx context.Context, ch string) (map[string]*ClientInfo, error) {
-//	s := e.getShard(ch)
-//	shardClient := s.shard.client
-//
-//	metaTTL := "0"
-//	if e.conf.PresenceMetaTTL > 0 {
-//		metaTTL = strconv.Itoa(int(e.conf.PresenceMetaTTL.Seconds()))
-//	}
-//
-//	replies, err := e.readUnorderedScript.Exec(ctx, shardClient,
-//		[]string{
-//			e.snapshotHashKey(s.shard, ch),   // hash_key
-//			e.snapshotExpireKey(s.shard, ch), // expire_key
-//			e.metaKey(s.shard, ch),           // meta_key
-//			"",                               // snapshot_meta_key (not used for presence)
-//		},
-//		[]string{
-//			"0", // cursor (start)
-//			"0", // limit (0 = HGETALL)
-//			strconv.FormatInt(time.Now().Unix(), 10),
-//			metaTTL,
-//			"0", // snapshot_ttl (don't refresh on read)
-//		},
-//	).ToArray()
-//	if err != nil {
-//		return nil, err
-//	}
-//	if len(replies) < 4 {
-//		return nil, errors.New("wrong number of replies")
-//	}
-//
-//	dataArr, _ := replies[3].ToArray()
-//	if len(dataArr) == 0 {
-//		return nil, nil
-//	}
-//
-//	m := make(map[string]*ClientInfo, len(dataArr)/2)
-//	for i := 0; i < len(dataArr); i += 2 {
-//		k, _ := dataArr[i].ToString()
-//		v, _ := dataArr[i+1].AsBytes()
-//
-//		// Parse snapshot value: offset:epoch:publication_bytes
-//		_, _, payload, err := parseSnapshotValue(v)
-//		if err != nil {
-//			// Skip malformed entries
-//			continue
-//		}
-//
-//		var pub protocol.Publication
-//		err = pub.UnmarshalVT(payload)
-//		if err != nil {
-//			return nil, err
-//		}
-//		if pub.Info != nil {
-//			m[k] = infoFromProto(pub.Info)
-//		}
-//	}
-//	return m, nil
-//}

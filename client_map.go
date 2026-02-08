@@ -327,7 +327,7 @@ func (c *Client) handleMapStateToLive(
 
 	// Build subscription info first, validate before subscribing.
 	useID := opts.AllowChannelCompaction && req.Flag&subscriptionFlagChannelCompression != 0
-	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, keyed: true}
+	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, isMap: true}
 
 	// Process tags filter if provided.
 	if req.Tf != nil {
@@ -484,7 +484,7 @@ func (c *Client) handleMapStateToLive(
 	if chanID > 0 {
 		res.Id = chanID
 	}
-	res.State = stateProtos        // Last page state entries
+	res.State = stateProtos          // Last page state entries
 	res.Publications = recoveredPubs // Stream catch-up publications
 
 	// Write response before stopping buffer.
@@ -705,7 +705,7 @@ func (c *Client) handleMapStreamToLive(
 
 	// Build subscription info first, validate before subscribing.
 	useID := opts.AllowChannelCompaction && req.Flag&subscriptionFlagChannelCompression != 0
-	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, keyed: true}
+	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, isMap: true}
 
 	// Process tags filter if provided.
 	if req.Tf != nil {
@@ -1000,7 +1000,7 @@ func (c *Client) handleMapLivePhase(
 ) error {
 	channel := req.Channel
 
-	if c.node.getMapEngine(channel) == nil {
+	if c.node.getMapBroker(channel) == nil {
 		return ErrorNotAvailable
 	}
 
@@ -1053,7 +1053,7 @@ func (c *Client) handleMapImmediateJoin(
 
 	// Build subscription info first, validate before subscribing.
 	useID := opts.AllowChannelCompaction && req.Flag&subscriptionFlagChannelCompression != 0
-	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, keyed: true}
+	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, isMap: true}
 
 	// Process tags filter if provided.
 	if req.Tf != nil {
@@ -1241,8 +1241,8 @@ func (c *Client) handleMapImmediateJoin(
 		Epoch:        streamPos.Epoch,
 		Offset:       latestOffset,
 		Delta:        deltaEnabled,
-		State:        stateProtos,    // Full state for immediate join
-		Publications: recoveredPubs,  // Stream publications
+		State:        stateProtos,   // Full state for immediate join
+		Publications: recoveredPubs, // Stream publications
 	}
 	if chanID > 0 {
 		res.Id = chanID
@@ -1310,7 +1310,7 @@ func (c *Client) handleMapRecoveryJoin(
 
 	// Build subscription info first, validate before subscribing.
 	useID := opts.AllowChannelCompaction && req.Flag&subscriptionFlagChannelCompression != 0
-	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, keyed: true}
+	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, isMap: true}
 
 	// Process tags filter if provided.
 	if req.Tf != nil {
@@ -1524,7 +1524,7 @@ func (c *Client) buildMapChannelFlags(deltaEnabled bool, delta string, isPresenc
 	var channelFlags uint16
 	channelFlags |= flagSubscribed
 	channelFlags |= flagPositioning // Map subscriptions are always positioned.
-	channelFlags |= flagMap        // Mark as map subscription.
+	channelFlags |= flagMap         // Mark as map subscription.
 	if deltaEnabled && delta == string(DeltaTypeFossil) {
 		channelFlags |= flagDeltaAllowed
 	}
@@ -1557,7 +1557,7 @@ func (c *Client) buildMapChannelFlags(deltaEnabled bool, delta string, isPresenc
 
 // setupMapPresenceAndJoin handles presence and join event setup for map subscriptions.
 func (c *Client) setupMapPresenceAndJoin(channel string, opts SubscribeOptions) {
-	// Add presence if enabled (uses MapEngine for map channels).
+	// Add presence if enabled (uses MapBroker for map channels).
 	if opts.EmitPresence {
 		info := &ClientInfo{
 			ClientID: c.uid,
@@ -1720,7 +1720,7 @@ func (c *Client) addMapUserPresence(channel string, prefix string) error {
 	return err
 }
 
-// updateMapPresence updates presence for a map channel using MapEngine.
+// updateMapPresence updates presence for a map channel using MapBroker.
 // This is called periodically by updateChannelPresence to refresh the TTL.
 // Handles presence channels based on configured prefixes.
 func (c *Client) updateMapPresence(channel string, info *ClientInfo, ctx ChannelContext) error {
@@ -1759,7 +1759,7 @@ func (c *Client) updateMapPresence(channel string, info *ClientInfo, ctx Channel
 	return nil
 }
 
-// removeMapPresence removes presence for a map channel using MapEngine.
+// removeMapPresence removes presence for a map channel using MapBroker.
 // Called on explicit unsubscribe or disconnect. Only removes client presence,
 // user presence entries expire via TTL (acts as debounce for quick reconnects).
 func (c *Client) removeMapPresence(channel string, ctx ChannelContext) error {

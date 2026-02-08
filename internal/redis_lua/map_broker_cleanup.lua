@@ -1,34 +1,25 @@
 --[[
-Cleanup expired entries from keyed snapshot and generate removal events.
+Cleanup expired entries from keyed state and generate removal events.
 
 This script:
 1. Finds expired entries in the expire ZSET
 2. For each expired entry:
    - Writes removal event to stream with new offset
-   - Removes from snapshot hash and aggregation mapping
+   - Removes from state hash
    - Removes from expire ZSET
-   - Updates aggregation counts
    - Publishes removal event via PUB/SUB
 3. Updates cleanup registration ZSET with next expiry time
 4. Returns count of removed entries
 
-Storage format in snapshot hash: offset:epoch:publication_bytes
-
-Generic design:
-- Works for any keyed state (presence, cursors, etc.)
-- Key = any unique identifier (e.g., clientID for presence, userID for cursors)
-- Aggregation = optional grouping (e.g., userID for presence to count unique users)
+Storage format in state hash: offset:epoch:publication_bytes
 --]]
 
 -- ==== KEYS ====
--- KEYS[1] = snapshot hash key
--- KEYS[2] = snapshot expire zset key
+-- KEYS[1] = state hash key
+-- KEYS[2] = state expire zset key
 -- KEYS[3] = stream key (for removal events)
 -- KEYS[4] = stream meta key (for offset/epoch)
--- KEYS[5] = aggregation zset key (for aggregation TTL, optional)
--- KEYS[6] = aggregation hash key (for aggregation counts, optional)
--- KEYS[7] = cleanup registration zset key (for scheduling)
--- KEYS[8] = aggregation mapping hash key (entry_key -> aggregation_value, optional)
+-- KEYS[5] = cleanup registration zset key (for scheduling)
 
 -- ==== ARGV ====
 -- ARGV[1]  = now (unix timestamp)
@@ -43,14 +34,11 @@ Generic design:
 -- ARGV[10] = channel_for_cleanup_zset (channel name to update in cleanup ZSET)
 -- ARGV[11] = force_consistency ("0" or "1" - force epoch change on eviction)
 
-local snapshot_hash_key = KEYS[1]
-local snapshot_expire_key = KEYS[2]
+local state_hash_key = KEYS[1]
+local state_expire_key = KEYS[2]
 local stream_key = KEYS[3]
 local meta_key = KEYS[4]
-local aggregation_zset_key = KEYS[5]
-local aggregation_hash_key = KEYS[6]
-local cleanup_registration_key = KEYS[7]
-local aggregation_mapping_key = KEYS[8]
+local cleanup_registration_key = KEYS[5]
 
 local now = tonumber(ARGV[1])
 local batch_size = tonumber(ARGV[2])
@@ -60,9 +48,7 @@ local stream_size = ARGV[5]
 local stream_ttl = ARGV[6]
 local meta_expire = ARGV[7]
 local new_epoch_if_empty = ARGV[8]
-local use_hexpire = ARGV[9]
 local channel_for_cleanup = ARGV[10]
-local force_consistency = ARGV[11]
 
 -- Helper: encode an integer as a protobuf varint
 local function encode_varint(value)
@@ -102,7 +88,7 @@ end
 -- ensuring remaining expired entries are not lost when batch_size limits processing.
 local function update_cleanup_registration()
     if cleanup_registration_key == '' then return end
-    local earliest = redis.call("zrange", snapshot_expire_key, 0, 0, "WITHSCORES")
+    local earliest = redis.call("zrange", state_expire_key, 0, 0, "WITHSCORES")
     if #earliest >= 2 then
         redis.call("zadd", cleanup_registration_key, earliest[2], channel_for_cleanup)
     else
@@ -111,7 +97,7 @@ local function update_cleanup_registration()
 end
 
 -- Find expired entries
-local expired = redis.call("zrangebyscore", snapshot_expire_key, 0, now, "LIMIT", 0, batch_size)
+local expired = redis.call("zrangebyscore", state_expire_key, 0, now, "LIMIT", 0, batch_size)
 
 if #expired == 0 then
     -- No expired entries, update cleanup registration with next expiry
@@ -130,7 +116,7 @@ local removed_count = 0
 
 for _, entry_key in ipairs(expired) do
     -- Race condition check: verify entry is still expired
-    local current_score = redis.call("zscore", snapshot_expire_key, entry_key)
+    local current_score = redis.call("zscore", state_expire_key, entry_key)
     if current_score and tonumber(current_score) <= now then
         -- Still expired, safe to remove
 
@@ -159,30 +145,9 @@ for _, entry_key in ipairs(expired) do
             redis.call(publish_command, channel, pub_payload)
         end
 
-        -- Get aggregation value from mapping (e.g., userID for presence, optional)
-        local aggregation_value = nil
-        if aggregation_mapping_key ~= '' and aggregation_hash_key ~= '' then
-            aggregation_value = redis.call("hget", aggregation_mapping_key, entry_key)
-        end
-
-        -- Remove from snapshot and aggregation mapping
-        redis.call("hdel", snapshot_hash_key, entry_key)
-        if aggregation_mapping_key ~= '' then
-            redis.call("hdel", aggregation_mapping_key, entry_key)
-        end
-        redis.call("zrem", snapshot_expire_key, entry_key)
-
-        -- Update aggregation counts - decrement for this aggregation value
-        if aggregation_value and aggregation_hash_key ~= '' then
-            local entry_count = redis.call("hincrby", aggregation_hash_key, aggregation_value, -1)
-            if entry_count <= 0 then
-                -- Last entry for this aggregation value, remove from tracking
-                if use_hexpire == '0' and aggregation_zset_key ~= '' then
-                    redis.call("zrem", aggregation_zset_key, aggregation_value)
-                end
-                redis.call("hdel", aggregation_hash_key, aggregation_value)
-            end
-        end
+        -- Remove from state hash and expire zset
+        redis.call("hdel", state_hash_key, entry_key)
+        redis.call("zrem", state_expire_key, entry_key)
 
         removed_count = removed_count + 1
     end

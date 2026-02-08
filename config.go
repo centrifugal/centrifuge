@@ -140,19 +140,19 @@ type Config struct {
 	// custom Broker instances. When GetBroker returns false as the second argument then Node will
 	// use the default Broker for the channel.
 	GetBroker func(channel string) (Broker, bool)
+	// GetMapBroker when set allows returning a custom MapBroker to use for a specific channel.
+	// This enables sharding map state across multiple databases based on channel. If not set
+	// then the default Node's MapBroker (set via SetMapBroker) is always used for all channels.
+	// It's the responsibility of an application to properly initialize and shutdown all MapBroker
+	// instances. When GetMapBroker returns false as the second argument then Node will use the
+	// default MapBroker for the channel.
+	GetMapBroker func(channel string) (MapBroker, bool)
 	// GetPresenceManager when set allows returning a custom PresenceManager to use for a specific
 	// channel. If not set then the default Node's PresenceManager is always used for all channels.
 	// A proper PresenceManager shutdown is the responsibility of application because Node does not
 	// know about custom PresenceManager instances. When GetPresenceManager returns false as the second
 	// argument then Node will use the default PresenceManager for the channel.
 	GetPresenceManager func(channel string) (PresenceManager, bool)
-	// GetMapEngine when set allows returning a custom MapEngine to use for a specific channel.
-	// This enables sharding map state across multiple databases based on channel. If not set
-	// then the default Node's MapEngine (set via SetMapEngine) is always used for all channels.
-	// It's the responsibility of an application to properly initialize and shutdown all MapEngine
-	// instances. When GetMapEngine returns false as the second argument then Node will use the
-	// default MapEngine for the channel.
-	GetMapEngine func(channel string) (MapEngine, bool)
 	// Tell Centrifuge how to transform connect error codes to disconnect objects for unidirectional
 	// transports. If not set or code not found in the mapping then Centrifuge falls back to the default
 	// mapping defined internally.

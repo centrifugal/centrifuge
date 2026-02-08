@@ -12,22 +12,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// setupTwoNodeCachedRedis creates two CachedMapEngine instances backed by the same Redis.
+// setupTwoNodeCachedRedis creates two CachedMapBroker instances backed by the same Redis.
 // This simulates two distributed nodes sharing the same backend.
 // Note: Since there are no real client subscriptions, PUB/SUB won't work in these tests.
 // Instead, we rely on the sync mechanism to propagate changes between nodes.
-func setupTwoNodeCachedRedis(t *testing.T) (node1 *Node, cached1 *CachedMapEngine, node2 *Node, cached2 *CachedMapEngine, cleanup func()) {
+func setupTwoNodeCachedRedis(t *testing.T) (node1 *Node, cached1 *CachedMapBroker, node2 *Node, cached2 *CachedMapBroker, cleanup func()) {
 	// Node 1
 	node1, _ = New(Config{})
 	redisConf := testSingleRedisConf(6379)
 	shard1, err := NewRedisShard(node1, redisConf)
 	require.NoError(t, err)
-	backend1, err := NewRedisMapEngine(node1, RedisMapEngineConfig{
+	backend1, err := NewRedisMapBroker(node1, RedisMapBrokerConfig{
 		Shards: []*RedisShard{shard1},
 	})
 	require.NoError(t, err)
 
-	cached1, err = NewCachedMapEngine(node1, backend1, CachedMapEngineConfig{
+	cached1, err = NewCachedMapBroker(node1, backend1, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels:        1000,
 			ChannelIdleTimeout: 5 * time.Minute,
@@ -43,12 +43,12 @@ func setupTwoNodeCachedRedis(t *testing.T) (node1 *Node, cached1 *CachedMapEngin
 	node2, _ = New(Config{})
 	shard2, err := NewRedisShard(node2, redisConf)
 	require.NoError(t, err)
-	backend2, err := NewRedisMapEngine(node2, RedisMapEngineConfig{
+	backend2, err := NewRedisMapBroker(node2, RedisMapBrokerConfig{
 		Shards: []*RedisShard{shard2},
 	})
 	require.NoError(t, err)
 
-	cached2, err = NewCachedMapEngine(node2, backend2, CachedMapEngineConfig{
+	cached2, err = NewCachedMapBroker(node2, backend2, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels:        1000,
 			ChannelIdleTimeout: 5 * time.Minute,
@@ -70,9 +70,9 @@ func setupTwoNodeCachedRedis(t *testing.T) (node1 *Node, cached1 *CachedMapEngin
 	return node1, cached1, node2, cached2, cleanup
 }
 
-// TestCachedMapEngine_TwoNodes_BasicPublish tests that publications from one node
+// TestCachedMapBroker_TwoNodes_BasicPublish tests that publications from one node
 // are received by another node via the sync mechanism.
-func TestCachedMapEngine_TwoNodes_BasicPublish(t *testing.T) {
+func TestCachedMapBroker_TwoNodes_BasicPublish(t *testing.T) {
 	_, cached1, _, cached2, cleanup := setupTwoNodeCachedRedis(t)
 	defer cleanup()
 
@@ -114,9 +114,9 @@ func TestCachedMapEngine_TwoNodes_BasicPublish(t *testing.T) {
 	require.Equal(t, pos1.Offset, pos2.Offset)
 }
 
-// TestCachedMapEngine_TwoNodes_ConcurrentPublish tests concurrent publications
+// TestCachedMapBroker_TwoNodes_ConcurrentPublish tests concurrent publications
 // from both nodes and verifies eventual consistency via sync mechanism.
-func TestCachedMapEngine_TwoNodes_ConcurrentPublish(t *testing.T) {
+func TestCachedMapBroker_TwoNodes_ConcurrentPublish(t *testing.T) {
 	_, cached1, _, cached2, cleanup := setupTwoNodeCachedRedis(t)
 	defer cleanup()
 
@@ -203,9 +203,9 @@ func TestCachedMapEngine_TwoNodes_ConcurrentPublish(t *testing.T) {
 	}
 }
 
-// TestCachedMapEngine_TwoNodes_UpdateSameKey tests both nodes updating the same key
+// TestCachedMapBroker_TwoNodes_UpdateSameKey tests both nodes updating the same key
 // and verifies both caches converge to the same final value via sync mechanism.
-func TestCachedMapEngine_TwoNodes_UpdateSameKey(t *testing.T) {
+func TestCachedMapBroker_TwoNodes_UpdateSameKey(t *testing.T) {
 	_, cached1, _, cached2, cleanup := setupTwoNodeCachedRedis(t)
 	defer cleanup()
 
@@ -266,9 +266,9 @@ func TestCachedMapEngine_TwoNodes_UpdateSameKey(t *testing.T) {
 	require.Len(t, stream2, 10, "stream should have all 10 updates")
 }
 
-// TestCachedMapEngine_TwoNodes_GapFilling tests that when a node loads a channel
+// TestCachedMapBroker_TwoNodes_GapFilling tests that when a node loads a channel
 // after another node has published, it gets all data from the backend.
-func TestCachedMapEngine_TwoNodes_GapFilling(t *testing.T) {
+func TestCachedMapBroker_TwoNodes_GapFilling(t *testing.T) {
 	_, cached1, _, cached2, cleanup := setupTwoNodeCachedRedis(t)
 	defer cleanup()
 
@@ -319,9 +319,9 @@ func TestCachedMapEngine_TwoNodes_GapFilling(t *testing.T) {
 	require.Equal(t, pos1.Offset, pos2.Offset)
 }
 
-// TestCachedMapEngine_TwoNodes_Remove tests that unpublish (removal) propagates
+// TestCachedMapBroker_TwoNodes_Remove tests that unpublish (removal) propagates
 // correctly to both nodes via sync mechanism.
-func TestCachedMapEngine_TwoNodes_Remove(t *testing.T) {
+func TestCachedMapBroker_TwoNodes_Remove(t *testing.T) {
 	_, cached1, _, cached2, cleanup := setupTwoNodeCachedRedis(t)
 	defer cleanup()
 
@@ -385,9 +385,9 @@ func TestCachedMapEngine_TwoNodes_Remove(t *testing.T) {
 	require.True(t, keys["key4"])
 }
 
-// TestCachedMapEngine_TwoNodes_HighConcurrency stress tests with high concurrency
+// TestCachedMapBroker_TwoNodes_HighConcurrency stress tests with high concurrency
 // from both nodes simultaneously, verifying eventual consistency via sync mechanism.
-func TestCachedMapEngine_TwoNodes_HighConcurrency(t *testing.T) {
+func TestCachedMapBroker_TwoNodes_HighConcurrency(t *testing.T) {
 	_, cached1, _, cached2, cleanup := setupTwoNodeCachedRedis(t)
 	defer cleanup()
 
@@ -460,20 +460,20 @@ func TestCachedMapEngine_TwoNodes_HighConcurrency(t *testing.T) {
 	require.Equal(t, pos1.Offset, pos2.Offset, "offsets should match")
 }
 
-// setupTwoNodeCachedRedisWithPubSub creates two CachedMapEngine instances with long sync interval
+// setupTwoNodeCachedRedisWithPubSub creates two CachedMapBroker instances with long sync interval
 // to ensure tests rely on PUB/SUB propagation, not periodic sync.
-func setupTwoNodeCachedRedisWithPubSub(t *testing.T) (node1 *Node, cached1 *CachedMapEngine, node2 *Node, cached2 *CachedMapEngine, cleanup func()) {
+func setupTwoNodeCachedRedisWithPubSub(t *testing.T) (node1 *Node, cached1 *CachedMapBroker, node2 *Node, cached2 *CachedMapBroker, cleanup func()) {
 	// Node 1
 	node1, _ = New(Config{})
 	redisConf := testSingleRedisConf(6379)
 	shard1, err := NewRedisShard(node1, redisConf)
 	require.NoError(t, err)
-	backend1, err := NewRedisMapEngine(node1, RedisMapEngineConfig{
+	backend1, err := NewRedisMapBroker(node1, RedisMapBrokerConfig{
 		Shards: []*RedisShard{shard1},
 	})
 	require.NoError(t, err)
 
-	cached1, err = NewCachedMapEngine(node1, backend1, CachedMapEngineConfig{
+	cached1, err = NewCachedMapBroker(node1, backend1, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels:        1000,
 			ChannelIdleTimeout: 5 * time.Minute,
@@ -489,12 +489,12 @@ func setupTwoNodeCachedRedisWithPubSub(t *testing.T) (node1 *Node, cached1 *Cach
 	node2, _ = New(Config{})
 	shard2, err := NewRedisShard(node2, redisConf)
 	require.NoError(t, err)
-	backend2, err := NewRedisMapEngine(node2, RedisMapEngineConfig{
+	backend2, err := NewRedisMapBroker(node2, RedisMapBrokerConfig{
 		Shards: []*RedisShard{shard2},
 	})
 	require.NoError(t, err)
 
-	cached2, err = NewCachedMapEngine(node2, backend2, CachedMapEngineConfig{
+	cached2, err = NewCachedMapBroker(node2, backend2, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels:        1000,
 			ChannelIdleTimeout: 5 * time.Minute,
@@ -516,9 +516,9 @@ func setupTwoNodeCachedRedisWithPubSub(t *testing.T) (node1 *Node, cached1 *Cach
 	return node1, cached1, node2, cached2, cleanup
 }
 
-// TestCachedMapEngine_TwoNodes_PubSub tests real PUB/SUB propagation between nodes.
+// TestCachedMapBroker_TwoNodes_PubSub tests real PUB/SUB propagation between nodes.
 // Uses Subscribe to set up PUB/SUB channels and verifies real-time updates.
-func TestCachedMapEngine_TwoNodes_PubSub(t *testing.T) {
+func TestCachedMapBroker_TwoNodes_PubSub(t *testing.T) {
 	_, cached1, _, cached2, cleanup := setupTwoNodeCachedRedisWithPubSub(t)
 	defer cleanup()
 
@@ -562,9 +562,9 @@ func TestCachedMapEngine_TwoNodes_PubSub(t *testing.T) {
 	_ = cached2.Unsubscribe(channel)
 }
 
-// TestCachedMapEngine_TwoNodes_UpdateSameKeyPubSub tests both nodes updating the same key
+// TestCachedMapBroker_TwoNodes_UpdateSameKeyPubSub tests both nodes updating the same key
 // and verifies both caches converge to the same final value via real PUB/SUB.
-func TestCachedMapEngine_TwoNodes_UpdateSameKeyPubSub(t *testing.T) {
+func TestCachedMapBroker_TwoNodes_UpdateSameKeyPubSub(t *testing.T) {
 	_, cached1, _, cached2, cleanup := setupTwoNodeCachedRedisWithPubSub(t)
 	defer cleanup()
 
@@ -632,9 +632,9 @@ func TestCachedMapEngine_TwoNodes_UpdateSameKeyPubSub(t *testing.T) {
 	_ = cached2.Unsubscribe(channel)
 }
 
-// TestCachedMapEngine_TwoNodes_GapFillingPubSub tests that when node2 subscribes after
+// TestCachedMapBroker_TwoNodes_GapFillingPubSub tests that when node2 subscribes after
 // node1 has published, it gets all data and then receives real-time updates via PUB/SUB.
-func TestCachedMapEngine_TwoNodes_GapFillingPubSub(t *testing.T) {
+func TestCachedMapBroker_TwoNodes_GapFillingPubSub(t *testing.T) {
 	_, cached1, _, cached2, cleanup := setupTwoNodeCachedRedisWithPubSub(t)
 	defer cleanup()
 
@@ -693,9 +693,9 @@ func TestCachedMapEngine_TwoNodes_GapFillingPubSub(t *testing.T) {
 	_ = cached2.Unsubscribe(channel)
 }
 
-// TestCachedMapEngine_TwoNodes_RemovePubSub tests that unpublish (removal) propagates
+// TestCachedMapBroker_TwoNodes_RemovePubSub tests that unpublish (removal) propagates
 // correctly to both nodes via real PUB/SUB (not periodic sync).
-func TestCachedMapEngine_TwoNodes_RemovePubSub(t *testing.T) {
+func TestCachedMapBroker_TwoNodes_RemovePubSub(t *testing.T) {
 	_, cached1, _, cached2, cleanup := setupTwoNodeCachedRedisWithPubSub(t)
 	defer cleanup()
 
@@ -766,9 +766,9 @@ func TestCachedMapEngine_TwoNodes_RemovePubSub(t *testing.T) {
 	_ = cached2.Unsubscribe(channel)
 }
 
-// TestCachedMapEngine_TwoNodes_ConcurrentPublishPubSub tests concurrent publications
+// TestCachedMapBroker_TwoNodes_ConcurrentPublishPubSub tests concurrent publications
 // from both nodes using real PUB/SUB propagation (not periodic sync).
-func TestCachedMapEngine_TwoNodes_ConcurrentPublishPubSub(t *testing.T) {
+func TestCachedMapBroker_TwoNodes_ConcurrentPublishPubSub(t *testing.T) {
 	_, cached1, _, cached2, cleanup := setupTwoNodeCachedRedisWithPubSub(t)
 	defer cleanup()
 
@@ -862,22 +862,22 @@ func TestCachedMapEngine_TwoNodes_ConcurrentPublishPubSub(t *testing.T) {
 	_ = cached2.Unsubscribe(channel)
 }
 
-// TestCachedMapEngine_TwoNodes_MissedPubSubMessages tests that when a node misses
+// TestCachedMapBroker_TwoNodes_MissedPubSubMessages tests that when a node misses
 // PUB/SUB messages, it detects the gap and fills it from the backend.
 // Simulates missed messages by writing directly to backend (SkipPubSub) then
 // sending a later message via PUB/SUB to trigger gap detection.
-func TestCachedMapEngine_TwoNodes_MissedPubSubMessages(t *testing.T) {
+func TestCachedMapBroker_TwoNodes_MissedPubSubMessages(t *testing.T) {
 	// Node 1 setup - regular node with PUB/SUB
 	node1, _ := New(Config{})
 	redisConf := testSingleRedisConf(6379)
 	shard1, err := NewRedisShard(node1, redisConf)
 	require.NoError(t, err)
-	backend1, err := NewRedisMapEngine(node1, RedisMapEngineConfig{
+	backend1, err := NewRedisMapBroker(node1, RedisMapBrokerConfig{
 		Shards: []*RedisShard{shard1},
 	})
 	require.NoError(t, err)
 
-	cached1, err := NewCachedMapEngine(node1, backend1, CachedMapEngineConfig{
+	cached1, err := NewCachedMapBroker(node1, backend1, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels:        1000,
 			ChannelIdleTimeout: 5 * time.Minute,
@@ -893,12 +893,12 @@ func TestCachedMapEngine_TwoNodes_MissedPubSubMessages(t *testing.T) {
 	node2, _ := New(Config{})
 	shard2, err := NewRedisShard(node2, redisConf)
 	require.NoError(t, err)
-	backend2, err := NewRedisMapEngine(node2, RedisMapEngineConfig{
+	backend2, err := NewRedisMapBroker(node2, RedisMapBrokerConfig{
 		Shards: []*RedisShard{shard2},
 	})
 	require.NoError(t, err)
 
-	cached2, err := NewCachedMapEngine(node2, backend2, CachedMapEngineConfig{
+	cached2, err := NewCachedMapBroker(node2, backend2, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels:        1000,
 			ChannelIdleTimeout: 5 * time.Minute,
@@ -915,7 +915,7 @@ func TestCachedMapEngine_TwoNodes_MissedPubSubMessages(t *testing.T) {
 	node3, _ := New(Config{})
 	shard3, err := NewRedisShard(node3, redisConf)
 	require.NoError(t, err)
-	silentBackend, err := NewRedisMapEngine(node3, RedisMapEngineConfig{
+	silentBackend, err := NewRedisMapBroker(node3, RedisMapBrokerConfig{
 		Shards:     []*RedisShard{shard3},
 		SkipPubSub: true, // No PUB/SUB - writes go to Redis but no notifications
 	})
@@ -1005,9 +1005,9 @@ func TestCachedMapEngine_TwoNodes_MissedPubSubMessages(t *testing.T) {
 	_ = cached2.Unsubscribe(channel)
 }
 
-// TestCachedMapEngine_TwoNodes_StreamOrderConsistency verifies that the stream
+// TestCachedMapBroker_TwoNodes_StreamOrderConsistency verifies that the stream
 // order is identical on both nodes after publications from both sides.
-func TestCachedMapEngine_TwoNodes_StreamOrderConsistency(t *testing.T) {
+func TestCachedMapBroker_TwoNodes_StreamOrderConsistency(t *testing.T) {
 	_, cached1, _, cached2, cleanup := setupTwoNodeCachedRedisWithPubSub(t)
 	defer cleanup()
 
@@ -1082,9 +1082,9 @@ func TestCachedMapEngine_TwoNodes_StreamOrderConsistency(t *testing.T) {
 	_ = cached2.Unsubscribe(channel)
 }
 
-// TestCachedMapEngine_TwoNodes_HighConcurrencyPubSub stress tests with high concurrency
+// TestCachedMapBroker_TwoNodes_HighConcurrencyPubSub stress tests with high concurrency
 // using real PUB/SUB propagation (not periodic sync).
-func TestCachedMapEngine_TwoNodes_HighConcurrencyPubSub(t *testing.T) {
+func TestCachedMapBroker_TwoNodes_HighConcurrencyPubSub(t *testing.T) {
 	_, cached1, _, cached2, cleanup := setupTwoNodeCachedRedisWithPubSub(t)
 	defer cleanup()
 

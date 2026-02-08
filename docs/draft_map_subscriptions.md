@@ -69,14 +69,14 @@ Map Subscriptions solve these problems by combining:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## MapEngine Interface
+## MapBroker Interface
 
-The `MapEngine` interface defines the storage backend for map subscriptions:
+The `MapBroker` interface defines the storage backend for map subscriptions:
 
 ### Core Operations
 
 ```go
-type MapEngine interface {
+type MapBroker interface {
     // Pub/sub coordination
     Subscribe(ch string) error      // Register node for channel messages
     Unsubscribe(ch string) error    // Unregister node from channel
@@ -219,8 +219,8 @@ usersSub.on('subscribed', (ctx) => {
 **Use case**: Development, testing, single-node deployments
 
 ```go
-engine, _ := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
-node.SetMapEngine(engine)
+engine, _ := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+node.SetMapBroker(engine)
 ```
 
 **Characteristics**:
@@ -241,10 +241,10 @@ node.SetMapEngine(engine)
 **Use case**: Distributed deployments, horizontal scaling
 
 ```go
-engine, _ := NewRedisMapEngine(node, RedisMapEngineConfig{
+engine, _ := NewRedisMapBroker(node, RedisMapBrokerConfig{
     Shards: []redis.UniversalClient{redisClient},
 })
-node.SetMapEngine(engine)
+node.SetMapBroker(engine)
 ```
 
 **Characteristics**:
@@ -270,10 +270,10 @@ node.SetMapEngine(engine)
 **Use case**: ACID transactions, persistence, SQL-based publishing
 
 ```go
-engine, _ := NewPostgresMapEngine(node, PostgresMapEngineConfig{
+engine, _ := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
     DSN: "postgres://user:pass@localhost/db",
 })
-node.SetMapEngine(engine)
+node.SetMapBroker(engine)
 ```
 
 **Characteristics**:
@@ -393,18 +393,18 @@ sub.on('publication', (ctx) => {
 **Use case**: Wrap any backend for low-latency reads and read-your-own-writes consistency
 
 ```go
-cachedEngine, _ := NewCachedMapEngine(backendEngine, CachedMapEngineConfig{
+cachedEngine, _ := NewCachedMapBroker(backendEngine, CachedMapBrokerConfig{
     Cache: MapCacheConfig{
         MaxChannels: 10000,
         MaxKeys:     1000000,
     },
     SyncInterval: 30 * time.Second,
 })
-node.SetMapEngine(cachedEngine)
+node.SetMapBroker(cachedEngine)
 ```
 
 **Characteristics**:
-- Wraps any `MapEngine` (Redis, PostgreSQL)
+- Wraps any `MapBroker` (Redis, PostgreSQL)
 - In-memory cache with lazy loading
 - Immediate visibility of local writes
 - Background sync with backend
@@ -419,7 +419,7 @@ node.SetMapEngine(cachedEngine)
 
 **Configuration**:
 ```go
-type CachedMapEngineConfig struct {
+type CachedMapBrokerConfig struct {
     Cache           MapCacheConfig    // Size limits
     SyncInterval    time.Duration     // Backend sync frequency (default 30s)
     SyncJitter      float64           // Prevents thundering herd (default 10%)

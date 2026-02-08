@@ -1431,15 +1431,15 @@ func TestNodeCheckPositionMap(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	// Set up map engine.
-	mapEngine, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	node.SetMapEngine(mapEngine)
+	node.SetMapBroker(mapBroker)
 
 	ctx := context.Background()
 	channel := "test_map"
 
 	// Publish some data to create stream position.
-	result, err := mapEngine.Publish(ctx, channel, "key1", MapPublishOptions{
+	result, err := mapBroker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte(`{"test": 1}`),
 		StreamSize: 100,
 		StreamTTL:  time.Hour,
@@ -1469,7 +1469,7 @@ func TestNodeCheckPositionMap(t *testing.T) {
 	require.False(t, isValid)
 
 	// Publish more data.
-	result2, err := mapEngine.Publish(ctx, channel, "key2", MapPublishOptions{
+	result2, err := mapBroker.Publish(ctx, channel, "key2", MapPublishOptions{
 		Data:       []byte(`{"test": 2}`),
 		StreamSize: 100,
 		StreamTTL:  time.Hour,
@@ -1534,24 +1534,24 @@ func TestGetPresenceManager(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestGetMapEngine(t *testing.T) {
+func TestGetMapBroker(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	// Create two map engines
-	defaultEngine, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	defaultEngine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	_ = defaultEngine.RegisterBrokerEventHandler(nil)
 
-	customEngine, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	customEngine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	_ = customEngine.RegisterBrokerEventHandler(nil)
 
 	// Set default engine
-	node.SetMapEngine(defaultEngine)
+	node.SetMapBroker(defaultEngine)
 
-	// Configure GetMapEngine to route "custom:*" channels to customEngine
-	node.config.GetMapEngine = func(channel string) (MapEngine, bool) {
+	// Configure GetMapBroker to route "custom:*" channels to customEngine
+	node.config.GetMapBroker = func(channel string) (MapBroker, bool) {
 		if len(channel) >= 7 && channel[:7] == "custom:" {
 			return customEngine, true
 		}

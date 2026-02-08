@@ -13,11 +13,11 @@ import (
 // BenchmarkCachedEngine_ReadState_Cached benchmarks reading from warm cache.
 func BenchmarkCachedEngine_ReadState_Cached(b *testing.B) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterBrokerEventHandler(nil)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels: 10000,
 			StreamSize:  10000,
@@ -57,7 +57,7 @@ func BenchmarkCachedEngine_ReadState_Cached(b *testing.B) {
 // BenchmarkCachedEngine_ReadState_ColdLoad benchmarks first read (load from backend).
 func BenchmarkCachedEngine_ReadState_ColdLoad(b *testing.B) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterBrokerEventHandler(nil)
 
@@ -78,7 +78,7 @@ func BenchmarkCachedEngine_ReadState_ColdLoad(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
-		cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+		cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 			Cache: MapCacheConfig{
 				MaxChannels: 10000,
 				StreamSize:  10000,
@@ -100,11 +100,11 @@ func BenchmarkCachedEngine_ReadState_ColdLoad(b *testing.B) {
 // BenchmarkCachedEngine_ReadState_Parallel benchmarks parallel cached reads.
 func BenchmarkCachedEngine_ReadState_Parallel(b *testing.B) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterBrokerEventHandler(nil)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels: 10000,
 			StreamSize:  10000,
@@ -140,11 +140,11 @@ func BenchmarkCachedEngine_ReadState_Parallel(b *testing.B) {
 // BenchmarkCachedEngine_ReadState_Paginated benchmarks paginated reads.
 func BenchmarkCachedEngine_ReadState_Paginated(b *testing.B) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterBrokerEventHandler(nil)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels: 10000,
 			StreamSize:  10000,
@@ -188,11 +188,11 @@ func BenchmarkCachedEngine_ReadState_Paginated(b *testing.B) {
 // BenchmarkCachedEngine_Publish benchmarks publish (backend + cache).
 func BenchmarkCachedEngine_Publish(b *testing.B) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterBrokerEventHandler(nil)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels: 10000,
 			StreamSize:  10000,
@@ -220,11 +220,11 @@ func BenchmarkCachedEngine_Publish(b *testing.B) {
 // BenchmarkCachedEngine_Publish_Parallel benchmarks parallel publishes.
 func BenchmarkCachedEngine_Publish_Parallel(b *testing.B) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterBrokerEventHandler(nil)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels: 10000,
 			StreamSize:  10000,
@@ -258,7 +258,7 @@ func BenchmarkCachedEngine_Publish_Parallel(b *testing.B) {
 // BenchmarkMapCache_EnsureLoaded benchmarks load latency.
 func BenchmarkMapCache_EnsureLoaded(b *testing.B) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterBrokerEventHandler(nil)
 
@@ -280,7 +280,7 @@ func BenchmarkMapCache_EnsureLoaded(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
-		cached, _ := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+		cached, _ := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 			Cache: MapCacheConfig{
 				MaxChannels: 10000,
 				StreamSize:  1000,
@@ -333,11 +333,11 @@ func BenchmarkMapCache_ApplyPublication(b *testing.B) {
 // BenchmarkReadState_Direct_vs_Cached compares direct vs cached reads.
 func BenchmarkReadState_Direct_vs_Cached(b *testing.B) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterBrokerEventHandler(nil)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels: 10000,
 			StreamSize:  10000,
@@ -381,11 +381,11 @@ func BenchmarkReadState_Direct_vs_Cached(b *testing.B) {
 // BenchmarkPublish_Direct_vs_Cached compares direct vs cached writes.
 func BenchmarkPublish_Direct_vs_Cached(b *testing.B) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterBrokerEventHandler(nil)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels: 10000,
 			StreamSize:  10000,
@@ -425,11 +425,11 @@ func BenchmarkPublish_Direct_vs_Cached(b *testing.B) {
 // BenchmarkCachedEngine_SyncChannel benchmarks single channel sync.
 func BenchmarkCachedEngine_SyncChannel(b *testing.B) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterBrokerEventHandler(nil)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels: 10000,
 			StreamSize:  10000,
@@ -471,11 +471,11 @@ func BenchmarkCachedEngine_SyncChannel(b *testing.B) {
 // BenchmarkCachedEngine_ManyChannels benchmarks with many active channels.
 func BenchmarkCachedEngine_ManyChannels(b *testing.B) {
 	node, _ := New(Config{})
-	backend, err := NewMemoryMapEngine(node, MemoryMapEngineConfig{})
+	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterBrokerEventHandler(nil)
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels: 10000,
 			StreamSize:  1000,
@@ -522,7 +522,7 @@ func BenchmarkMapReadState_Postgres_Direct_vs_Cached(b *testing.B) {
 	}
 
 	node, _ := New(Config{})
-	backend, err := NewPostgresMapEngine(node, PostgresMapEngineConfig{
+	backend, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: pgURL,
 	})
 	require.NoError(b, err)
@@ -530,7 +530,7 @@ func BenchmarkMapReadState_Postgres_Direct_vs_Cached(b *testing.B) {
 	require.NoError(b, err)
 	defer func() { _ = backend.Close(context.Background()) }()
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels: 10000,
 			StreamSize:  10000,
@@ -589,7 +589,7 @@ func BenchmarkMapReadState_Postgres_Parallel(b *testing.B) {
 	}
 
 	node, _ := New(Config{})
-	backend, err := NewPostgresMapEngine(node, PostgresMapEngineConfig{
+	backend, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: pgURL,
 		PoolSize:   32,
 	})
@@ -598,7 +598,7 @@ func BenchmarkMapReadState_Postgres_Parallel(b *testing.B) {
 	require.NoError(b, err)
 	defer func() { _ = backend.Close(context.Background()) }()
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels: 10000,
 			StreamSize:  10000,
@@ -660,7 +660,7 @@ func BenchmarkMapPublish_Postgres_Direct_vs_Cached(b *testing.B) {
 	}
 
 	node, _ := New(Config{})
-	backend, err := NewPostgresMapEngine(node, PostgresMapEngineConfig{
+	backend, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: pgURL,
 	})
 	require.NoError(b, err)
@@ -668,7 +668,7 @@ func BenchmarkMapPublish_Postgres_Direct_vs_Cached(b *testing.B) {
 	require.NoError(b, err)
 	defer func() { _ = backend.Close(context.Background()) }()
 
-	cached, err := NewCachedMapEngine(node, backend, CachedMapEngineConfig{
+	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels: 10000,
 			StreamSize:  10000,

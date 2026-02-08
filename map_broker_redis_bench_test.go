@@ -10,18 +10,18 @@ import (
 	"time"
 )
 
-func setupSnapshotEngineBench(b *testing.B) (*RedisMapEngine, func()) {
+func setupStateEngineBench(b *testing.B) (*RedisMapBroker, func()) {
 	b.Helper()
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(b, node)
+	engine := newTestStateRedisEngine(b, node)
 	return engine, func() {
 		_ = node.Shutdown(context.Background())
 	}
 }
 
-// BenchmarkRedisMapEngine_PublishStreamOnly benchmarks publishing to stream without snapshots.
-func BenchmarkRedisMapEngine_PublishStreamOnly(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkRedisMapBroker_PublishStreamOnly benchmarks publishing to stream without state.
+func BenchmarkRedisMapBroker_PublishStreamOnly(b *testing.B) {
+	engine, cleanup := setupStateEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -36,7 +36,7 @@ func BenchmarkRedisMapEngine_PublishStreamOnly(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			data := []byte(fmt.Sprintf("message_%d", i))
 			_, err := engine.Publish(ctx, channel, "", MapPublishOptions{
-			Data: data,
+				Data:       data,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 			})
@@ -47,9 +47,9 @@ func BenchmarkRedisMapEngine_PublishStreamOnly(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisMapEngine_PublishMapStateSimple benchmarks simple keyed state (HASH only).
-func BenchmarkRedisMapEngine_PublishMapStateSimple(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkRedisMapBroker_PublishMapStateSimple benchmarks simple keyed state (HASH only).
+func BenchmarkRedisMapBroker_PublishMapStateSimple(b *testing.B) {
+	engine, cleanup := setupStateEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -65,7 +65,7 @@ func BenchmarkRedisMapEngine_PublishMapStateSimple(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+				Data:       data,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 				KeyTTL:     300 * time.Second,
@@ -77,9 +77,9 @@ func BenchmarkRedisMapEngine_PublishMapStateSimple(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisMapEngine_PublishMapStateOrdered benchmarks ordered keyed state (HASH+ZSET).
-func BenchmarkRedisMapEngine_PublishMapStateOrdered(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkRedisMapBroker_PublishMapStateOrdered benchmarks ordered keyed state (HASH+ZSET).
+func BenchmarkRedisMapBroker_PublishMapStateOrdered(b *testing.B) {
+	engine, cleanup := setupStateEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -95,7 +95,7 @@ func BenchmarkRedisMapEngine_PublishMapStateOrdered(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+				Data:       data,
 				Ordered:    true,
 				Score:      i,
 				StreamSize: 10000,
@@ -109,9 +109,9 @@ func BenchmarkRedisMapEngine_PublishMapStateOrdered(b *testing.B) {
 	})
 }
 
-//// BenchmarkRedisMapEngine_AddMember benchmarks presence/membership operations.
-//func BenchmarkRedisMapEngine_AddMember(b *testing.B) {
-//	engine, cleanup := setupSnapshotEngineBench(b)
+//// BenchmarkRedisMapBroker_AddMember benchmarks presence/membership operations.
+//func BenchmarkRedisMapBroker_AddMember(b *testing.B) {
+//	engine, cleanup := setupStateEngineBench(b)
 //	defer cleanup()
 //
 //	ctx := context.Background()
@@ -140,9 +140,9 @@ func BenchmarkRedisMapEngine_PublishMapStateOrdered(b *testing.B) {
 //	})
 //}
 
-// BenchmarkRedisMapEngine_PublishCombined benchmarks publishing with stream + snapshot.
-func BenchmarkRedisMapEngine_PublishCombined(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkRedisMapBroker_PublishCombined benchmarks publishing with stream + state.
+func BenchmarkRedisMapBroker_PublishCombined(b *testing.B) {
+	engine, cleanup := setupStateEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -158,7 +158,7 @@ func BenchmarkRedisMapEngine_PublishCombined(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+				Data:       data,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 				KeyTTL:     300 * time.Second,
@@ -170,9 +170,9 @@ func BenchmarkRedisMapEngine_PublishCombined(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisMapEngine_ReadStream benchmarks reading from stream.
-func BenchmarkRedisMapEngine_ReadStream(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkRedisMapBroker_ReadStream benchmarks reading from stream.
+func BenchmarkRedisMapBroker_ReadStream(b *testing.B) {
+	engine, cleanup := setupStateEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -183,7 +183,7 @@ func BenchmarkRedisMapEngine_ReadStream(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		data := []byte(fmt.Sprintf("message_%d", i))
 		res, err := engine.Publish(ctx, channel, "", MapPublishOptions{
-			Data: data,
+			Data:       data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 		})
@@ -213,20 +213,20 @@ func BenchmarkRedisMapEngine_ReadStream(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisMapEngine_ReadStateFull benchmarks reading full unordered snapshot.
-func BenchmarkRedisMapEngine_ReadStateFull(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkRedisMapBroker_ReadStateFull benchmarks reading full unordered state.
+func BenchmarkRedisMapBroker_ReadStateFull(b *testing.B) {
+	engine, cleanup := setupStateEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := randomChannel("bench_read_snapshot")
+	channel := randomChannel("bench_read_state")
 
-	// Prepopulate snapshot with 1000 entries
+	// Prepopulate state with 1000 entries
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+			Data:       data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -242,7 +242,7 @@ func BenchmarkRedisMapEngine_ReadStateFull(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-				Limit:       0, // Read all
+				Limit:    0, // Read all
 				StateTTL: 300 * time.Second,
 			})
 			if err != nil {
@@ -252,20 +252,20 @@ func BenchmarkRedisMapEngine_ReadStateFull(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisMapEngine_ReadStatePaginated benchmarks paginated snapshot reads.
-func BenchmarkRedisMapEngine_ReadStatePaginated(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkRedisMapBroker_ReadStatePaginated benchmarks paginated state reads.
+func BenchmarkRedisMapBroker_ReadStatePaginated(b *testing.B) {
+	engine, cleanup := setupStateEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := randomChannel("bench_read_snapshot_paginated")
+	channel := randomChannel("bench_read_state_paginated")
 
-	// Prepopulate snapshot with 1000 entries
+	// Prepopulate state with 1000 entries
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+			Data:       data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -281,8 +281,8 @@ func BenchmarkRedisMapEngine_ReadStatePaginated(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-				Cursor:      "0",
-				Limit:       100, // Read 100 at a time
+				Cursor:   "0",
+				Limit:    100, // Read 100 at a time
 				StateTTL: 300 * time.Second,
 			})
 			if err != nil {
@@ -292,20 +292,20 @@ func BenchmarkRedisMapEngine_ReadStatePaginated(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisMapEngine_ReadStateOrdered benchmarks reading ordered snapshot.
-func BenchmarkRedisMapEngine_ReadStateOrdered(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkRedisMapBroker_ReadStateOrdered benchmarks reading ordered state.
+func BenchmarkRedisMapBroker_ReadStateOrdered(b *testing.B) {
+	engine, cleanup := setupStateEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := randomChannel("bench_read_snapshot_ordered")
+	channel := randomChannel("bench_read_state_ordered")
 
-	// Prepopulate ordered snapshot with 1000 entries
+	// Prepopulate ordered state with 1000 entries
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+			Data:       data,
 			Ordered:    true,
 			Score:      int64(i),
 			StreamSize: 10000,
@@ -323,8 +323,8 @@ func BenchmarkRedisMapEngine_ReadStateOrdered(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
-				Ordered:     true,
-				Limit:       100,
+				Ordered:  true,
+				Limit:    100,
 				StateTTL: 300 * time.Second,
 			})
 			if err != nil {
@@ -335,9 +335,9 @@ func BenchmarkRedisMapEngine_ReadStateOrdered(b *testing.B) {
 }
 
 //
-//// BenchmarkRedisMapEngine_Members benchmarks reading presence members.
-//func BenchmarkRedisMapEngine_Members(b *testing.B) {
-//	engine, cleanup := setupSnapshotEngineBench(b)
+//// BenchmarkRedisMapBroker_Members benchmarks reading presence members.
+//func BenchmarkRedisMapBroker_Members(b *testing.B) {
+//	engine, cleanup := setupStateEngineBench(b)
 //	defer cleanup()
 //
 //	ctx := context.Background()
@@ -371,9 +371,9 @@ func BenchmarkRedisMapEngine_ReadStateOrdered(b *testing.B) {
 //	})
 //}
 
-//// BenchmarkRedisMapEngine_MemberStats benchmarks reading presence stats.
-//func BenchmarkRedisMapEngine_MemberStats(b *testing.B) {
-//	engine, cleanup := setupSnapshotEngineBench(b)
+//// BenchmarkRedisMapBroker_MemberStats benchmarks reading presence stats.
+//func BenchmarkRedisMapBroker_MemberStats(b *testing.B) {
+//	engine, cleanup := setupStateEngineBench(b)
 //	defer cleanup()
 //
 //	ctx := context.Background()
@@ -407,13 +407,13 @@ func BenchmarkRedisMapEngine_ReadStateOrdered(b *testing.B) {
 //	})
 //}
 
-//// BenchmarkRedisMapEngine_ReadPresenceSnapshot benchmarks reading presence snapshot with revisions.
-//func BenchmarkRedisMapEngine_ReadPresenceSnapshot(b *testing.B) {
-//	engine, cleanup := setupSnapshotEngineBench(b)
+//// BenchmarkRedisMapBroker_ReadPresenceState benchmarks reading presence state with revisions.
+//func BenchmarkRedisMapBroker_ReadPresenceState(b *testing.B) {
+//	engine, cleanup := setupStateEngineBench(b)
 //	defer cleanup()
 //
 //	ctx := context.Background()
-//	channel := randomChannel("bench_presence_snapshot")
+//	channel := randomChannel("bench_presence_state")
 //
 //	// Prepopulate with 1000 members
 //	for i := 0; i < 1000; i++ {
@@ -435,7 +435,7 @@ func BenchmarkRedisMapEngine_ReadStateOrdered(b *testing.B) {
 //
 //	b.RunParallel(func(pb *testing.PB) {
 //		for pb.Next() {
-//			_, _, err := engine.ReadPresenceSnapshot(ctx, channel, MapReadStateOptions{
+//			_, _, err := engine.ReadPresenceState(ctx, channel, MapReadStateOptions{
 //				Limit:       0, // Read all
 //				StateTTL: 300 * time.Second,
 //			})
@@ -446,9 +446,9 @@ func BenchmarkRedisMapEngine_ReadStateOrdered(b *testing.B) {
 //	})
 //}
 
-// BenchmarkRedisMapEngine_IdempotentPublish benchmarks idempotent publishing.
-func BenchmarkRedisMapEngine_IdempotentPublish(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkRedisMapBroker_IdempotentPublish benchmarks idempotent publishing.
+func BenchmarkRedisMapBroker_IdempotentPublish(b *testing.B) {
+	engine, cleanup := setupStateEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -464,7 +464,7 @@ func BenchmarkRedisMapEngine_IdempotentPublish(b *testing.B) {
 			data := []byte(fmt.Sprintf("message_%d", i))
 			idempotencyKey := fmt.Sprintf("key_%d", i)
 			_, err := engine.Publish(ctx, channel, "", MapPublishOptions{
-			Data: data,
+				Data:                data,
 				IdempotencyKey:      idempotencyKey,
 				IdempotentResultTTL: 60 * time.Second,
 				StreamSize:          10000,
@@ -477,9 +477,9 @@ func BenchmarkRedisMapEngine_IdempotentPublish(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisMapEngine_VersionedPublish benchmarks version-based publishing.
-func BenchmarkRedisMapEngine_VersionedPublish(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkRedisMapBroker_VersionedPublish benchmarks version-based publishing.
+func BenchmarkRedisMapBroker_VersionedPublish(b *testing.B) {
+	engine, cleanup := setupStateEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -495,7 +495,7 @@ func BenchmarkRedisMapEngine_VersionedPublish(b *testing.B) {
 			key := fmt.Sprintf("key%d", i%100) // Reuse 100 keys
 			data := []byte(fmt.Sprintf("data_%d", i))
 			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
+				Data:       data,
 				Version:    uint64(i),
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
