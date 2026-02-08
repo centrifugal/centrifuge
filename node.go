@@ -809,17 +809,20 @@ func (n *Node) publish(ch string, data []byte, opts ...PublishOption) (PublishRe
 		opt(pubOpts)
 	}
 	n.metrics.incMessagesSent("publication", ch)
-	streamPos, fromCache, err := n.getBroker(ch).Publish(ch, data, *pubOpts)
+	result, err := n.getBroker(ch).Publish(ch, data, *pubOpts)
 	if err != nil {
 		return PublishResult{}, err
 	}
-	return PublishResult{StreamPosition: streamPos, FromCache: fromCache}, nil
+	return result, nil
 }
 
 // PublishResult returned from Publish operation.
 type PublishResult struct {
 	StreamPosition
-	FromCache bool
+	// Suppressed is true when the operation was suppressed (e.g. due to idempotency key deduplication).
+	Suppressed bool
+	// SuppressReason explains why the operation was suppressed (empty when Suppressed is false).
+	SuppressReason SuppressReason
 }
 
 // Publish sends data to all clients subscribed on channel at this moment. All running
@@ -2044,18 +2047,7 @@ func (n *Node) MapPublish(ctx context.Context, ch string, key string, opts MapPu
 	}
 	n.metrics.incActionCount("map_publish", ch)
 	n.metrics.incMessagesSent("map_publication", ch)
-	result, err := mapBroker.Publish(ctx, ch, key, opts)
-	if n.logEnabled(LogLevelDebug) {
-		n.logger.log(newLogEntry(LogLevelDebug, "MapPublish result", map[string]any{
-			"channel":        ch,
-			"key":            key,
-			"suppressed":     result.Suppressed,
-			"suppressReason": result.SuppressReason,
-			"offset":         result.Position.Offset,
-			"error":          err,
-		}))
-	}
-	return result, err
+	return mapBroker.Publish(ctx, ch, key, opts)
 }
 
 // MapRemove removes a key from a map channel.

@@ -1291,7 +1291,7 @@ func (e *PostgresMapBroker) processInsertMessage(ctx context.Context, rel *pglog
 
 	if e.conf.Broker != nil {
 		// Multi-node: publish to broker, which will deliver to all subscribed nodes (including this one)
-		_, _, err := e.conf.Broker.Publish(channel, data, PublishOptions{
+		_, err := e.conf.Broker.Publish(channel, data, PublishOptions{
 			Key:     key,
 			Removed: removed,
 			Score:   score,
@@ -1770,7 +1770,7 @@ func (e *PostgresMapBroker) handleOutboxEntry(_ context.Context, entry outboxRow
 
 	if e.conf.Broker != nil {
 		// Multi-node: publish to broker, which will deliver to all subscribed nodes (including this one)
-		_, _, err := e.conf.Broker.Publish(entry.channel, entry.data, PublishOptions{
+		_, err := e.conf.Broker.Publish(entry.channel, entry.data, PublishOptions{
 			Key:     entry.key,
 			Removed: entry.removed,
 			Score:   score,

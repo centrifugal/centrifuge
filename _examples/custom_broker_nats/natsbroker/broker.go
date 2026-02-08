@@ -116,23 +116,23 @@ type push struct {
 }
 
 // Publish - see centrifuge.Broker interface description.
-func (b *NatsBroker) Publish(ch string, data []byte, opts centrifuge.PublishOptions) (centrifuge.StreamPosition, bool, error) {
+func (b *NatsBroker) Publish(ch string, data []byte, opts centrifuge.PublishOptions) (centrifuge.PublishResult, error) {
 	pub := &centrifuge.Publication{
 		Data: data,
 		Info: opts.ClientInfo,
 	}
 	data, err := json.Marshal(pub)
 	if err != nil {
-		return centrifuge.StreamPosition{}, false, err
+		return centrifuge.PublishResult{}, err
 	}
 	byteMessage, err := json.Marshal(push{
 		Type: pubPushType,
 		Data: data,
 	})
 	if err != nil {
-		return centrifuge.StreamPosition{}, false, err
+		return centrifuge.PublishResult{}, err
 	}
-	return centrifuge.StreamPosition{}, false, b.nc.Publish(string(b.clientChannel(ch)), byteMessage)
+	return centrifuge.PublishResult{}, b.nc.Publish(string(b.clientChannel(ch)), byteMessage)
 }
 
 // PublishJoin - see centrifuge.Broker interface description.

@@ -1126,7 +1126,7 @@ func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create PostgreSQL map broker with WAL mode and broker for multi-node delivery
-	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+	pgBroker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Broker:     broker,
 		WAL: WALConfig{
@@ -1138,26 +1138,26 @@ func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 	require.NoError(t, err)
 
 	// Clean up tables before test
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'test_wal_broker_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'test_wal_broker_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'test_wal_broker_%'")
+	_, _ = pgBroker.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'test_wal_broker_%'")
+	_, _ = pgBroker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'test_wal_broker_%'")
+	_, _ = pgBroker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'test_wal_broker_%'")
 
 	t.Cleanup(func() {
-		_ = broker.Close(context.Background())
+		_ = pgBroker.Close(context.Background())
 		_ = node.Shutdown(context.Background())
 	})
 
 	// Register nil handler on broker (not used with broker, but required)
-	err = broker.RegisterEventHandler(nil)
+	err = pgBroker.RegisterEventHandler(nil)
 	require.NoError(t, err)
 
 	// Wait for WAL reader to claim at least one shard
 	require.Eventually(t, func() bool {
-		return len(broker.ClaimedShards()) > 0
+		return len(pgBroker.ClaimedShards()) > 0
 	}, 10*time.Second, 100*time.Millisecond, "WAL reader should claim at least one shard")
 
 	// Publish via SQL (simulating external publish, p_skip_outbox = true for WAL mode)
-	_, err = broker.pool.Exec(ctx, `
+	_, err = pgBroker.pool.Exec(ctx, `
 		SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, $4, NULL, NULL, NULL, NULL, NULL, NULL, false, true, 16)
 	`, channel, "test_key", []byte("test_data"), int64(100))
 	require.NoError(t, err)
@@ -1620,7 +1620,7 @@ func TestPostgresMapBroker_OutboxWithBroker(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create PostgreSQL map broker with broker for multi-node delivery
-	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+	pgBroker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Broker:     broker,
 		Outbox: OutboxConfig{
@@ -1630,22 +1630,22 @@ func TestPostgresMapBroker_OutboxWithBroker(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	cleanupTestTables(ctx, broker)
+	cleanupTestTables(ctx, pgBroker)
 
 	t.Cleanup(func() {
-		_ = broker.Close(context.Background())
+		_ = pgBroker.Close(context.Background())
 		_ = node.Shutdown(context.Background())
 	})
 
-	err = broker.RegisterEventHandler(nil)
+	err = pgBroker.RegisterEventHandler(nil)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		return len(broker.OutboxClaimedShards()) > 0
+		return len(pgBroker.OutboxClaimedShards()) > 0
 	}, 10*time.Second, 100*time.Millisecond, "Outbox worker should claim at least one shard")
 
 	// Publish via broker
-	_, err = broker.Publish(ctx, channel, "test_key", MapPublishOptions{
+	_, err = pgBroker.Publish(ctx, channel, "test_key", MapPublishOptions{
 		Data:      []byte("test_data"),
 		Score:     100,
 		StreamTTL: 300 * time.Second,

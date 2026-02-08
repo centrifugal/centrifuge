@@ -615,11 +615,11 @@ func (b *RedisBroker) useShardedPubSub(s *RedisShard) bool {
 }
 
 // Publish - see Broker.Publish.
-func (b *RedisBroker) Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, bool, error) {
+func (b *RedisBroker) Publish(ch string, data []byte, opts PublishOptions) (PublishResult, error) {
 	return b.publish(b.getShard(ch), ch, data, opts)
 }
 
-func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts PublishOptions) (StreamPosition, bool, error) {
+func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts PublishOptions) (PublishResult, error) {
 	protoPub := &protocol.Publication{
 		Data:    data,
 		Info:    infoToProto(opts.ClientInfo),
@@ -639,7 +639,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 
 	byteMessage, err := protoPub.MarshalVT()
 	if err != nil {
-		return StreamPosition{}, false, err
+		return PublishResult{}, err
 	}
 
 	publishChannel := b.messageChannelID(s.shard, ch)
@@ -670,7 +670,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		if useShardedPublish {
 			if resultExpire == "" {
 				if publishChannelStr == "" {
-					return StreamPosition{}, false, nil
+					return PublishResult{}, nil
 				}
 				cmd := s.shard.client.B().Spublish().Channel(string(publishChannel)).Message(convert.BytesToString(byteMessage)).Build()
 				resp = s.shard.client.Do(context.Background(), cmd)
@@ -690,7 +690,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		} else {
 			if resultExpire == "" {
 				if publishChannelStr == "" {
-					return StreamPosition{}, false, nil
+					return PublishResult{}, nil
 				}
 				cmd := s.shard.client.B().Publish().Channel(string(publishChannel)).Message(convert.BytesToString(byteMessage)).Build()
 				resp = s.shard.client.Do(context.Background(), cmd)
@@ -708,7 +708,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 				)
 			}
 		}
-		return StreamPosition{}, false, resp.Error()
+		return PublishResult{}, resp.Error()
 	}
 
 	historyMetaKey := b.historyMetaKey(s.shard, ch)
@@ -763,37 +763,42 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		},
 	).ToArray()
 	if err != nil {
-		return StreamPosition{}, false, err
+		return PublishResult{}, err
 	}
 	if len(replies) != 2 && len(replies) != 3 && len(replies) != 4 {
-		return StreamPosition{}, false, errors.New("wrong Redis reply")
+		return PublishResult{}, errors.New("wrong Redis reply")
 	}
 	offset, err := replies[0].AsInt64()
 	if err != nil {
-		return StreamPosition{}, false, errors.New("wrong Redis reply offset")
+		return PublishResult{}, errors.New("wrong Redis reply offset")
 	}
 	epoch, err := replies[1].ToString()
 	if err != nil {
-		return StreamPosition{}, false, errors.New("wrong Redis reply epoch")
+		return PublishResult{}, errors.New("wrong Redis reply epoch")
 	}
-	fromCache := false
+	result := PublishResult{StreamPosition: StreamPosition{Offset: uint64(offset), Epoch: epoch}}
 	if len(replies) == 3 {
 		fromCacheStr, err := replies[2].ToString()
 		if err != nil {
-			return StreamPosition{}, false, errors.New("wrong Redis reply from cache flag")
+			return PublishResult{}, errors.New("wrong Redis reply from cache flag")
 		}
-		fromCache = fromCacheStr == "1"
+		if fromCacheStr == "1" {
+			result.Suppressed = true
+			result.SuppressReason = SuppressReasonIdempotency
+		}
 	}
-	//skipped := false
-	//if len(replies) == 4 {
-	//	skippedStr, err := replies[3].ToString()
-	//	if err != nil {
-	//		return StreamPosition{}, false, errors.New("wrong Redis reply skipped flag")
-	//	}
-	//	skipped = skippedStr == "1"
-	//}
+	if len(replies) == 4 {
+		skippedStr, err := replies[3].ToString()
+		if err != nil {
+			return PublishResult{}, errors.New("wrong Redis reply skipped flag")
+		}
+		if skippedStr == "1" {
+			result.Suppressed = true
+			result.SuppressReason = SuppressReasonVersion
+		}
+	}
 
-	return StreamPosition{Offset: uint64(offset), Epoch: epoch}, fromCache, nil
+	return result, nil
 }
 
 // PublishJoin - see Broker.PublishJoin.

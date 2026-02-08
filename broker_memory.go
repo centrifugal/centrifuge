@@ -89,14 +89,14 @@ func (b *MemoryBroker) pubLock(ch string) *sync.Mutex {
 
 // Publish adds message into history hub and calls node method to handle message.
 // We don't have any PUB/SUB here as MemoryBroker is single node only.
-func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, bool, error) {
+func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (PublishResult, error) {
 	mu := b.pubLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
 
 	if opts.IdempotencyKey != "" {
 		if res, ok := b.getResultFromCache(ch, opts.IdempotencyKey); ok {
-			return res, true, nil
+			return PublishResult{StreamPosition: res, Suppressed: true, SuppressReason: SuppressReasonIdempotency}, nil
 		}
 	}
 
@@ -113,10 +113,10 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 		var skip bool
 		streamTop, prevPub, skip, err = b.historyHub.add(ch, pub, opts)
 		if err != nil {
-			return StreamPosition{}, false, err
+			return PublishResult{}, err
 		}
 		if skip {
-			return streamTop, false, nil
+			return PublishResult{StreamPosition: streamTop, Suppressed: true, SuppressReason: SuppressReasonVersion}, nil
 		}
 		pub.Offset = streamTop.Offset
 		if opts.IdempotencyKey != "" {
@@ -126,7 +126,7 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 			}
 			b.saveResultToCache(ch, opts.IdempotencyKey, streamTop, resultExpireSeconds)
 		}
-		return streamTop, false, b.eventHandler.HandlePublication(ch, pub, streamTop, opts.UseDelta, prevPub)
+		return PublishResult{StreamPosition: streamTop}, b.eventHandler.HandlePublication(ch, pub, streamTop, opts.UseDelta, prevPub)
 	}
 	streamPosition := StreamPosition{}
 	if opts.IdempotencyKey != "" {
@@ -136,7 +136,7 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 		}
 		b.saveResultToCache(ch, opts.IdempotencyKey, streamPosition, resultExpireSeconds)
 	}
-	return streamPosition, false, b.eventHandler.HandlePublication(ch, pub, StreamPosition{}, opts.UseDelta, prevPub)
+	return PublishResult{StreamPosition: streamPosition}, b.eventHandler.HandlePublication(ch, pub, StreamPosition{}, opts.UseDelta, prevPub)
 }
 
 func (b *MemoryBroker) getResultFromCache(ch string, key string) (StreamPosition, bool) {

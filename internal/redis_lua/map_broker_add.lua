@@ -214,6 +214,14 @@ if meta_key ~= '' then
         end
     end
 
+    -- ==== Step 2d: Leave key existence check (BEFORE incrementing offset) ====
+    if is_leave == "1" and message_key ~= "" and state_hash_key ~= "" then
+        if redis.call("hexists", state_hash_key, message_key) == 0 then
+            local current_offset = redis.call("hget", meta_key, "s") or 0
+            return { tonumber(current_offset), current_epoch, "key_not_found" }
+        end
+    end
+
     -- ==== Step 3: Increment append log offset (only if not suppressed) ====
     top_offset = redis.call("hincrby", meta_key, "s", 1)
 
@@ -230,6 +238,13 @@ else
     -- No append log, use epoch from ARGV
     current_epoch = new_epoch_if_empty
     top_offset = 0
+
+    -- Leave key existence check (no stream case)
+    if is_leave == "1" and message_key ~= "" and state_hash_key ~= "" then
+        if redis.call("hexists", state_hash_key, message_key) == 0 then
+            return { 0, current_epoch, "key_not_found" }
+        end
+    end
 end
 
 -- ==== Step 4: Handle leave message ====

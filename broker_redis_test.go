@@ -245,9 +245,9 @@ func TestRedisBroker(t *testing.T) {
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(b)
 
-			_, _, err := b.Publish("channel", testPublicationData(), PublishOptions{})
+			_, err := b.Publish("channel", testPublicationData(), PublishOptions{})
 			require.NoError(t, err)
-			_, _, err = b.Publish("channel", testPublicationData(), PublishOptions{})
+			_, err = b.Publish("channel", testPublicationData(), PublishOptions{})
 			require.NoError(t, err)
 			require.NoError(t, b.Subscribe("channel"))
 			require.NoError(t, b.Unsubscribe("channel"))
@@ -255,7 +255,7 @@ func TestRedisBroker(t *testing.T) {
 			rawData := []byte("{}")
 
 			// test adding history
-			_, _, err = b.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
+			_, err = b.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
 			require.NoError(t, err)
 			pubs, _, err := b.History("channel", HistoryOptions{
 				Filter: HistoryFilter{
@@ -267,11 +267,11 @@ func TestRedisBroker(t *testing.T) {
 			require.Equal(t, pubs[0].Data, []byte("{}"))
 
 			// test history limit
-			_, _, err = b.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
+			_, err = b.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
 			require.NoError(t, err)
-			_, _, err = b.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
+			_, err = b.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
 			require.NoError(t, err)
-			_, _, err = b.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
+			_, err = b.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
 			require.NoError(t, err)
 			pubs, _, err = b.History("channel", HistoryOptions{
 				Filter: HistoryFilter{
@@ -282,11 +282,11 @@ func TestRedisBroker(t *testing.T) {
 			require.Equal(t, 2, len(pubs))
 
 			// test history limit greater than history size
-			_, _, err = b.Publish("channel", rawData, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+			_, err = b.Publish("channel", rawData, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
 			require.NoError(t, err)
-			_, _, err = b.Publish("channel", rawData, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+			_, err = b.Publish("channel", rawData, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
 			require.NoError(t, err)
-			_, _, err = b.Publish("channel", rawData, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+			_, err = b.Publish("channel", rawData, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
 			require.NoError(t, err)
 
 			// ask all history.
@@ -340,12 +340,12 @@ func TestRedisBrokerPublishNoPubSub(t *testing.T) {
 	node.SetBroker(b)
 	err = node.Run()
 	require.NoError(t, err)
-	sp, _, err := b.Publish("channel", []byte(`{}`), PublishOptions{
+	res, err := b.Publish("channel", []byte(`{}`), PublishOptions{
 		HistorySize: 4,
 		HistoryTTL:  time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, sp.Offset > 0)
+	require.True(t, res.StreamPosition.Offset > 0)
 }
 
 func TestRedisBrokerPublishIdempotent(t *testing.T) {
@@ -357,12 +357,12 @@ func TestRedisBrokerPublishIdempotent(t *testing.T) {
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(b)
 
-			_, _, err := b.Publish("channel", testPublicationData(), PublishOptions{
+			_, err := b.Publish("channel", testPublicationData(), PublishOptions{
 				IdempotencyKey: "publish_no_history",
 			})
 			require.NoError(t, err)
 
-			_, _, err = b.Publish("channel", testPublicationData(), PublishOptions{
+			_, err = b.Publish("channel", testPublicationData(), PublishOptions{
 				IdempotencyKey: "publish_no_history",
 			})
 			require.NoError(t, err)
@@ -370,7 +370,7 @@ func TestRedisBrokerPublishIdempotent(t *testing.T) {
 			rawData := []byte("{}")
 
 			// test adding history
-			sp1, _, err := b.Publish("channel", rawData, PublishOptions{
+			res1, err := b.Publish("channel", rawData, PublishOptions{
 				HistorySize:    4,
 				HistoryTTL:     time.Second,
 				IdempotencyKey: "publish_with_history",
@@ -385,7 +385,7 @@ func TestRedisBrokerPublishIdempotent(t *testing.T) {
 			require.Equal(t, 1, len(pubs))
 
 			// test publish with  history and same idempotency key.
-			sp2, _, err := b.Publish("channel", rawData, PublishOptions{
+			res2, err := b.Publish("channel", rawData, PublishOptions{
 				HistorySize:    4,
 				HistoryTTL:     time.Second,
 				IdempotencyKey: "publish_with_history",
@@ -399,7 +399,9 @@ func TestRedisBrokerPublishIdempotent(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 1, len(pubs))
 
-			require.Equal(t, sp1, sp2)
+			require.Equal(t, res1.StreamPosition, res2.StreamPosition)
+			require.True(t, res2.Suppressed)
+			require.Equal(t, SuppressReasonIdempotency, res2.SuppressReason)
 		})
 	}
 }
@@ -420,13 +422,13 @@ func TestRedisBrokerPublishSkipOldVersion(t *testing.T) {
 
 			channel := uuid.New().String()
 
-			_, _, err := b.Publish(channel, testPublicationData(), PublishOptions{
+			_, err := b.Publish(channel, testPublicationData(), PublishOptions{
 				HistorySize: 2,
 				HistoryTTL:  5 * time.Second,
 				Version:     1,
 			})
 			require.NoError(t, err)
-			_, _, err = b.Publish(channel, testPublicationData(), PublishOptions{
+			_, err = b.Publish(channel, testPublicationData(), PublishOptions{
 				HistorySize: 2,
 				HistoryTTL:  5 * time.Second,
 				Version:     1,
@@ -442,7 +444,7 @@ func TestRedisBrokerPublishSkipOldVersion(t *testing.T) {
 
 			channel2 := uuid.NewString()
 			// Test publish with history and with version and version epoch.
-			_, _, err = b.Publish(channel2, testPublicationData(), PublishOptions{
+			_, err = b.Publish(channel2, testPublicationData(), PublishOptions{
 				HistorySize:  2,
 				HistoryTTL:   5 * time.Second,
 				Version:      1,
@@ -450,7 +452,7 @@ func TestRedisBrokerPublishSkipOldVersion(t *testing.T) {
 			})
 			require.NoError(t, err)
 			// Publish with same version and epoch.
-			_, _, err = b.Publish(channel2, testPublicationData(), PublishOptions{
+			_, err = b.Publish(channel2, testPublicationData(), PublishOptions{
 				HistorySize:  2,
 				HistoryTTL:   5 * time.Second,
 				Version:      1,
@@ -465,7 +467,7 @@ func TestRedisBrokerPublishSkipOldVersion(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 1, len(pubs))
 			// Publish with same version and different epoch.
-			_, _, err = b.Publish(channel2, testPublicationData(), PublishOptions{
+			_, err = b.Publish(channel2, testPublicationData(), PublishOptions{
 				HistorySize:  2,
 				HistoryTTL:   time.Second,
 				Version:      1,
@@ -502,7 +504,7 @@ func TestRedisCurrentPosition(t *testing.T) {
 			require.Equal(t, uint64(0), streamTop.Offset)
 
 			rawData := []byte("{}")
-			_, _, err = b.Publish(channel, rawData, PublishOptions{HistorySize: 10, HistoryTTL: 2 * time.Second})
+			_, err = b.Publish(channel, rawData, PublishOptions{HistorySize: 10, HistoryTTL: 2 * time.Second})
 			require.NoError(t, err)
 
 			_, streamTop, err = b.History(channel, HistoryOptions{
@@ -527,7 +529,7 @@ func TestRedisBrokerRecover(t *testing.T) {
 			rawData := []byte("{}")
 
 			for i := 0; i < 5; i++ {
-				_, _, err := b.Publish("channel", rawData, PublishOptions{HistorySize: 10, HistoryTTL: 2 * time.Second})
+				_, err := b.Publish("channel", rawData, PublishOptions{HistorySize: 10, HistoryTTL: 2 * time.Second})
 				require.NoError(t, err)
 			}
 
@@ -552,7 +554,7 @@ func TestRedisBrokerRecover(t *testing.T) {
 			require.Equal(t, uint64(5), pubs[2].Offset)
 
 			for i := 0; i < 10; i++ {
-				_, _, err := b.Publish("channel", rawData, PublishOptions{HistorySize: 10, HistoryTTL: 2 * time.Second})
+				_, err := b.Publish("channel", rawData, PublishOptions{HistorySize: 10, HistoryTTL: 2 * time.Second})
 				require.NoError(t, err)
 			}
 
@@ -1546,7 +1548,7 @@ func BenchmarkRedisPublish_1Ch(b *testing.B) {
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
-					_, _, err := broker.Publish("channel", rawData, PublishOptions{})
+					_, err := broker.Publish("channel", rawData, PublishOptions{})
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -1573,7 +1575,7 @@ func BenchmarkRedisPublish_ManyCh(b *testing.B) {
 				for pb.Next() {
 					jj := atomic.AddInt32(&j, 1)
 					channel := "channel" + strconv.Itoa(int(jj)%benchmarkNumDifferentChannels)
-					_, _, err := broker.Publish(channel, rawData, PublishOptions{})
+					_, err := broker.Publish(channel, rawData, PublishOptions{})
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -1597,11 +1599,11 @@ func BenchmarkRedisPublish_History_1Ch(b *testing.B) {
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
 					var err error
-					pos, _, err := broker.Publish("channel", rawData, chOpts)
+					res, err := broker.Publish("channel", rawData, chOpts)
 					if err != nil {
 						b.Fatal(err)
 					}
-					if pos.Offset == 0 {
+					if res.StreamPosition.Offset == 0 {
 						b.Fail()
 					}
 				}
@@ -1627,11 +1629,11 @@ func BenchmarkRedisPub_History_ManyCh(b *testing.B) {
 					jj := atomic.AddInt32(&j, 1)
 					channel := "channel" + strconv.Itoa(int(jj)%benchmarkNumDifferentChannels)
 					var err error
-					pos, _, err := broker.Publish(channel, rawData, chOpts)
+					res, err := broker.Publish(channel, rawData, chOpts)
 					if err != nil {
 						b.Fatal(err)
 					}
-					if pos.Offset == 0 {
+					if res.StreamPosition.Offset == 0 {
 						b.Fail()
 					}
 				}
@@ -1672,7 +1674,7 @@ func BenchmarkRedisHistory_1Ch(b *testing.B) {
 			defer stopRedisBroker(broker)
 			rawData := []byte("{}")
 			for i := 0; i < 4; i++ {
-				_, _, err := broker.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: 300 * time.Second})
+				_, err := broker.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: 300 * time.Second})
 				require.NoError(b, err)
 			}
 			b.SetParallelism(getBenchParallelism())
@@ -1701,7 +1703,7 @@ func BenchmarkRedisRecover_1Ch(b *testing.B) {
 			numMessages := 10
 			numMissing := 10
 			for i := 1; i <= numMessages; i++ {
-				_, _, err := broker.Publish("channel", rawData, PublishOptions{HistorySize: numMessages, HistoryTTL: 300 * time.Second})
+				_, err := broker.Publish("channel", rawData, PublishOptions{HistorySize: numMessages, HistoryTTL: 300 * time.Second})
 				require.NoError(b, err)
 			}
 			b.SetParallelism(getBenchParallelism())
@@ -2133,7 +2135,7 @@ func TestRedisMemoryUsage(t *testing.T) {
 			rawData := []byte(randString(messageSizeBytes))
 			for i := 0; i < numStreams; i++ {
 				for j := 0; j < numMessagesInStream; j++ {
-					_, _, err := broker.Publish("channel"+strconv.Itoa(i), rawData, PublishOptions{
+					_, err := broker.Publish("channel"+strconv.Itoa(i), rawData, PublishOptions{
 						HistorySize: numMessagesInStream,
 						HistoryTTL:  100 * time.Second,
 					})

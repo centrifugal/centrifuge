@@ -739,6 +739,24 @@ func TestMemoryMapBroker_Remove(t *testing.T) {
 	require.Len(t, pubs, 3) // key1, key2, remove(key1)
 	require.True(t, pubs[2].Removed)
 	require.Equal(t, "key1", pubs[2].Key)
+
+	// Remove non-existent key should be suppressed with key_not_found
+	res, err := broker.Remove(ctx, channel, "nonexistent", MapRemoveOptions{
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.True(t, res.Suppressed)
+	require.Equal(t, SuppressReasonKeyNotFound, res.SuppressReason)
+
+	// Verify no extra stream entry was added
+	pubs, _, err = broker.ReadStream(ctx, channel, MapReadStreamOptions{
+		Filter: StreamFilter{
+			Limit: -1,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, pubs, 3) // Still 3 - no entry for nonexistent key
 }
 
 // TestMemoryMapBroker_KeyModeIfNew tests KeyModeIfNew - only write if key doesn't exist.

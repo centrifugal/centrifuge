@@ -1666,6 +1666,76 @@ func TestRedisMapBroker_KeyModeReplace(t *testing.T) {
 	require.Equal(t, []byte("value2"), entries[0].Data)
 }
 
+func TestRedisMapBroker_Remove(t *testing.T) {
+	node, _ := New(Config{})
+	broker := newTestRedisMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_remove")
+
+	// Publish some keys
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("data1"),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{
+		Data:       []byte("data2"),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Verify state has 2 keys
+	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit:    100,
+		StateTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+
+	// Remove key1
+	res, err := broker.Remove(ctx, channel, "key1", MapRemoveOptions{
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.False(t, res.Suppressed)
+
+	// Verify state has 1 key
+	entries, _, _, err = broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit:    100,
+		StateTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "key2", entries[0].Key)
+
+	// Remove non-existent key should be suppressed with key_not_found
+	res, err = broker.Remove(ctx, channel, "nonexistent", MapRemoveOptions{
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.True(t, res.Suppressed)
+	require.Equal(t, SuppressReasonKeyNotFound, res.SuppressReason)
+
+	// Verify stream has only 3 entries (key1, key2, remove(key1)) - no entry for nonexistent
+	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+		Filter: StreamFilter{
+			Limit: -1,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, pubs, 3)
+	require.True(t, pubs[2].Removed)
+	require.Equal(t, "key1", pubs[2].Key)
+}
+
 // TestRedisMapBroker_Aggregation - REMOVED: aggregation feature was removed.
 // TestRedisMapBroker_AggregationAutoDiscovery - REMOVED: aggregation feature was removed.
 

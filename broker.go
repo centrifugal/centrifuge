@@ -181,13 +181,11 @@ type Broker interface {
 	// after another. Otherwise, the order of publications and stable behaviour of
 	// subscribers with positioning/recovery enabled can't be guaranteed.
 	//
-	// StreamPosition returned here describes stream epoch and offset assigned to
-	// the publication. For channels without history this StreamPosition should be
-	// zero value.
-	// Second bool value returned here means whether Publish was suppressed due to
-	// the use of PublishOptions.IdempotencyKey. In this case StreamPosition is
-	// returned from the cache maintained by Broker.
-	Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, bool, error)
+	// PublishResult.StreamPosition describes stream epoch and offset assigned to
+	// the publication. For channels without history this should be zero value.
+	// PublishResult.Suppressed and PublishResult.SuppressReason indicate whether
+	// the publish was suppressed and why (e.g. idempotency deduplication, version skip).
+	Publish(ch string, data []byte, opts PublishOptions) (PublishResult, error)
 	// PublishJoin publishes Join Push message into channel.
 	PublishJoin(ch string, info *ClientInfo) error
 	// PublishLeave publishes Leave Push message into channel.
