@@ -903,7 +903,7 @@ func (c *Client) handleMapStreamToLive(
 	if opts.MapUserPresenceChannelPrefix != "" {
 		channelFlags |= flagMapUserPresence
 	}
-	if opts.CleanupOnUnsubscribe {
+	if opts.MapRemoveOnUnsubscribe {
 		channelFlags |= flagCleanupOnUnsubscribe
 	}
 
@@ -1549,7 +1549,7 @@ func (c *Client) buildMapChannelFlags(deltaEnabled bool, delta string, isPresenc
 	if opts.MapUserPresenceChannelPrefix != "" {
 		channelFlags |= flagMapUserPresence
 	}
-	if opts.CleanupOnUnsubscribe {
+	if opts.MapRemoveOnUnsubscribe {
 		channelFlags |= flagCleanupOnUnsubscribe
 	}
 	return channelFlags
@@ -1783,7 +1783,7 @@ func (c *Client) removeMapPresence(channel string, ctx ChannelContext) error {
 	// User presence entries are NOT removed on disconnect - they only expire via TTL.
 	// This provides debounce/grace period for quick reconnects.
 
-	// Remove key=clientId from channel if CleanupOnUnsubscribe is enabled.
+	// Remove key=clientId from channel if MapRemoveOnUnsubscribe is enabled.
 	// This is for ephemeral state like cursors where each client publishes
 	// to a key that equals their client ID.
 	// Stream options (StreamSize/TTL/MetaTTL) use defaults from GetMapChannelOptions.

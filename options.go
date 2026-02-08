@@ -158,23 +158,13 @@ type SubscribeOptions struct {
 	// For example, if prefix is "$users:" and channel is "games", presence goes to "$users:games".
 	// Empty string means no user presence publishing.
 	MapUserPresenceChannelPrefix string
-	// CleanupOnUnsubscribe enables automatic cleanup of map state when the
+	// MapRemoveOnUnsubscribe enables automatic cleanup of map state when the
 	// subscription ends. When enabled, all keys in the channel's state that
 	// were published by this client (matched by client_id) will be removed
 	// when the client unsubscribes or disconnects. This is useful for ephemeral
 	// state like cursor positions or temporary resources that should not persist
 	// after the client leaves.
-	CleanupOnUnsubscribe bool
-	// MapStreamSize sets the maximum stream size for map presence channels.
-	// Used when MapClientPresenceChannelPrefix, MapUserPresenceChannelPrefix, or CleanupOnUnsubscribe is enabled.
-	// Default: 1000
-	MapStreamSize int
-	// MapStreamTTL sets how long stream entries are retained for map presence.
-	// Default: 5 minutes
-	MapStreamTTL time.Duration
-	// MapStreamMetaTTL sets how long stream metadata is retained for map presence.
-	// Default: 1 hour
-	MapStreamMetaTTL time.Duration
+	MapRemoveOnUnsubscribe bool
 }
 
 // SubscribeOption is a type to represent various Subscribe options.

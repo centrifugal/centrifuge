@@ -605,8 +605,8 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap:            true,
-					CleanupOnUnsubscribe: true,
+					EnableMap:              true,
+					MapRemoveOnUnsubscribe: true,
 				},
 			}, nil)
 		})
@@ -615,7 +615,7 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 	client := newTestConnectedClientV2(t, node, "user1")
 	clientID := client.ID()
 
-	// Subscribe with CleanupOnUnsubscribe.
+	// Subscribe with MapRemoveOnUnsubscribe.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
 		Type:    1,
@@ -660,8 +660,8 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap:            true,
-					CleanupOnUnsubscribe: true,
+					EnableMap:              true,
+					MapRemoveOnUnsubscribe: true,
 				},
 			}, nil)
 		})
@@ -670,7 +670,7 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 	client := newTestConnectedClientV2(t, node, "user1")
 	clientID := client.ID()
 
-	// Subscribe with CleanupOnUnsubscribe.
+	// Subscribe with MapRemoveOnUnsubscribe.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
 		Type:    1,

@@ -132,6 +132,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// Wrap with debouncing for cursors channel — coalesces rapid cursor updates
+	// on the server side before forwarding to the backend.
+	mapBroker = centrifuge.NewDebouncingMapBroker(mapBroker, centrifuge.DebouncingMapBrokerConfig{
+		Debounce: func(channel string) time.Duration {
+			if channel == "cursors" {
+				return 200 * time.Millisecond
+			}
+			return 0
+		},
+	})
 	node.SetMapBroker(mapBroker)
 
 	// Set up PostgreSQL pool for native leaderboard operations.
@@ -175,7 +185,7 @@ func main() {
 
 			// Enable automatic cleanup for cursors channel - removes key=clientID on unsubscribe/disconnect.
 			if e.Channel == "cursors" {
-				opts.CleanupOnUnsubscribe = true
+				opts.MapRemoveOnUnsubscribe = true
 			}
 
 			cb(centrifuge.SubscribeReply{Options: opts}, nil)
@@ -211,7 +221,7 @@ func main() {
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
 			log.Printf("client disconnected: %s", client.ID())
-			// Cursor cleanup is now automatic via CleanupOnUnsubscribe option.
+			// Cursor cleanup is now automatic via MapRemoveOnUnsubscribe option.
 		})
 	})
 

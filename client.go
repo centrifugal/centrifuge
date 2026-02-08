@@ -3892,7 +3892,7 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		channelHasFlag(chCtx.flags, flagMapClientPresence) ||
 		channelHasFlag(chCtx.flags, flagMapUserPresence)
 
-	// Also need to run map cleanup if CleanupOnUnsubscribe is enabled.
+	// Also need to run map cleanup if MapRemoveOnUnsubscribe is enabled.
 	needsMapCleanup := hasAnyPresence || channelHasFlag(chCtx.flags, flagCleanupOnUnsubscribe)
 
 	if needsMapCleanup && channelHasFlag(chCtx.flags, flagSubscribed) {
