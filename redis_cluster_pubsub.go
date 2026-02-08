@@ -22,7 +22,7 @@ type slotRange struct {
 
 // initNodeGroupedPubSub initializes per-node PubSub connection grouping.
 // Called from NewRedisMapBroker when GroupPubSubByNode is true.
-func (e *RedisMapBroker) initNodeGroupedPubSub(wrapper *engineShardWrapper, shard *RedisShard) error {
+func (e *RedisMapBroker) initNodeGroupedPubSub(wrapper *brokerShardWrapper, shard *RedisShard) error {
 	client := shard.client
 	if e.conf.SubscribeOnReplica {
 		client = shard.replicaClient
@@ -60,7 +60,7 @@ func (e *RedisMapBroker) initNodeGroupedPubSub(wrapper *engineShardWrapper, shar
 
 // runNodeGroupedPubSubShard launches per-node PubSub goroutines.
 // Replaces runPubSubShard when GroupPubSubByNode is enabled.
-func (e *RedisMapBroker) runNodeGroupedPubSubShard(s *engineShardWrapper, h BrokerEventHandler) error {
+func (e *RedisMapBroker) runNodeGroupedPubSubShard(s *brokerShardWrapper, h BrokerEventHandler) error {
 	if e.conf.SkipPubSub {
 		return nil
 	}
@@ -109,7 +109,7 @@ func (e *RedisMapBroker) runNodeGroupedPubSubShard(s *engineShardWrapper, h Brok
 // runNodeGroupedPubSub is the per-node PubSub goroutine.
 // Subscribes to shard channels for ALL partitions assigned to this node.
 func (e *RedisMapBroker) runNodeGroupedPubSub(
-	s *engineShardWrapper,
+	s *brokerShardWrapper,
 	logFields map[string]any,
 	eventHandler BrokerEventHandler,
 	nodeIdx, psShardIdx int,
@@ -152,7 +152,7 @@ func (e *RedisMapBroker) runNodeGroupedPubSub(
 }
 
 // closeTopologyDone atomically closes the topologyDone channel and creates a new one.
-func (e *RedisMapBroker) closeTopologyDone(s *engineShardWrapper) {
+func (e *RedisMapBroker) closeTopologyDone(s *brokerShardWrapper) {
 	s.subClientsMu.Lock()
 	defer s.subClientsMu.Unlock()
 	select {
@@ -166,7 +166,7 @@ func (e *RedisMapBroker) closeTopologyDone(s *engineShardWrapper) {
 // runTopologyRefreshLoop periodically polls CLUSTER SLOTS and triggers a restart
 // of all PubSub goroutines if the topology has changed. Also listens on
 // topologyRebuildCh for immediate rebuild signals from sunsubscribe events.
-func (e *RedisMapBroker) runTopologyRefreshLoop(s *engineShardWrapper) {
+func (e *RedisMapBroker) runTopologyRefreshLoop(s *brokerShardWrapper) {
 	ticker := time.NewTicker(topologyRefreshInterval)
 	defer ticker.Stop()
 
@@ -221,7 +221,7 @@ func pokeSlotOwners(client rueidis.Client, slotRanges []slotRange, knownAddrs ma
 
 // refreshTopology re-queries CLUSTER SLOTS + Nodes(), rebuilds mappings.
 // Returns true if the topology changed.
-func (e *RedisMapBroker) refreshTopology(s *engineShardWrapper) bool {
+func (e *RedisMapBroker) refreshTopology(s *brokerShardWrapper) bool {
 	client := s.shard.client
 	if e.conf.SubscribeOnReplica {
 		client = s.shard.replicaClient
@@ -258,7 +258,7 @@ func (e *RedisMapBroker) refreshTopology(s *engineShardWrapper) bool {
 
 // rebuildNodeGroupedPubSub rebuilds mappings and creates a new topologyDone channel
 // so that restarted goroutines can use updated state.
-func (e *RedisMapBroker) rebuildNodeGroupedPubSub(s *engineShardWrapper) {
+func (e *RedisMapBroker) rebuildNodeGroupedPubSub(s *brokerShardWrapper) {
 	client := s.shard.client
 	if e.conf.SubscribeOnReplica {
 		client = s.shard.replicaClient

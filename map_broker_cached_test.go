@@ -250,7 +250,7 @@ func TestCachedMapBroker_Publish(t *testing.T) {
 	ctx := context.Background()
 	channel := "test_publish"
 
-	// Publish through cached engine
+	// Publish through cached broker
 	result, err := cached.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte("data1"),
 		StreamSize: 100,
@@ -344,7 +344,7 @@ func TestCachedMapBroker_ReadState_LazyLoad(t *testing.T) {
 	// Not loaded yet
 	require.False(t, cached.cache.IsLoaded(channel))
 
-	// Read through cached engine - triggers load
+	// Read through cached broker - triggers load
 	pubs, _, _, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -531,7 +531,7 @@ func TestCachedMapBroker_Sync_ReappliesOwnWrites(t *testing.T) {
 	ctx := context.Background()
 	channel := "test_sync_reapply"
 
-	// Publish through cached engine
+	// Publish through cached broker
 	_, err := cached.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte("data1"),
 		StreamSize: 100,
@@ -1015,7 +1015,7 @@ func TestCachedMapBroker_HandlePublication_GapFilling(t *testing.T) {
 	ctx := context.Background()
 	channel := "test_gap_filling"
 
-	// Step 1: Publish initial data through cached engine to load cache
+	// Step 1: Publish initial data through cached broker to load cache
 	_, err = cached.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte("data1"),
 		StreamSize: 100,
@@ -1049,7 +1049,7 @@ func TestCachedMapBroker_HandlePublication_GapFilling(t *testing.T) {
 
 	// Create the cachedEventHandler directly to test the gap filling logic
 	handler := &cachedEventHandler{
-		engine:  cached,
+		broker:  cached,
 		cache:   cached.cache,
 		backend: backend,
 		handler: nil,
@@ -1126,7 +1126,7 @@ func TestCachedMapBroker_HandlePublication_EpochMismatch(t *testing.T) {
 
 	// Create the cachedEventHandler directly to test epoch mismatch logic
 	handler := &cachedEventHandler{
-		engine:  cached,
+		broker:  cached,
 		cache:   cached.cache,
 		backend: backend,
 		handler: nil,
@@ -1192,7 +1192,7 @@ func TestCachedMapBroker_HandlePublication_NoGap(t *testing.T) {
 
 	// Create handler
 	handler := &cachedEventHandler{
-		engine:  cached,
+		broker:  cached,
 		cache:   cached.cache,
 		backend: backend,
 		handler: nil,
@@ -1299,7 +1299,7 @@ func TestCachedMapBroker_SnapshotAndStreamRecovery(t *testing.T) {
 	require.Len(t, backendSnapshot, 10)
 	require.Equal(t, uint64(10), backendPos.Offset)
 
-	// Step 2: Create cached engine - cache is empty at this point
+	// Step 2: Create cached broker - cache is empty at this point
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels:        1000,
@@ -1651,7 +1651,7 @@ func TestCachedMapBroker_OptionsFromBackendLoad(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, backendStream, 10, "backend should have all 10 stream entries")
 
-	// Now create cached engine - it should only load 3 stream entries per channel options
+	// Now create cached broker - it should only load 3 stream entries per channel options
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
 		Cache: MapCacheConfig{
 			MaxChannels: 1000,
@@ -1905,7 +1905,7 @@ func TestCachedMapBroker_ResubscribeFreshData(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 3: While unsubscribed, publish more data directly to backend
-	// These publications won't be seen by the cached engine (not subscribed to pub/sub)
+	// These publications won't be seen by the cached broker (not subscribed to pub/sub)
 	for i := 4; i <= 6; i++ {
 		_, err := backend.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
 			Data:       []byte(fmt.Sprintf(`{"id":%d}`, i)),

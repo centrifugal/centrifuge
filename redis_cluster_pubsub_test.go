@@ -113,7 +113,7 @@ func TestRedisMapBroker_NodeGrouped_Basic(t *testing.T) {
 // MapBroker instances with node-grouped connections, using many channels to verify
 // proper distribution across Redis cluster nodes.
 func TestRedisMapBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
-	// Both engines share the same prefix so they communicate via the same channels.
+	// Both brokers share the same prefix so they communicate via the same channels.
 	prefix := getUniquePrefix()
 
 	node1, _ := New(Config{
@@ -167,7 +167,7 @@ func TestRedisMapBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 	require.Greater(t, numNodesHit, 1, "channels should distribute across multiple nodes, got distribution: %v", nodeHits)
 	t.Logf("channel distribution across %d nodes: %v", numNodesHit, nodeHits)
 
-	// Setup a second engine to publish (same prefix).
+	// Setup a second broker to publish (same prefix).
 	node2, _ := New(Config{})
 	e2 := newNodeGroupedMapBrokerPrefix(t, node2, 16, prefix)
 	defer func() { _ = e2.Close(context.Background()) }()
@@ -832,7 +832,7 @@ func TestRedisMapBroker_NodeGrouped_SlotMigration(t *testing.T) {
 	require.NoError(t, e1.RegisterEventHandler(handler))
 	require.NoError(t, e1.Subscribe(testChannel))
 
-	// Second engine to publish.
+	// Second broker to publish.
 	node2, _ := New(Config{})
 	e2 := newNodeGroupedMapBrokerPrefix(t, node2, numPartitions, prefix)
 	defer func() { _ = e2.Close(context.Background()) }()
@@ -859,12 +859,12 @@ func TestRedisMapBroker_NodeGrouped_SlotMigration(t *testing.T) {
 		t.Fatal("phase 1: timeout waiting for publication before migration")
 	}
 
-	// Record the engine's node index for this partition BEFORE migration.
+	// Record the broker's node index for this partition BEFORE migration.
 	wrapper := e1.shards[0]
 	wrapper.subClientsMu.Lock()
 	origNodeIdx := wrapper.partitionToNodeIdx[targetPartition]
 	wrapper.subClientsMu.Unlock()
-	t.Logf("partition %d is at engine nodeIdx=%d before migration", targetPartition, origNodeIdx)
+	t.Logf("partition %d is at broker nodeIdx=%d before migration", targetPartition, origNodeIdx)
 
 	// --- Phase 2: Migrate the slot ---
 	migrateSlot(t, slot, sourceNode, targetNode, clusterNodes)
@@ -1142,9 +1142,9 @@ func cleanupNode7004(t *testing.T) {
 	}
 }
 
-// TestRedisMapBroker_NodeGrouped_AddRemoveNode tests that a running engine's PubSub
+// TestRedisMapBroker_NodeGrouped_AddRemoveNode tests that a running broker's PubSub
 // handles node additions and removals without panicking. It adds a 4th Redis Cluster
-// node, verifies the running engine discovers it and PubSub still works, then removes
+// node, verifies the running broker discovers it and PubSub still works, then removes
 // the node and verifies no panic + PubSub recovery.
 func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 	// Ensure clean state from any previous failed runs.
@@ -1186,7 +1186,7 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 	testChannel := "add_remove_node_test_ch"
 	require.NoError(t, e1.Subscribe(testChannel))
 
-	// Publisher engine (same prefix).
+	// Publisher broker (same prefix).
 	node2, _ := New(Config{})
 	e2 := newNodeGroupedMapBrokerPrefix(t, node2, numPartitions, prefix)
 	defer func() { _ = e2.Close(context.Background()) }()
@@ -1272,7 +1272,7 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 	wrapper.subClientsMu.Lock()
 	nodeCount := len(wrapper.nodeClients)
 	wrapper.subClientsMu.Unlock()
-	require.Equal(t, 4, nodeCount, "engine should see 4 nodes after add")
+	require.Equal(t, 4, nodeCount, "broker should see 4 nodes after add")
 	t.Logf("phase 2: node count = %d, maxNodeGoroutines = %d", nodeCount, wrapper.maxNodeGoroutines)
 	require.Equal(t, 4, wrapper.maxNodeGoroutines, "maxNodeGoroutines should be 4")
 
@@ -1328,7 +1328,7 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 	wrapper.subClientsMu.Lock()
 	nodeCount = len(wrapper.nodeClients)
 	wrapper.subClientsMu.Unlock()
-	require.Equal(t, 3, nodeCount, "engine should see 3 nodes after remove")
+	require.Equal(t, 3, nodeCount, "broker should see 3 nodes after remove")
 	t.Logf("phase 3: node count = %d", nodeCount)
 
 	// The critical check: no panic from goroutines that had nodeIdx=3.

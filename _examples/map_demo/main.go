@@ -77,9 +77,9 @@ func handleLog(e centrifuge.LogEntry) {
 
 var (
 	port         = flag.String("port", "3000", "HTTP server port")
-	redisAddr    = flag.String("redis", "", "Redis address (e.g., localhost:6379). If empty, uses in-memory engine.")
+	redisAddr    = flag.String("redis", "", "Redis address (e.g., localhost:6379). If empty, uses in-memory broker.")
 	postgresAddr = flag.String("postgres", "", "PostgreSQL connection string (e.g., postgres://user:pass@localhost:5432/db?sslmode=disable)")
-	enableCache  = flag.Bool("cache", false, "Enable memory cache layer for Redis/Postgres engines (provides read-your-own-writes and low-latency reads)")
+	enableCache  = flag.Bool("cache", false, "Enable memory cache layer for Redis/Postgres brokers (provides read-your-own-writes and low-latency reads)")
 )
 
 func main() {
@@ -126,8 +126,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Set up map engine (memory, Redis, or PostgreSQL based on flags).
-	// When -cache flag is set, wraps Redis/Postgres engines with CachedMapBroker.
+	// Set up map broker (memory, Redis, or PostgreSQL based on flags).
+	// When -cache flag is set, wraps Redis/Postgres brokers with CachedMapBroker.
 	mapBroker, err := setupMapBroker(node, *redisAddr, *postgresAddr, *enableCache)
 	if err != nil {
 		log.Fatal(err)
@@ -331,7 +331,7 @@ func handleGameJoin(client *centrifuge.Client, node *centrifuge.Node, data []byt
 		return
 	}
 
-	// Read game info from map engine (single source of truth).
+	// Read game info from map broker (single source of truth).
 	stateResult, err := node.MapStateRead(context.Background(), "games", centrifuge.MapReadStateOptions{
 		Key: req.GameID,
 	})
@@ -665,7 +665,7 @@ func handleLeaderboardLeaveHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Inventory handlers - demonstrates CAS (Compare-And-Swap) for preventing overselling.
 
-// initInventory initializes inventory items in the map engine on startup.
+// initInventory initializes inventory items in the map broker on startup.
 func initInventory(node *centrifuge.Node) {
 	ctx := context.Background()
 	for _, item := range inventoryItems {
@@ -912,8 +912,8 @@ func handleInventoryRestock(_ *centrifuge.Client, node *centrifuge.Node, data []
 	cb(centrifuge.RPCReply{}, &centrifuge.Error{Code: 4002, Message: "too many conflicts"})
 }
 
-// setupMapBroker creates either a memory, Redis, or PostgreSQL map engine.
-// When enableCache is true, wraps Redis/Postgres engines with CachedMapBroker
+// setupMapBroker creates either a memory, Redis, or PostgreSQL map broker.
+// When enableCache is true, wraps Redis/Postgres brokers with CachedMapBroker
 // for read-your-own-writes consistency and low-latency reads.
 func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enableCache bool) (centrifuge.MapBroker, error) {
 	var backend centrifuge.MapBroker
@@ -926,7 +926,7 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enabl
 
 		// If Redis is also specified, use it as broker for multi-node fan-out
 		if redisAddr != "" {
-			log.Printf("Using PostgreSQL map engine with Redis broker for fan-out")
+			log.Printf("Using PostgreSQL map broker with Redis broker for fan-out")
 			redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
 				Address: redisAddr,
 			})
@@ -944,17 +944,17 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enabl
 			node.SetBroker(broker)
 			pgConfig.Broker = broker
 		} else {
-			log.Printf("Using PostgreSQL map engine (single-node, local delivery only)")
+			log.Printf("Using PostgreSQL map broker (single-node, local delivery only)")
 		}
 
-		engine, err := centrifuge.NewPostgresMapBroker(node, pgConfig)
+		broker, err := centrifuge.NewPostgresMapBroker(node, pgConfig)
 		if err != nil {
-			return nil, fmt.Errorf("error creating PostgreSQL map engine: %w", err)
+			return nil, fmt.Errorf("error creating PostgreSQL map broker: %w", err)
 		}
-		backend = engine
+		backend = broker
 	} else if redisAddr != "" {
 		// Redis if specified
-		log.Printf("Using Redis map engine at %s", redisAddr)
+		log.Printf("Using Redis map broker at %s", redisAddr)
 
 		redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
 			Address: redisAddr,
@@ -963,22 +963,22 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enabl
 			return nil, fmt.Errorf("error creating Redis shard: %w", err)
 		}
 
-		engine, err := centrifuge.NewRedisMapBroker(node, centrifuge.RedisMapBrokerConfig{
+		broker, err := centrifuge.NewRedisMapBroker(node, centrifuge.RedisMapBrokerConfig{
 			Shards: []*centrifuge.RedisShard{redisShard},
 			Prefix: "map_demo",
 		})
 		if err != nil {
 			return nil, err
 		}
-		backend = engine
+		backend = broker
 	} else {
 		// Default to memory - cache not applicable (already in-memory)
-		log.Println("Using in-memory map engine")
-		engine, err := centrifuge.NewMemoryMapBroker(node, centrifuge.MemoryMapBrokerConfig{})
+		log.Println("Using in-memory map broker")
+		broker, err := centrifuge.NewMemoryMapBroker(node, centrifuge.MemoryMapBrokerConfig{})
 		if err != nil {
 			return nil, err
 		}
-		return engine, nil
+		return broker, nil
 	}
 
 	// Wrap with cache layer if enabled (only for Redis/Postgres)
@@ -994,7 +994,7 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enabl
 			SyncBatchSize: 1000,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("error creating cached map engine: %w", err)
+			return nil, fmt.Errorf("error creating cached map broker: %w", err)
 		}
 		return cached, nil
 	}

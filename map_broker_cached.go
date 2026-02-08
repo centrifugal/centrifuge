@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// CachedMapBrokerConfig configures the cached map engine wrapper.
+// CachedMapBrokerConfig configures the cached map broker wrapper.
 type CachedMapBrokerConfig struct {
 	// Cache configuration for the in-memory cache layer.
 	Cache MapCacheConfig
@@ -77,7 +77,6 @@ func (c CachedMapBrokerConfig) setDefaults() CachedMapBrokerConfig {
 // - Read-your-own-writes consistency on the publishing node
 // - Low-latency reads from memory instead of database
 // - Cross-node eventual consistency via stream synchronization
-// - Backward compatibility - existing engines work unchanged
 type CachedMapBroker struct {
 	node         *Node
 	backend      MapBroker
@@ -120,7 +119,7 @@ var _ MapBroker = (*CachedMapBroker)(nil)
 // reads while the backend provides durability and cross-node consistency.
 func NewCachedMapBroker(n *Node, backend MapBroker, conf CachedMapBrokerConfig) (*CachedMapBroker, error) {
 	if backend == nil {
-		return nil, errors.New("cached map engine: backend is required")
+		return nil, errors.New("cached map broker: backend is required")
 	}
 	conf = conf.setDefaults()
 
@@ -148,7 +147,7 @@ func NewCachedMapBroker(n *Node, backend MapBroker, conf CachedMapBrokerConfig) 
 // cachedEventHandler wraps the original event handler to intercept publications
 // and update the cache before forwarding to the original handler.
 type cachedEventHandler struct {
-	engine  *CachedMapBroker
+	broker  *CachedMapBroker
 	cache   *mapCacheImpl
 	backend MapBroker
 	handler BrokerEventHandler
@@ -165,7 +164,7 @@ func (h *cachedEventHandler) HandlePublication(ch string, pub *Publication, sp S
 	}
 	if !buffered && h.cache.IsLoaded(ch) {
 		// Update cache if channel is loaded, using per-channel lock for ordering
-		h.engine.withChannelLock(ch, func() {
+		h.broker.withChannelLock(ch, func() {
 			cachedPos := h.cache.GetPosition(ch)
 
 			// Check for gap - if incoming offset > cached + 1, we missed publications
@@ -249,7 +248,7 @@ func (e *CachedMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 
 	// Create wrapper that updates cache and forwards to original handler
 	wrapper := &cachedEventHandler{
-		engine:  e,
+		broker:  e,
 		cache:   e.cache,
 		backend: e.backend,
 		handler: h,
@@ -269,7 +268,7 @@ func (e *CachedMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 	return nil
 }
 
-// Close shuts down the cached engine.
+// Close shuts down the cached broker.
 func (e *CachedMapBroker) Close(ctx context.Context) error {
 	e.closeOnce.Do(func() {
 		close(e.closeCh)

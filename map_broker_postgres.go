@@ -101,7 +101,7 @@ type OutboxConfig struct {
 // This requires PostgreSQL setup: wal_level=logical, publications, replication slots.
 type WALConfig struct {
 	// Enabled activates WAL mode instead of the default outbox mode.
-	// When true, the engine uses logical replication to stream changes.
+	// When true, the broker uses logical replication to stream changes.
 	// Default: false (use outbox mode)
 	Enabled bool
 
@@ -128,7 +128,7 @@ type WALConfig struct {
 	HeartbeatInterval time.Duration
 }
 
-// PostgresMapBrokerConfig configures the PostgreSQL map engine.
+// PostgresMapBrokerConfig configures the PostgreSQL map broker.
 type PostgresMapBrokerConfig struct {
 	// ConnString is the primary PostgreSQL connection string for writes.
 	// Example: "postgres://user:pass@localhost:5432/dbname?sslmode=disable"
@@ -211,18 +211,18 @@ func (c *PostgresMapBrokerConfig) setDefaults() {
 	}
 }
 
-// NewPostgresMapBroker creates a new PostgreSQL map engine.
+// NewPostgresMapBroker creates a new PostgreSQL map broker.
 func NewPostgresMapBroker(n *Node, conf PostgresMapBrokerConfig) (*PostgresMapBroker, error) {
 	conf.setDefaults()
 
 	if conf.ConnString == "" {
-		return nil, errors.New("postgres map engine: ConnString is required")
+		return nil, errors.New("postgres map broker: ConnString is required")
 	}
 
 	// Validate pool size is sufficient for outbox workers.
 	// Each outbox worker holds a connection for its advisory lock.
 	if !conf.WAL.Enabled && conf.PoolSize <= conf.Outbox.NumShards {
-		return nil, fmt.Errorf("postgres map engine: PoolSize (%d) must be greater than Outbox.NumShards (%d) to leave connections for queries",
+		return nil, fmt.Errorf("postgres map broker: PoolSize (%d) must be greater than Outbox.NumShards (%d) to leave connections for queries",
 			conf.PoolSize, conf.Outbox.NumShards)
 	}
 
@@ -231,19 +231,19 @@ func NewPostgresMapBroker(n *Node, conf PostgresMapBrokerConfig) (*PostgresMapBr
 	// Configure primary pool
 	poolConfig, err := pgxpool.ParseConfig(conf.ConnString)
 	if err != nil {
-		return nil, fmt.Errorf("postgres map engine: parse config: %w", err)
+		return nil, fmt.Errorf("postgres map broker: parse config: %w", err)
 	}
 	poolConfig.MaxConns = int32(conf.PoolSize)
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
-		return nil, fmt.Errorf("postgres map engine: connect primary: %w", err)
+		return nil, fmt.Errorf("postgres map broker: connect primary: %w", err)
 	}
 
 	// Test connection
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("postgres map engine: ping primary: %w", err)
+		return nil, fmt.Errorf("postgres map broker: ping primary: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -312,7 +312,7 @@ func (e *PostgresMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 	e.eventHandler = h
 
 	if e.running.Swap(true) {
-		return errors.New("postgres map engine: already running")
+		return errors.New("postgres map broker: already running")
 	}
 
 	// Start TTL and cleanup workers (always needed)
@@ -351,7 +351,7 @@ func (e *PostgresMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 	return nil
 }
 
-// Close shuts down the engine.
+// Close shuts down the broker.
 func (e *PostgresMapBroker) Close(_ context.Context) error {
 	e.closeOnce.Do(func() {
 		e.cancelFunc() // Cancel context to unblock WaitForNotification
@@ -961,7 +961,7 @@ func (e *PostgresMapBroker) Clear(ctx context.Context, ch string, _ MapClearOpti
 
 // walShardReader represents a reader for a specific shard of the WAL stream.
 type walShardReader struct {
-	engine      *PostgresMapBroker
+	broker      *PostgresMapBroker
 	shardID     int
 	conn        *pgconn.PgConn
 	running     atomic.Bool

@@ -88,7 +88,7 @@ func (b *MemoryBroker) pubLock(ch string) *sync.Mutex {
 }
 
 // Publish adds message into history hub and calls node method to handle message.
-// We don't have any PUB/SUB here as Memory Engine is single node only.
+// We don't have any PUB/SUB here as MemoryBroker is single node only.
 func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, bool, error) {
 	mu := b.pubLock(ch)
 	mu.Lock()

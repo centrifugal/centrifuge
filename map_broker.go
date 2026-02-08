@@ -42,7 +42,7 @@ import (
 // historical catch-up to live streaming, even if new messages arrive during
 // the final ReadStream() call.
 //
-// The engine supports several advanced features:
+// The broker supports several advanced features:
 //
 //   - Idempotency: Duplicate detection via IdempotencyKey to safely retry operations.
 //   - Versioning: Optimistic concurrency control via Version/VersionEpoch fields.
@@ -288,7 +288,7 @@ type MapReadStateOptions struct {
 	// This is an internal option used by the subscription flow for optimized delivery.
 	// Application code should NOT set this - leave it false to always read fresh data
 	// from the backend (safe for CAS operations, always consistent).
-	// Only affects CachedMapBroker; other engines ignore this option.
+	// Only affects CachedMapBroker; other brokers ignore this option.
 	Cached bool
 }
 

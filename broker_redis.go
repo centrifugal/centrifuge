@@ -62,10 +62,10 @@ type shardWrapper struct {
 	partitionToNodeIdx []int              // partition → subClients first-dimension index
 	nodePartitions     [][]int            // nodeIdx → partition indices
 	nodeClients        []rueidis.Client   // per-node clients from Nodes()
-	topologyDone        chan struct{}       // closed to signal topology change → restart all
-	topologyRebuildCh   chan struct{}       // [node-grouped-pubsub] signaled by sunsubscribe → immediate rebuild
-	eventHandler        BrokerEventHandler // stored for launching new goroutines on node growth
-	maxNodeGoroutines   int                // highest node count we've launched goroutines for
+	topologyDone       chan struct{}      // closed to signal topology change → restart all
+	topologyRebuildCh  chan struct{}      // [node-grouped-pubsub] signaled by sunsubscribe → immediate rebuild
+	eventHandler       BrokerEventHandler // stored for launching new goroutines on node growth
+	maxNodeGoroutines  int                // highest node count we've launched goroutines for
 }
 
 // RedisBroker uses Redis to implement Broker functionality. This broker allows
@@ -468,7 +468,6 @@ func (b *RedisBroker) Close(_ context.Context) error {
 	})
 	return nil
 }
-
 
 func (b *RedisBroker) runControlPubSub(s *RedisShard, logFields map[string]any, eventHandler ControlEventHandler, startOnce func(error)) {
 	b.node.logger.log(newLogEntry(LogLevelDebug, "running Redis control PUB/SUB", getPubSubStartLogFields(s, logFields)))
@@ -1237,7 +1236,7 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 			// it to unmarshalled Publication.
 			pub.Offset = sp.Offset
 		}
-		// Use Publication's Offset/Epoch for StreamPosition when available (keyed engine fan-out).
+		// Use Publication's Offset/Epoch for StreamPosition when available (keyed broker fan-out).
 		// This takes precedence over metadata prefix since keyed publications carry position in the message.
 		if pub.Offset > 0 {
 			sp.Offset = pub.Offset

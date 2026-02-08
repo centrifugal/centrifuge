@@ -33,7 +33,7 @@ type MemoryMapBroker struct {
 
 var _ MapBroker = (*MemoryMapBroker)(nil)
 
-// MemoryMapBrokerConfig is a memory map engine config.
+// MemoryMapBrokerConfig is a memory map broker config.
 type MemoryMapBrokerConfig struct{}
 
 // NewMemoryMapBroker initializes MemoryMapBroker.
@@ -55,7 +55,7 @@ func NewMemoryMapBroker(n *Node, _ MemoryMapBrokerConfig) (*MemoryMapBroker, err
 	return e, nil
 }
 
-// RegisterEventHandler registers event handler and runs memory map engine.
+// RegisterEventHandler registers event handler and runs memory map broker.
 func (e *MemoryMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 	e.eventHandler = h
 	e.mapHub.setEventHandler(h)
@@ -64,7 +64,7 @@ func (e *MemoryMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 	return nil
 }
 
-// Close shuts down the engine.
+// Close shuts down the broker.
 func (e *MemoryMapBroker) Close(_ context.Context) error {
 	e.closeOnce.Do(func() {
 		close(e.closeCh)

@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// BenchmarkCachedEngine_ReadState_Cached benchmarks reading from warm cache.
-func BenchmarkCachedEngine_ReadState_Cached(b *testing.B) {
+// BenchmarkCachedMapBroker_ReadState_Cached benchmarks reading from warm cache.
+func BenchmarkCachedMapBroker_ReadState_Cached(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
@@ -54,8 +54,8 @@ func BenchmarkCachedEngine_ReadState_Cached(b *testing.B) {
 	}
 }
 
-// BenchmarkCachedEngine_ReadState_ColdLoad benchmarks first read (load from backend).
-func BenchmarkCachedEngine_ReadState_ColdLoad(b *testing.B) {
+// BenchmarkCachedMapBroker_ReadState_ColdLoad benchmarks first read (load from backend).
+func BenchmarkCachedMapBroker_ReadState_ColdLoad(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
@@ -97,8 +97,8 @@ func BenchmarkCachedEngine_ReadState_ColdLoad(b *testing.B) {
 	}
 }
 
-// BenchmarkCachedEngine_ReadState_Parallel benchmarks parallel cached reads.
-func BenchmarkCachedEngine_ReadState_Parallel(b *testing.B) {
+// BenchmarkCachedMapBroker_ReadState_Parallel benchmarks parallel cached reads.
+func BenchmarkCachedMapBroker_ReadState_Parallel(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
@@ -137,8 +137,8 @@ func BenchmarkCachedEngine_ReadState_Parallel(b *testing.B) {
 	})
 }
 
-// BenchmarkCachedEngine_ReadState_Paginated benchmarks paginated reads.
-func BenchmarkCachedEngine_ReadState_Paginated(b *testing.B) {
+// BenchmarkCachedMapBroker_ReadState_Paginated benchmarks paginated reads.
+func BenchmarkCachedMapBroker_ReadState_Paginated(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
@@ -185,8 +185,8 @@ func BenchmarkCachedEngine_ReadState_Paginated(b *testing.B) {
 	}
 }
 
-// BenchmarkCachedEngine_Publish benchmarks publish (backend + cache).
-func BenchmarkCachedEngine_Publish(b *testing.B) {
+// BenchmarkCachedMapBroker_Publish benchmarks publish (backend + cache).
+func BenchmarkCachedMapBroker_Publish(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
@@ -217,8 +217,8 @@ func BenchmarkCachedEngine_Publish(b *testing.B) {
 	}
 }
 
-// BenchmarkCachedEngine_Publish_Parallel benchmarks parallel publishes.
-func BenchmarkCachedEngine_Publish_Parallel(b *testing.B) {
+// BenchmarkCachedMapBroker_Publish_Parallel benchmarks parallel publishes.
+func BenchmarkCachedMapBroker_Publish_Parallel(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
@@ -360,7 +360,7 @@ func BenchmarkReadState_Direct_vs_Cached(b *testing.B) {
 		require.NoError(b, err)
 	}
 
-	// Warm up cached engine
+	// Warm up cached broker
 	_, _, _, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
 
 	b.Run("Direct", func(b *testing.B) {
@@ -422,8 +422,8 @@ func BenchmarkPublish_Direct_vs_Cached(b *testing.B) {
 	})
 }
 
-// BenchmarkCachedEngine_SyncChannel benchmarks single channel sync.
-func BenchmarkCachedEngine_SyncChannel(b *testing.B) {
+// BenchmarkCachedMapBroker_SyncChannel benchmarks single channel sync.
+func BenchmarkCachedMapBroker_SyncChannel(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
@@ -468,8 +468,8 @@ func BenchmarkCachedEngine_SyncChannel(b *testing.B) {
 	}
 }
 
-// BenchmarkCachedEngine_ManyChannels benchmarks with many active channels.
-func BenchmarkCachedEngine_ManyChannels(b *testing.B) {
+// BenchmarkCachedMapBroker_ManyChannels benchmarks with many active channels.
+func BenchmarkCachedMapBroker_ManyChannels(b *testing.B) {
 	node, _ := New(Config{})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
@@ -556,7 +556,7 @@ func BenchmarkMapReadState_Postgres_Direct_vs_Cached(b *testing.B) {
 		require.NoError(b, err)
 	}
 
-	// Warm up cached engine (load into cache)
+	// Warm up cached broker (load into cache)
 	_, _, _, err = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
 	require.NoError(b, err)
 

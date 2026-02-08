@@ -1099,7 +1099,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 			}
 		}
 
-		// Subscribe to appropriate engine based on subscription type.
+		// Subscribe to appropriate broker based on subscription type.
 		if sub.isMap {
 			if mapBroker := n.getMapBroker(ch); mapBroker != nil {
 				n.metrics.incActionCount("map_broker_subscribe", ch)
@@ -1164,7 +1164,7 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 			defer subMu.Unlock()
 			noSubscribers := n.hub.NumSubscribers(ch) == 0
 			if noSubscribers {
-				// Unsubscribe from appropriate engine based on channel type.
+				// Unsubscribe from appropriate broker based on channel type.
 				if wasKeyed {
 					if mapBroker := n.getMapBroker(ch); mapBroker != nil {
 						n.metrics.incActionCount("map_broker_unsubscribe", ch)
@@ -1480,8 +1480,8 @@ func (n *Node) getBroker(ch string) Broker {
 
 func (n *Node) getMapBroker(ch string) MapBroker {
 	if n.config.GetMapBroker != nil {
-		if engine, ok := n.config.GetMapBroker(ch); ok {
-			return engine
+		if broker, ok := n.config.GetMapBroker(ch); ok {
+			return broker
 		}
 	}
 	return n.mapBroker

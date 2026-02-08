@@ -3,7 +3,7 @@ version: '3.8'
 services:
   redis:
     image: redis:7
-    container_name: keyed_engine_redis
+    container_name: map_broker_redis
     ports:
       - "6379:6379"
     healthcheck:
@@ -23,7 +23,7 @@ services:
       - "5432:5432"
     volumes:
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-      - keyed_engine_data:/var/lib/postgresql/data
+      - map_broker_data:/var/lib/postgresql/data
     command:
       - "postgres"
       - "-c"
@@ -39,4 +39,4 @@ services:
       retries: 5
 
 volumes:
-  keyed_engine_data:
+  map_broker_data:

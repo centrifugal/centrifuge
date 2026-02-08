@@ -4,7 +4,6 @@ package natsbroker
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -18,23 +17,25 @@ type (
 	channelID string
 )
 
-// Config of NatsEngine.
+// Config of NatsBroker.
 type Config struct {
 	Servers string
 	Prefix  string
 }
 
 var _ centrifuge.Broker = (*NatsBroker)(nil)
+var _ centrifuge.Controller = (*NatsBroker)(nil)
 
 // NatsBroker is a broker on top of Nats messaging system.
 type NatsBroker struct {
 	node   *centrifuge.Node
 	config Config
 
-	nc           *nats.Conn
-	subsMu       sync.Mutex
-	subs         map[channelID]*nats.Subscription
-	eventHandler centrifuge.BrokerEventHandler
+	nc                  *nats.Conn
+	subsMu              sync.Mutex
+	subs                map[channelID]*nats.Subscription
+	eventHandler        centrifuge.BrokerEventHandler
+	controlEventHandler centrifuge.ControlEventHandler
 }
 
 // History ...
@@ -73,8 +74,8 @@ func (b *NatsBroker) extractChannel(subject string) string {
 	return strings.TrimPrefix(subject, b.config.Prefix+".client.")
 }
 
-// Run runs broker after node initialized.
-func (b *NatsBroker) Run(h centrifuge.BrokerEventHandler) error {
+// RegisterBrokerEventHandler ...
+func (b *NatsBroker) RegisterBrokerEventHandler(h centrifuge.BrokerEventHandler) error {
 	b.eventHandler = h
 	servers := b.config.Servers
 	if servers == "" {
@@ -191,7 +192,7 @@ func (b *NatsBroker) handleClientMessage(subject string, data []byte) error {
 		if err != nil {
 			return err
 		}
-		_ = b.eventHandler.HandlePublication(channel, &pub, centrifuge.StreamPosition{}, nil)
+		_ = b.eventHandler.HandlePublication(channel, &pub, centrifuge.StreamPosition{}, false, nil)
 	case joinPushType:
 		var info centrifuge.ClientInfo
 		err := json.Unmarshal(p.Data, &info)
@@ -216,7 +217,12 @@ func (b *NatsBroker) handleClient(m *nats.Msg) {
 }
 
 func (b *NatsBroker) handleControl(m *nats.Msg) {
-	_ = b.eventHandler.HandleControl(m.Data)
+	_ = b.controlEventHandler.HandleControl(m.Data)
+}
+
+func (b *NatsBroker) RegisterControlEventHandler(h centrifuge.ControlEventHandler) error {
+	b.controlEventHandler = h
+	return nil
 }
 
 // Subscribe - see centrifuge.Broker interface description.

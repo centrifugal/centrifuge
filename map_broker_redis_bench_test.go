@@ -10,18 +10,18 @@ import (
 	"time"
 )
 
-func setupStateEngineBench(b *testing.B) (*RedisMapBroker, func()) {
+func setupMapBrokerBench(b *testing.B) (*RedisMapBroker, func()) {
 	b.Helper()
 	node, _ := New(Config{})
-	engine := newTestStateRedisEngine(b, node)
-	return engine, func() {
+	broker := newTestRedisMapBroker(b, node)
+	return broker, func() {
 		_ = node.Shutdown(context.Background())
 	}
 }
 
 // BenchmarkRedisMapBroker_PublishStreamOnly benchmarks publishing to stream without state.
 func BenchmarkRedisMapBroker_PublishStreamOnly(b *testing.B) {
-	engine, cleanup := setupStateEngineBench(b)
+	broker, cleanup := setupMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -35,7 +35,7 @@ func BenchmarkRedisMapBroker_PublishStreamOnly(b *testing.B) {
 		for pb.Next() {
 			i := atomic.AddInt64(&counter, 1)
 			data := []byte(fmt.Sprintf("message_%d", i))
-			_, err := engine.Publish(ctx, channel, "", MapPublishOptions{
+			_, err := broker.Publish(ctx, channel, "", MapPublishOptions{
 				Data:       data,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
@@ -49,7 +49,7 @@ func BenchmarkRedisMapBroker_PublishStreamOnly(b *testing.B) {
 
 // BenchmarkRedisMapBroker_PublishMapStateSimple benchmarks simple keyed state (HASH only).
 func BenchmarkRedisMapBroker_PublishMapStateSimple(b *testing.B) {
-	engine, cleanup := setupStateEngineBench(b)
+	broker, cleanup := setupMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -64,7 +64,7 @@ func BenchmarkRedisMapBroker_PublishMapStateSimple(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 				Data:       data,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
@@ -79,7 +79,7 @@ func BenchmarkRedisMapBroker_PublishMapStateSimple(b *testing.B) {
 
 // BenchmarkRedisMapBroker_PublishMapStateOrdered benchmarks ordered keyed state (HASH+ZSET).
 func BenchmarkRedisMapBroker_PublishMapStateOrdered(b *testing.B) {
-	engine, cleanup := setupStateEngineBench(b)
+	broker, cleanup := setupMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -94,7 +94,7 @@ func BenchmarkRedisMapBroker_PublishMapStateOrdered(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 				Data:       data,
 				Ordered:    true,
 				Score:      i,
@@ -109,40 +109,9 @@ func BenchmarkRedisMapBroker_PublishMapStateOrdered(b *testing.B) {
 	})
 }
 
-//// BenchmarkRedisMapBroker_AddMember benchmarks presence/membership operations.
-//func BenchmarkRedisMapBroker_AddMember(b *testing.B) {
-//	engine, cleanup := setupStateEngineBench(b)
-//	defer cleanup()
-//
-//	ctx := context.Background()
-//	channel := randomChannel("bench_presence")
-//
-//	b.ReportAllocs()
-//	b.ResetTimer()
-//
-//	var counter int64
-//	b.RunParallel(func(pb *testing.PB) {
-//		for pb.Next() {
-//			i := atomic.AddInt64(&counter, 1)
-//			clientID := fmt.Sprintf("client%d", i)
-//			userID := fmt.Sprintf("user%d", i%100) // 100 different users
-//
-//			err := engine.AddMember(ctx, channel, ClientInfo{
-//				ClientID: clientID,
-//				UserID:   userID,
-//			}, EnginePresenceOptions{
-//				Publish: false, // Don't publish for benchmark
-//			})
-//			if err != nil {
-//				b.Fatal(err)
-//			}
-//		}
-//	})
-//}
-
 // BenchmarkRedisMapBroker_PublishCombined benchmarks publishing with stream + state.
 func BenchmarkRedisMapBroker_PublishCombined(b *testing.B) {
-	engine, cleanup := setupStateEngineBench(b)
+	broker, cleanup := setupMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -157,7 +126,7 @@ func BenchmarkRedisMapBroker_PublishCombined(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 				Data:       data,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
@@ -172,7 +141,7 @@ func BenchmarkRedisMapBroker_PublishCombined(b *testing.B) {
 
 // BenchmarkRedisMapBroker_ReadStream benchmarks reading from stream.
 func BenchmarkRedisMapBroker_ReadStream(b *testing.B) {
-	engine, cleanup := setupStateEngineBench(b)
+	broker, cleanup := setupMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -182,7 +151,7 @@ func BenchmarkRedisMapBroker_ReadStream(b *testing.B) {
 	var sp StreamPosition
 	for i := 0; i < 1000; i++ {
 		data := []byte(fmt.Sprintf("message_%d", i))
-		res, err := engine.Publish(ctx, channel, "", MapPublishOptions{
+		res, err := broker.Publish(ctx, channel, "", MapPublishOptions{
 			Data:       data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
@@ -200,7 +169,7 @@ func BenchmarkRedisMapBroker_ReadStream(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, err := engine.ReadStreamZero(ctx, channel, MapReadStreamOptions{
+			_, _, err := broker.ReadStreamZero(ctx, channel, MapReadStreamOptions{
 				Filter: StreamFilter{
 					Limit: 1000,
 					Since: &sp,
@@ -215,7 +184,7 @@ func BenchmarkRedisMapBroker_ReadStream(b *testing.B) {
 
 // BenchmarkRedisMapBroker_ReadStateFull benchmarks reading full unordered state.
 func BenchmarkRedisMapBroker_ReadStateFull(b *testing.B) {
-	engine, cleanup := setupStateEngineBench(b)
+	broker, cleanup := setupMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -225,7 +194,7 @@ func BenchmarkRedisMapBroker_ReadStateFull(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
@@ -241,7 +210,7 @@ func BenchmarkRedisMapBroker_ReadStateFull(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+			_, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 				Limit:    0, // Read all
 				StateTTL: 300 * time.Second,
 			})
@@ -254,7 +223,7 @@ func BenchmarkRedisMapBroker_ReadStateFull(b *testing.B) {
 
 // BenchmarkRedisMapBroker_ReadStatePaginated benchmarks paginated state reads.
 func BenchmarkRedisMapBroker_ReadStatePaginated(b *testing.B) {
-	engine, cleanup := setupStateEngineBench(b)
+	broker, cleanup := setupMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -264,7 +233,7 @@ func BenchmarkRedisMapBroker_ReadStatePaginated(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
@@ -280,7 +249,7 @@ func BenchmarkRedisMapBroker_ReadStatePaginated(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+			_, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 				Cursor:   "0",
 				Limit:    100, // Read 100 at a time
 				StateTTL: 300 * time.Second,
@@ -294,7 +263,7 @@ func BenchmarkRedisMapBroker_ReadStatePaginated(b *testing.B) {
 
 // BenchmarkRedisMapBroker_ReadStateOrdered benchmarks reading ordered state.
 func BenchmarkRedisMapBroker_ReadStateOrdered(b *testing.B) {
-	engine, cleanup := setupStateEngineBench(b)
+	broker, cleanup := setupMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -304,7 +273,7 @@ func BenchmarkRedisMapBroker_ReadStateOrdered(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       data,
 			Ordered:    true,
 			Score:      int64(i),
@@ -322,7 +291,7 @@ func BenchmarkRedisMapBroker_ReadStateOrdered(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+			_, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 				Ordered:  true,
 				Limit:    100,
 				StateTTL: 300 * time.Second,
@@ -334,121 +303,9 @@ func BenchmarkRedisMapBroker_ReadStateOrdered(b *testing.B) {
 	})
 }
 
-//
-//// BenchmarkRedisMapBroker_Members benchmarks reading presence members.
-//func BenchmarkRedisMapBroker_Members(b *testing.B) {
-//	engine, cleanup := setupStateEngineBench(b)
-//	defer cleanup()
-//
-//	ctx := context.Background()
-//	channel := randomChannel("bench_members")
-//
-//	// Prepopulate with 1000 members
-//	for i := 0; i < 1000; i++ {
-//		clientID := fmt.Sprintf("client%d", i)
-//		userID := fmt.Sprintf("user%d", i%100)
-//		err := engine.AddMember(ctx, channel, ClientInfo{
-//			ClientID: clientID,
-//			UserID:   userID,
-//		}, EnginePresenceOptions{
-//			Publish: false,
-//		})
-//		if err != nil {
-//			b.Fatal(err)
-//		}
-//	}
-//
-//	b.ReportAllocs()
-//	b.ResetTimer()
-//
-//	b.RunParallel(func(pb *testing.PB) {
-//		for pb.Next() {
-//			_, err := engine.Members(ctx, channel)
-//			if err != nil {
-//				b.Fatal(err)
-//			}
-//		}
-//	})
-//}
-
-//// BenchmarkRedisMapBroker_MemberStats benchmarks reading presence stats.
-//func BenchmarkRedisMapBroker_MemberStats(b *testing.B) {
-//	engine, cleanup := setupStateEngineBench(b)
-//	defer cleanup()
-//
-//	ctx := context.Background()
-//	channel := randomChannel("bench_member_stats")
-//
-//	// Prepopulate with 1000 members (100 unique users)
-//	for i := 0; i < 1000; i++ {
-//		clientID := fmt.Sprintf("client%d", i)
-//		userID := fmt.Sprintf("user%d", i%100)
-//		err := engine.AddMember(ctx, channel, ClientInfo{
-//			ClientID: clientID,
-//			UserID:   userID,
-//		}, EnginePresenceOptions{
-//			Publish: false,
-//		})
-//		if err != nil {
-//			b.Fatal(err)
-//		}
-//	}
-//
-//	b.ReportAllocs()
-//	b.ResetTimer()
-//
-//	b.RunParallel(func(pb *testing.PB) {
-//		for pb.Next() {
-//			_, err := engine.Stats(ctx, channel)
-//			if err != nil {
-//				b.Fatal(err)
-//			}
-//		}
-//	})
-//}
-
-//// BenchmarkRedisMapBroker_ReadPresenceState benchmarks reading presence state with revisions.
-//func BenchmarkRedisMapBroker_ReadPresenceState(b *testing.B) {
-//	engine, cleanup := setupStateEngineBench(b)
-//	defer cleanup()
-//
-//	ctx := context.Background()
-//	channel := randomChannel("bench_presence_state")
-//
-//	// Prepopulate with 1000 members
-//	for i := 0; i < 1000; i++ {
-//		clientID := fmt.Sprintf("client%d", i)
-//		userID := fmt.Sprintf("user%d", i%100)
-//		err := engine.AddMember(ctx, channel, ClientInfo{
-//			ClientID: clientID,
-//			UserID:   userID,
-//		}, EnginePresenceOptions{
-//			Publish: false,
-//		})
-//		if err != nil {
-//			b.Fatal(err)
-//		}
-//	}
-//
-//	b.ReportAllocs()
-//	b.ResetTimer()
-//
-//	b.RunParallel(func(pb *testing.PB) {
-//		for pb.Next() {
-//			_, _, err := engine.ReadPresenceState(ctx, channel, MapReadStateOptions{
-//				Limit:       0, // Read all
-//				StateTTL: 300 * time.Second,
-//			})
-//			if err != nil {
-//				b.Fatal(err)
-//			}
-//		}
-//	})
-//}
-
 // BenchmarkRedisMapBroker_IdempotentPublish benchmarks idempotent publishing.
 func BenchmarkRedisMapBroker_IdempotentPublish(b *testing.B) {
-	engine, cleanup := setupStateEngineBench(b)
+	broker, cleanup := setupMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -463,7 +320,7 @@ func BenchmarkRedisMapBroker_IdempotentPublish(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			data := []byte(fmt.Sprintf("message_%d", i))
 			idempotencyKey := fmt.Sprintf("key_%d", i)
-			_, err := engine.Publish(ctx, channel, "", MapPublishOptions{
+			_, err := broker.Publish(ctx, channel, "", MapPublishOptions{
 				Data:                data,
 				IdempotencyKey:      idempotencyKey,
 				IdempotentResultTTL: 60 * time.Second,
@@ -479,7 +336,7 @@ func BenchmarkRedisMapBroker_IdempotentPublish(b *testing.B) {
 
 // BenchmarkRedisMapBroker_VersionedPublish benchmarks version-based publishing.
 func BenchmarkRedisMapBroker_VersionedPublish(b *testing.B) {
-	engine, cleanup := setupStateEngineBench(b)
+	broker, cleanup := setupMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -494,7 +351,7 @@ func BenchmarkRedisMapBroker_VersionedPublish(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i%100) // Reuse 100 keys
 			data := []byte(fmt.Sprintf("data_%d", i))
-			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 				Data:       data,
 				Version:    uint64(i),
 				StreamSize: 10000,

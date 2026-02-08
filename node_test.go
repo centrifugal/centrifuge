@@ -1430,7 +1430,7 @@ func TestNodeCheckPositionMap(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	// Set up map engine.
+	// Set up map broker.
 	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	node.SetMapBroker(mapBroker)
@@ -1538,35 +1538,35 @@ func TestGetMapBroker(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	// Create two map engines
-	defaultEngine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	// Create two map brokers
+	defaultBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	_ = defaultEngine.RegisterEventHandler(nil)
+	_ = defaultBroker.RegisterEventHandler(nil)
 
-	customEngine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	customBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	_ = customEngine.RegisterEventHandler(nil)
+	_ = customBroker.RegisterEventHandler(nil)
 
-	// Set default engine
-	node.SetMapBroker(defaultEngine)
+	// Set default broker
+	node.SetMapBroker(defaultBroker)
 
-	// Configure GetMapBroker to route "custom:*" channels to customEngine
+	// Configure GetMapBroker to route "custom:*" channels to customBroker
 	node.config.GetMapBroker = func(channel string) (MapBroker, bool) {
 		if len(channel) >= 7 && channel[:7] == "custom:" {
-			return customEngine, true
+			return customBroker, true
 		}
 		return nil, false // Use default
 	}
 
 	ctx := context.Background()
 
-	// Publish to default channel - should use defaultEngine
+	// Publish to default channel - should use defaultBroker
 	_, err = node.MapPublish(ctx, "default:test", "key1", MapPublishOptions{
 		Data: []byte(`{"v":1}`),
 	})
 	require.NoError(t, err)
 
-	// Publish to custom channel - should use customEngine
+	// Publish to custom channel - should use customBroker
 	_, err = node.MapPublish(ctx, "custom:test", "key1", MapPublishOptions{
 		Data: []byte(`{"v":2}`),
 	})

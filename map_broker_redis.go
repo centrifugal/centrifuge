@@ -39,7 +39,7 @@ var (
 	brokerStateCleanupScriptSource string
 )
 
-type engineShardWrapper struct {
+type brokerShardWrapper struct {
 	shard               *RedisShard
 	subClientsMu        sync.Mutex
 	subClients          [][]rueidis.DedicatedClient
@@ -62,7 +62,7 @@ type engineShardWrapper struct {
 // Message Formats
 // ===============
 //
-// This engine uses simplified message formats published by Lua scripts:
+// This broker uses simplified message formats published by Lua scripts:
 //
 // 1. No prefix:
 //   - Raw protobuf bytes (Publication)
@@ -91,7 +91,7 @@ type RedisMapBroker struct {
 	node *Node
 	conf RedisMapBrokerConfig
 
-	shards []*engineShardWrapper
+	shards []*brokerShardWrapper
 
 	addScript           *rueidis.Lua
 	readOrderedScript   *rueidis.Lua
@@ -115,7 +115,7 @@ type RedisMapBrokerConfig struct {
 	Shards []*RedisShard
 	// Prefix to use before every channel name and key in Redis.
 	Prefix string
-	// Name of engine, for observability purposes – i.e. becomes part of metrics/logs labels.
+	// Name of broker, for observability purposes – i.e. becomes part of metrics/logs labels.
 	// By default, empty string is used.
 	Name string
 	// LoadSHA1 enables loading SHA1 from Redis via SCRIPT LOAD instead of calculating
@@ -125,11 +125,11 @@ type RedisMapBrokerConfig struct {
 	IdempotentResultTTL time.Duration
 	// SubscribeOnReplica allows subscribing on replica Redis nodes.
 	SubscribeOnReplica bool
-	// SkipPubSub enables mode when engine only works with data structures, without
+	// SkipPubSub enables mode when broker only works with data structures, without
 	// publishing to channels and using PUB/SUB.
 	SkipPubSub bool
 	// NumShardedPubSubPartitions when greater than zero allows turning on a mode in which
-	// engine will use Redis Cluster with sharded PUB/SUB feature available in
+	// broker will use Redis Cluster with sharded PUB/SUB feature available in
 	// Redis >= 7: https://redis.io/docs/manual/pubsub/#sharded-pubsub
 	NumShardedPubSubPartitions int
 	// [node-grouped-pubsub] Groups sharded PUB/SUB connections by Redis Cluster node
@@ -157,13 +157,13 @@ type RedisMapBrokerConfig struct {
 // NewRedisMapBroker initializes RedisMapBroker.
 func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, error) {
 	if len(conf.Shards) == 0 {
-		return nil, errors.New("state engine: no shards provided")
+		return nil, errors.New("state broker: no shards provided")
 	}
 
 	if conf.SubscribeOnReplica {
 		for i, s := range conf.Shards {
 			if s.replicaClient == nil {
-				return nil, fmt.Errorf("engine: SubscribeOnReplica enabled but no replica client initialized in shard[%d] (ReplicaClientEnabled option)", i)
+				return nil, fmt.Errorf("broker: SubscribeOnReplica enabled but no replica client initialized in shard[%d] (ReplicaClientEnabled option)", i)
 			}
 		}
 	}
@@ -191,9 +191,9 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 		conf.CleanupInterval = 5 * time.Second
 	}
 
-	shardWrappers := make([]*engineShardWrapper, 0, len(conf.Shards))
+	shardWrappers := make([]*brokerShardWrapper, 0, len(conf.Shards))
 	for _, s := range conf.Shards {
-		shardWrappers = append(shardWrappers, &engineShardWrapper{shard: s})
+		shardWrappers = append(shardWrappers, &brokerShardWrapper{shard: s})
 	}
 
 	e := &RedisMapBroker{
@@ -324,7 +324,7 @@ func (e *RedisMapBroker) useShardedPubSub(s *RedisShard) bool {
 	return s.isCluster && e.conf.NumShardedPubSubPartitions > 0
 }
 
-func (e *RedisMapBroker) getShard(channel string) *engineShardWrapper {
+func (e *RedisMapBroker) getShard(channel string) *brokerShardWrapper {
 	if len(e.shards) == 1 {
 		return e.shards[0]
 	}
@@ -493,7 +493,7 @@ func (e *RedisMapBroker) messageChannelID(s *RedisShard, ch string) string {
 	return builder.String()
 }
 
-// Close closes the engine.
+// Close closes the broker.
 func (e *RedisMapBroker) Close(_ context.Context) error {
 	e.closeOnce.Do(func() {
 		close(e.closeCh)
@@ -2123,7 +2123,7 @@ func (e *RedisMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 	return nil
 }
 
-func (e *RedisMapBroker) runPubSubShard(s *engineShardWrapper, h BrokerEventHandler) error {
+func (e *RedisMapBroker) runPubSubShard(s *brokerShardWrapper, h BrokerEventHandler) error {
 	if e.conf.SkipPubSub {
 		return nil
 	}
@@ -2356,7 +2356,7 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 	return err
 }
 
-func (e *RedisMapBroker) runPubSub(s *engineShardWrapper, logFields map[string]any, eventHandler BrokerEventHandler, clusterShardIndex, psShardIndex int, useShardedPubSub bool, startOnce func(error)) {
+func (e *RedisMapBroker) runPubSub(s *brokerShardWrapper, logFields map[string]any, eventHandler BrokerEventHandler, clusterShardIndex, psShardIndex int, useShardedPubSub bool, startOnce func(error)) {
 	cb := pubSubCallbacks{
 		handleMessage: func(isCluster bool, handler BrokerEventHandler, ch string, data []byte) error {
 			return e.handleRedisClientMessage(isCluster, handler, ch, data)

@@ -136,7 +136,7 @@ type MapPublishOptions struct {
 
 ### Suppression Reasons
 
-When a write doesn't modify state, the engine returns a suppression reason:
+When a write doesn't modify state, the broker returns a suppression reason:
 
 | Reason | Description |
 |--------|-------------|
@@ -212,15 +212,15 @@ usersSub.on('subscribed', (ctx) => {
 });
 ```
 
-## Engine Implementations
+## Broker Implementations
 
-### Memory Engine
+### Memory Broker
 
 **Use case**: Development, testing, single-node deployments
 
 ```go
-engine, _ := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
-node.SetMapBroker(engine)
+broker, _ := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+node.SetMapBroker(broker)
 ```
 
 **Characteristics**:
@@ -236,15 +236,15 @@ node.SetMapBroker(engine)
 - Background goroutines for TTL cleanup
 - Supports score-based ordering
 
-### Redis Engine
+### Redis Broker
 
 **Use case**: Distributed deployments, horizontal scaling
 
 ```go
-engine, _ := NewRedisMapBroker(node, RedisMapBrokerConfig{
+broker, _ := NewRedisMapBroker(node, RedisMapBrokerConfig{
     Shards: []redis.UniversalClient{redisClient},
 })
-node.SetMapBroker(engine)
+node.SetMapBroker(broker)
 ```
 
 **Characteristics**:
@@ -260,20 +260,20 @@ node.SetMapBroker(engine)
 - `HASH` with TTL for idempotency tracking
 
 **Atomic operations** via embedded Lua scripts:
-- `map_engine_add.lua`: Publish with all validation checks
-- `map_engine_read_ordered.lua` / `map_engine_read_unordered.lua`: State pagination
-- `map_engine_stream_read.lua`: Stream pagination
-- `map_engine_cleanup.lua`: TTL cleanup
+- `map_broker_add.lua`: Publish with all validation checks
+- `map_broker_read_ordered.lua` / `map_broker_read_unordered.lua`: State pagination
+- `map_broker_stream_read.lua`: Stream pagination
+- `map_broker_cleanup.lua`: TTL cleanup
 
-### PostgreSQL Engine
+### PostgreSQL Broker
 
 **Use case**: ACID transactions, persistence, SQL-based publishing
 
 ```go
-engine, _ := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+broker, _ := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
     DSN: "postgres://user:pass@localhost/db",
 })
-node.SetMapBroker(engine)
+node.SetMapBroker(broker)
 ```
 
 **Characteristics**:
@@ -292,7 +292,7 @@ node.SetMapBroker(engine)
 
 #### Transactional Publishing
 
-The PostgreSQL engine provides SQL functions for publishing within application transactions:
+The PostgreSQL broker provides SQL functions for publishing within application transactions:
 
 ```sql
 -- Publish or update a key
@@ -388,19 +388,19 @@ sub.on('publication', (ctx) => {
 });
 ```
 
-### Cached Engine
+### Cached Broker
 
 **Use case**: Wrap any backend for low-latency reads and read-your-own-writes consistency
 
 ```go
-cachedEngine, _ := NewCachedMapBroker(backendEngine, CachedMapBrokerConfig{
+cachedBroker, _ := NewCachedMapBroker(backendBroker, CachedMapBrokerConfig{
     Cache: MapCacheConfig{
         MaxChannels: 10000,
         MaxKeys:     1000000,
     },
     SyncInterval: 30 * time.Second,
 })
-node.SetMapBroker(cachedEngine)
+node.SetMapBroker(cachedBroker)
 ```
 
 **Characteristics**:
@@ -589,7 +589,7 @@ Map Subscriptions bridge the gap between traditional databases and real-time del
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │   ┌──────────────┐         ┌──────────────┐                     │
-│   │   Primary    │         │  Map Engine  │                     │
+│   │   Primary    │         │  Map Broker  │                     │
 │   │   Database   │────────>│  (Postgres)  │                     │
 │   │              │  SQL    │              │                     │
 │   └──────────────┘  Func   └──────────────┘                     │

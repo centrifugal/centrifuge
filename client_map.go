@@ -738,7 +738,7 @@ func (c *Client) handleMapStreamToLive(
 		}
 	}
 
-	// Start coordination: buffer -> add subscription (which subscribes to map engine) -> read remaining -> merge.
+	// Start coordination: buffer -> add subscription (which subscribes to map broker) -> read remaining -> merge.
 	c.pubSubSync.StartBuffering(channel)
 
 	chanID, err := c.node.addSubscription(channel, sub)
@@ -1343,8 +1343,8 @@ func (c *Client) handleMapRecoveryJoin(
 		}
 	}
 
-	// Start coordination: buffer -> add subscription (which subscribes to map engine) -> read remaining -> merge.
-	// IMPORTANT: addSubscription adds client to hub AND subscribes to map engine.
+	// Start coordination: buffer -> add subscription (which subscribes to map broker) -> read remaining -> merge.
+	// IMPORTANT: addSubscription adds client to hub AND subscribes to map broker.
 	// This ensures the client is in hub before pub/sub messages arrive.
 	c.pubSubSync.StartBuffering(channel)
 
@@ -1383,7 +1383,7 @@ func (c *Client) handleMapRecoveryJoin(
 	streamResult, err := c.node.MapStreamRead(c.ctx, channel, streamOpts)
 	if err != nil {
 		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c) // This handles map engine unsubscribe.
+		_ = c.node.removeSubscription(channel, c) // This handles map broker unsubscribe.
 		c.cleanupMapSubscribing(channel)
 		if errors.Is(err, ErrorUnrecoverablePosition) {
 			return ErrorUnrecoverablePosition
@@ -1418,7 +1418,7 @@ func (c *Client) handleMapRecoveryJoin(
 	recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
 	if !okMerge {
 		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c) // This handles map engine unsubscribe.
+		_ = c.node.removeSubscription(channel, c) // This handles map broker unsubscribe.
 		c.cleanupMapSubscribing(channel)
 		return &DisconnectInsufficientState
 	}
@@ -1471,7 +1471,7 @@ func (c *Client) handleMapRecoveryJoin(
 	protoReply, err := c.getSubscribeCommandReply(res)
 	if err != nil {
 		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c) // This handles map engine unsubscribe.
+		_ = c.node.removeSubscription(channel, c) // This handles map broker unsubscribe.
 		c.cleanupMapSubscribing(channel)
 		c.node.logger.log(newErrorLogEntry(err, "error encoding map subscribe reply", map[string]any{
 			"channel": channel, "user": c.user, "client": c.uid,

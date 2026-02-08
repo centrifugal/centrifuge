@@ -21,12 +21,12 @@ func getPostgresConnString(tb testing.TB) string {
 	return connString
 }
 
-// newTestPostgresMapBroker creates a test engine with default outbox mode.
+// newTestPostgresMapBroker creates a test broker with default outbox mode.
 func newTestPostgresMapBroker(tb testing.TB, n *Node) *PostgresMapBroker {
 	return newTestPostgresMapBrokerWithOutbox(tb, n)
 }
 
-// newTestPostgresMapBrokerWithOutbox creates a test engine with outbox mode (default).
+// newTestPostgresMapBrokerWithOutbox creates a test broker with outbox mode (default).
 func newTestPostgresMapBrokerWithOutbox(tb testing.TB, n *Node) *PostgresMapBroker {
 	connString := getPostgresConnString(tb)
 
@@ -54,7 +54,7 @@ func newTestPostgresMapBrokerWithOutbox(tb testing.TB, n *Node) *PostgresMapBrok
 	return e
 }
 
-// newTestPostgresMapBrokerWithWAL creates a test engine with WAL mode.
+// newTestPostgresMapBrokerWithWAL creates a test broker with WAL mode.
 func newTestPostgresMapBrokerWithWAL(tb testing.TB, n *Node) *PostgresMapBroker {
 	connString := getPostgresConnString(tb)
 
@@ -99,13 +99,13 @@ func stateToMapPostgres(pubs []*Publication) map[string][]byte {
 // TestPostgresMapBroker_StatefulChannel tests stateful channel with keyed state and revisions.
 func TestPostgresMapBroker_StatefulChannel(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapBroker(t, node)
+	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_stateful"
 
 	// Publish some keyed state updates
-	_, err := engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte("data1"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -113,7 +113,7 @@ func TestPostgresMapBroker_StatefulChannel(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "key2", MapPublishOptions{
+	_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{
 		Data:       []byte("data2"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -121,7 +121,7 @@ func TestPostgresMapBroker_StatefulChannel(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	_, err = broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte("data1_updated"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -130,7 +130,7 @@ func TestPostgresMapBroker_StatefulChannel(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read state
-	entries, streamPos, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+	entries, streamPos, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
@@ -145,7 +145,7 @@ func TestPostgresMapBroker_StatefulChannel(t *testing.T) {
 	require.Equal(t, []byte("data2"), state["key2"])
 
 	// Read stream to verify all publications are in history
-	pubs, _, err := engine.ReadStream(ctx, channel, MapReadStreamOptions{
+	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit: -1, // Get all
 		},
@@ -157,14 +157,14 @@ func TestPostgresMapBroker_StatefulChannel(t *testing.T) {
 // TestPostgresMapBroker_StatefulChannelOrdered tests ordered stateful channel.
 func TestPostgresMapBroker_StatefulChannelOrdered(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapBroker(t, node)
+	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_ordered"
 
 	// Publish with scores for ordering
 	for i := 0; i < 5; i++ {
-		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
 			Data:       []byte(fmt.Sprintf("data%d", i)),
 			Ordered:    true,
 			Score:      int64(i * 10), // Scores: 0, 10, 20, 30, 40
@@ -176,7 +176,7 @@ func TestPostgresMapBroker_StatefulChannelOrdered(t *testing.T) {
 	}
 
 	// Read ordered state (descending by score)
-	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    100,
 		StateTTL: 300 * time.Second,
@@ -195,13 +195,13 @@ func TestPostgresMapBroker_StatefulChannelOrdered(t *testing.T) {
 // TestPostgresMapBroker_StateRevision tests that state values include revisions.
 func TestPostgresMapBroker_StateRevision(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapBroker(t, node)
+	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_revision"
 
 	// Publish a keyed state update
-	res1, err := engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	res1, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte("data1"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -211,7 +211,7 @@ func TestPostgresMapBroker_StateRevision(t *testing.T) {
 	require.Equal(t, uint64(1), res1.Position.Offset)
 
 	// Publish another update
-	res2, err := engine.Publish(ctx, channel, "key2", MapPublishOptions{
+	res2, err := broker.Publish(ctx, channel, "key2", MapPublishOptions{
 		Data:       []byte("data2"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -222,7 +222,7 @@ func TestPostgresMapBroker_StateRevision(t *testing.T) {
 	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch) // Same epoch
 
 	// Read state - entries now include per-entry revisions
-	entries, streamPos, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+	entries, streamPos, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
@@ -245,14 +245,14 @@ func TestPostgresMapBroker_StateRevision(t *testing.T) {
 // TestPostgresMapBroker_StatePagination tests cursor-based state pagination.
 func TestPostgresMapBroker_StatePagination(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapBroker(t, node)
+	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_pagination"
 
 	// Publish 10 keyed entries
 	for i := 0; i < 10; i++ {
-		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
 			Data:       []byte(fmt.Sprintf("data%d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -262,7 +262,7 @@ func TestPostgresMapBroker_StatePagination(t *testing.T) {
 	}
 
 	// Read state with limit
-	page1, pos1, cursor, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+	page1, pos1, cursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    3,
 		Cursor:   "",
 		StateTTL: 300 * time.Second,
@@ -278,7 +278,7 @@ func TestPostgresMapBroker_StatePagination(t *testing.T) {
 
 	// Continue reading until cursor is empty
 	for cursor != "" {
-		page, pos, newCursor, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+		page, pos, newCursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 			Limit:    3,
 			Cursor:   cursor,
 			StateTTL: 300 * time.Second,
@@ -301,14 +301,14 @@ func TestPostgresMapBroker_StatePagination(t *testing.T) {
 // TestPostgresMapBroker_StreamRecovery tests stream recovery.
 func TestPostgresMapBroker_StreamRecovery(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapBroker(t, node)
+	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_recovery"
 
 	// Publish some updates
 	for i := 1; i <= 5; i++ {
-		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
 			Data:       []byte(fmt.Sprintf("data%d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -320,7 +320,7 @@ func TestPostgresMapBroker_StreamRecovery(t *testing.T) {
 	sincePos := StreamPosition{Offset: 2}
 
 	// Read stream since position 2
-	pubs, streamPos, err := engine.ReadStream(ctx, channel, MapReadStreamOptions{
+	pubs, streamPos, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Since: &sincePos,
 			Limit: -1,
@@ -334,13 +334,13 @@ func TestPostgresMapBroker_StreamRecovery(t *testing.T) {
 // TestPostgresMapBroker_Idempotency tests idempotent publishing.
 func TestPostgresMapBroker_Idempotency(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapBroker(t, node)
+	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_idempotency"
 
 	// Publish with idempotency key
-	res1, err := engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	res1, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:                []byte("data1"),
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
@@ -353,7 +353,7 @@ func TestPostgresMapBroker_Idempotency(t *testing.T) {
 	require.Equal(t, uint64(1), res1.Position.Offset)
 
 	// Publish again with same idempotency key
-	res2, err := engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	res2, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:                []byte("data1_different"),
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
@@ -367,7 +367,7 @@ func TestPostgresMapBroker_Idempotency(t *testing.T) {
 	require.Equal(t, res1.Position.Offset, res2.Position.Offset)     // Same offset
 
 	// State should still have original data
-	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
@@ -380,13 +380,13 @@ func TestPostgresMapBroker_Idempotency(t *testing.T) {
 // TestPostgresMapBroker_KeyMode tests KeyMode (IfNew, IfExists).
 func TestPostgresMapBroker_KeyMode(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapBroker(t, node)
+	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_keymode"
 
 	// First publish with KeyModeIfNew should succeed
-	res1, err := engine.Publish(ctx, channel, "slot1", MapPublishOptions{
+	res1, err := broker.Publish(ctx, channel, "slot1", MapPublishOptions{
 		Data:       []byte("player1"),
 		KeyMode:    KeyModeIfNew,
 		StreamSize: 100,
@@ -398,7 +398,7 @@ func TestPostgresMapBroker_KeyMode(t *testing.T) {
 	require.Equal(t, uint64(1), res1.Position.Offset)
 
 	// Second publish with KeyModeIfNew should be suppressed
-	res2, err := engine.Publish(ctx, channel, "slot1", MapPublishOptions{
+	res2, err := broker.Publish(ctx, channel, "slot1", MapPublishOptions{
 		Data:       []byte("player2"),
 		KeyMode:    KeyModeIfNew,
 		StreamSize: 100,
@@ -410,7 +410,7 @@ func TestPostgresMapBroker_KeyMode(t *testing.T) {
 	require.Equal(t, SuppressReasonKeyExists, res2.SuppressReason)
 
 	// Verify state still has original data
-	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
@@ -419,7 +419,7 @@ func TestPostgresMapBroker_KeyMode(t *testing.T) {
 	require.Equal(t, []byte("player1"), entries[0].Data)
 
 	// KeyModeIfExists should be suppressed for non-existent key
-	res3, err := engine.Publish(ctx, channel, "nonexistent", MapPublishOptions{
+	res3, err := broker.Publish(ctx, channel, "nonexistent", MapPublishOptions{
 		Data:       []byte("data"),
 		KeyMode:    KeyModeIfExists,
 		StreamSize: 100,
@@ -431,7 +431,7 @@ func TestPostgresMapBroker_KeyMode(t *testing.T) {
 	require.Equal(t, SuppressReasonKeyNotFound, res3.SuppressReason)
 
 	// KeyModeIfExists should succeed for existing key
-	res4, err := engine.Publish(ctx, channel, "slot1", MapPublishOptions{
+	res4, err := broker.Publish(ctx, channel, "slot1", MapPublishOptions{
 		Data:       []byte("updated"),
 		KeyMode:    KeyModeIfExists,
 		StreamSize: 100,
@@ -445,13 +445,13 @@ func TestPostgresMapBroker_KeyMode(t *testing.T) {
 // TestPostgresMapBroker_CAS tests Compare-And-Swap operations.
 func TestPostgresMapBroker_CAS(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapBroker(t, node)
+	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_cas"
 
 	// Initial publish
-	res1, err := engine.Publish(ctx, channel, "item1", MapPublishOptions{
+	res1, err := broker.Publish(ctx, channel, "item1", MapPublishOptions{
 		Data:       []byte(`{"stock": 10}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -460,7 +460,7 @@ func TestPostgresMapBroker_CAS(t *testing.T) {
 	require.False(t, res1.Suppressed)
 
 	// Read current state
-	entries, pos, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+	entries, pos, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Key: "item1",
 	})
 	require.NoError(t, err)
@@ -468,7 +468,7 @@ func TestPostgresMapBroker_CAS(t *testing.T) {
 
 	// CAS update with correct position
 	expectedPos := StreamPosition{Offset: entries[0].Offset, Epoch: pos.Epoch}
-	res2, err := engine.Publish(ctx, channel, "item1", MapPublishOptions{
+	res2, err := broker.Publish(ctx, channel, "item1", MapPublishOptions{
 		Data:             []byte(`{"stock": 9}`),
 		ExpectedPosition: &expectedPos,
 		StreamSize:       100,
@@ -478,7 +478,7 @@ func TestPostgresMapBroker_CAS(t *testing.T) {
 	require.False(t, res2.Suppressed)
 
 	// CAS update with stale position should fail
-	res3, err := engine.Publish(ctx, channel, "item1", MapPublishOptions{
+	res3, err := broker.Publish(ctx, channel, "item1", MapPublishOptions{
 		Data:             []byte(`{"stock": 8}`),
 		ExpectedPosition: &expectedPos, // Using old position
 		StreamSize:       100,
@@ -498,13 +498,13 @@ func TestPostgresMapBroker_KeyTTL(t *testing.T) {
 	}
 
 	node, _ := New(Config{})
-	engine := newTestPostgresMapBroker(t, node)
+	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_key_ttl"
 
 	// Publish with short TTL
-	_, err := engine.Publish(ctx, channel, "ephemeral", MapPublishOptions{
+	_, err := broker.Publish(ctx, channel, "ephemeral", MapPublishOptions{
 		Data:       []byte("temporary"),
 		KeyTTL:     2 * time.Second,
 		StreamSize: 100,
@@ -513,7 +513,7 @@ func TestPostgresMapBroker_KeyTTL(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify key exists
-	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Key: "ephemeral",
 	})
 	require.NoError(t, err)
@@ -523,10 +523,10 @@ func TestPostgresMapBroker_KeyTTL(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	// Trigger TTL check
-	engine.expireKeys(ctx)
+	broker.expireKeys(ctx)
 
 	// Key should be gone
-	entries, _, _, err = engine.ReadState(ctx, channel, MapReadStateOptions{
+	entries, _, _, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Key: "ephemeral",
 	})
 	require.NoError(t, err)
@@ -536,13 +536,13 @@ func TestPostgresMapBroker_KeyTTL(t *testing.T) {
 // TestPostgresMapBroker_Version tests version-based ordering.
 func TestPostgresMapBroker_Version(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapBroker(t, node)
+	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_version"
 
 	// Publish with version 2
-	res1, err := engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	res1, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte("data_v2"),
 		Version:    2,
 		StreamSize: 100,
@@ -552,7 +552,7 @@ func TestPostgresMapBroker_Version(t *testing.T) {
 	require.False(t, res1.Suppressed)
 
 	// Try to publish older version (should be suppressed)
-	res2, err := engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	res2, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte("data_v1"),
 		Version:    1,
 		StreamSize: 100,
@@ -563,7 +563,7 @@ func TestPostgresMapBroker_Version(t *testing.T) {
 	require.Equal(t, SuppressReasonVersion, res2.SuppressReason)
 
 	// Publish newer version
-	res3, err := engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	res3, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte("data_v3"),
 		Version:    3,
 		StreamSize: 100,
@@ -573,7 +573,7 @@ func TestPostgresMapBroker_Version(t *testing.T) {
 	require.False(t, res3.Suppressed)
 
 	// Verify state has v3 data
-	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Key: "key1",
 	})
 	require.NoError(t, err)
@@ -583,20 +583,20 @@ func TestPostgresMapBroker_Version(t *testing.T) {
 // TestPostgresMapBroker_Remove tests removing keys.
 func TestPostgresMapBroker_Remove(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapBroker(t, node)
+	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_unpublish"
 
 	// Publish some keys
-	_, err := engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte("data1"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "key2", MapPublishOptions{
+	_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{
 		Data:       []byte("data2"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -604,14 +604,14 @@ func TestPostgresMapBroker_Remove(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify state has 2 keys
-	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 
 	// Remove key1
-	res, err := engine.Remove(ctx, channel, "key1", MapRemoveOptions{
+	res, err := broker.Remove(ctx, channel, "key1", MapRemoveOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 	})
@@ -619,7 +619,7 @@ func TestPostgresMapBroker_Remove(t *testing.T) {
 	require.False(t, res.Suppressed)
 
 	// Verify state has 1 key
-	entries, _, _, err = engine.ReadState(ctx, channel, MapReadStateOptions{
+	entries, _, _, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -627,7 +627,7 @@ func TestPostgresMapBroker_Remove(t *testing.T) {
 	require.Equal(t, "key2", entries[0].Key)
 
 	// Remove non-existent key should be suppressed
-	res, err = engine.Remove(ctx, channel, "nonexistent", MapRemoveOptions{
+	res, err = broker.Remove(ctx, channel, "nonexistent", MapRemoveOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 	})
@@ -636,7 +636,7 @@ func TestPostgresMapBroker_Remove(t *testing.T) {
 	require.Equal(t, SuppressReasonKeyNotFound, res.SuppressReason)
 
 	// Verify stream has removal event
-	pubs, _, err := engine.ReadStream(ctx, channel, MapReadStreamOptions{
+	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit: -1,
 		},
@@ -650,19 +650,19 @@ func TestPostgresMapBroker_Remove(t *testing.T) {
 // TestPostgresMapBroker_Stats tests state statistics.
 func TestPostgresMapBroker_Stats(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapBroker(t, node)
+	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_stats"
 
 	// Initially empty
-	stats, err := engine.Stats(ctx, channel)
+	stats, err := broker.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 0, stats.NumKeys)
 
 	// Publish some keys
 	for i := 0; i < 5; i++ {
-		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
 			Data:       []byte(fmt.Sprintf("data%d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -671,7 +671,7 @@ func TestPostgresMapBroker_Stats(t *testing.T) {
 	}
 
 	// Should have 5 keys
-	stats, err = engine.Stats(ctx, channel)
+	stats, err = broker.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 5, stats.NumKeys)
 }
@@ -679,13 +679,13 @@ func TestPostgresMapBroker_Stats(t *testing.T) {
 // TestPostgresMapBroker_EpochMismatch tests epoch validation.
 func TestPostgresMapBroker_EpochMismatch(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapBroker(t, node)
+	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_epoch_mismatch"
 
 	// Client tries to read with old epoch (channel doesn't exist yet)
-	_, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+	_, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Revision: &StreamPosition{
 			Epoch:  "old_epoch",
 			Offset: 100,
@@ -695,7 +695,7 @@ func TestPostgresMapBroker_EpochMismatch(t *testing.T) {
 	require.ErrorIs(t, err, ErrorUnrecoverablePosition)
 
 	// Create channel
-	_, err = engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	_, err = broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte("data1"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -703,14 +703,14 @@ func TestPostgresMapBroker_EpochMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read actual epoch
-	_, pos, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+	_, pos, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, pos.Epoch)
 
 	// Read with wrong epoch should fail
-	_, _, _, err = engine.ReadState(ctx, channel, MapReadStateOptions{
+	_, _, _, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Revision: &StreamPosition{
 			Epoch:  "wrong_epoch",
 			Offset: 1,
@@ -720,7 +720,7 @@ func TestPostgresMapBroker_EpochMismatch(t *testing.T) {
 	require.ErrorIs(t, err, ErrorUnrecoverablePosition)
 
 	// Read with correct epoch should succeed
-	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Revision: &pos,
 		Limit:    100,
 	})
@@ -737,8 +737,8 @@ func TestPostgresMapBroker_WALReader(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
-	// Create PostgreSQL map engine with WAL mode (single-node, local delivery)
-	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+	// Create PostgreSQL map broker with WAL mode (single-node, local delivery)
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		WAL: WALConfig{
 			Enabled:           true,
@@ -750,15 +750,15 @@ func TestPostgresMapBroker_WALReader(t *testing.T) {
 	require.NoError(t, err)
 
 	// Clean up tables before test
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'test_wal_%'")
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'test_wal_%'")
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'test_wal_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'test_wal_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'test_wal_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'test_wal_%'")
 
 	// Use unique channel name to avoid interference from other tests
 	channel := fmt.Sprintf("test_wal_channel_%d", time.Now().UnixNano())
 
 	t.Cleanup(func() {
-		_ = engine.Close(context.Background())
+		_ = broker.Close(context.Background())
 		_ = node.Shutdown(context.Background())
 	})
 
@@ -768,7 +768,7 @@ func TestPostgresMapBroker_WALReader(t *testing.T) {
 	receivedCh := make(chan struct{}, 10)
 
 	// Register event handler to capture publications
-	err = engine.RegisterEventHandler(&testBrokerEventHandler{
+	err = broker.RegisterEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			if ch != channel {
 				return nil
@@ -787,13 +787,13 @@ func TestPostgresMapBroker_WALReader(t *testing.T) {
 
 	// Wait for WAL reader to claim at least one shard
 	require.Eventually(t, func() bool {
-		return len(engine.ClaimedShards()) > 0
+		return len(broker.ClaimedShards()) > 0
 	}, 10*time.Second, 100*time.Millisecond, "WAL reader should claim at least one shard")
 
 	// Publish via another connection (simulating external publish)
 	// This will go through the WAL reader -> broker -> event handler
 	// p_skip_outbox = true since we're testing WAL mode
-	directPool := engine.pool
+	directPool := broker.pool
 	_, err = directPool.Exec(ctx, `
 		SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, true, 16)
 	`, channel, "key1", []byte("data1"))
@@ -857,7 +857,7 @@ func TestPostgresMapBroker_WALReaderOrdering(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
-	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		WAL: WALConfig{
 			Enabled:           true,
@@ -872,7 +872,7 @@ func TestPostgresMapBroker_WALReaderOrdering(t *testing.T) {
 	channel := fmt.Sprintf("test_wal_order_%d", time.Now().UnixNano())
 
 	t.Cleanup(func() {
-		_ = engine.Close(context.Background())
+		_ = broker.Close(context.Background())
 		_ = node.Shutdown(context.Background())
 	})
 
@@ -882,7 +882,7 @@ func TestPostgresMapBroker_WALReaderOrdering(t *testing.T) {
 
 	const numMessages = 10
 
-	err = engine.RegisterEventHandler(&testBrokerEventHandler{
+	err = broker.RegisterEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			// Only count messages for our specific channel
 			if ch != channel {
@@ -904,12 +904,12 @@ func TestPostgresMapBroker_WALReaderOrdering(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		return len(engine.ClaimedShards()) > 0
+		return len(broker.ClaimedShards()) > 0
 	}, 10*time.Second, 100*time.Millisecond)
 
 	// Publish multiple messages in sequence (p_skip_outbox = true for WAL mode)
 	for i := 0; i < numMessages; i++ {
-		_, err = engine.pool.Exec(ctx, `
+		_, err = broker.pool.Exec(ctx, `
 			SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, true, 16)
 		`, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)))
 		require.NoError(t, err)
@@ -943,7 +943,7 @@ func TestPostgresMapBroker_WALReaderMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
-	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		WAL: WALConfig{
 			Enabled:           true,
@@ -958,7 +958,7 @@ func TestPostgresMapBroker_WALReaderMetadata(t *testing.T) {
 	channel := fmt.Sprintf("test_wal_meta_%d", time.Now().UnixNano())
 
 	t.Cleanup(func() {
-		_ = engine.Close(context.Background())
+		_ = broker.Close(context.Background())
 		_ = node.Shutdown(context.Background())
 	})
 
@@ -966,7 +966,7 @@ func TestPostgresMapBroker_WALReaderMetadata(t *testing.T) {
 	var receivedMu sync.Mutex
 	receivedCh := make(chan struct{}, 1)
 
-	err = engine.RegisterEventHandler(&testBrokerEventHandler{
+	err = broker.RegisterEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			// Only count messages for our specific channel
 			if ch != channel {
@@ -985,13 +985,13 @@ func TestPostgresMapBroker_WALReaderMetadata(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		return len(engine.ClaimedShards()) > 0
+		return len(broker.ClaimedShards()) > 0
 	}, 10*time.Second, 100*time.Millisecond)
 
 	// Publish with tags and score via SQL (p_skip_outbox = true for WAL mode)
 	// cf_map_publish params: channel, key, data, tags, client_id, user_id, conn_info, chan_info,
 	//   subscribed_at, key_mode, key_ttl, stream_ttl, stream_size, meta_ttl, expected_offset, score, ...
-	_, err = engine.pool.Exec(ctx, `
+	_, err = broker.pool.Exec(ctx, `
 		SELECT * FROM cf_map_publish(
 			$1, $2, $3,
 			'{"env": "test", "type": "metadata"}'::jsonb,
@@ -1024,7 +1024,7 @@ func TestPostgresMapBroker_WALReaderMetadata(t *testing.T) {
 // TestPostgresMapBroker_ConcurrentPublishOrdering tests that concurrent publishes maintain per-channel ordering.
 func TestPostgresMapBroker_ConcurrentPublishOrdering(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestPostgresMapBroker(t, node)
+	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
 	channel := "test_concurrent_order"
@@ -1042,7 +1042,7 @@ func TestPostgresMapBroker_ConcurrentPublishOrdering(t *testing.T) {
 			for i := 0; i < publishesPerGoroutine; i++ {
 				key := fmt.Sprintf("g%d_k%d", goroutineID, i)
 				data := []byte(fmt.Sprintf("data_%d_%d", goroutineID, i))
-				_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+				_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 					Data:       data,
 					StreamSize: 1000,
 					StreamTTL:  300 * time.Second,
@@ -1055,7 +1055,7 @@ func TestPostgresMapBroker_ConcurrentPublishOrdering(t *testing.T) {
 	wg.Wait()
 
 	// Read stream and verify offsets are sequential with no gaps
-	pubs, pos, err := engine.ReadStream(ctx, channel, MapReadStreamOptions{
+	pubs, pos, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit: -1,
 		},
@@ -1104,7 +1104,7 @@ func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 
 	// Register event handler on broker directly (before node.Run which would override it)
 	// This captures publications from broker
-	err = broker.RegisterEventHandler(&testBrokerEventHandler{
+	err = broker.RegisterBrokerEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			if ch != channel {
 				return nil
@@ -1125,8 +1125,8 @@ func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 	err = broker.Subscribe(channel)
 	require.NoError(t, err)
 
-	// Create PostgreSQL map engine with WAL mode and broker for multi-node delivery
-	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+	// Create PostgreSQL map broker with WAL mode and broker for multi-node delivery
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Broker:     broker,
 		WAL: WALConfig{
@@ -1138,26 +1138,26 @@ func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 	require.NoError(t, err)
 
 	// Clean up tables before test
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'test_wal_broker_%'")
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'test_wal_broker_%'")
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'test_wal_broker_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'test_wal_broker_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'test_wal_broker_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'test_wal_broker_%'")
 
 	t.Cleanup(func() {
-		_ = engine.Close(context.Background())
+		_ = broker.Close(context.Background())
 		_ = node.Shutdown(context.Background())
 	})
 
-	// Register nil handler on engine (not used with broker, but required)
-	err = engine.RegisterEventHandler(nil)
+	// Register nil handler on broker (not used with broker, but required)
+	err = broker.RegisterEventHandler(nil)
 	require.NoError(t, err)
 
 	// Wait for WAL reader to claim at least one shard
 	require.Eventually(t, func() bool {
-		return len(engine.ClaimedShards()) > 0
+		return len(broker.ClaimedShards()) > 0
 	}, 10*time.Second, 100*time.Millisecond, "WAL reader should claim at least one shard")
 
 	// Publish via SQL (simulating external publish, p_skip_outbox = true for WAL mode)
-	_, err = engine.pool.Exec(ctx, `
+	_, err = broker.pool.Exec(ctx, `
 		SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, $4, NULL, NULL, NULL, NULL, NULL, NULL, false, true, 16)
 	`, channel, "test_key", []byte("test_data"), int64(100))
 	require.NoError(t, err)
@@ -1197,8 +1197,8 @@ func TestPostgresMapBroker_OutboxOrdering(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
-	// Create engine with outbox mode (default)
-	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+	// Create broker with outbox mode (default)
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Outbox: OutboxConfig{
 			NumShards:    4,
@@ -1212,10 +1212,10 @@ func TestPostgresMapBroker_OutboxOrdering(t *testing.T) {
 	channel := fmt.Sprintf("test_outbox_order_%d", time.Now().UnixNano())
 
 	// Clean up tables
-	cleanupTestTables(ctx, engine)
+	cleanupTestTables(ctx, broker)
 
 	t.Cleanup(func() {
-		_ = engine.Close(context.Background())
+		_ = broker.Close(context.Background())
 		_ = node.Shutdown(context.Background())
 	})
 
@@ -1225,7 +1225,7 @@ func TestPostgresMapBroker_OutboxOrdering(t *testing.T) {
 
 	const numMessages = 10
 
-	err = engine.RegisterEventHandler(&testBrokerEventHandler{
+	err = broker.RegisterEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			if ch != channel {
 				return nil
@@ -1247,12 +1247,12 @@ func TestPostgresMapBroker_OutboxOrdering(t *testing.T) {
 
 	// Wait for outbox worker to claim at least one shard
 	require.Eventually(t, func() bool {
-		return len(engine.OutboxClaimedShards()) > 0
+		return len(broker.OutboxClaimedShards()) > 0
 	}, 10*time.Second, 100*time.Millisecond, "Outbox worker should claim at least one shard")
 
 	// Publish multiple messages in sequence
 	for i := 0; i < numMessages; i++ {
-		_, err = engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+		_, err = broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
 			Data:      []byte(fmt.Sprintf("data%d", i)),
 			StreamTTL: 300 * time.Second,
 		})
@@ -1290,7 +1290,7 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 	node1, err := New(Config{})
 	require.NoError(t, err)
 
-	engine1, err := NewPostgresMapBroker(node1, PostgresMapBrokerConfig{
+	broker1, err := NewPostgresMapBroker(node1, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Outbox: OutboxConfig{
 			NumShards:    4,
@@ -1299,11 +1299,11 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	cleanupTestTables(ctx, engine1)
+	cleanupTestTables(ctx, broker1)
 
 	// Publish messages directly via SQL (bypassing workers)
 	for i := 0; i < 5; i++ {
-		_, err = engine1.pool.Exec(ctx, `
+		_, err = broker1.pool.Exec(ctx, `
 			SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, 4)
 		`, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)))
 		require.NoError(t, err)
@@ -1311,19 +1311,19 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 
 	// Verify messages are in outbox
 	var count int
-	err = engine1.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1", channel).Scan(&count)
+	err = broker1.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1", channel).Scan(&count)
 	require.NoError(t, err)
 	require.Equal(t, 5, count, "5 messages should be in outbox")
 
-	_ = engine1.Close(ctx)
+	_ = broker1.Close(ctx)
 	_ = node1.Shutdown(ctx)
 
-	// Now start a new engine with workers - they should pick up the pending messages
+	// Now start a new broker with workers - they should pick up the pending messages
 	node2, err := New(Config{})
 	require.NoError(t, err)
 	require.NoError(t, node2.Run())
 
-	engine2, err := NewPostgresMapBroker(node2, PostgresMapBrokerConfig{
+	broker2, err := NewPostgresMapBroker(node2, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Outbox: OutboxConfig{
 			NumShards:    4,
@@ -1333,7 +1333,7 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		_ = engine2.Close(ctx)
+		_ = broker2.Close(ctx)
 		_ = node2.Shutdown(ctx)
 	})
 
@@ -1341,7 +1341,7 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 	var receivedMu sync.Mutex
 	doneCh := make(chan struct{})
 
-	err = engine2.RegisterEventHandler(&testBrokerEventHandler{
+	err = broker2.RegisterEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			if ch != channel {
 				return nil
@@ -1376,7 +1376,7 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 	receivedMu.Unlock()
 
 	// Verify outbox is empty
-	err = engine2.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1", channel).Scan(&count)
+	err = broker2.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1", channel).Scan(&count)
 	require.NoError(t, err)
 	require.Equal(t, 0, count, "outbox should be empty after processing")
 }
@@ -1390,8 +1390,8 @@ func TestPostgresMapBroker_OutboxMarkProcessed(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
-	// Create engine with mark-processed mode
-	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+	// Create broker with mark-processed mode
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Outbox: OutboxConfig{
 			NumShards:     4,
@@ -1403,10 +1403,10 @@ func TestPostgresMapBroker_OutboxMarkProcessed(t *testing.T) {
 	require.NoError(t, err)
 
 	channel := fmt.Sprintf("test_outbox_mark_%d", time.Now().UnixNano())
-	cleanupTestTables(ctx, engine)
+	cleanupTestTables(ctx, broker)
 
 	t.Cleanup(func() {
-		_ = engine.Close(context.Background())
+		_ = broker.Close(context.Background())
 		_ = node.Shutdown(context.Background())
 	})
 
@@ -1414,7 +1414,7 @@ func TestPostgresMapBroker_OutboxMarkProcessed(t *testing.T) {
 	var receivedMu sync.Mutex
 	doneCh := make(chan struct{})
 
-	err = engine.RegisterEventHandler(&testBrokerEventHandler{
+	err = broker.RegisterEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			if ch != channel {
 				return nil
@@ -1435,12 +1435,12 @@ func TestPostgresMapBroker_OutboxMarkProcessed(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		return len(engine.OutboxClaimedShards()) > 0
+		return len(broker.OutboxClaimedShards()) > 0
 	}, 10*time.Second, 100*time.Millisecond)
 
 	// Publish messages
 	for i := 0; i < 3; i++ {
-		_, err = engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+		_, err = broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
 			Data:      []byte(fmt.Sprintf("data%d", i)),
 			StreamTTL: 300 * time.Second,
 		})
@@ -1456,9 +1456,9 @@ func TestPostgresMapBroker_OutboxMarkProcessed(t *testing.T) {
 
 	// In mark-processed mode, rows should still exist but have processed_at set
 	var totalCount, processedCount int
-	err = engine.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1", channel).Scan(&totalCount)
+	err = broker.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1", channel).Scan(&totalCount)
 	require.NoError(t, err)
-	err = engine.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1 AND processed_at IS NOT NULL", channel).Scan(&processedCount)
+	err = broker.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1 AND processed_at IS NOT NULL", channel).Scan(&processedCount)
 	require.NoError(t, err)
 
 	require.Equal(t, 3, totalCount, "rows should still exist")
@@ -1474,7 +1474,7 @@ func TestPostgresMapBroker_OutboxConcurrentPublish(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
-	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Outbox: OutboxConfig{
 			NumShards:    4,
@@ -1484,10 +1484,10 @@ func TestPostgresMapBroker_OutboxConcurrentPublish(t *testing.T) {
 	require.NoError(t, err)
 
 	channel := fmt.Sprintf("test_outbox_concurrent_%d", time.Now().UnixNano())
-	cleanupTestTables(ctx, engine)
+	cleanupTestTables(ctx, broker)
 
 	t.Cleanup(func() {
-		_ = engine.Close(context.Background())
+		_ = broker.Close(context.Background())
 		_ = node.Shutdown(context.Background())
 	})
 
@@ -1499,7 +1499,7 @@ func TestPostgresMapBroker_OutboxConcurrentPublish(t *testing.T) {
 	var receivedMu sync.Mutex
 	doneCh := make(chan struct{})
 
-	err = engine.RegisterEventHandler(&testBrokerEventHandler{
+	err = broker.RegisterEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			if ch != channel {
 				return nil
@@ -1520,7 +1520,7 @@ func TestPostgresMapBroker_OutboxConcurrentPublish(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		return len(engine.OutboxClaimedShards()) > 0
+		return len(broker.OutboxClaimedShards()) > 0
 	}, 10*time.Second, 100*time.Millisecond)
 
 	// Concurrent publishes
@@ -1533,7 +1533,7 @@ func TestPostgresMapBroker_OutboxConcurrentPublish(t *testing.T) {
 			for i := 0; i < publishesPerGoroutine; i++ {
 				key := fmt.Sprintf("g%d_k%d", goroutineID, i)
 				data := []byte(fmt.Sprintf("data_%d_%d", goroutineID, i))
-				_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+				_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 					Data:      data,
 					StreamTTL: 300 * time.Second,
 				})
@@ -1598,7 +1598,7 @@ func TestPostgresMapBroker_OutboxWithBroker(t *testing.T) {
 	receivedCh := make(chan struct{}, 10)
 
 	// Register event handler on broker
-	err = broker.RegisterEventHandler(&testBrokerEventHandler{
+	err = broker.RegisterBrokerEventHandler(&testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			if ch != channel {
 				return nil
@@ -1619,8 +1619,8 @@ func TestPostgresMapBroker_OutboxWithBroker(t *testing.T) {
 	err = broker.Subscribe(channel)
 	require.NoError(t, err)
 
-	// Create PostgreSQL map engine with broker for multi-node delivery
-	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+	// Create PostgreSQL map broker with broker for multi-node delivery
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Broker:     broker,
 		Outbox: OutboxConfig{
@@ -1630,22 +1630,22 @@ func TestPostgresMapBroker_OutboxWithBroker(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	cleanupTestTables(ctx, engine)
+	cleanupTestTables(ctx, broker)
 
 	t.Cleanup(func() {
-		_ = engine.Close(context.Background())
+		_ = broker.Close(context.Background())
 		_ = node.Shutdown(context.Background())
 	})
 
-	err = engine.RegisterEventHandler(nil)
+	err = broker.RegisterEventHandler(nil)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		return len(engine.OutboxClaimedShards()) > 0
+		return len(broker.OutboxClaimedShards()) > 0
 	}, 10*time.Second, 100*time.Millisecond, "Outbox worker should claim at least one shard")
 
-	// Publish via engine
-	_, err = engine.Publish(ctx, channel, "test_key", MapPublishOptions{
+	// Publish via broker
+	_, err = broker.Publish(ctx, channel, "test_key", MapPublishOptions{
 		Data:      []byte("test_data"),
 		Score:     100,
 		StreamTTL: 300 * time.Second,

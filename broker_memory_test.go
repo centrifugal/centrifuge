@@ -274,7 +274,7 @@ func TestMemoryBrokerPublishSkipOldVersion(t *testing.T) {
 	require.Equal(t, 2, numPubs)
 }
 
-func TestMemoryEngineSubscribeUnsubscribe(t *testing.T) {
+func TestMemoryBrokerSubscribeUnsubscribe(t *testing.T) {
 	e := testMemoryBroker()
 	defer func() { _ = e.node.Shutdown(context.Background()) }()
 	require.NoError(t, e.Subscribe("channel"))

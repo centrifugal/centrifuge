@@ -126,7 +126,7 @@ type PublishOptions struct {
 	// the returned result is the same as from the previous publication with the same key.
 	IdempotencyKey string
 	// IdempotentResultTTL sets the time of expiration for results of idempotent publications
-	// (publications with idempotency key provided). Memory and Redis engines implement this TTL
+	// (publications with idempotency key provided). Memory and Redis brokers implement this TTL
 	// with second precision, so don't set something less than one second here. By default,
 	// Centrifuge uses 5 minutes as idempotent result TTL.
 	IdempotentResultTTL time.Duration
@@ -149,7 +149,7 @@ type PublishOptions struct {
 	Score int64
 
 	// Offset is the stream offset for map publications. When set, this offset
-	// is used instead of broker-assigned offset (used for map engine fan-out).
+	// is used instead of broker-assigned offset (used for map broker fan-out).
 	Offset uint64
 	// Epoch is the stream epoch for map publications. When set along with Offset,
 	// the broker will include position information in the message for fan-out.

@@ -17,30 +17,30 @@ func setupPostgresMapBrokerBench(b *testing.B) (*PostgresMapBroker, func()) {
 	connString := getPostgresConnString(b)
 
 	node, _ := New(Config{})
-	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 	})
 	if err != nil {
 		b.Fatal(err)
 	}
-	_ = engine.RegisterEventHandler(nil)
+	_ = broker.RegisterEventHandler(nil)
 
 	// Clean up tables
 	ctx := context.Background()
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'bench_%'")
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'bench_%'")
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'bench_%'")
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'bench_%'")
 
-	return engine, func() {
-		_ = engine.Close(context.Background())
+	return broker, func() {
+		_ = broker.Close(context.Background())
 		_ = node.Shutdown(context.Background())
 	}
 }
 
 // BenchmarkPostgresMapBroker_PublishStreamOnly benchmarks publishing to stream.
 func BenchmarkPostgresMapBroker_PublishStreamOnly(b *testing.B) {
-	engine, cleanup := setupPostgresMapBrokerBench(b)
+	broker, cleanup := setupPostgresMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -54,7 +54,7 @@ func BenchmarkPostgresMapBroker_PublishStreamOnly(b *testing.B) {
 		for pb.Next() {
 			i := atomic.AddInt64(&counter, 1)
 			data := []byte(fmt.Sprintf("message_%d", i))
-			_, err := engine.Publish(ctx, channel, "", MapPublishOptions{
+			_, err := broker.Publish(ctx, channel, "", MapPublishOptions{
 				Data:       data,
 				StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
 				StreamTTL:  300 * time.Second,
@@ -68,7 +68,7 @@ func BenchmarkPostgresMapBroker_PublishStreamOnly(b *testing.B) {
 
 // BenchmarkPostgresMapBroker_PublishMapStateSimple benchmarks simple keyed state.
 func BenchmarkPostgresMapBroker_PublishMapStateSimple(b *testing.B) {
-	engine, cleanup := setupPostgresMapBrokerBench(b)
+	broker, cleanup := setupPostgresMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -83,7 +83,7 @@ func BenchmarkPostgresMapBroker_PublishMapStateSimple(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 				Data:       data,
 				StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
 				StreamTTL:  300 * time.Second,
@@ -98,7 +98,7 @@ func BenchmarkPostgresMapBroker_PublishMapStateSimple(b *testing.B) {
 
 // BenchmarkPostgresMapBroker_PublishMapStateOrdered benchmarks ordered keyed state.
 func BenchmarkPostgresMapBroker_PublishMapStateOrdered(b *testing.B) {
-	engine, cleanup := setupPostgresMapBrokerBench(b)
+	broker, cleanup := setupPostgresMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -113,7 +113,7 @@ func BenchmarkPostgresMapBroker_PublishMapStateOrdered(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 				Data:       data,
 				Ordered:    true,
 				Score:      i,
@@ -130,7 +130,7 @@ func BenchmarkPostgresMapBroker_PublishMapStateOrdered(b *testing.B) {
 
 // BenchmarkPostgresMapBroker_PublishCombined benchmarks publishing with stream + state.
 func BenchmarkPostgresMapBroker_PublishCombined(b *testing.B) {
-	engine, cleanup := setupPostgresMapBrokerBench(b)
+	broker, cleanup := setupPostgresMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -145,7 +145,7 @@ func BenchmarkPostgresMapBroker_PublishCombined(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 				Data:       data,
 				StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
 				StreamTTL:  300 * time.Second,
@@ -160,7 +160,7 @@ func BenchmarkPostgresMapBroker_PublishCombined(b *testing.B) {
 
 // BenchmarkPostgresMapBroker_ReadStream benchmarks reading from stream.
 func BenchmarkPostgresMapBroker_ReadStream(b *testing.B) {
-	engine, cleanup := setupPostgresMapBrokerBench(b)
+	broker, cleanup := setupPostgresMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -170,7 +170,7 @@ func BenchmarkPostgresMapBroker_ReadStream(b *testing.B) {
 	var sp StreamPosition
 	for i := 0; i < 1000; i++ {
 		data := []byte(fmt.Sprintf("message_%d", i))
-		res, err := engine.Publish(ctx, channel, "", MapPublishOptions{
+		res, err := broker.Publish(ctx, channel, "", MapPublishOptions{
 			Data:       data,
 			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
 			StreamTTL:  300 * time.Second,
@@ -188,7 +188,7 @@ func BenchmarkPostgresMapBroker_ReadStream(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, err := engine.ReadStream(ctx, channel, MapReadStreamOptions{
+			_, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 				Filter: StreamFilter{
 					Limit: 1000,
 					Since: &sp,
@@ -203,7 +203,7 @@ func BenchmarkPostgresMapBroker_ReadStream(b *testing.B) {
 
 // BenchmarkPostgresMapBroker_ReadStateFull benchmarks reading full unordered state.
 func BenchmarkPostgresMapBroker_ReadStateFull(b *testing.B) {
-	engine, cleanup := setupPostgresMapBrokerBench(b)
+	broker, cleanup := setupPostgresMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -213,7 +213,7 @@ func BenchmarkPostgresMapBroker_ReadStateFull(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       data,
 			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
 			StreamTTL:  300 * time.Second,
@@ -229,7 +229,7 @@ func BenchmarkPostgresMapBroker_ReadStateFull(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+			_, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 				Limit:    0, // Use default of 100
 				StateTTL: 300 * time.Second,
 			})
@@ -242,7 +242,7 @@ func BenchmarkPostgresMapBroker_ReadStateFull(b *testing.B) {
 
 // BenchmarkPostgresMapBroker_ReadStatePaginated benchmarks paginated state reads.
 func BenchmarkPostgresMapBroker_ReadStatePaginated(b *testing.B) {
-	engine, cleanup := setupPostgresMapBrokerBench(b)
+	broker, cleanup := setupPostgresMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -252,7 +252,7 @@ func BenchmarkPostgresMapBroker_ReadStatePaginated(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       data,
 			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
 			StreamTTL:  300 * time.Second,
@@ -268,7 +268,7 @@ func BenchmarkPostgresMapBroker_ReadStatePaginated(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+			_, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 				Cursor:   "0",
 				Limit:    100, // Read 100 at a time
 				StateTTL: 300 * time.Second,
@@ -282,7 +282,7 @@ func BenchmarkPostgresMapBroker_ReadStatePaginated(b *testing.B) {
 
 // BenchmarkPostgresMapBroker_ReadStateOrdered benchmarks reading ordered state.
 func BenchmarkPostgresMapBroker_ReadStateOrdered(b *testing.B) {
-	engine, cleanup := setupPostgresMapBrokerBench(b)
+	broker, cleanup := setupPostgresMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -292,7 +292,7 @@ func BenchmarkPostgresMapBroker_ReadStateOrdered(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       data,
 			Ordered:    true,
 			Score:      int64(i),
@@ -310,7 +310,7 @@ func BenchmarkPostgresMapBroker_ReadStateOrdered(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+			_, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 				Ordered:  true,
 				Limit:    100,
 				StateTTL: 300 * time.Second,
@@ -324,7 +324,7 @@ func BenchmarkPostgresMapBroker_ReadStateOrdered(b *testing.B) {
 
 // BenchmarkPostgresMapBroker_Stats benchmarks reading state statistics.
 func BenchmarkPostgresMapBroker_Stats(b *testing.B) {
-	engine, cleanup := setupPostgresMapBrokerBench(b)
+	broker, cleanup := setupPostgresMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -334,7 +334,7 @@ func BenchmarkPostgresMapBroker_Stats(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       data,
 			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
 			StreamTTL:  300 * time.Second,
@@ -350,7 +350,7 @@ func BenchmarkPostgresMapBroker_Stats(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, err := engine.Stats(ctx, channel)
+			_, err := broker.Stats(ctx, channel)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -360,7 +360,7 @@ func BenchmarkPostgresMapBroker_Stats(b *testing.B) {
 
 // BenchmarkPostgresMapBroker_Remove benchmarks removing keys.
 func BenchmarkPostgresMapBroker_Remove(b *testing.B) {
-	engine, cleanup := setupPostgresMapBrokerBench(b)
+	broker, cleanup := setupPostgresMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -370,7 +370,7 @@ func BenchmarkPostgresMapBroker_Remove(b *testing.B) {
 	for i := 0; i < 10000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       data,
 			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
 			StreamTTL:  300 * time.Second,
@@ -389,7 +389,7 @@ func BenchmarkPostgresMapBroker_Remove(b *testing.B) {
 		for pb.Next() {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
-			_, err := engine.Remove(ctx, channel, key, MapRemoveOptions{
+			_, err := broker.Remove(ctx, channel, key, MapRemoveOptions{
 				StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
 				StreamTTL:  300 * time.Second,
 			})
@@ -402,7 +402,7 @@ func BenchmarkPostgresMapBroker_Remove(b *testing.B) {
 
 // BenchmarkPostgresMapBroker_IdempotentPublish benchmarks idempotent publishing.
 func BenchmarkPostgresMapBroker_IdempotentPublish(b *testing.B) {
-	engine, cleanup := setupPostgresMapBrokerBench(b)
+	broker, cleanup := setupPostgresMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -417,7 +417,7 @@ func BenchmarkPostgresMapBroker_IdempotentPublish(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			data := []byte(fmt.Sprintf("message_%d", i))
 			idempotencyKey := fmt.Sprintf("key_%d", i)
-			_, err := engine.Publish(ctx, channel, "", MapPublishOptions{
+			_, err := broker.Publish(ctx, channel, "", MapPublishOptions{
 				Data:                data,
 				IdempotencyKey:      idempotencyKey,
 				IdempotentResultTTL: 60 * time.Second,
@@ -433,14 +433,14 @@ func BenchmarkPostgresMapBroker_IdempotentPublish(b *testing.B) {
 
 // BenchmarkPostgresMapBroker_CAS benchmarks CAS (Compare-And-Swap) operations.
 func BenchmarkPostgresMapBroker_CAS(b *testing.B) {
-	engine, cleanup := setupPostgresMapBrokerBench(b)
+	broker, cleanup := setupPostgresMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
 	channel := "bench_cas"
 
 	// Create initial key
-	res, err := engine.Publish(ctx, channel, "shared_counter", MapPublishOptions{
+	res, err := broker.Publish(ctx, channel, "shared_counter", MapPublishOptions{
 		Data:       []byte("0"),
 		StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
 		StreamTTL:  300 * time.Second,
@@ -456,7 +456,7 @@ func BenchmarkPostgresMapBroker_CAS(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			// Read current state
-			entries, pos, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+			entries, pos, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 				Key: "shared_counter",
 			})
 			if err != nil || len(entries) == 0 {
@@ -465,7 +465,7 @@ func BenchmarkPostgresMapBroker_CAS(b *testing.B) {
 
 			// Attempt CAS
 			expectedPos := StreamPosition{Offset: entries[0].Offset, Epoch: pos.Epoch}
-			_, _ = engine.Publish(ctx, channel, "shared_counter", MapPublishOptions{
+			_, _ = broker.Publish(ctx, channel, "shared_counter", MapPublishOptions{
 				Data:             []byte("updated"),
 				ExpectedPosition: &expectedPos,
 				//StreamSize:       10000, // This is rather expensive, rely on TTL fits PG better.
@@ -488,7 +488,7 @@ func setupPostgresMapBrokerOutboxBench(b *testing.B) (*PostgresMapBroker, func()
 	node, _ := New(Config{})
 	// Use fewer shards than pool size to leave connections available for Publish calls.
 	// Each outbox worker holds a connection for its advisory lock.
-	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		PoolSize:   32,
 		Outbox: OutboxConfig{
@@ -500,23 +500,23 @@ func setupPostgresMapBrokerOutboxBench(b *testing.B) (*PostgresMapBroker, func()
 	if err != nil {
 		b.Fatal(err)
 	}
-	_ = engine.RegisterEventHandler(nil)
+	_ = broker.RegisterEventHandler(nil)
 
 	// Clean up tables
 	ctx := context.Background()
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'bench_%'")
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'bench_%'")
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'bench_%'")
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'bench_%'")
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_outbox WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_outbox WHERE channel LIKE 'bench_%'")
 
-	return engine, func() {
-		_ = engine.Close(context.Background())
+	return broker, func() {
+		_ = broker.Close(context.Background())
 		_ = node.Shutdown(context.Background())
 	}
 }
 
-// setupPostgresMapBrokerOutboxBenchWithHandler creates engine and registers handler.
+// setupPostgresMapBrokerOutboxBenchWithHandler creates broker and registers handler.
 func setupPostgresMapBrokerOutboxBenchWithHandler(b *testing.B, handler BrokerEventHandler) (*PostgresMapBroker, func()) {
 	b.Helper()
 
@@ -525,7 +525,7 @@ func setupPostgresMapBrokerOutboxBenchWithHandler(b *testing.B, handler BrokerEv
 	node, _ := New(Config{})
 	// Use fewer shards than pool size to leave connections available for Publish calls.
 	// Each outbox worker holds a connection for its advisory lock.
-	engine, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		PoolSize:   32,
 		Outbox: OutboxConfig{
@@ -540,24 +540,24 @@ func setupPostgresMapBrokerOutboxBenchWithHandler(b *testing.B, handler BrokerEv
 
 	// Clean up tables before registering handler (which starts workers)
 	ctx := context.Background()
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'bench_%'")
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'bench_%'")
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'bench_%'")
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'bench_%'")
-	_, _ = engine.pool.Exec(ctx, "DELETE FROM cf_map_outbox WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_outbox WHERE channel LIKE 'bench_%'")
 
 	// Register handler which starts workers
-	_ = engine.RegisterEventHandler(handler)
+	_ = broker.RegisterEventHandler(handler)
 
-	return engine, func() {
-		_ = engine.Close(context.Background())
+	return broker, func() {
+		_ = broker.Close(context.Background())
 		_ = node.Shutdown(context.Background())
 	}
 }
 
 // BenchmarkPostgresMapBroker_OutboxPublish benchmarks publishing with outbox mode.
 func BenchmarkPostgresMapBroker_OutboxPublish(b *testing.B) {
-	engine, cleanup := setupPostgresMapBrokerOutboxBench(b)
+	broker, cleanup := setupPostgresMapBrokerOutboxBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -572,7 +572,7 @@ func BenchmarkPostgresMapBroker_OutboxPublish(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 				Data:       data,
 				StreamSize: -1,
 				StreamTTL:  300 * time.Second,
@@ -594,7 +594,7 @@ func BenchmarkPostgresMapBroker_OutboxThroughput(b *testing.B) {
 	var delivered int64
 	doneCh := make(chan struct{})
 
-	engine, cleanup := setupPostgresMapBrokerOutboxBenchWithHandler(b, &testBrokerEventHandler{
+	broker, cleanup := setupPostgresMapBrokerOutboxBenchWithHandler(b, &testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			if ch != channel {
 				return nil
@@ -614,12 +614,12 @@ func BenchmarkPostgresMapBroker_OutboxThroughput(b *testing.B) {
 	// Wait for at least one outbox worker to claim a shard
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(engine.OutboxClaimedShards()) > 0 {
+		if len(broker.OutboxClaimedShards()) > 0 {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if len(engine.OutboxClaimedShards()) == 0 {
+	if len(broker.OutboxClaimedShards()) == 0 {
 		b.Fatal("no outbox worker claimed any shards")
 	}
 
@@ -630,7 +630,7 @@ func BenchmarkPostgresMapBroker_OutboxThroughput(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       data,
 			StreamSize: -1,
 			StreamTTL:  300 * time.Second,
@@ -659,7 +659,7 @@ func BenchmarkPostgresMapBroker_OutboxLatency(b *testing.B) {
 	publishTimes := make(map[string]time.Time)
 	var mu sync.Mutex
 
-	engine, cleanup := setupPostgresMapBrokerOutboxBenchWithHandler(b, &testBrokerEventHandler{
+	broker, cleanup := setupPostgresMapBrokerOutboxBenchWithHandler(b, &testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			if ch != channel {
 				return nil
@@ -682,12 +682,12 @@ func BenchmarkPostgresMapBroker_OutboxLatency(b *testing.B) {
 	// Wait for at least one outbox worker to claim a shard
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(engine.OutboxClaimedShards()) > 0 {
+		if len(broker.OutboxClaimedShards()) > 0 {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if len(engine.OutboxClaimedShards()) == 0 {
+	if len(broker.OutboxClaimedShards()) == 0 {
 		b.Fatal("no outbox worker claimed any shards")
 	}
 
@@ -702,7 +702,7 @@ func BenchmarkPostgresMapBroker_OutboxLatency(b *testing.B) {
 		publishTimes[key] = time.Now()
 		mu.Unlock()
 
-		_, err := engine.Publish(ctx, channel, key, MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       data,
 			StreamSize: -1,
 			StreamTTL:  300 * time.Second,

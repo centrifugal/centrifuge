@@ -271,7 +271,7 @@ Possible causes:
 | `-redis`    | Redis address for multi-node fan-out | (none)  |
 | `-cache`    | Enable memory cache layer            | `false` |
 
-### PostgreSQL Engine Options
+### PostgreSQL Broker Options
 
 When using `PostgresMapBrokerConfig`:
 

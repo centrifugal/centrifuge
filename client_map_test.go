@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newTestNodeWithMapBroker creates a test node with a memory map engine.
+// newTestNodeWithMapBroker creates a test node with a memory map broker.
 func newTestNodeWithMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
 	node, err := New(Config{
 		LogLevel:   LogLevelTrace,
@@ -17,12 +17,12 @@ func newTestNodeWithMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
 	})
 	require.NoError(t, err)
 
-	engine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	broker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = engine.RegisterEventHandler(nil)
+	err = broker.RegisterEventHandler(nil)
 	require.NoError(t, err)
 
-	node.SetMapBroker(engine)
+	node.SetMapBroker(broker)
 
 	err = node.Run()
 	require.NoError(t, err)
@@ -31,7 +31,7 @@ func newTestNodeWithMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
 		_ = node.Shutdown(context.Background())
 	})
 
-	return node, engine
+	return node, broker
 }
 
 // subscribeMapClient performs a keyed subscribe request and returns the result.
@@ -63,13 +63,13 @@ func subscribeMapClientExpectError(t testing.TB, client *Client, req *protocol.S
 }
 
 func TestMapSubscribe_StatePhase(t *testing.T) {
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_keyed"
 	ctx := context.Background()
 
 	// Pre-populate some keyed data. Must use valid JSON for data since test uses JSON transport.
-	_, err := engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte(`{"value":"data1"}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -77,7 +77,7 @@ func TestMapSubscribe_StatePhase(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "key2", MapPublishOptions{
+	_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{
 		Data:       []byte(`{"value":"data2"}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -119,14 +119,14 @@ func TestMapSubscribe_StatePhase(t *testing.T) {
 }
 
 func TestMapSubscribe_StatePagination(t *testing.T) {
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_map_pagination"
 	ctx := context.Background()
 
 	// Pre-populate keyed data.
 	for i := 0; i < 10; i++ {
-		_, err := engine.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
 			Data:       []byte(`{"v":"data"}`),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -179,7 +179,7 @@ func TestMapSubscribe_StatePagination(t *testing.T) {
 }
 
 func TestMapSubscribe_StreamPhase(t *testing.T) {
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_stream"
 	ctx := context.Background()
@@ -188,7 +188,7 @@ func TestMapSubscribe_StreamPhase(t *testing.T) {
 	var lastOffset uint64
 	var epoch string
 	for i := 0; i < 5; i++ {
-		res, err := engine.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+		res, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
 			Data:       []byte(`{"v":"data"}`),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -239,13 +239,13 @@ func TestMapSubscribe_StreamPhase(t *testing.T) {
 }
 
 func TestMapSubscribe_LivePhase(t *testing.T) {
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_live"
 	ctx := context.Background()
 
 	// Pre-populate some data.
-	res, err := engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	res, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte(`{"v":"data1"}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -294,13 +294,13 @@ func TestMapSubscribe_LivePhase(t *testing.T) {
 }
 
 func TestMapSubscribe_DirectLive(t *testing.T) {
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_direct_live"
 	ctx := context.Background()
 
 	// Pre-populate some data.
-	_, err := engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte(`{"v":"data1"}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -334,14 +334,14 @@ func TestMapSubscribe_DirectLive(t *testing.T) {
 }
 
 func TestMapSubscribe_FullTwoPhase(t *testing.T) {
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_two_phase"
 	ctx := context.Background()
 
 	// Pre-populate data.
 	for i := 0; i < 5; i++ {
-		_, err := engine.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
 			Data:       []byte(`{"v":"data"}`),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -454,13 +454,13 @@ func TestMapSubscribe_AlreadySubscribed(t *testing.T) {
 }
 
 func TestMapSubscribe_WithPresence(t *testing.T) {
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_with_presence"
 	ctx := context.Background()
 
 	// Pre-populate data.
-	_, err := engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte(`{"v":"data1"}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -490,7 +490,7 @@ func TestMapSubscribe_WithPresence(t *testing.T) {
 
 	// Verify presence was added to $clients:{channel}.
 	clientsChannel := "$clients:" + channel
-	entries, _, _, err := engine.ReadState(ctx, clientsChannel, MapReadStateOptions{
+	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -505,7 +505,7 @@ func TestMapSubscribe_WithPresence(t *testing.T) {
 }
 
 func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_presence_cleanup"
 	ctx := context.Background()
@@ -532,7 +532,7 @@ func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 
 	// Verify presence exists in :clients channel.
 	clientsChannel := "$clients:" + channel
-	entries, _, _, err := engine.ReadState(ctx, clientsChannel, MapReadStateOptions{
+	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -542,7 +542,7 @@ func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 	client.Unsubscribe(channel)
 
 	// Verify presence was removed.
-	entries, _, _, err = engine.ReadState(ctx, clientsChannel, MapReadStateOptions{
+	entries, _, _, err = broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -550,7 +550,7 @@ func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 }
 
 func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_presence_disconnect"
 	ctx := context.Background()
@@ -577,7 +577,7 @@ func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 
 	// Verify presence exists in :clients channel.
 	clientsChannel := "$clients:" + channel
-	entries, _, _, err := engine.ReadState(ctx, clientsChannel, MapReadStateOptions{
+	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -588,7 +588,7 @@ func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify presence was removed.
-	entries, _, _, err = engine.ReadState(ctx, clientsChannel, MapReadStateOptions{
+	entries, _, _, err = broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -596,7 +596,7 @@ func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 }
 
 func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_cleanup_on_unsub"
 	ctx := context.Background()
@@ -623,7 +623,7 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 	})
 
 	// Publish a key with key=clientID (simulating cursor/ephemeral state).
-	_, err := engine.Publish(ctx, channel, clientID, MapPublishOptions{
+	_, err := broker.Publish(ctx, channel, clientID, MapPublishOptions{
 
 		Data:       []byte(`{"x":100,"y":200}`),
 		StreamSize: 1000,
@@ -632,7 +632,7 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify key exists.
-	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -643,7 +643,7 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 	client.Unsubscribe(channel)
 
 	// Verify key was removed.
-	entries, _, _, err = engine.ReadState(ctx, channel, MapReadStateOptions{
+	entries, _, _, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -651,7 +651,7 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 }
 
 func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_cleanup_on_disconnect"
 	ctx := context.Background()
@@ -678,7 +678,7 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 	})
 
 	// Publish a key with key=clientID.
-	_, err := engine.Publish(ctx, channel, clientID, MapPublishOptions{
+	_, err := broker.Publish(ctx, channel, clientID, MapPublishOptions{
 
 		Data:       []byte(`{"x":100,"y":200}`),
 		StreamSize: 1000,
@@ -687,7 +687,7 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify key exists.
-	entries, _, _, err := engine.ReadState(ctx, channel, MapReadStateOptions{
+	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -698,7 +698,7 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify key was removed.
-	entries, _, _, err = engine.ReadState(ctx, channel, MapReadStateOptions{
+	entries, _, _, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -706,20 +706,20 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 }
 
 func TestPresenceSubscribe_State(t *testing.T) {
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	ctx := context.Background()
 
 	// Pre-populate presence data using prefix-based channel naming.
 	// With prefix "$clients:", the presence channel for "test_presence_sub" is "$clients:test_presence_sub".
 	presenceChannel := "$clients:test_presence_sub"
-	_, err := engine.Publish(ctx, presenceChannel, "client1", MapPublishOptions{
+	_, err := broker.Publish(ctx, presenceChannel, "client1", MapPublishOptions{
 		ClientInfo: &ClientInfo{ClientID: "client1", UserID: "user1"},
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, presenceChannel, "client2", MapPublishOptions{
+	_, err = broker.Publish(ctx, presenceChannel, "client2", MapPublishOptions{
 		ClientInfo: &ClientInfo{ClientID: "client2", UserID: "user2"},
 		KeyTTL:     300 * time.Second,
 	})
@@ -750,13 +750,13 @@ func TestPresenceSubscribe_State(t *testing.T) {
 }
 
 func TestPresenceSubscribe_Live(t *testing.T) {
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	ctx := context.Background()
 
 	// Pre-populate presence data using prefix-based channel naming.
 	presenceChannel := "$clients:test_presence_live"
-	_, err := engine.Publish(ctx, presenceChannel, "client1", MapPublishOptions{
+	_, err := broker.Publish(ctx, presenceChannel, "client1", MapPublishOptions{
 		ClientInfo: &ClientInfo{ClientID: "client1", UserID: "user1"},
 		KeyTTL:     300 * time.Second,
 	})
@@ -899,7 +899,7 @@ func TestMapPresenceTTL(t *testing.T) {
 }
 
 func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_map_presence"
 	ctx := context.Background()
@@ -927,7 +927,7 @@ func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
 
 	// Verify :clients presence was added (key=clientId, full info).
 	clientsChannel := "$clients:" + channel
-	entries, _, _, err := engine.ReadState(ctx, clientsChannel, MapReadStateOptions{
+	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -939,7 +939,7 @@ func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
 
 	// Verify :users presence was added (key=userId, no info).
 	usersChannel := "$users:" + channel
-	entries, _, _, err = engine.ReadState(ctx, usersChannel, MapReadStateOptions{
+	entries, _, _, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -957,7 +957,7 @@ func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
 }
 
 func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_map_presence_cleanup"
 	ctx := context.Background()
@@ -987,11 +987,11 @@ func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
 	clientsChannel := "$clients:" + channel
 	usersChannel := "$users:" + channel
 
-	entries, _, _, err := engine.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
+	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 
-	entries, _, _, err = engine.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
+	entries, _, _, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 
@@ -1000,18 +1000,18 @@ func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify :clients presence was removed.
-	entries, _, _, err = engine.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
+	entries, _, _, err = broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, entries, 0)
 
 	// Verify :users presence is NOT removed (TTL-based expiration).
-	entries, _, _, err = engine.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
+	entries, _, _, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, entries, 1) // Still there, will expire via TTL.
 }
 
 func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_multi_clients"
 	ctx := context.Background()
@@ -1046,13 +1046,13 @@ func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
 
 	// Verify :clients has two entries (one per connection).
 	clientsChannel := "$clients:" + channel
-	entries, _, _, err := engine.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
+	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 
 	// Verify :users has one entry (deduplicated by userId).
 	usersChannel := "$users:" + channel
-	entries, _, _, err = engine.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
+	entries, _, _, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, "user1", entries[0].Key)
@@ -1062,24 +1062,24 @@ func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
 	require.NoError(t, err)
 
 	// :clients should have one entry.
-	entries, _, _, err = engine.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
+	entries, _, _, err = broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 
 	// :users still has the user (TTL refresh from client2).
-	entries, _, _, err = engine.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
+	entries, _, _, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 }
 
 // TestMapBroker_ReadStateByKey tests the Key filter for ReadState.
 func TestMapBroker_ReadStateByKey(t *testing.T) {
-	_, engine := newTestNodeWithMapBroker(t)
+	_, broker := newTestNodeWithMapBroker(t)
 	ctx := context.Background()
 	ch := "test_read_by_key"
 
 	// Publish 3 keys
-	_, err := engine.Publish(ctx, ch, "key1", MapPublishOptions{
+	_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
 		Data:       []byte(`{"value":"data1"}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -1087,7 +1087,7 @@ func TestMapBroker_ReadStateByKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, ch, "key2", MapPublishOptions{
+	_, err = broker.Publish(ctx, ch, "key2", MapPublishOptions{
 		Data:       []byte(`{"value":"data2"}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -1095,7 +1095,7 @@ func TestMapBroker_ReadStateByKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, ch, "key3", MapPublishOptions{
+	_, err = broker.Publish(ctx, ch, "key3", MapPublishOptions{
 		Data:       []byte(`{"value":"data3"}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -1104,7 +1104,7 @@ func TestMapBroker_ReadStateByKey(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read single key
-	pubs, pos, cursor, err := engine.ReadState(ctx, ch, MapReadStateOptions{
+	pubs, pos, cursor, err := broker.ReadState(ctx, ch, MapReadStateOptions{
 		Key: "key2",
 	})
 	require.NoError(t, err)
@@ -1115,7 +1115,7 @@ func TestMapBroker_ReadStateByKey(t *testing.T) {
 	require.NotEmpty(t, pos.Epoch)
 
 	// Read non-existent key
-	pubs, _, _, err = engine.ReadState(ctx, ch, MapReadStateOptions{
+	pubs, _, _, err = broker.ReadState(ctx, ch, MapReadStateOptions{
 		Key: "nonexistent",
 	})
 	require.NoError(t, err)
@@ -1124,12 +1124,12 @@ func TestMapBroker_ReadStateByKey(t *testing.T) {
 
 // TestMapBroker_CASSuccess tests successful CAS update.
 func TestMapBroker_CASSuccess(t *testing.T) {
-	_, engine := newTestNodeWithMapBroker(t)
+	_, broker := newTestNodeWithMapBroker(t)
 	ctx := context.Background()
 	ch := "test_cas_success"
 
 	// Publish initial value
-	res1, err := engine.Publish(ctx, ch, "counter", MapPublishOptions{
+	res1, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
 		Data:       []byte(`{"value":10}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -1139,13 +1139,13 @@ func TestMapBroker_CASSuccess(t *testing.T) {
 	require.False(t, res1.Suppressed)
 
 	// Read current state - position includes offset AND epoch
-	pubs, pos, _, err := engine.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	pubs, pos, _, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	expectedPos := StreamPosition{Offset: pubs[0].Offset, Epoch: pos.Epoch}
 
 	// CAS update with correct position
-	res2, err := engine.Publish(ctx, ch, "counter", MapPublishOptions{
+	res2, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
 		Data:             []byte(`{"value":15}`),
 		ExpectedPosition: &expectedPos,
 		StreamSize:       100,
@@ -1157,7 +1157,7 @@ func TestMapBroker_CASSuccess(t *testing.T) {
 	require.Greater(t, res2.Position.Offset, res1.Position.Offset)
 
 	// Verify the value was updated
-	pubs, _, _, err = engine.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	pubs, _, _, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	require.Equal(t, []byte(`{"value":15}`), pubs[0].Data)
@@ -1165,12 +1165,12 @@ func TestMapBroker_CASSuccess(t *testing.T) {
 
 // TestMapBroker_CASConflict tests CAS conflict when position has changed.
 func TestMapBroker_CASConflict(t *testing.T) {
-	_, engine := newTestNodeWithMapBroker(t)
+	_, broker := newTestNodeWithMapBroker(t)
 	ctx := context.Background()
 	ch := "test_cas_conflict"
 
 	// Publish initial value
-	_, err := engine.Publish(ctx, ch, "counter", MapPublishOptions{
+	_, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
 		Data:       []byte(`{"value":10}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -1179,13 +1179,13 @@ func TestMapBroker_CASConflict(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read current state
-	pubs, pos, _, err := engine.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	pubs, pos, _, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	originalPos := StreamPosition{Offset: pubs[0].Offset, Epoch: pos.Epoch}
 
 	// Another client updates the key (simulated)
-	_, err = engine.Publish(ctx, ch, "counter", MapPublishOptions{
+	_, err = broker.Publish(ctx, ch, "counter", MapPublishOptions{
 		Data:       []byte(`{"value":12}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -1194,7 +1194,7 @@ func TestMapBroker_CASConflict(t *testing.T) {
 	require.NoError(t, err)
 
 	// CAS with stale position - should fail
-	res, err := engine.Publish(ctx, ch, "counter", MapPublishOptions{
+	res, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
 		Data:             []byte(`{"value":15}`),
 		ExpectedPosition: &originalPos, // stale offset!
 		StreamSize:       100,
@@ -1211,7 +1211,7 @@ func TestMapBroker_CASConflict(t *testing.T) {
 
 	// Immediate retry using returned position - should succeed
 	retryPos := StreamPosition{Offset: res.CurrentPublication.Offset, Epoch: res.Position.Epoch}
-	res2, err := engine.Publish(ctx, ch, "counter", MapPublishOptions{
+	res2, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
 		Data:             []byte(`{"value":15}`),
 		ExpectedPosition: &retryPos,
 		StreamSize:       100,
@@ -1222,7 +1222,7 @@ func TestMapBroker_CASConflict(t *testing.T) {
 	require.False(t, res2.Suppressed)
 
 	// Verify the value was updated
-	pubs, _, _, err = engine.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	pubs, _, _, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	require.Equal(t, []byte(`{"value":15}`), pubs[0].Data)
@@ -1230,12 +1230,12 @@ func TestMapBroker_CASConflict(t *testing.T) {
 
 // TestMapBroker_CASNonExistent tests CAS on a key that doesn't exist.
 func TestMapBroker_CASNonExistent(t *testing.T) {
-	_, engine := newTestNodeWithMapBroker(t)
+	_, broker := newTestNodeWithMapBroker(t)
 	ctx := context.Background()
 	ch := "test_cas_nonexistent"
 
 	// First create the channel by publishing something
-	_, err := engine.Publish(ctx, ch, "other_key", MapPublishOptions{
+	_, err := broker.Publish(ctx, ch, "other_key", MapPublishOptions{
 		Data:       []byte(`{"value":1}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -1244,12 +1244,12 @@ func TestMapBroker_CASNonExistent(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get the epoch
-	_, pos, _, err := engine.ReadState(ctx, ch, MapReadStateOptions{Limit: 1})
+	_, pos, _, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 1})
 	require.NoError(t, err)
 
 	// Try CAS on non-existent key with expected position
 	expectedPos := StreamPosition{Offset: 42, Epoch: pos.Epoch}
-	res, err := engine.Publish(ctx, ch, "newkey", MapPublishOptions{
+	res, err := broker.Publish(ctx, ch, "newkey", MapPublishOptions{
 		Data:             []byte(`{"value":1}`),
 		ExpectedPosition: &expectedPos, // expects key to exist
 		StreamSize:       100,
@@ -1263,12 +1263,12 @@ func TestMapBroker_CASNonExistent(t *testing.T) {
 
 // TestMapBroker_CASWrongEpoch tests CAS with correct offset but wrong epoch.
 func TestMapBroker_CASWrongEpoch(t *testing.T) {
-	_, engine := newTestNodeWithMapBroker(t)
+	_, broker := newTestNodeWithMapBroker(t)
 	ctx := context.Background()
 	ch := "test_cas_wrong_epoch"
 
 	// Publish initial value
-	_, err := engine.Publish(ctx, ch, "counter", MapPublishOptions{
+	_, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
 		Data:       []byte(`{"value":10}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -1277,14 +1277,14 @@ func TestMapBroker_CASWrongEpoch(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read current state
-	pubs, _, _, err := engine.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	pubs, _, _, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 
 	// Use correct offset but wrong epoch
 	wrongPos := StreamPosition{Offset: pubs[0].Offset, Epoch: "wrong-epoch"}
 
-	res, err := engine.Publish(ctx, ch, "counter", MapPublishOptions{
+	res, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
 		Data:             []byte(`{"value":15}`),
 		ExpectedPosition: &wrongPos,
 		StreamSize:       100,
@@ -1300,7 +1300,7 @@ func TestMapBroker_CASWrongEpoch(t *testing.T) {
 	require.Equal(t, []byte(`{"value":10}`), res.CurrentPublication.Data)
 
 	// Verify value unchanged
-	pubs, _, _, err = engine.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	pubs, _, _, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	require.Equal(t, []byte(`{"value":10}`), pubs[0].Data)
@@ -1309,12 +1309,12 @@ func TestMapBroker_CASWrongEpoch(t *testing.T) {
 // TestMapBroker_StreamDataDifferentPayloads tests publishing with different
 // data for state (full state) and stream (incremental update).
 func TestMapBroker_StreamDataDifferentPayloads(t *testing.T) {
-	_, engine := newTestNodeWithMapBroker(t)
+	_, broker := newTestNodeWithMapBroker(t)
 	ctx := context.Background()
 	ch := "test_stream_data"
 
 	// Publish with different payloads: state gets full state, stream gets delta
-	_, err := engine.Publish(ctx, ch, "counter", MapPublishOptions{
+	_, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
 		Data:       []byte(`{"count":100}`), // Full state → state
 		StreamData: []byte(`{"delta":100}`), // Incremental → stream
 		StreamSize: 100,
@@ -1324,13 +1324,13 @@ func TestMapBroker_StreamDataDifferentPayloads(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read state - should have full state
-	pubs, pos, _, err := engine.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	pubs, pos, _, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	require.Equal(t, []byte(`{"count":100}`), pubs[0].Data)
 
 	// Read stream - should have incremental data
-	streamPubs, _, err := engine.ReadStream(ctx, ch, MapReadStreamOptions{
+	streamPubs, _, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: 10},
 	})
 	require.NoError(t, err)
@@ -1339,7 +1339,7 @@ func TestMapBroker_StreamDataDifferentPayloads(t *testing.T) {
 
 	// Update with CAS: read current position, update with different payloads
 	expectedPos := StreamPosition{Offset: pubs[0].Offset, Epoch: pos.Epoch}
-	_, err = engine.Publish(ctx, ch, "counter", MapPublishOptions{
+	_, err = broker.Publish(ctx, ch, "counter", MapPublishOptions{
 		Data:             []byte(`{"count":105}`), // New full state → state
 		StreamData:       []byte(`{"delta":5}`),   // Incremental → stream
 		ExpectedPosition: &expectedPos,
@@ -1350,13 +1350,13 @@ func TestMapBroker_StreamDataDifferentPayloads(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify state has new full state
-	pubs, _, _, err = engine.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	pubs, _, _, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	require.Equal(t, []byte(`{"count":105}`), pubs[0].Data)
 
 	// Verify stream has both incremental updates
-	streamPubs, _, err = engine.ReadStream(ctx, ch, MapReadStreamOptions{
+	streamPubs, _, err = broker.ReadStream(ctx, ch, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: 10},
 	})
 	require.NoError(t, err)
@@ -1368,12 +1368,12 @@ func TestMapBroker_StreamDataDifferentPayloads(t *testing.T) {
 // TestMapBroker_StreamDataWithoutStreamData tests that when StreamData is not set,
 // Data is used for both state and stream.
 func TestMapBroker_StreamDataWithoutStreamData(t *testing.T) {
-	_, engine := newTestNodeWithMapBroker(t)
+	_, broker := newTestNodeWithMapBroker(t)
 	ctx := context.Background()
 	ch := "test_no_stream_data"
 
 	// Publish without StreamData - Data should be used for both
-	_, err := engine.Publish(ctx, ch, "item", MapPublishOptions{
+	_, err := broker.Publish(ctx, ch, "item", MapPublishOptions{
 		Data:       []byte(`{"name":"test","value":42}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -1382,13 +1382,13 @@ func TestMapBroker_StreamDataWithoutStreamData(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read state
-	pubs, _, _, err := engine.ReadState(ctx, ch, MapReadStateOptions{Key: "item"})
+	pubs, _, _, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "item"})
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	require.Equal(t, []byte(`{"name":"test","value":42}`), pubs[0].Data)
 
 	// Read stream - should have same data
-	streamPubs, _, err := engine.ReadStream(ctx, ch, MapReadStreamOptions{
+	streamPubs, _, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: 10},
 	})
 	require.NoError(t, err)
@@ -1408,11 +1408,11 @@ func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	engine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	broker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = engine.RegisterEventHandler(nil)
+	err = broker.RegisterEventHandler(nil)
 	require.NoError(t, err)
-	node.SetMapBroker(engine)
+	node.SetMapBroker(broker)
 
 	err = node.Run()
 	require.NoError(t, err)
@@ -1425,7 +1425,7 @@ func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
 
 	// Pre-populate state with a few entries.
 	for i := 0; i < 3; i++ {
-		_, err := engine.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
 			Data:       []byte(`{"v":"data"}`),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -1479,11 +1479,11 @@ func TestMapSubscribe_StateToLive_WithStreamPublications(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	engine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	broker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = engine.RegisterEventHandler(nil)
+	err = broker.RegisterEventHandler(nil)
 	require.NoError(t, err)
-	node.SetMapBroker(engine)
+	node.SetMapBroker(broker)
 
 	err = node.Run()
 	require.NoError(t, err)
@@ -1495,7 +1495,7 @@ func TestMapSubscribe_StateToLive_WithStreamPublications(t *testing.T) {
 	ctx := context.Background()
 
 	// Pre-populate initial state.
-	_, err = engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	_, err = broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte(`{"v":"initial"}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -1545,11 +1545,11 @@ func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	engine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	broker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = engine.RegisterEventHandler(nil)
+	err = broker.RegisterEventHandler(nil)
 	require.NoError(t, err)
-	node.SetMapBroker(engine)
+	node.SetMapBroker(broker)
 
 	err = node.Run()
 	require.NoError(t, err)
@@ -1562,7 +1562,7 @@ func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
 
 	// Pre-populate 10 entries.
 	for i := 0; i < 10; i++ {
-		_, err := engine.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
 			Data:       []byte(`{"v":"data"}`),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -1620,7 +1620,7 @@ func TestMapSubscribe_StreamPhaseRecovery(t *testing.T) {
 	// Test that a reconnecting client can use phase=1 (STREAM) with recover=true
 	// to catch up from its last known position without going through STATE phase.
 	// This simulates a client reconnection after disconnect.
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_stream_recovery"
 	ctx := context.Background()
@@ -1629,7 +1629,7 @@ func TestMapSubscribe_StreamPhaseRecovery(t *testing.T) {
 	var lastOffset uint64
 	var epoch string
 	for i := 0; i < 5; i++ {
-		res, err := engine.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+		res, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
 			Data:       []byte(`{"v":"data"}`),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -1693,13 +1693,13 @@ func TestMapSubscribe_StreamPhaseRecovery(t *testing.T) {
 func TestMapSubscribe_StreamPhaseRecovery_WithoutRecoverFlag(t *testing.T) {
 	// Test that phase=1 (STREAM) without recover=true and without prior STATE
 	// phase returns permission denied.
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_stream_no_recover"
 	ctx := context.Background()
 
 	// Pre-populate some data.
-	res, err := engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	res, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte(`{"v":"data"}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -1737,7 +1737,7 @@ func TestMapSubscribe_StreamPhaseRecovery_WithoutRecoverFlag(t *testing.T) {
 func TestMapSubscribe_StreamPhaseRecovery_LargeGap(t *testing.T) {
 	// Test stream phase recovery with a larger gap that requires multiple
 	// pagination rounds before going LIVE.
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_stream_recovery_large_gap"
 	ctx := context.Background()
@@ -1746,7 +1746,7 @@ func TestMapSubscribe_StreamPhaseRecovery_LargeGap(t *testing.T) {
 	var lastOffset uint64
 	var epoch string
 	for i := 0; i < 100; i++ {
-		res, err := engine.Publish(ctx, channel, string(rune('a'+(i%26)))+string(rune('0'+(i/26))), MapPublishOptions{
+		res, err := broker.Publish(ctx, channel, string(rune('a'+(i%26)))+string(rune('0'+(i/26))), MapPublishOptions{
 			Data:       []byte(`{"v":"data"}`),
 			StreamSize: 1000,
 			StreamTTL:  300 * time.Second,
@@ -1820,7 +1820,7 @@ func TestMapSubscribe_StreamPhaseRecovery_LargeGap(t *testing.T) {
 func TestMapSubscribe_LivePhaseRecovery(t *testing.T) {
 	// Test that a reconnecting client can use phase=0 (LIVE) with recover=true
 	// to catch up directly without any pagination.
-	node, engine := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_live_recovery"
 	ctx := context.Background()
@@ -1829,7 +1829,7 @@ func TestMapSubscribe_LivePhaseRecovery(t *testing.T) {
 	var lastOffset uint64
 	var epoch string
 	for i := 0; i < 5; i++ {
-		res, err := engine.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+		res, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
 			Data:       []byte(`{"v":"data"}`),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -1890,11 +1890,11 @@ func TestMapSubscribe_StateToLive_Disabled(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	engine, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	broker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	err = engine.RegisterEventHandler(nil)
+	err = broker.RegisterEventHandler(nil)
 	require.NoError(t, err)
-	node.SetMapBroker(engine)
+	node.SetMapBroker(broker)
 
 	err = node.Run()
 	require.NoError(t, err)
@@ -1906,7 +1906,7 @@ func TestMapSubscribe_StateToLive_Disabled(t *testing.T) {
 	ctx := context.Background()
 
 	// Pre-populate state.
-	_, err = engine.Publish(ctx, channel, "key1", MapPublishOptions{
+	_, err = broker.Publish(ctx, channel, "key1", MapPublishOptions{
 		Data:       []byte(`{"v":"data"}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
