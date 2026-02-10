@@ -47,7 +47,7 @@ import (
 //     state recovery. Clients receive a state plus stream catch-up, ensuring they
 //     can always recover the complete current state.
 //
-// When EnableMap is true in SubscribeOptions, the subscription automatically gets:
+// When Type is SubscriptionTypeMap in SubscribeOptions, the subscription automatically gets:
 //   - Stream position tracking (equivalent to EnablePositioning)
 //   - State recovery via state + stream (superior to EnableRecovery)
 //   - Delta compression support for stream catch-up (if negotiated)
@@ -60,7 +60,7 @@ import (
 //
 // Presence is configured using channel prefixes:
 //
-//   - MapClientPresenceChannelPrefix (e.g., "$clients:") - When set, client presence
+//   - MapClientPresenceChannelPrefix (e.g., "clients:") - When set, client presence
 //     is published to {prefix}{channel}. Each entry is keyed by client ID and contains
 //     full ClientInfo. Use for tracking individual connections.
 //
@@ -70,12 +70,13 @@ import (
 //
 // Authorization flow:
 //
-// Presence subscriptions go through OnPresenceSubscribe handler (separate from OnSubscribe)
-// to allow different permission checks. For example, a user might be allowed to subscribe
-// to a chat channel but not see who else is in it.
+// Presence subscriptions go through OnSubscribe handler with SubscribeEvent.Type set
+// to SubscriptionTypeMap (same as map data subscriptions). The handler can use the
+// channel name to distinguish presence channels from data channels.
 //
-// Client subscribes to presence channel -> OnPresenceSubscribe called with base channel
-// -> Handler returns PresenceSubscribeReply{Allowed: true} -> Subscription proceeds
+// Client subscribes to presence channel -> OnSubscribe called with Type=SubscriptionTypeMap
+// -> Handler returns SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}
+// -> Subscription proceeds
 //
 // Presence data lifecycle:
 //
@@ -100,6 +101,81 @@ type mapSubscribeState struct {
 	isPresence          bool             // True if this is a presence subscription
 	subscribingCh       chan struct{}    // Closed when subscription completes (for race handling)
 	tagsFilter          *tagsFilter      // Tags filter for state/stream publications
+}
+
+// handleMapSubscribeCommand handles the full map subscribe command flow:
+// validates, checks for continuation, calls OnSubscribe handler for initial requests.
+func (c *Client) handleMapSubscribeCommand(
+	req *protocol.SubscribeRequest,
+	cmd *protocol.Command,
+	started time.Time,
+	rw *replyWriter,
+) error {
+	if c.eventHub.subscribeHandler == nil {
+		return ErrorNotAvailable
+	}
+
+	replyError, disconnect := c.validateSubscribeRequest(req)
+	if disconnect != nil || replyError != nil {
+		if disconnect != nil {
+			return *disconnect
+		}
+		return replyError
+	}
+
+	// For map subscription continuation requests (pagination or non-state phase with existing state),
+	// bypass the OnSubscribe callback - we already authorized on the first request.
+	c.mu.RLock()
+	state, hasState := c.mapSubscribing[req.Channel]
+	c.mu.RUnlock()
+
+	if req.Cursor != "" {
+		if !hasState {
+			return ErrorPermissionDenied
+		}
+		reply := SubscribeReply{Options: state.options}
+		if handleErr := c.handleMapSubscribe(req, reply, cmd, started, rw); handleErr != nil {
+			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
+		}
+		return nil
+	}
+
+	if req.Phase != MapPhaseState && hasState {
+		reply := SubscribeReply{Options: state.options}
+		if handleErr := c.handleMapSubscribe(req, reply, cmd, started, rw); handleErr != nil {
+			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
+		}
+		return nil
+	}
+
+	event := SubscribeEvent{
+		Channel: req.Channel,
+		Token:   req.Token,
+		Data:    req.Data,
+		Type:    SubscriptionType(req.Type),
+	}
+
+	cb := func(reply SubscribeReply, err error) {
+		if err != nil {
+			c.onSubscribeError(req.Channel)
+			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, err, started, rw)
+			return
+		}
+
+		if reply.Options.Type != event.Type {
+			c.onSubscribeError(req.Channel)
+			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, ErrorBadRequest, started, rw)
+			return
+		}
+
+		if handleErr := c.handleMapSubscribe(req, reply, cmd, started, rw); handleErr != nil {
+			c.onSubscribeError(req.Channel)
+			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
+		}
+	}
+
+	c.eventHub.subscribeHandler(event, cb)
+	return nil
 }
 
 // handleMapSubscribe routes map subscription requests to the appropriate phase handler.
@@ -174,7 +250,7 @@ func (c *Client) handleMapStatePhase(
 		}
 		c.mapSubscribing[channel] = &mapSubscribeState{
 			options:       reply.Options,
-			isPresence:    req.Type >= 2,
+			isPresence:    reply.Options.Type == SubscriptionTypeMapClients || reply.Options.Type == SubscriptionTypeMapUsers,
 			subscribingCh: make(chan struct{}),
 			tagsFilter:    tf,
 		}
@@ -567,7 +643,7 @@ func (c *Client) handleMapStreamPhase(
 		// Client is reconnecting with offset/epoch, skip state phase.
 		state = &mapSubscribeState{
 			options:       reply.Options,
-			isPresence:    req.Type >= 2,
+			isPresence:    reply.Options.Type == SubscriptionTypeMapClients || reply.Options.Type == SubscriptionTypeMapUsers,
 			subscribingCh: make(chan struct{}),
 			epoch:         req.Epoch,
 		}
@@ -1024,7 +1100,7 @@ func (c *Client) handleMapLivePhase(
 	} else {
 		// Direct live subscription (no prior pagination).
 		opts = reply.Options
-		isPresence = req.Type >= 2
+		isPresence = opts.Type == SubscriptionTypeMapClients || opts.Type == SubscriptionTypeMapUsers
 	}
 
 	// Immediate join: Fresh subscription (not recovering) without prior pagination.
@@ -1794,67 +1870,5 @@ func (c *Client) removeMapPresence(channel string, ctx ChannelContext) error {
 		}
 	}
 
-	return nil
-}
-
-// handleMapPresenceSubscribe handles subscriptions to map presence channels.
-// This is called for subscription types 2 (clients) and 3 (users).
-// These subscriptions are handled differently:
-// - Authorization goes through OnPresenceSubscribe instead of OnSubscribe
-// - The channel name should be the full presence channel (e.g., "$clients:games")
-// - Server uses the subscription type to determine handling
-func (c *Client) handleMapPresenceSubscribe(
-	req *protocol.SubscribeRequest,
-	cmd *protocol.Command,
-	started time.Time,
-	rw *replyWriter,
-) error {
-	channel := req.Channel
-
-	// Check if presence subscribe handler is set.
-	if c.eventHub.presenceSubscribeHandler == nil {
-		return ErrorNotAvailable
-	}
-
-	// Validate request.
-	replyError, disconnect := c.validateSubscribeRequest(req)
-	if disconnect != nil || replyError != nil {
-		if disconnect != nil {
-			return *disconnect
-		}
-		return replyError
-	}
-
-	// Build presence subscribe event.
-	event := PresenceSubscribeEvent{
-		Channel: channel,
-		Data:    req.Data,
-	}
-
-	cb := func(reply PresenceSubscribeReply, err error) {
-		if err != nil {
-			c.onSubscribeError(channel)
-			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, err, started, rw)
-			return
-		}
-
-		// Build subscribe options for the presence channel (treated as map subscription).
-		opts := SubscribeOptions{
-			EnableMap: true,
-		}
-
-		subscribeReply := SubscribeReply{
-			Options: opts,
-		}
-
-		// Route to map subscribe handler - presence subscriptions use the same
-		// map subscription flow but with presence flag set.
-		if handleErr := c.handleMapSubscribe(req, subscribeReply, cmd, started, rw); handleErr != nil {
-			c.onSubscribeError(channel)
-			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
-		}
-	}
-
-	c.eventHub.presenceSubscribeHandler(event, cb)
 	return nil
 }

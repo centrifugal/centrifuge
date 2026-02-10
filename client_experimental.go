@@ -136,13 +136,15 @@ type ChannelBatchConfig struct {
 // channelWriter buffers queue.Item objects and flushes them after a fixed delay
 // or when a specific batch size is reached.
 type channelWriter struct {
-	mu           sync.Mutex
-	buffer       []queue.Item
-	timer        *time.Timer
-	flushFn      func([]queue.Item) error
-	latestOnly   bool
-	latestPub    queue.Item
-	hasLatestPub bool
+	mu         sync.Mutex
+	buffer     []queue.Item
+	timer      *time.Timer
+	flushFn    func([]queue.Item) error
+	latestOnly bool
+	// latestPubs tracks the latest publication per key for FlushLatestPublication mode.
+	// Items are ordered by last-update time so that offsets are emitted in ascending order.
+	// For non-map publications (Key=""), all collapse into a single entry under "".
+	latestPubs []queue.Item
 }
 
 // newChannelWriter creates a new channelWriter with the given flush callback.
@@ -157,42 +159,48 @@ func (w *channelWriter) close(flushRemaining bool) {
 		w.timer.Stop()
 		w.timer = nil
 	}
-	if flushRemaining && (len(w.buffer) > 0 || w.hasLatestPub) {
+	if flushRemaining && (len(w.buffer) > 0 || len(w.latestPubs) > 0) {
 		w.flushLocked()
 	}
 	w.buffer = nil
-	w.hasLatestPub = false
+	w.latestPubs = nil
 	w.mu.Unlock()
 }
 
-// Add appends an item to the buffer or records it as the latest publication.
+// Add appends an item to the buffer or records it as the latest publication per key.
+// When FlushLatestPublication is enabled, publications are coalesced by key — only the
+// latest publication for each key is kept. For non-map publications (Key=""), all collapse
+// into a single entry. Items are ordered by last-update time so offsets stay ascending.
 // It starts a delay timer if this is the first item, and flushes immediately if the batch size is reached.
 func (w *channelWriter) Add(item queue.Item, config ChannelBatchConfig) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.latestOnly = config.FlushLatestPublication
 
-	// If FlushLatestPublication is enabled and this is a publication, keep it separately
 	if config.FlushLatestPublication && item.FrameType == protocol.FrameTypePushPublication {
-		w.latestPub = item
-		w.hasLatestPub = true
+		// Remove existing entry with the same key (if any) to maintain offset order.
+		for i, existing := range w.latestPubs {
+			if existing.Key == item.Key {
+				w.latestPubs = append(w.latestPubs[:i], w.latestPubs[i+1:]...)
+				break
+			}
+		}
+		// Append to the end — latest update has the highest offset.
+		w.latestPubs = append(w.latestPubs, item)
 	} else {
 		w.buffer = append(w.buffer, item)
 	}
 
-	// Total items count includes latestPub if present
-	totalCount := len(w.buffer)
-	if w.hasLatestPub {
-		totalCount++
-	}
+	// Total items count includes all latest pubs.
+	totalCount := len(w.buffer) + len(w.latestPubs)
 
-	// Start timer on first item
+	// Start timer on first item.
 	if config.MaxDelay > 0 && totalCount == 1 && w.timer == nil {
 		w.timer = timers.AcquireTimer(config.MaxDelay)
 		go w.waitTimer(w.timer)
 	}
 
-	// Flush immediately if batch size is reached
+	// Flush immediately if batch size is reached.
 	if config.MaxSize > 0 && int64(totalCount) >= config.MaxSize {
 		if w.timer != nil {
 			w.timer.Stop()
@@ -208,14 +216,14 @@ func (w *channelWriter) waitTimer(tm *time.Timer) {
 	timers.ReleaseTimer(tm)
 	w.mu.Lock()
 
-	// If timer was stopped, do nothing
+	// If timer was stopped, do nothing.
 	if w.timer == nil {
 		w.mu.Unlock()
 		return
 	}
 
-	// Flush if any items exist
-	if len(w.buffer) > 0 || w.hasLatestPub {
+	// Flush if any items exist.
+	if len(w.buffer) > 0 || len(w.latestPubs) > 0 {
 		w.flushLocked()
 	}
 	w.timer = nil // Mark the timer as no longer active.
@@ -224,24 +232,22 @@ func (w *channelWriter) waitTimer(tm *time.Timer) {
 
 // flushLocked flushes the current batch. Caller must hold the lock.
 func (w *channelWriter) flushLocked() {
-	// Nothing to do if no items.
-	if len(w.buffer) == 0 && !w.hasLatestPub {
+	if len(w.buffer) == 0 && len(w.latestPubs) == 0 {
 		return
 	}
 
 	var batch []queue.Item
-	// Combine logic: if FlushLatestPublication and a latest publication exists, include all buffered items.
-	// followed by that publication.
-	if w.latestOnly && w.hasLatestPub {
+	if w.latestOnly && len(w.latestPubs) > 0 {
+		// Emit non-publication items first, then per-key latest publications
+		// in last-updated order (ascending offsets).
 		batch = append(batch, w.buffer...)
-		batch = append(batch, w.latestPub)
+		batch = append(batch, w.latestPubs...)
 	} else {
-		// Otherwise, flush everything currently buffered.
 		batch = w.buffer
 	}
 
 	w.buffer = w.buffer[:0]
-	w.hasLatestPub = false
+	w.latestPubs = w.latestPubs[:0]
 	_ = w.flushFn(batch)
 }
 

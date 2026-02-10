@@ -160,7 +160,7 @@ Map subscriptions support automatic presence tracking via special channel prefix
 
 ### Client Presence (`MAP_CLIENTS`)
 
-Configured via `MapClientPresenceChannelPrefix` (e.g., `"$clients:"`):
+Configured via `MapClientPresenceChannelPrefix` (e.g., `"clients:"`):
 
 - **Key**: Client ID
 - **Value**: Full `ClientInfo` (user ID, connection info, channel info)
@@ -169,7 +169,7 @@ Configured via `MapClientPresenceChannelPrefix` (e.g., `"$clients:"`):
 
 ### User Presence (`MAP_USERS`)
 
-Configured via `MapUserPresenceChannelPrefix` (e.g., `"$users:"`):
+Configured via `MapUserPresenceChannelPrefix` (e.g., `"users:"`):
 
 - **Key**: User ID
 - **Value**: Minimal data
@@ -185,8 +185,8 @@ node.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
     cb(SubscribeReply{
         Options: SubscribeOptions{
             EnableMap:                      true,
-            MapClientPresenceChannelPrefix: "$clients:",
-            MapUserPresenceChannelPrefix:   "$users:",
+            MapClientPresenceChannelPrefix: "clients:",
+            MapUserPresenceChannelPrefix:   "users:",
         },
     }, nil)
 })

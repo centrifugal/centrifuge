@@ -440,7 +440,10 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		keyMode = &km
 	}
 
-	// Prepare TTLs as interval strings
+	// Prepare TTLs as interval strings.
+	// Go already applied applyChannelOptionsDefaults, so values are resolved:
+	//   > 0: use as-is (send interval string)
+	//   = 0: disabled (send NULL — SQL treats NULL as "no TTL")
 	var keyTTL, streamTTL, metaTTL, idempotencyTTL *string
 	if opts.KeyTTL > 0 {
 		s := strconv.Itoa(int(opts.KeyTTL.Seconds())) + " seconds"
@@ -504,7 +507,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		idempotencyKey = &opts.IdempotencyKey
 	}
 
-	// Prepare stream size
+	// Prepare stream size. NULL = no trimming, > 0 = trim to this size.
 	var streamSize *int
 	if opts.StreamSize > 0 {
 		streamSize = &opts.StreamSize
@@ -524,9 +527,11 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 	var currentData []byte
 	var currentOffset *int64
 
+	useDelta := opts.UseDelta && len(opts.StreamData) == 0
+
 	err := e.pool.QueryRow(ctx, `
 		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset
-		FROM cf_map_publish($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::interval, $12::interval, $13, $14::interval, $15, $16, $17, $18, $19, $20, $21, $22::interval, $23, $24, $25)
+		FROM cf_map_publish($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::interval, $12::interval, $13, $14::interval, $15, $16, $17, $18, $19, $20, $21, $22::interval, $23, $24, $25, $26)
 	`,
 		ch, key, opts.Data, tagsJSON,
 		clientID, userID, connInfo, chanInfo, subscribedAt,
@@ -534,7 +539,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		expectedOffset, score, version, versionEpoch,
 		keyVersion, keyVersionEpoch,
 		idempotencyKey, idempotencyTTL, opts.RefreshTTLOnSuppress,
-		skipOutbox, numShards,
+		useDelta, skipOutbox, numShards,
 	).Scan(&id, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset)
 
 	if err != nil {
@@ -560,20 +565,6 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		return result, nil
 	}
 
-	// Handle local delivery if configured
-	if e.eventHandler != nil {
-		pub := &Publication{
-			Offset: uint64(channelOffset),
-			Key:    key,
-			Data:   opts.Data,
-			Tags:   opts.Tags,
-			Info:   opts.ClientInfo,
-			Score:  opts.Score,
-			Time:   time.Now().UnixMilli(),
-		}
-		_ = e.eventHandler.HandlePublication(ch, pub, newPos, opts.UseDelta, nil)
-	}
-
 	return MapPublishResult{Position: newPos}, nil
 }
 
@@ -585,7 +576,8 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 		e.node.ResolveMapChannelOptions, ch,
 	)
 
-	// Prepare TTLs as interval strings
+	// Prepare TTLs as interval strings.
+	// NULL = no TTL, > 0 = use as-is.
 	var streamTTL, metaTTL, idempotencyTTL *string
 	if opts.StreamTTL > 0 {
 		s := strconv.Itoa(int(opts.StreamTTL.Seconds())) + " seconds"
@@ -644,17 +636,6 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 			Suppressed:     true,
 			SuppressReason: parseSuppressReason(suppressReason),
 		}, nil
-	}
-
-	// Handle local delivery if configured
-	if e.eventHandler != nil {
-		pub := &Publication{
-			Key:     key,
-			Removed: true,
-			Offset:  uint64(channelOffset),
-			Time:    time.Now().UnixMilli(),
-		}
-		_ = e.eventHandler.HandlePublication(ch, pub, newPos, false, nil)
 	}
 
 	return MapPublishResult{Position: newPos}, nil
@@ -1278,6 +1259,12 @@ func (e *PostgresMapBroker) processInsertMessage(ctx context.Context, rel *pglog
 		_ = json.Unmarshal(tagsBytes, &tags)
 	}
 
+	// Parse previous data for key-based delta.
+	var previousData []byte
+	if prevBytes, ok := values["previous_data"]; ok {
+		previousData = decodePgBytea(prevBytes)
+	}
+
 	// Create publication
 	pub := &Publication{
 		Offset:  offset,
@@ -1287,6 +1274,13 @@ func (e *PostgresMapBroker) processInsertMessage(ctx context.Context, rel *pglog
 		Tags:    tags,
 		Removed: removed,
 		Score:   score,
+	}
+
+	// Construct prevPub for key-based delta if previous data available.
+	var prevPub *Publication
+	useDelta := len(previousData) > 0
+	if useDelta {
+		prevPub = &Publication{Data: previousData}
 	}
 
 	if e.conf.Broker != nil {
@@ -1304,7 +1298,7 @@ func (e *PostgresMapBroker) processInsertMessage(ctx context.Context, rel *pglog
 		}
 	} else if e.eventHandler != nil {
 		// Single-node: deliver locally only
-		_ = e.eventHandler.HandlePublication(channel, pub, StreamPosition{Offset: offset, Epoch: epoch}, false, nil)
+		_ = e.eventHandler.HandlePublication(channel, pub, StreamPosition{Offset: offset, Epoch: epoch}, useDelta, prevPub)
 	}
 
 	return nil
@@ -1630,6 +1624,7 @@ type outboxRow struct {
 	userID        *string
 	connInfo      []byte
 	chanInfo      []byte
+	previousData  []byte
 }
 
 // processOutboxBatch fetches and processes a batch of outbox entries.
@@ -1643,7 +1638,7 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int)
 		// Mark-processed mode: only get unprocessed rows
 		query = `
 			SELECT id, shard_id, channel, channel_offset, epoch, key, data, tags, removed, score,
-				   client_id, user_id, conn_info, chan_info
+				   client_id, user_id, conn_info, chan_info, previous_data
 			FROM cf_map_outbox
 			WHERE shard_id = $1 AND processed_at IS NULL
 			ORDER BY id
@@ -1654,7 +1649,7 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int)
 		// Delete mode: get all rows for this shard
 		query = `
 			SELECT id, shard_id, channel, channel_offset, epoch, key, data, tags, removed, score,
-				   client_id, user_id, conn_info, chan_info
+				   client_id, user_id, conn_info, chan_info, previous_data
 			FROM cf_map_outbox
 			WHERE shard_id = $1
 			ORDER BY id
@@ -1684,7 +1679,7 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int)
 		err := rows.Scan(
 			&row.id, &row.shardID, &row.channel, &row.channelOffset, &row.epoch,
 			&row.key, &row.data, &tagsJSON, &row.removed, &row.score,
-			&row.clientID, &row.userID, &row.connInfo, &row.chanInfo,
+			&row.clientID, &row.userID, &row.connInfo, &row.chanInfo, &row.previousData,
 		)
 		if err != nil {
 			rows.Close()
@@ -1768,6 +1763,13 @@ func (e *PostgresMapBroker) handleOutboxEntry(_ context.Context, entry outboxRow
 
 	streamPos := StreamPosition{Offset: uint64(entry.channelOffset), Epoch: entry.epoch}
 
+	// Construct prevPub for key-based delta if previous data available.
+	var prevPub *Publication
+	useDelta := len(entry.previousData) > 0
+	if useDelta {
+		prevPub = &Publication{Data: entry.previousData}
+	}
+
 	if e.conf.Broker != nil {
 		// Multi-node: publish to broker, which will deliver to all subscribed nodes (including this one)
 		_, err := e.conf.Broker.Publish(entry.channel, entry.data, PublishOptions{
@@ -1783,7 +1785,7 @@ func (e *PostgresMapBroker) handleOutboxEntry(_ context.Context, entry outboxRow
 		}
 	} else if e.eventHandler != nil {
 		// Single-node: deliver locally only
-		_ = e.eventHandler.HandlePublication(entry.channel, pub, streamPos, false, nil)
+		_ = e.eventHandler.HandlePublication(entry.channel, pub, streamPos, useDelta, prevPub)
 	}
 
 	return nil

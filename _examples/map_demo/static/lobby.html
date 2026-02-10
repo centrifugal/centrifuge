@@ -238,6 +238,14 @@
             background: rgba(76, 175, 80, 0.2);
             cursor: default;
         }
+        .slot.occupied.slot-claimed {
+            animation: slot-pop 0.4s ease;
+        }
+        @keyframes slot-pop {
+            0%   { transform: scale(0.85); opacity: 0.5; }
+            50%  { transform: scale(1.05); }
+            100% { transform: scale(1); opacity: 1; }
+        }
         .slot.mine {
             background: rgba(79, 195, 247, 0.2);
             border-color: rgba(79, 195, 247, 0.5);
@@ -436,6 +444,7 @@
         const availableGames = new Map(); // gameId -> GameInfo
         const gameSubscriptions = new Map(); // gameId -> {sub, slots}
         const mySlots = new Map(); // gameId -> slotNum
+        const justClaimed = new Set(); // "gameId:slot_N" — cleared after render
 
         // Generate a stable color from a string identifier using HSL for pleasant colors.
         function stringToColor(str) {
@@ -521,10 +530,10 @@
             renderGames();
         });
 
-        // Subscribe to $clients:games channel for tracking individual connections.
+        // Subscribe to clients:games channel for tracking individual connections.
         // Key is clientId, contains full ClientInfo.
         // Use this to see all connected browser tabs/sessions.
-        const clientsSub = centrifuge.newMapClientsSubscription('$clients:games');
+        const clientsSub = centrifuge.newMapClientsSubscription('clients:games');
 
         clientsSub.on('subscribed', (ctx) => {
             console.log('Clients subscribed, recovered:', ctx.recovered);
@@ -648,6 +657,9 @@
                         }
                         delete gameState.slots[ctx.key];
                     } else if (ctx.data) {
+                        if (!gameState.slots[ctx.key]) {
+                            justClaimed.add(gameId + ':' + ctx.key);
+                        }
                         gameState.slots[ctx.key] = ctx.data;
                         if (ctx.data.userId === userId) {
                             mySlots.set(gameId, ctx.data.slot);
@@ -749,6 +761,7 @@
                 `;
             }
             container.innerHTML = html;
+            justClaimed.clear();
         }
 
         function renderSlots(gameId, maxPlayers, slots, mySlot) {
@@ -760,8 +773,9 @@
                 const isMine = player && player.userId === userId;
 
                 if (isOccupied) {
+                    const claimed = justClaimed.has(gameId + ':' + slotKey) ? ' slot-claimed' : '';
                     html += `
-                        <div class="slot occupied ${isMine ? 'mine' : ''}" ${isMine ? `onclick="leaveGame('${gameId}', ${i})"` : ''}>
+                        <div class="slot occupied${claimed} ${isMine ? 'mine' : ''}" ${isMine ? `onclick="leaveGame('${gameId}', ${i})"` : ''}>
                             <div class="slot-label">Slot ${i}</div>
                             <div class="slot-avatar" style="background: ${stringToColor(player.userId)}">${player.name.charAt(0).toUpperCase()}</div>
                             <div class="slot-name">${escapeHtml(player.name)}${isMine ? ' (you)' : ''}</div>

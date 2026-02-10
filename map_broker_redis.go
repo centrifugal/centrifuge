@@ -501,8 +501,31 @@ func (e *RedisMapBroker) Close(_ context.Context) error {
 	return nil
 }
 
-func (e *RedisMapBroker) Clear(ctx context.Context, ch string, opts MapClearOptions) error {
-	// TODO: implement.
+func (e *RedisMapBroker) Clear(ctx context.Context, ch string, _ MapClearOptions) error {
+	s := e.getShard(ch)
+	shard := s.shard
+	client := shard.client
+
+	dataKeys := []string{
+		e.streamKey(shard, ch),
+		e.metaKey(shard, ch),
+		e.stateHashKey(shard, ch),
+		e.stateOrderKey(shard, ch),
+		e.stateExpireKey(shard, ch),
+		e.stateMetaKey(shard, ch),
+	}
+
+	cmds := make(rueidis.Commands, 0, 2)
+	cmds = append(cmds, client.B().Del().Key(dataKeys...).Build())
+	cleanupKey := e.cleanupRegistrationKeyForChannel(shard, ch)
+	cmds = append(cmds, client.B().Zrem().Key(cleanupKey).Member(ch).Build())
+
+	results := client.DoMulti(ctx, cmds...)
+	for _, res := range results {
+		if err := res.Error(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -630,7 +653,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 	}
 
 	useDelta := "0"
-	if opts.UseDelta {
+	if opts.UseDelta && len(opts.StreamData) == 0 {
 		useDelta = "1"
 	}
 
@@ -2474,9 +2497,14 @@ func (e *RedisMapBroker) handleRedisClientMessage(isCluster bool, eventHandler B
 	// Regular publication
 	var prevPubPtr *Publication
 	if isDelta && len(prevProtobuf) > 0 {
-		var prevPub protocol.Publication
-		if err := prevPub.UnmarshalVT(prevProtobuf); err == nil {
-			prevPubPtr = pubFromProto(&prevPub)
+		// Delta prev data is in state value format: "offset:epoch:protobuf".
+		// Extract the protobuf payload.
+		_, _, payload, parseErr := parseStateValue(prevProtobuf)
+		if parseErr == nil {
+			var prevPub protocol.Publication
+			if err := prevPub.UnmarshalVT(payload); err == nil {
+				prevPubPtr = pubFromProto(&prevPub)
+			}
 		}
 	}
 

@@ -76,8 +76,12 @@ func (e *MemoryMapBroker) pubLock(ch string) *sync.Mutex {
 	return e.pubLocks[index(ch, numPubLocks)]
 }
 
-func (e *MemoryMapBroker) Clear(ctx context.Context, ch string, opts MapClearOptions) error {
-	// TODO: implement.
+func (e *MemoryMapBroker) Clear(_ context.Context, ch string, _ MapClearOptions) error {
+	mu := e.pubLock(ch)
+	mu.Lock()
+	defer mu.Unlock()
+	e.mapHub.clear(ch)
+	e.clearResultCache(ch)
 	return nil
 }
 
@@ -241,6 +245,17 @@ func (e *MemoryMapBroker) saveResultToCache(ch string, key string, sp StreamPosi
 	}
 }
 
+func (e *MemoryMapBroker) clearResultCache(ch string) {
+	e.resultCacheMu.Lock()
+	defer e.resultCacheMu.Unlock()
+	prefix := ch + "_"
+	for key := range e.resultCache {
+		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
+			delete(e.resultCache, key)
+		}
+	}
+}
+
 func (e *MemoryMapBroker) expireResultCache() {
 	var nextExpireCheck int64
 	for {
@@ -288,7 +303,7 @@ type mapHub struct {
 	keyExpireQueue         priority.Queue     // priority queue of {ch:key, expireAt}
 	keyExpires             map[string]int64   // "ch:key" -> expireAt
 	eventHandler           BrokerEventHandler // for publishing removal events
-	channelOptionsResolver ChannelOptionsResolver
+	channelOptionsResolver MapChannelOptionsResolver
 }
 
 // mapChannel represents keyed state for a single channel.
@@ -323,7 +338,7 @@ func newMapHub(historyMetaTTL time.Duration, closeCh chan struct{}) *mapHub {
 	}
 }
 
-func (h *mapHub) setChannelOptionsResolver(r ChannelOptionsResolver) {
+func (h *mapHub) setChannelOptionsResolver(r MapChannelOptionsResolver) {
 	h.Lock()
 	defer h.Unlock()
 	h.channelOptionsResolver = r
@@ -572,8 +587,8 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 	defer h.Unlock()
 
 	var prevPub *Publication
-	if opts.UseDelta && key != "" {
-		// Get previous publication for delta
+	if opts.UseDelta && len(opts.StreamData) == 0 && key != "" {
+		// Get previous publication for delta (key-based: same key's previous state).
 		if channel, ok := h.channels[ch]; ok {
 			if entry, ok := channel.state[key]; ok {
 				prevPub = entry.Publication
@@ -817,6 +832,27 @@ func (h *mapHub) remove(ch string, key string, opts MapRemoveOptions) (StreamPos
 	}
 
 	return streamPosition, true, nil
+}
+
+func (h *mapHub) clear(ch string) {
+	h.Lock()
+	defer h.Unlock()
+
+	channel, ok := h.channels[ch]
+	if !ok {
+		return
+	}
+
+	// Clean up key expiration tracking for all keys in the channel.
+	for key := range channel.state {
+		chKey := h.makeChKey(ch, key)
+		delete(h.keyExpires, chKey)
+	}
+
+	// Remove channel and associated tracking entries.
+	delete(h.channels, ch)
+	delete(h.expires, ch)
+	delete(h.removes, ch)
 }
 
 func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {

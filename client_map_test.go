@@ -89,7 +89,7 @@ func TestMapSubscribe_StatePhase(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -139,7 +139,7 @@ func TestMapSubscribe_StatePagination(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -203,7 +203,7 @@ func TestMapSubscribe_StreamPhase(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -257,7 +257,7 @@ func TestMapSubscribe_LivePhase(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -312,7 +312,7 @@ func TestMapSubscribe_DirectLive(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -354,7 +354,7 @@ func TestMapSubscribe_FullTwoPhase(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -398,7 +398,7 @@ func TestMapSubscribe_NotEnabled(t *testing.T) {
 			// Don't enable keyed mode.
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap: false,
+					Type: SubscriptionTypeStream,
 				},
 			}, nil)
 		})
@@ -428,7 +428,7 @@ func TestMapSubscribe_AlreadySubscribed(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -472,8 +472,8 @@ func TestMapSubscribe_WithPresence(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap:                      true,
-					MapClientPresenceChannelPrefix: "$clients:",
+					Type:                           SubscriptionTypeMap,
+					MapClientPresenceChannelPrefix: "clients:",
 				},
 			}, nil)
 		})
@@ -488,8 +488,8 @@ func TestMapSubscribe_WithPresence(t *testing.T) {
 		Phase:   MapPhaseLive,
 	})
 
-	// Verify presence was added to $clients:{channel}.
-	clientsChannel := "$clients:" + channel
+	// Verify presence was added to clients:{channel}.
+	clientsChannel := "clients:" + channel
 	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
@@ -514,8 +514,8 @@ func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap:                      true,
-					MapClientPresenceChannelPrefix: "$clients:",
+					Type:                           SubscriptionTypeMap,
+					MapClientPresenceChannelPrefix: "clients:",
 				},
 			}, nil)
 		})
@@ -531,7 +531,7 @@ func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 	})
 
 	// Verify presence exists in :clients channel.
-	clientsChannel := "$clients:" + channel
+	clientsChannel := "clients:" + channel
 	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
@@ -559,8 +559,8 @@ func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap:                      true,
-					MapClientPresenceChannelPrefix: "$clients:",
+					Type:                           SubscriptionTypeMap,
+					MapClientPresenceChannelPrefix: "clients:",
 				},
 			}, nil)
 		})
@@ -576,7 +576,7 @@ func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 	})
 
 	// Verify presence exists in :clients channel.
-	clientsChannel := "$clients:" + channel
+	clientsChannel := "clients:" + channel
 	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
@@ -605,7 +605,7 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap:              true,
+					Type:                   SubscriptionTypeMap,
 					MapRemoveOnUnsubscribe: true,
 				},
 			}, nil)
@@ -660,7 +660,7 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap:              true,
+					Type:                   SubscriptionTypeMap,
 					MapRemoveOnUnsubscribe: true,
 				},
 			}, nil)
@@ -711,8 +711,8 @@ func TestPresenceSubscribe_State(t *testing.T) {
 	ctx := context.Background()
 
 	// Pre-populate presence data using prefix-based channel naming.
-	// With prefix "$clients:", the presence channel for "test_presence_sub" is "$clients:test_presence_sub".
-	presenceChannel := "$clients:test_presence_sub"
+	// With prefix "clients:", the presence channel for "test_presence_sub" is "clients:test_presence_sub".
+	presenceChannel := "clients:test_presence_sub"
 	_, err := broker.Publish(ctx, presenceChannel, "client1", MapPublishOptions{
 		ClientInfo: &ClientInfo{ClientID: "client1", UserID: "user1"},
 		KeyTTL:     300 * time.Second,
@@ -726,11 +726,10 @@ func TestPresenceSubscribe_State(t *testing.T) {
 	require.NoError(t, err)
 
 	node.OnConnect(func(client *Client) {
-		// Presence subscriptions go through OnPresenceSubscribe (separate permission scope).
-		client.OnPresenceSubscribe(func(e PresenceSubscribeEvent, cb PresenceSubscribeCallback) {
-			// Event receives the full presence channel name as provided by client.
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			require.Equal(t, presenceChannel, e.Channel)
-			cb(PresenceSubscribeReply{}, nil)
+			require.Equal(t, SubscriptionTypeMapClients, e.Type)
+			cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMapClients}}, nil)
 		})
 	})
 
@@ -755,7 +754,7 @@ func TestPresenceSubscribe_Live(t *testing.T) {
 	ctx := context.Background()
 
 	// Pre-populate presence data using prefix-based channel naming.
-	presenceChannel := "$clients:test_presence_live"
+	presenceChannel := "clients:test_presence_live"
 	_, err := broker.Publish(ctx, presenceChannel, "client1", MapPublishOptions{
 		ClientInfo: &ClientInfo{ClientID: "client1", UserID: "user1"},
 		KeyTTL:     300 * time.Second,
@@ -763,8 +762,8 @@ func TestPresenceSubscribe_Live(t *testing.T) {
 	require.NoError(t, err)
 
 	node.OnConnect(func(client *Client) {
-		client.OnPresenceSubscribe(func(e PresenceSubscribeEvent, cb PresenceSubscribeCallback) {
-			cb(PresenceSubscribeReply{}, nil)
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{Type: e.Type}}, nil)
 		})
 	})
 
@@ -799,12 +798,11 @@ func TestPresenceSubscribe_Live(t *testing.T) {
 func TestPresenceSubscribe_NotAllowed(t *testing.T) {
 	node, _ := newTestNodeWithMapBroker(t)
 
-	presenceChannel := "$clients:test_presence_not_allowed"
+	presenceChannel := "clients:test_presence_not_allowed"
 
 	node.OnConnect(func(client *Client) {
-		client.OnPresenceSubscribe(func(e PresenceSubscribeEvent, cb PresenceSubscribeCallback) {
-			// Deny presence subscriptions.
-			cb(PresenceSubscribeReply{}, ErrorPermissionDenied)
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, ErrorPermissionDenied)
 		})
 	})
 
@@ -826,14 +824,14 @@ func TestPresenceSubscribe_NotAllowed(t *testing.T) {
 func TestPresenceSubscribe_NoHandler(t *testing.T) {
 	node, _ := newTestNodeWithMapBroker(t)
 
-	presenceChannel := "$clients:test_presence_no_handler"
+	presenceChannel := "clients:test_presence_no_handler"
 
-	// No OnPresenceSubscribe handler set.
+	// No OnSubscribe handler set.
 	node.OnConnect(func(client *Client) {})
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// Try to subscribe to presence - should fail because no OnPresenceSubscribe handler.
+	// Try to subscribe to presence - should fail because no OnSubscribe handler.
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: presenceChannel,
@@ -847,11 +845,11 @@ func TestPresenceSubscribe_NoHandler(t *testing.T) {
 func TestPresenceSubscribe_AlreadySubscribed(t *testing.T) {
 	node, _ := newTestNodeWithMapBroker(t)
 
-	presenceChannel := "$clients:test_presence_already_sub"
+	presenceChannel := "clients:test_presence_already_sub"
 
 	node.OnConnect(func(client *Client) {
-		client.OnPresenceSubscribe(func(e PresenceSubscribeEvent, cb PresenceSubscribeCallback) {
-			cb(PresenceSubscribeReply{}, nil)
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{Type: e.Type}}, nil)
 		})
 	})
 
@@ -908,8 +906,8 @@ func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap:                      true,
-					MapClientPresenceChannelPrefix: "$clients:",
+					Type:                           SubscriptionTypeMap,
+					MapClientPresenceChannelPrefix: "clients:",
 					MapUserPresenceChannelPrefix:   "$users:",
 				},
 			}, nil)
@@ -926,7 +924,7 @@ func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
 	})
 
 	// Verify :clients presence was added (key=clientId, full info).
-	clientsChannel := "$clients:" + channel
+	clientsChannel := "clients:" + channel
 	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
@@ -966,8 +964,8 @@ func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap:                      true,
-					MapClientPresenceChannelPrefix: "$clients:",
+					Type:                           SubscriptionTypeMap,
+					MapClientPresenceChannelPrefix: "clients:",
 					MapUserPresenceChannelPrefix:   "$users:",
 				},
 			}, nil)
@@ -984,7 +982,7 @@ func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
 	})
 
 	// Verify presence exists in both channels.
-	clientsChannel := "$clients:" + channel
+	clientsChannel := "clients:" + channel
 	usersChannel := "$users:" + channel
 
 	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
@@ -1020,8 +1018,8 @@ func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap:                      true,
-					MapClientPresenceChannelPrefix: "$clients:",
+					Type:                           SubscriptionTypeMap,
+					MapClientPresenceChannelPrefix: "clients:",
 					MapUserPresenceChannelPrefix:   "$users:",
 				},
 			}, nil)
@@ -1045,7 +1043,7 @@ func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
 	})
 
 	// Verify :clients has two entries (one per connection).
-	clientsChannel := "$clients:" + channel
+	clientsChannel := "clients:" + channel
 	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
@@ -1438,7 +1436,7 @@ func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -1507,7 +1505,7 @@ func TestMapSubscribe_StateToLive_WithStreamPublications(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -1575,7 +1573,7 @@ func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -1644,7 +1642,7 @@ func TestMapSubscribe_StreamPhaseRecovery(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -1711,7 +1709,7 @@ func TestMapSubscribe_StreamPhaseRecovery_WithoutRecoverFlag(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -1761,7 +1759,7 @@ func TestMapSubscribe_StreamPhaseRecovery_LargeGap(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -1844,7 +1842,7 @@ func TestMapSubscribe_LivePhaseRecovery(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -1918,7 +1916,7 @@ func TestMapSubscribe_StateToLive_Disabled(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableMap: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})

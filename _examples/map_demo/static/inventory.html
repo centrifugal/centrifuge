@@ -72,10 +72,49 @@
             padding: 24px;
             text-align: center;
             transition: transform 0.2s, box-shadow 0.2s;
+            position: relative;
+            overflow: hidden;
+        }
+        .item-card.sold-out > *:not(.sold-out-stamp) {
+            opacity: 0.2;
+        }
+        .sold-out-stamp {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(-18deg);
+            font-size: 28px;
+            font-weight: 900;
+            letter-spacing: 3px;
+            color: #f44336;
+            border: 4px solid #f44336;
+            border-radius: 8px;
+            padding: 6px 18px;
+            text-transform: uppercase;
+            pointer-events: none;
+            white-space: nowrap;
+            background: rgba(0, 0, 0, 0.6);
+        }
+        .sold-out-stamp.animate {
+            animation: stamp-in 0.35s ease forwards;
+        }
+        @keyframes stamp-in {
+            0%   { opacity: 0; transform: translate(-50%, -50%) rotate(-18deg) scale(2); }
+            60%  { opacity: 1; transform: translate(-50%, -50%) rotate(-18deg) scale(0.95); }
+            100% { opacity: 1; transform: translate(-50%, -50%) rotate(-18deg) scale(1); }
         }
         .item-card:hover {
-            transform: translateY(-4px);
             box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+        }
+        .item-card.shake {
+            animation: card-shake 0.4s ease;
+        }
+        @keyframes card-shake {
+            0%, 100% { transform: translateX(0); }
+            20%      { transform: translateX(-6px); }
+            40%      { transform: translateX(6px); }
+            60%      { transform: translateX(-4px); }
+            80%      { transform: translateX(4px); }
         }
         .item-emoji {
             font-size: 48px;
@@ -109,6 +148,21 @@
         .item-stock.out-of-stock {
             background: rgba(244, 67, 54, 0.3);
             color: #e57373;
+        }
+        .item-stock.flash {
+            animation: stock-flash 0.5s ease;
+        }
+        @keyframes stock-flash {
+            0%   { transform: scale(1); }
+            30%  { transform: scale(1.25); }
+            100% { transform: scale(1); }
+        }
+        .activity-item.slide-in {
+            animation: activity-slide 0.3s ease;
+        }
+        @keyframes activity-slide {
+            from { opacity: 0; transform: translateY(-10px); }
+            to   { opacity: 1; transform: translateY(0); }
         }
         .item-buttons {
             display: flex;
@@ -286,6 +340,15 @@
         // Store items state.
         const items = new Map();
 
+        // Previous stock values for detecting changes.
+        const prevStock = new Map();
+
+        // Items whose stock just changed (for flash animation).
+        const changedItems = new Set();
+
+        // Items that just hit zero stock (for sold-out stamp animation).
+        const justSoldOut = new Set();
+
         // Track loading state by item ID.
         const loadingItems = new Set();
 
@@ -330,6 +393,13 @@
             if (ctx.removed) {
                 items.delete(ctx.key);
             } else if (ctx.data) {
+                const prev = items.get(ctx.key);
+                if (prev && prev.stock !== ctx.data.item.stock) {
+                    changedItems.add(ctx.key);
+                    if (prev.stock > 0 && ctx.data.item.stock === 0) {
+                        justSoldOut.add(ctx.key);
+                    }
+                }
                 items.set(ctx.key, ctx.data.item);
                 if (ctx.data.transaction) {
                     addActivityLog(ctx.data.transaction);
@@ -350,7 +420,8 @@
 
             for (const item of sortedItems) {
                 const card = document.createElement('div');
-                card.className = 'item-card';
+                card.className = item.stock === 0 ? 'item-card sold-out' : 'item-card';
+                card.dataset.id = item.id;
 
                 let stockClass = 'in-stock';
                 let stockText = `${item.stock} in stock`;
@@ -362,22 +433,33 @@
                     stockText = `Only ${item.stock} left!`;
                 }
 
+                const flash = changedItems.has(item.id) ? ' flash' : '';
+
                 const isLoading = loadingItems.has(item.id);
                 const buyBtnClass = `btn btn-buy${isLoading ? ' loading' : ''}`;
                 const buyBtnDisabled = item.stock === 0 || isLoading ? 'disabled' : '';
+
+                let stamp = '';
+                if (item.stock === 0) {
+                    const animClass = justSoldOut.has(item.id) ? ' animate' : '';
+                    stamp = `<div class="sold-out-stamp${animClass}">Sold Out</div>`;
+                }
 
                 card.innerHTML = `
                     <div class="item-emoji">${item.emoji}</div>
                     <div class="item-name">${item.name}</div>
                     <div class="item-price">${item.price} coins</div>
-                    <div class="item-stock ${stockClass}">${stockText}</div>
+                    <div class="item-stock ${stockClass}${flash}">${stockText}</div>
                     <div class="item-buttons">
                         <button class="${buyBtnClass}" onclick="buyItem('${item.id}')" ${buyBtnDisabled}>Buy</button>
                         <button class="btn btn-restock" onclick="restockItem('${item.id}')">+1</button>
                     </div>
+                    ${stamp}
                 `;
                 grid.appendChild(card);
             }
+            changedItems.clear();
+            justSoldOut.clear();
         }
 
         function buyItem(itemId) {
@@ -392,6 +474,7 @@
                         }
                     } else {
                         showToast(result.data.message || 'Purchase failed', 'error');
+                        shakeCard(itemId);
                     }
                 })
                 .catch(err => {
@@ -429,7 +512,7 @@
             }
 
             const item = document.createElement('div');
-            item.className = `activity-item ${transaction.action}`;
+            item.className = `activity-item ${transaction.action} slide-in`;
 
             const time = new Date().toLocaleTimeString();
             const icon = transaction.action === 'purchase' ? 'cart' : 'box';
@@ -444,6 +527,14 @@
             // Keep only last 20 entries.
             while (list.children.length > 20) {
                 list.removeChild(list.lastChild);
+            }
+        }
+
+        function shakeCard(itemId) {
+            const card = document.querySelector(`.item-card[data-id="${itemId}"]`);
+            if (card) {
+                card.classList.add('shake');
+                card.addEventListener('animationend', () => card.classList.remove('shake'), { once: true });
             }
         }
 

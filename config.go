@@ -8,26 +8,26 @@ import (
 
 // MapChannelOptions contains configuration for map channels.
 type MapChannelOptions struct {
+	// MetaTTL is how long channel metadata (offset, epoch) is retained.
+	MetaTTL time.Duration
 	// StreamSize is the maximum number of entries in the stream.
 	StreamSize int
 	// StreamTTL is how long stream entries are retained.
 	StreamTTL time.Duration
-	// MetaTTL is how long channel metadata (offset, epoch) is retained.
-	MetaTTL time.Duration
 	// KeyTTL is the default TTL for keys in the channel.
 	KeyTTL time.Duration
 }
 
-// ChannelOptionsResolver returns channel options for a channel.
-type ChannelOptionsResolver func(channel string) MapChannelOptions
+// MapChannelOptionsResolver returns channel options for a channel.
+type MapChannelOptionsResolver func(channel string) MapChannelOptions
 
 // DefaultMapChannelOptions returns sensible defaults for map channel options.
 func DefaultMapChannelOptions() MapChannelOptions {
 	return MapChannelOptions{
+		MetaTTL:    time.Hour,
 		StreamSize: 1000,
 		StreamTTL:  5 * time.Minute,
-		MetaTTL:    time.Hour,
-		KeyTTL:     0, // No default key TTL
+		KeyTTL:     time.Minute,
 	}
 }
 

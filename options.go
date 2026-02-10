@@ -80,6 +80,35 @@ func WithVersion(version uint64, versionEpoch string) PublishOption {
 	}
 }
 
+// SubscriptionType defines the type of subscription.
+type SubscriptionType int32
+
+const (
+	// SubscriptionTypeStream is a regular PUB/SUB subscription (default).
+	SubscriptionTypeStream SubscriptionType = 0
+	// SubscriptionTypeMap is a map subscription with keyed state.
+	SubscriptionTypeMap SubscriptionType = 1
+	// SubscriptionTypeMapClients is a client presence subscription on a map channel.
+	SubscriptionTypeMapClients SubscriptionType = 2
+	// SubscriptionTypeMapUsers is a user presence subscription on a map channel.
+	SubscriptionTypeMapUsers SubscriptionType = 3
+)
+
+func (t SubscriptionType) String() string {
+	switch t {
+	case SubscriptionTypeStream:
+		return "stream"
+	case SubscriptionTypeMap:
+		return "map"
+	case SubscriptionTypeMapClients:
+		return "map_clients"
+	case SubscriptionTypeMapUsers:
+		return "map_users"
+	default:
+		return "unknown"
+	}
+}
+
 // SubscribeOptions define per-subscription options.
 type SubscribeOptions struct {
 	// clientID to subscribe.
@@ -146,11 +175,13 @@ type SubscribeOptions struct {
 	// Important note here, since channel permissions are managed on channel level, tags filtering
 	// must be used as a bandwidth optimization, not an access control mechanism.
 	AllowTagsFilter bool
-	// EnableMap allows map subscription for this channel.
-	EnableMap bool
+
+	// Type defines the subscription type. Use SubscriptionTypeMap for map subscriptions.
+	// For regular subscriptions this can be left as zero value (SubscriptionTypeStream).
+	Type SubscriptionType
 	// MapClientPresenceChannelPrefix is the prefix for client presence channels.
 	// When set, client presence will be published to {prefix}{channel} on subscribe.
-	// For example, if prefix is "$clients:" and channel is "games", presence goes to "$clients:games".
+	// For example, if prefix is "clients:" and channel is "games", presence goes to "clients:games".
 	// Empty string means no client presence publishing.
 	MapClientPresenceChannelPrefix string
 	// MapUserPresenceChannelPrefix is the prefix for user presence channels.

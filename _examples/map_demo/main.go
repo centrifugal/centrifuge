@@ -171,16 +171,21 @@ func main() {
 		log.Printf("client connected: %s (user: %s)", client.ID(), client.UserID())
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
-			log.Printf("client %s subscribing to %s (map: %v)", client.ID(), e.Channel, e.Map)
+			log.Printf("client %s subscribing to %s (type: %v)", client.ID(), e.Channel, e.Type)
+			if e.Type == centrifuge.SubscriptionTypeStream {
+				// We expect only map subscriptions here.
+				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
+				return
+			}
 
 			opts := centrifuge.SubscribeOptions{
-				EnableMap: true,
+				Type: e.Type,
 			}
 
 			// Enable map presence for games and individual game channels.
 			if e.Channel == "games" || strings.HasPrefix(e.Channel, "game:") {
-				opts.MapClientPresenceChannelPrefix = "$clients:"
-				opts.MapUserPresenceChannelPrefix = "$users:"
+				opts.MapClientPresenceChannelPrefix = "clients:"
+				opts.MapUserPresenceChannelPrefix = "users:"
 			}
 
 			// Enable automatic cleanup for cursors channel - removes key=clientID on unsubscribe/disconnect.
@@ -191,19 +196,27 @@ func main() {
 			cb(centrifuge.SubscribeReply{Options: opts}, nil)
 		})
 
-		client.OnPresenceSubscribe(func(e centrifuge.PresenceSubscribeEvent, cb centrifuge.PresenceSubscribeCallback) {
-			log.Printf("client %s presence subscribing to %s", client.ID(), e.Channel)
-			cb(centrifuge.PresenceSubscribeReply{}, nil)
+		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
+			log.Printf("client %s unsubscribed from channel %s", client.ID(), e.Channel)
 		})
 
-		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
-			log.Printf("client %s unsubscribed from %s", client.ID(), e.Channel)
+		client.OnMapPublish(func(e centrifuge.MapPublishEvent, cb centrifuge.MapPublishCallback) {
+			// For cursors channel: server assigns key to client ID, auto-cleanup TTL.
+			// Removal is handled automatically via MapRemoveOnUnsubscribe.
+			if e.Channel == "cursors" {
+				cb(centrifuge.MapPublishReply{
+					Key: client.ID(),
+					Options: centrifuge.MapPublishOptions{
+						KeyTTL: 10 * time.Second,
+					},
+				}, nil)
+				return
+			}
+			cb(centrifuge.MapPublishReply{}, centrifuge.ErrorPermissionDenied)
 		})
 
 		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
 			switch e.Method {
-			case "cursor:update":
-				handleCursorUpdate(client, node, e.Data, cb)
 			case "game:create":
 				handleGameCreate(client, node, e.Data, cb)
 			case "game:join":
@@ -269,22 +282,6 @@ func main() {
 	if pgPool != nil {
 		pgPool.Close()
 	}
-}
-
-// Cursor update handler.
-func handleCursorUpdate(client *centrifuge.Client, node *centrifuge.Node, data []byte, cb centrifuge.RPCCallback) {
-	// Note: StreamSize/TTL/MetaTTL are configured via GetMapChannelOptions in node config.
-	_, err := node.MapPublish(context.Background(), "cursors", client.ID(), centrifuge.MapPublishOptions{
-		Data:   data,
-		KeyTTL: 5 * time.Second, // Auto-expire if client stops sending updates.
-	})
-	if err != nil {
-		log.Printf("cursor update error: %v", err)
-		cb(centrifuge.RPCReply{}, centrifuge.ErrorInternal)
-		return
-	}
-
-	cb(centrifuge.RPCReply{}, nil)
 }
 
 // Game handlers.
@@ -951,7 +948,6 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enabl
 			if err != nil {
 				return nil, fmt.Errorf("error creating Redis broker: %w", err)
 			}
-			node.SetBroker(broker)
 			pgConfig.Broker = broker
 		} else {
 			log.Printf("Using PostgreSQL map broker (single-node, local delivery only)")

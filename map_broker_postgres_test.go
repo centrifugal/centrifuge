@@ -795,7 +795,7 @@ func TestPostgresMapBroker_WALReader(t *testing.T) {
 	// p_skip_outbox = true since we're testing WAL mode
 	directPool := broker.pool
 	_, err = directPool.Exec(ctx, `
-		SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, true, 16)
+		SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, true, 16)
 	`, channel, "key1", []byte("data1"))
 	require.NoError(t, err)
 
@@ -910,7 +910,7 @@ func TestPostgresMapBroker_WALReaderOrdering(t *testing.T) {
 	// Publish multiple messages in sequence (p_skip_outbox = true for WAL mode)
 	for i := 0; i < numMessages; i++ {
 		_, err = broker.pool.Exec(ctx, `
-			SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, true, 16)
+			SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, true, 16)
 		`, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)))
 		require.NoError(t, err)
 	}
@@ -998,7 +998,7 @@ func TestPostgresMapBroker_WALReaderMetadata(t *testing.T) {
 			NULL, NULL, NULL, NULL, NULL,
 			NULL, NULL, '300 seconds'::interval, NULL, NULL,
 			NULL, $4,
-			NULL, NULL, NULL, NULL, NULL, NULL, false, true, 16
+			NULL, NULL, NULL, NULL, NULL, NULL, false, false, true, 16
 		)
 	`, channel, "metadata_key", []byte("metadata_data"), int64(42))
 	require.NoError(t, err)
@@ -1158,7 +1158,7 @@ func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 
 	// Publish via SQL (simulating external publish, p_skip_outbox = true for WAL mode)
 	_, err = pgBroker.pool.Exec(ctx, `
-		SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, $4, NULL, NULL, NULL, NULL, NULL, NULL, false, true, 16)
+		SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, $4, NULL, NULL, NULL, NULL, NULL, NULL, false, false, true, 16)
 	`, channel, "test_key", []byte("test_data"), int64(100))
 	require.NoError(t, err)
 
@@ -1304,7 +1304,7 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 	// Publish messages directly via SQL (bypassing workers)
 	for i := 0; i < 5; i++ {
 		_, err = broker1.pool.Exec(ctx, `
-			SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, 4)
+			SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, false, 4)
 		`, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)))
 		require.NoError(t, err)
 	}
@@ -1375,10 +1375,12 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 	require.Len(t, received, 5)
 	receivedMu.Unlock()
 
-	// Verify outbox is empty
-	err = broker2.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1", channel).Scan(&count)
-	require.NoError(t, err)
-	require.Equal(t, 0, count, "outbox should be empty after processing")
+	// Verify outbox is empty (wait for outbox transaction to commit after handler callback).
+	require.Eventually(t, func() bool {
+		var c int
+		_ = broker2.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1", channel).Scan(&c)
+		return c == 0
+	}, 5*time.Second, 50*time.Millisecond, "outbox should be empty after processing")
 }
 
 // TestPostgresMapBroker_OutboxMarkProcessed tests mark-processed mode.
@@ -1454,15 +1456,18 @@ func TestPostgresMapBroker_OutboxMarkProcessed(t *testing.T) {
 		t.Fatal("timeout waiting for publications")
 	}
 
-	// In mark-processed mode, rows should still exist but have processed_at set
-	var totalCount, processedCount int
+	// In mark-processed mode, rows should still exist but have processed_at set.
+	// Wait briefly for the outbox transaction to commit after handler callback.
+	require.Eventually(t, func() bool {
+		var processedCount int
+		_ = broker.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1 AND processed_at IS NOT NULL", channel).Scan(&processedCount)
+		return processedCount == 3
+	}, 5*time.Second, 50*time.Millisecond, "all rows should be marked as processed")
+
+	var totalCount int
 	err = broker.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1", channel).Scan(&totalCount)
 	require.NoError(t, err)
-	err = broker.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1 AND processed_at IS NOT NULL", channel).Scan(&processedCount)
-	require.NoError(t, err)
-
 	require.Equal(t, 3, totalCount, "rows should still exist")
-	require.Equal(t, 3, processedCount, "all rows should be marked as processed")
 }
 
 // TestPostgresMapBroker_OutboxConcurrentPublish tests concurrent publishes maintain ordering.
@@ -1671,4 +1676,237 @@ func TestPostgresMapBroker_OutboxWithBroker(t *testing.T) {
 	}
 	receivedMu.Unlock()
 	require.True(t, found, "expected to receive publication with key=test_key, data=test_data, score=100")
+}
+
+// TestPostgresMapBroker_Delta_Outbox tests key-based delta delivery via outbox workers.
+func TestPostgresMapBroker_Delta_Outbox(t *testing.T) {
+	connString := getPostgresConnString(t)
+	node, _ := New(Config{})
+
+	type pubEvent struct {
+		ch      string
+		pub     *Publication
+		delta   bool
+		prevPub *Publication
+	}
+
+	eventCh := make(chan pubEvent, 10)
+
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			eventCh <- pubEvent{ch: ch, pub: pub, delta: delta, prevPub: prevPub}
+			return nil
+		},
+	}
+
+	e, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+		Outbox: OutboxConfig{
+			NumShards:    4,
+			PollInterval: 10 * time.Millisecond,
+			BatchSize:    100,
+		},
+	})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	cleanupTestTables(ctx, e)
+
+	err = e.RegisterEventHandler(handler)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = e.Close(context.Background())
+		_ = node.Shutdown(context.Background())
+	})
+
+	require.Eventually(t, func() bool {
+		return len(e.OutboxClaimedShards()) > 0
+	}, 10*time.Second, 100*time.Millisecond, "Outbox worker should claim at least one shard")
+
+	channel := fmt.Sprintf("test_delta_%d", time.Now().UnixNano())
+
+	waitEvent := func(t *testing.T) pubEvent {
+		t.Helper()
+		select {
+		case ev := <-eventCh:
+			return ev
+		case <-time.After(10 * time.Second):
+			t.Fatal("timeout waiting for publication event")
+			return pubEvent{}
+		}
+	}
+
+	// 1. First publish with UseDelta - no previous state.
+	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("data1"),
+		UseDelta:   true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	ev := waitEvent(t)
+	require.False(t, ev.delta, "no previous data means useDelta is false in outbox delivery")
+	require.Nil(t, ev.prevPub, "no previous state for first publish")
+	require.Equal(t, []byte("data1"), ev.pub.Data)
+
+	// 2. Second publish same key - should get prevPub with first data.
+	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("data1_updated"),
+		UseDelta:   true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	ev = waitEvent(t)
+	require.True(t, ev.delta)
+	require.NotNil(t, ev.prevPub)
+	require.Equal(t, []byte("data1"), ev.prevPub.Data)
+	require.Equal(t, []byte("data1_updated"), ev.pub.Data)
+
+	// 3. Different key - no previous state for this key.
+	_, err = e.Publish(ctx, channel, "key2", MapPublishOptions{
+		Data:       []byte("data2"),
+		UseDelta:   true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	ev = waitEvent(t)
+	require.False(t, ev.delta, "no previous data for key2")
+	require.Nil(t, ev.prevPub, "no previous state for key2")
+	require.Equal(t, []byte("data2"), ev.pub.Data)
+
+	// 4. StreamData present - no delta.
+	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("data1_full"),
+		StreamData: []byte("data1_stream"),
+		UseDelta:   true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	ev = waitEvent(t)
+	require.False(t, ev.delta, "StreamData disables delta")
+	require.Nil(t, ev.prevPub, "StreamData disables key-based delta")
+
+	// 5. UseDelta=false - no delta.
+	_, err = e.Publish(ctx, channel, "key2", MapPublishOptions{
+		Data:       []byte("data2_updated"),
+		UseDelta:   false,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	ev = waitEvent(t)
+	require.False(t, ev.delta)
+	require.Nil(t, ev.prevPub, "UseDelta=false means no delta")
+
+	// 6. Third publish to key1 after StreamData update - prevPub should have data1_full.
+	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("data1_v3"),
+		UseDelta:   true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	ev = waitEvent(t)
+	require.True(t, ev.delta)
+	require.NotNil(t, ev.prevPub)
+	require.Equal(t, []byte("data1_full"), ev.prevPub.Data, "prevPub should have state data, not stream data")
+}
+
+func TestPostgresMapBroker_Clear(t *testing.T) {
+	node, _ := New(Config{})
+	broker := newTestPostgresMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := "test_clear"
+
+	// Publish some keyed state and stream entries.
+	for i := 0; i < 3; i++ {
+		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+			Data:       []byte(fmt.Sprintf("data%d", i)),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Verify data exists.
+	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+
+	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
+	require.NoError(t, err)
+	require.Len(t, pubs, 3)
+
+	stats, err := broker.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 3, stats.NumKeys)
+
+	// Clear the channel.
+	err = broker.Clear(ctx, channel, MapClearOptions{})
+	require.NoError(t, err)
+
+	// State should be empty.
+	entries, _, _, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	require.NoError(t, err)
+	require.Empty(t, entries)
+
+	// Stream should be empty.
+	pubs, _, err = broker.ReadStream(ctx, channel, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
+	require.NoError(t, err)
+	require.Empty(t, pubs)
+
+	// Stats should show zero keys.
+	stats, err = broker.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 0, stats.NumKeys)
+}
+
+func TestPostgresMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
+	node, _ := New(Config{})
+	broker := newTestPostgresMapBroker(t, node)
+
+	ctx := context.Background()
+
+	// Populate two channels.
+	for _, ch := range []string{"test_clear_iso_ch1", "test_clear_iso_ch2"} {
+		_, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
+			Data:       []byte("v"),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Clear only ch1.
+	err := broker.Clear(ctx, "test_clear_iso_ch1", MapClearOptions{})
+	require.NoError(t, err)
+
+	// ch1 empty.
+	entries, _, _, err := broker.ReadState(ctx, "test_clear_iso_ch1", MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	require.NoError(t, err)
+	require.Empty(t, entries)
+
+	// ch2 still intact.
+	entries, _, _, err = broker.ReadState(ctx, "test_clear_iso_ch2", MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
 }

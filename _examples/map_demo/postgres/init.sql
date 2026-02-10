@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS cf_map_stream (
     subscribed_at   TIMESTAMPTZ,
     removed         BOOLEAN DEFAULT FALSE,
     score           BIGINT,
+    previous_data   BYTEA,          -- Previous key data for delta computation
     expires_at      TIMESTAMPTZ,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     -- Shard number for partitioned logical replication (0 to N-1)
@@ -54,6 +55,7 @@ CREATE TABLE IF NOT EXISTS cf_map_outbox (
     user_id         TEXT,
     conn_info       BYTEA,
     chan_info       BYTEA,
+    previous_data   BYTEA,          -- Previous key data for delta computation
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     processed_at    TIMESTAMPTZ  -- For mark-processed mode (partitioning support)
 );
@@ -198,6 +200,7 @@ CREATE OR REPLACE FUNCTION cf_map_publish(
     p_idempotency_key TEXT DEFAULT NULL,
     p_idempotency_ttl INTERVAL DEFAULT NULL,
     p_refresh_ttl_on_suppress BOOLEAN DEFAULT FALSE,
+    p_use_delta BOOLEAN DEFAULT FALSE,
     p_skip_outbox BOOLEAN DEFAULT FALSE,
     p_num_shards INTEGER DEFAULT 16
 ) RETURNS TABLE(
@@ -216,6 +219,7 @@ DECLARE
     v_exists BOOLEAN;
     v_current_offset BIGINT;
     v_current_data BYTEA;
+    v_previous_data BYTEA;
     v_current_version BIGINT;
     v_stream_version BIGINT;
     v_stream_version_epoch TEXT;
@@ -293,6 +297,12 @@ BEGIN
     WHERE channel = p_channel
     RETURNING top_offset INTO v_offset;
 
+    -- 6b. Fetch previous data for key-based delta (before UPSERT overwrites it)
+    IF p_use_delta AND p_key IS NOT NULL AND p_key != '' THEN
+        SELECT sn.data INTO v_previous_data
+        FROM cf_map_state sn WHERE sn.channel = p_channel AND sn.key = p_key;
+    END IF;
+
     -- 7. Update snapshot
     INSERT INTO cf_map_state (
         channel, key, data, tags, client_id, user_id, conn_info, chan_info, subscribed_at,
@@ -309,11 +319,11 @@ BEGIN
         score = EXCLUDED.score, key_version = EXCLUDED.key_version, key_version_epoch = EXCLUDED.key_version_epoch,
         key_offset = EXCLUDED.key_offset, expires_at = EXCLUDED.expires_at, updated_at = NOW();
 
-    -- 8. Insert into stream (include epoch and shard_id)
+    -- 8. Insert into stream (include epoch, shard_id, and previous_data for delta)
     INSERT INTO cf_map_stream (
-        channel, channel_offset, epoch, key, data, tags, client_id, user_id, conn_info, chan_info, subscribed_at, score, expires_at, shard_id
+        channel, channel_offset, epoch, key, data, tags, client_id, user_id, conn_info, chan_info, subscribed_at, score, previous_data, expires_at, shard_id
     ) VALUES (
-        p_channel, v_offset, v_epoch, p_key, p_data, p_tags, p_client_id, p_user_id, p_conn_info, p_chan_info, p_subscribed_at, p_score,
+        p_channel, v_offset, v_epoch, p_key, p_data, p_tags, p_client_id, p_user_id, p_conn_info, p_chan_info, p_subscribed_at, p_score, v_previous_data,
         CASE WHEN p_stream_ttl IS NOT NULL THEN NOW() + p_stream_ttl ELSE NULL END,
         v_shard_id
     ) RETURNING cf_map_stream.id INTO v_id;
@@ -322,10 +332,10 @@ BEGIN
     IF NOT p_skip_outbox THEN
         INSERT INTO cf_map_outbox (
             shard_id, channel, channel_offset, epoch, key, data, tags, removed, score,
-            client_id, user_id, conn_info, chan_info
+            client_id, user_id, conn_info, chan_info, previous_data
         ) VALUES (
             v_shard_id, p_channel, v_offset, v_epoch, p_key, p_data, p_tags, FALSE, p_score,
-            p_client_id, p_user_id, p_conn_info, p_chan_info
+            p_client_id, p_user_id, p_conn_info, p_chan_info, v_previous_data
         );
     END IF;
 
@@ -373,6 +383,7 @@ CREATE OR REPLACE FUNCTION cf_map_publish_strict(
     p_idempotency_key TEXT DEFAULT NULL,
     p_idempotency_ttl INTERVAL DEFAULT NULL,
     p_refresh_ttl_on_suppress BOOLEAN DEFAULT FALSE,
+    p_use_delta BOOLEAN DEFAULT FALSE,
     p_skip_outbox BOOLEAN DEFAULT FALSE,
     p_num_shards INTEGER DEFAULT 16
 ) RETURNS TABLE(
@@ -391,7 +402,7 @@ BEGIN
         p_expected_offset, p_score, p_version, p_version_epoch,
         p_key_version, p_key_version_epoch,
         p_idempotency_key, p_idempotency_ttl, p_refresh_ttl_on_suppress,
-        p_skip_outbox, p_num_shards
+        p_use_delta, p_skip_outbox, p_num_shards
     );
 
     IF v_result.suppressed THEN

@@ -150,10 +150,9 @@ if meta_key ~= '' then
                 local expire_at = now + tonumber(keyed_member_ttl)
                 local ttl = tonumber(keyed_member_ttl)
 
-                -- Update expire zset with new expiry time
+                -- Update expire zset with new expiry time (per-key tracking)
                 if state_expire_key ~= '' then
                     redis.call("zadd", state_expire_key, expire_at, message_key)
-                    redis.call("expire", state_expire_key, ttl)
                 end
 
                 -- Update cleanup registration with new expiry
@@ -167,8 +166,16 @@ if meta_key ~= '' then
                 -- Refresh per-field TTL if using HEXPIRE
                 if use_hexpire == "1" then
                     redis.call("hexpire", state_hash_key, ttl, "FIELDS", "1", message_key)
-                else
-                    redis.call("expire", state_hash_key, ttl)
+                end
+                -- Container-level safety net EXPIRE using MetaTTL (not per-key TTL)
+                if meta_expire ~= '0' then
+                    local me = tonumber(meta_expire)
+                    if state_expire_key ~= '' then
+                        redis.call("expire", state_expire_key, me)
+                    end
+                    if use_hexpire ~= "1" then
+                        redis.call("expire", state_hash_key, me)
+                    end
                 end
             end
             local current_offset = redis.call("hget", meta_key, "s") or 0
@@ -280,6 +287,13 @@ if is_leave == "1" then
     end
 end
 
+-- For key-based delta: fetch raw previous state value before updating.
+-- Returned to Go for delta computation (Go parses "offset:epoch:payload" format).
+local prev_key_value = nil
+if use_delta == "1" and message_key ~= "" and state_hash_key ~= "" and state_payload_arg == "" and is_leave ~= "1" then
+    prev_key_value = redis.call("hget", state_hash_key, message_key)
+end
+
 -- ==== Step 5: Add/update keyed state ====
 -- Skip for leave messages (they already removed entries in Step 4)
 if state_hash_key ~= '' and is_leave ~= "1" then
@@ -313,10 +327,16 @@ if state_hash_key ~= '' and is_leave ~= "1" then
         local state_value = top_offset .. ":" .. current_epoch .. ":" .. state_payload
         redis.call("hset", state_hash_key, message_key, state_value)
         redis.call("zadd", state_order_key, tonumber(score), message_key)
-        redis.call("zadd", state_expire_key, expire_at, message_key)
-        redis.call("expire", state_hash_key, ttl)
-        redis.call("expire", state_order_key, ttl)
-        redis.call("expire", state_expire_key, ttl)
+        if ttl > 0 then
+            redis.call("zadd", state_expire_key, expire_at, message_key)
+        end
+        -- Container-level safety net EXPIRE using MetaTTL (not per-key TTL)
+        if meta_expire ~= '0' then
+            local me = tonumber(meta_expire)
+            redis.call("expire", state_hash_key, me)
+            redis.call("expire", state_order_key, me)
+            redis.call("expire", state_expire_key, me)
+        end
     else
         -- Simple HASH keyed state (unordered)
         -- Store revision with payload: offset:epoch:payload
@@ -327,15 +347,21 @@ if state_hash_key ~= '' and is_leave ~= "1" then
             -- This enables guaranteed LEAVE events even when using HEXPIRE
             if state_expire_key ~= '' then
                 redis.call("zadd", state_expire_key, expire_at, message_key)
-                redis.call("expire", state_expire_key, ttl)
             end
 
             if use_hexpire == "1" then
                 -- Redis 7.4+ HEXPIRE per-field TTL (defense in depth)
                 redis.call("hexpire", state_hash_key, ttl, "FIELDS", "1", message_key)
-            else
-                -- Still set whole-hash TTL as safety net
-                redis.call("expire", state_hash_key, ttl)
+            end
+        end
+        -- Container-level safety net EXPIRE using MetaTTL (not per-key TTL)
+        if meta_expire ~= '0' then
+            local me = tonumber(meta_expire)
+            if state_expire_key ~= '' then
+                redis.call("expire", state_expire_key, me)
+            end
+            if use_hexpire ~= "1" then
+                redis.call("expire", state_hash_key, me)
             end
         end
     end
@@ -411,22 +437,10 @@ end
 -- ==== Step 7: Publish to channel (simplified format) ====
 if channel ~= '' and publish_command ~= '' then
     local payload
-    if use_delta == "1" and stream_key ~= '' then
-        -- Delta format: d:offset:epoch:prev_len:prev_protobuf:curr_len:curr_protobuf
-        local prev_payload = ""
-        if top_offset > 1 then
-            local prev_entries = redis.call("xrevrange", stream_key, "+", "-", "COUNT", 1)
-            if #prev_entries > 0 then
-                local fields_and_values = prev_entries[1][2]
-                for i = 1, #fields_and_values, 2 do
-                    if fields_and_values[i] == "d" then
-                        prev_payload = fields_and_values[i + 1]
-                        break
-                    end
-                end
-            end
-        end
-        payload = "d:" .. top_offset .. ":" .. current_epoch .. ":" .. #prev_payload .. ":" .. prev_payload .. ":" .. #message_payload .. ":" .. message_payload
+    if prev_key_value then
+        -- Key-based delta: prev_key_value is raw state value ("offset:epoch:protobuf").
+        -- Go parses it on the receiving side.
+        payload = "d:" .. top_offset .. ":" .. current_epoch .. ":" .. #prev_key_value .. ":" .. prev_key_value .. ":" .. #message_payload .. ":" .. message_payload
     else
         -- Non-delta format: offset:epoch:protobuf
         payload = top_offset .. ":" .. current_epoch .. ":" .. message_payload

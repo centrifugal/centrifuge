@@ -190,8 +190,9 @@ type SubscribeEvent struct {
 	Recoverable bool
 	// JoinLeave is true when Client wants to receive join/leave messages.
 	JoinLeave bool
-	// Map is true when Client requested map subscription mode.
-	Map bool
+	// Type is the subscription type requested by the client (map, presence, etc.).
+	// For regular subscriptions this is SubscriptionTypeStream (zero value).
+	Type SubscriptionType
 }
 
 // SubscribeCallback should be called as soon as handler decides what to do
@@ -218,32 +219,6 @@ type SubscribeReply struct {
 
 // SubscribeHandler called when client wants to subscribe on channel.
 type SubscribeHandler func(SubscribeEvent, SubscribeCallback)
-
-// PresenceSubscribeEvent contains fields related to presence subscribe event.
-// Presence subscriptions allow watching who is currently subscribed to a channel.
-// This is a separate permission scope from data subscriptions.
-type PresenceSubscribeEvent struct {
-	// Channel is the base channel name (without :clients or :users suffix).
-	// For example, if client subscribes to "lobby:clients", Channel will be "lobby".
-	Channel string
-	// Data received from client as part of Subscribe Command.
-	Data []byte
-}
-
-// PresenceSubscribeReply contains fields determining the reaction on presence subscribe event.
-type PresenceSubscribeReply struct {
-	// ExpireAt defines time in future when subscription should expire.
-	ExpireAt int64
-}
-
-// PresenceSubscribeCallback should be called as soon as handler decides what to do
-// with presence subscribe event.
-type PresenceSubscribeCallback func(PresenceSubscribeReply, error)
-
-// PresenceSubscribeHandler called when client wants to subscribe to presence on a channel.
-// Presence subscriptions allow watching who is online - this is a separate permission
-// scope from data subscriptions (OnSubscribe).
-type PresenceSubscribeHandler func(PresenceSubscribeEvent, PresenceSubscribeCallback)
 
 // PublishEvent contains fields related to publish event. Note that this event
 // called before actual publish to Broker so handler has an option to reject this
@@ -276,6 +251,65 @@ type PublishCallback func(PublishReply, error)
 
 // PublishHandler called when client publishes into channel.
 type PublishHandler func(PublishEvent, PublishCallback)
+
+// MapPublishEvent contains fields related to map publish event.
+type MapPublishEvent struct {
+	// Channel client wants to publish data to.
+	Channel string
+	// Key sent by the client (may be empty if server assigns keys).
+	Key string
+	// Data client wants to publish.
+	Data []byte
+	// ClientInfo about client connection.
+	ClientInfo *ClientInfo
+}
+
+// MapPublishReply contains fields determining the result on map publish.
+type MapPublishReply struct {
+	// Key overrides the key from the client request. If set, this key is used
+	// instead of the one sent by the client. This allows the server to control
+	// key assignment (e.g., set key to client ID for cursor channels).
+	Key string
+	// Options to control map publication.
+	Options MapPublishOptions
+	// Result if set will tell Centrifuge that message already published to
+	// channel by handler code. In this case Centrifuge won't try to publish
+	// into channel again after handler returned MapPublishReply.
+	Result *MapPublishResult
+}
+
+// MapPublishCallback should be called with MapPublishReply or error.
+type MapPublishCallback func(MapPublishReply, error)
+
+// MapPublishHandler called when client publishes into map channel.
+type MapPublishHandler func(MapPublishEvent, MapPublishCallback)
+
+// MapRemoveEvent contains fields related to map remove event.
+type MapRemoveEvent struct {
+	// Channel client wants to remove a key from.
+	Channel string
+	// Key sent by the client (may be empty if server assigns keys).
+	Key string
+	// ClientInfo about client connection.
+	ClientInfo *ClientInfo
+}
+
+// MapRemoveReply contains fields determining the result on map remove.
+type MapRemoveReply struct {
+	// Key overrides the key from the client request.
+	Key string
+	// Options to control map removal.
+	Options MapRemoveOptions
+	// Result if set will tell Centrifuge that removal already performed
+	// by handler code. In this case Centrifuge won't try to remove again.
+	Result *MapPublishResult
+}
+
+// MapRemoveCallback should be called with MapRemoveReply or error.
+type MapRemoveCallback func(MapRemoveReply, error)
+
+// MapRemoveHandler called when client wants to remove a key from map channel.
+type MapRemoveHandler func(MapRemoveEvent, MapRemoveCallback)
 
 // SubRefreshEvent contains fields related to subscription refresh event.
 type SubRefreshEvent struct {
@@ -396,7 +430,6 @@ type HistoryCallback func(HistoryReply, error)
 // HistoryHandler must handle incoming command from client.
 type HistoryHandler func(HistoryEvent, HistoryCallback)
 
-
 // StateSnapshotHandler must return a copy of current client's
 // internal state. Returning a copy is important to avoid data races.
 type StateSnapshotHandler func() (any, error)
@@ -472,6 +505,8 @@ type TransportWriteEvent struct {
 	Data []byte
 	// Channel will be set if TransportWriteEvent relates to some channel.
 	Channel string
+	// Key of Publication (optional).
+	Key string
 	// FrameType tells what is being sent inside Data.
 	FrameType protocol.FrameType
 }

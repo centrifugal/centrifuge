@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -1606,4 +1607,222 @@ func TestMemoryMapBroker_CursorFormat(t *testing.T) {
 		// First entry of page 2 should be key_10 (score 1000, which is < 1100)
 		require.Equal(t, "key_10", pubs2[0].Key, "First entry of page 2 should be key_10")
 	})
+}
+
+// TestMemoryMapBroker_Delta tests key-based delta delivery via HandlePublication.
+func TestMemoryMapBroker_Delta(t *testing.T) {
+	node, _ := New(Config{})
+
+	type pubEvent struct {
+		ch      string
+		pub     *Publication
+		delta   bool
+		prevPub *Publication
+	}
+
+	var mu sync.Mutex
+	var events []pubEvent
+
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			mu.Lock()
+			events = append(events, pubEvent{ch: ch, pub: pub, delta: delta, prevPub: prevPub})
+			mu.Unlock()
+			return nil
+		},
+	}
+
+	e, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	err = e.RegisterEventHandler(handler)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+	})
+
+	ctx := context.Background()
+	channel := "test_delta"
+
+	// 1. First publish with UseDelta - no previous state, prevPub should be nil.
+	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("data1"),
+		UseDelta:   true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	mu.Lock()
+	require.Len(t, events, 1)
+	require.True(t, events[0].delta)
+	require.Nil(t, events[0].prevPub, "no previous state for first publish")
+	mu.Unlock()
+
+	// 2. Second publish same key - should get prevPub with first data.
+	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("data1_updated"),
+		UseDelta:   true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	mu.Lock()
+	require.Len(t, events, 2)
+	require.True(t, events[1].delta)
+	require.NotNil(t, events[1].prevPub)
+	require.Equal(t, []byte("data1"), events[1].prevPub.Data)
+	mu.Unlock()
+
+	// 3. Different key - no previous state for this key.
+	_, err = e.Publish(ctx, channel, "key2", MapPublishOptions{
+		Data:       []byte("data2"),
+		UseDelta:   true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	mu.Lock()
+	require.Len(t, events, 3)
+	require.True(t, events[2].delta)
+	require.Nil(t, events[2].prevPub, "no previous state for key2")
+	mu.Unlock()
+
+	// 4. StreamData present - prevPub nil even though UseDelta is true.
+	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("data1_full"),
+		StreamData: []byte("data1_stream"),
+		UseDelta:   true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	mu.Lock()
+	require.Len(t, events, 4)
+	require.True(t, events[3].delta)
+	require.Nil(t, events[3].prevPub, "StreamData disables key-based delta")
+	mu.Unlock()
+
+	// 5. UseDelta=false - no delta.
+	_, err = e.Publish(ctx, channel, "key2", MapPublishOptions{
+		Data:       []byte("data2_updated"),
+		UseDelta:   false,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	mu.Lock()
+	require.Len(t, events, 5)
+	require.False(t, events[4].delta)
+	require.Nil(t, events[4].prevPub, "UseDelta=false means no delta")
+	mu.Unlock()
+
+	// 6. Third publish to key1 after StreamData update - prevPub should have data1_full
+	// (state was updated to data1_full by the StreamData publish).
+	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("data1_v3"),
+		UseDelta:   true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	mu.Lock()
+	require.Len(t, events, 6)
+	require.True(t, events[5].delta)
+	require.NotNil(t, events[5].prevPub)
+	require.Equal(t, []byte("data1_full"), events[5].prevPub.Data, "prevPub should have state data, not stream data")
+	mu.Unlock()
+}
+
+func TestMemoryMapBroker_Clear(t *testing.T) {
+	node, _ := New(Config{})
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := "test_clear"
+
+	// Publish some keyed state and stream entries.
+	for i := 0; i < 3; i++ {
+		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+			Data:       []byte(fmt.Sprintf("data%d", i)),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Verify data exists.
+	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+
+	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
+	require.NoError(t, err)
+	require.Len(t, pubs, 3)
+
+	stats, err := broker.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 3, stats.NumKeys)
+
+	// Clear the channel.
+	err = broker.Clear(ctx, channel, MapClearOptions{})
+	require.NoError(t, err)
+
+	// State should be empty.
+	entries, _, _, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	require.NoError(t, err)
+	require.Empty(t, entries)
+
+	// Stream should be empty.
+	pubs, _, err = broker.ReadStream(ctx, channel, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
+	require.NoError(t, err)
+	require.Empty(t, pubs)
+
+	// Stats should show zero keys.
+	stats, err = broker.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 0, stats.NumKeys)
+}
+
+func TestMemoryMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
+	node, _ := New(Config{})
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+
+	// Populate two channels.
+	for _, ch := range []string{"ch1", "ch2"} {
+		_, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
+			Data:       []byte("v"),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Clear only ch1.
+	err := broker.Clear(ctx, "ch1", MapClearOptions{})
+	require.NoError(t, err)
+
+	// ch1 empty.
+	entries, _, _, err := broker.ReadState(ctx, "ch1", MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	require.NoError(t, err)
+	require.Empty(t, entries)
+
+	// ch2 still intact.
+	entries, _, _, err = broker.ReadState(ctx, "ch2", MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
 }

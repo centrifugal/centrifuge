@@ -28,8 +28,11 @@
         .cursor {
             position: absolute;
             pointer-events: none;
-            transition: transform 0.25s linear;
+            transition: transform 0.25s linear, opacity 0.4s ease-out;
             z-index: 1000;
+        }
+        .cursor.fade-out {
+            opacity: 0;
         }
         .cursor-pointer {
             width: 20px;
@@ -180,13 +183,14 @@
             updateUserCount();
         }
 
-        // Remove cursor.
+        // Remove cursor with fade-out.
         function removeCursor(key) {
             const cursor = cursors.get(key);
             if (cursor) {
-                cursor.remove();
                 cursors.delete(key);
                 updateUserCount();
+                cursor.classList.add('fade-out');
+                cursor.addEventListener('transitionend', () => cursor.remove(), { once: true });
             }
         }
 
@@ -262,8 +266,8 @@
             if (now - lastUpdate < updateInterval) return;
             lastUpdate = now;
 
-            // Send cursor update via RPC.
-            centrifuge.rpc('cursor:update', {
+            // Send cursor update via map publish (server assigns key to client ID).
+            sub.mapPublish('', {
                 x: e.clientX,
                 y: e.clientY,
                 color: userColor,

@@ -12,6 +12,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newTestRedisMapBrokerWithHandler(tb testing.TB, n *Node, h BrokerEventHandler) *RedisMapBroker {
+	redisConf := testSingleRedisConf(6379)
+	shard, err := NewRedisShard(n, redisConf)
+	require.NoError(tb, err)
+	e, err := NewRedisMapBroker(n, RedisMapBrokerConfig{
+		Shards: []*RedisShard{shard},
+	})
+	require.NoError(tb, err)
+	err = e.RegisterEventHandler(h)
+	require.NoError(tb, err)
+	tb.Cleanup(func() {
+		_ = n.Shutdown(context.Background())
+	})
+	return e
+}
+
 // randomChannel generates a unique channel name for testing to avoid cross-test pollution.
 func randomChannel(prefix string) string {
 	return fmt.Sprintf("%s_%d_%d", prefix, time.Now().UnixNano(), rand.Intn(100000))
@@ -2231,4 +2247,222 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	require.Contains(t, result, "key_new_top", "key_new_top should be present")
 	require.Contains(t, result, "key_new_bottom", "key_new_bottom should be present")
 	require.Equal(t, []byte("data_05_moved"), result["key_05"], "key_05 should have updated data")
+}
+
+// TestRedisMapBroker_Delta tests key-based delta delivery via PUB/SUB and HandlePublication.
+func TestRedisMapBroker_Delta(t *testing.T) {
+	node, _ := New(Config{})
+
+	type pubEvent struct {
+		ch      string
+		pub     *Publication
+		delta   bool
+		prevPub *Publication
+	}
+
+	eventCh := make(chan pubEvent, 10)
+
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			eventCh <- pubEvent{ch: ch, pub: pub, delta: delta, prevPub: prevPub}
+			return nil
+		},
+	}
+
+	e := newTestRedisMapBrokerWithHandler(t, node, handler)
+
+	ctx := context.Background()
+	channel := randomChannel("test_delta")
+
+	// Subscribe to channel for PUB/SUB delivery.
+	err := e.Subscribe(channel)
+	require.NoError(t, err)
+	time.Sleep(100 * time.Millisecond)
+
+	waitEvent := func(t *testing.T) pubEvent {
+		t.Helper()
+		select {
+		case ev := <-eventCh:
+			return ev
+		case <-time.After(5 * time.Second):
+			t.Fatal("timeout waiting for publication event")
+			return pubEvent{}
+		}
+	}
+
+	// 1. First publish with UseDelta - no previous state in Redis hash.
+	// Lua sends non-delta format because HGET returns false.
+	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("data1"),
+		UseDelta:   true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	ev := waitEvent(t)
+	require.False(t, ev.delta, "no prev state in Redis → non-delta PUB/SUB format")
+	require.Nil(t, ev.prevPub, "no previous state for first publish")
+	require.Equal(t, []byte("data1"), ev.pub.Data)
+
+	// 2. Second publish same key - Lua finds prev state via HGET, sends delta format.
+	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("data1_updated"),
+		UseDelta:   true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	ev = waitEvent(t)
+	require.True(t, ev.delta)
+	require.NotNil(t, ev.prevPub)
+	require.Equal(t, []byte("data1"), ev.prevPub.Data)
+	require.Equal(t, []byte("data1_updated"), ev.pub.Data)
+
+	// 3. Different key - no previous state for this key.
+	_, err = e.Publish(ctx, channel, "key2", MapPublishOptions{
+		Data:       []byte("data2"),
+		UseDelta:   true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	ev = waitEvent(t)
+	require.False(t, ev.delta, "no prev state for key2 → non-delta format")
+	require.Nil(t, ev.prevPub, "no previous state for key2")
+	require.Equal(t, []byte("data2"), ev.pub.Data)
+
+	// 4. StreamData present - no delta (use_delta=0 in Lua).
+	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("data1_full"),
+		StreamData: []byte("data1_stream"),
+		UseDelta:   true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	ev = waitEvent(t)
+	require.False(t, ev.delta, "StreamData disables delta")
+	require.Nil(t, ev.prevPub, "StreamData disables key-based delta")
+
+	// 5. UseDelta=false - no delta.
+	_, err = e.Publish(ctx, channel, "key2", MapPublishOptions{
+		Data:       []byte("data2_updated"),
+		UseDelta:   false,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	ev = waitEvent(t)
+	require.False(t, ev.delta)
+	require.Nil(t, ev.prevPub, "UseDelta=false means no delta")
+
+	// 6. Third publish to key1 after StreamData update - prevPub should have data1_full.
+	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("data1_v3"),
+		UseDelta:   true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	ev = waitEvent(t)
+	require.True(t, ev.delta)
+	require.NotNil(t, ev.prevPub)
+	require.Equal(t, []byte("data1_full"), ev.prevPub.Data, "prevPub should have state data, not stream data")
+}
+
+func TestRedisMapBroker_Clear(t *testing.T) {
+	node, _ := New(Config{})
+	broker := newTestRedisMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_clear")
+
+	// Publish some keyed state and stream entries.
+	for i := 0; i < 3; i++ {
+		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+			Data:       []byte(fmt.Sprintf("data%d", i)),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Verify data exists.
+	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+
+	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
+	require.NoError(t, err)
+	require.Len(t, pubs, 3)
+
+	stats, err := broker.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 3, stats.NumKeys)
+
+	// Clear the channel.
+	err = broker.Clear(ctx, channel, MapClearOptions{})
+	require.NoError(t, err)
+
+	// State should be empty.
+	entries, _, _, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	require.NoError(t, err)
+	require.Empty(t, entries)
+
+	// Stream should be empty.
+	pubs, _, err = broker.ReadStream(ctx, channel, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
+	require.NoError(t, err)
+	require.Empty(t, pubs)
+
+	// Stats should show zero keys.
+	stats, err = broker.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 0, stats.NumKeys)
+}
+
+func TestRedisMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
+	node, _ := New(Config{})
+	broker := newTestRedisMapBroker(t, node)
+
+	ctx := context.Background()
+	ch1 := randomChannel("test_clear_iso1")
+	ch2 := randomChannel("test_clear_iso2")
+
+	// Populate two channels.
+	for _, ch := range []string{ch1, ch2} {
+		_, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
+			Data:       []byte("v"),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Clear only ch1.
+	err := broker.Clear(ctx, ch1, MapClearOptions{})
+	require.NoError(t, err)
+
+	// ch1 empty.
+	entries, _, _, err := broker.ReadState(ctx, ch1, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	require.NoError(t, err)
+	require.Empty(t, entries)
+
+	// ch2 still intact.
+	entries, _, _, err = broker.ReadState(ctx, ch2, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
 }

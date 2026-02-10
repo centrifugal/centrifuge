@@ -151,19 +151,22 @@ type MapPublishOptions struct {
 	IdempotentResultTTL time.Duration
 
 	// StreamSize sets the maximum number of entries in the stream (history).
-	// Set to 0 to disable stream (no history, state-only mode).
+	// Zero value means using default from MapChannelOptionsResolver.
 	// Older entries are evicted when the limit is reached.
 	StreamSize int
 	// StreamTTL sets how long stream entries are retained.
+	// Zero value means using default from MapChannelOptionsResolver.
 	StreamTTL time.Duration
 	// MetaTTL sets how long stream metadata (epoch, top offset) is retained
 	// after all entries expire. Allows position validation even with empty stream.
+	// Zero value means using default from MapChannelOptionsResolver.
 	MetaTTL time.Duration
+
 	// KeyTTL sets automatic expiration for this key. After TTL expires, the key
 	// is removed from state and a removal event is published to stream.
-	// Use for presence, ephemeral cursors, and auto-cleanup scenarios.
+	// Zero value means using default from MapChannelOptionsResolver (1 minute by default).
+	// Use negative value (-1) to explicitly disable key expiration.
 	KeyTTL time.Duration
-
 	// Data is the publication payload (usually JSON, but can be binary also).
 	// Stored in state and published to stream/pub-sub (unless StreamData is set).
 	Data []byte
@@ -220,11 +223,13 @@ type MapRemoveOptions struct {
 
 	// StreamSize sets the maximum stream size. The removal event is appended
 	// to the stream so clients can recover the removal during catch-up.
-	// Set to 0 to skip stream (removal won't be recoverable).
+	// Zero value means using default from MapChannelOptionsResolver.
 	StreamSize int
 	// StreamTTL sets how long the removal entry is retained in stream.
+	// Zero value means using default from MapChannelOptionsResolver.
 	StreamTTL time.Duration
 	// MetaTTL sets how long stream metadata is retained.
+	// Zero value means using default from MapChannelOptionsResolver.
 	MetaTTL time.Duration
 }
 
@@ -348,7 +353,7 @@ type MapClearOptions struct{}
 // Positive values are kept as-is.
 func applyChannelOptionsDefaults(
 	streamSize int, streamTTL, metaTTL, keyTTL time.Duration,
-	resolver ChannelOptionsResolver, channel string,
+	resolver MapChannelOptionsResolver, channel string,
 ) (int, time.Duration, time.Duration, time.Duration) {
 	// Get defaults only if needed
 	var defaults MapChannelOptions

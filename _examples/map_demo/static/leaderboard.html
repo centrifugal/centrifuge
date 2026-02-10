@@ -131,6 +131,7 @@
             display: none;
             text-align: center;
             margin-bottom: 40px;
+            position: relative;
         }
         .game-section.active {
             display: block;
@@ -221,6 +222,42 @@
             font-weight: bold;
             font-size: 18px;
             text-align: right;
+        }
+        .score.bump {
+            animation: score-bump 0.35s ease;
+        }
+        @keyframes score-bump {
+            0%   { transform: scale(1); }
+            40%  { transform: scale(1.3); color: #4caf50; }
+            100% { transform: scale(1); }
+        }
+        .leaderboard-row.rank-up {
+            animation: rank-up-glow 0.6s ease;
+        }
+        @keyframes rank-up-glow {
+            0%   { background: rgba(76, 175, 80, 0.0); }
+            30%  { background: rgba(76, 175, 80, 0.25); }
+            100% { background: rgba(76, 175, 80, 0.0); }
+        }
+        .leaderboard-row.me.rank-up {
+            animation: rank-up-glow-me 0.6s ease;
+        }
+        @keyframes rank-up-glow-me {
+            0%   { background: rgba(79, 195, 247, 0.2); }
+            30%  { background: rgba(76, 175, 80, 0.35); }
+            100% { background: rgba(79, 195, 247, 0.2); }
+        }
+        .click-pop {
+            position: absolute;
+            pointer-events: none;
+            font-weight: 700;
+            font-size: 20px;
+            color: #4caf50;
+            animation: pop-up 0.6s ease forwards;
+        }
+        @keyframes pop-up {
+            0%   { opacity: 1; transform: translateY(0) scale(1); }
+            100% { opacity: 0; transform: translateY(-40px) scale(1.2); }
         }
         .empty-state {
             text-align: center;
@@ -330,6 +367,10 @@
         // Leaderboard entries.
         const entries = new Map();
 
+        // Previous rank and score per key for detecting changes.
+        const prevRanks = new Map();
+        const prevScores = new Map();
+
         // Color picker.
         document.querySelectorAll('.color-option').forEach(el => {
             el.addEventListener('click', () => {
@@ -360,19 +401,32 @@
             rowsContainer.innerHTML = sorted.map((entry, index) => {
                 const isMe = entry.userId === userId;
                 const rankClass = index === 0 ? 'gold' : index === 1 ? 'silver' : index === 2 ? 'bronze' : '';
+                const medal = index === 0 ? '\u{1F947}' : index === 1 ? '\u{1F948}' : index === 2 ? '\u{1F949}' : '';
+                const rankLabel = medal ? medal : '#' + (index + 1);
+                const key = entry.userId;
+                const oldRank = prevRanks.get(key);
+                const oldScore = prevScores.get(key);
+                const rankUp = oldRank !== undefined && index < oldRank ? ' rank-up' : '';
+                const scoreBump = oldScore !== undefined && entry.score > oldScore ? ' bump' : '';
 
                 return `
-                    <div class="leaderboard-row ${isMe ? 'me' : ''}">
-                        <div class="rank ${rankClass}">#${index + 1}</div>
+                    <div class="leaderboard-row ${isMe ? 'me' : ''}${rankUp}">
+                        <div class="rank ${rankClass}">${rankLabel}</div>
                         <div class="player-info">
                             <div class="player-avatar" style="background: ${entry.color}">${entry.name.charAt(0).toUpperCase()}</div>
                             <span class="player-name">${entry.name}</span>
                             ${isMe ? '<span class="player-tag">YOU</span>' : ''}
                         </div>
-                        <div class="score">${entry.score}</div>
+                        <div class="score${scoreBump}">${entry.score}</div>
                     </div>
                 `;
             }).join('');
+
+            // Store current ranks and scores for next comparison.
+            sorted.forEach((entry, index) => {
+                prevRanks.set(entry.userId, index);
+                prevScores.set(entry.userId, entry.score);
+            });
         }
 
         // Connect to Centrifuge.
@@ -419,6 +473,8 @@
 
             if (ctx.removed) {
                 entries.delete(ctx.key);
+                prevRanks.delete(ctx.key);
+                prevScores.delete(ctx.key);
                 if (ctx.key === userId) {
                     myEntry = null;
                     hideGameSection();
@@ -509,6 +565,16 @@
 
         async function handleClick() {
             if (!inGame) return;
+
+            // Floating "+1" pop.
+            const btn = document.getElementById('clickButton');
+            const pop = document.createElement('div');
+            pop.className = 'click-pop';
+            pop.textContent = '+1';
+            pop.style.left = btn.offsetLeft + btn.offsetWidth / 2 - 12 + 'px';
+            pop.style.top = btn.offsetTop - 10 + 'px';
+            btn.parentElement.appendChild(pop);
+            pop.addEventListener('animationend', () => pop.remove());
 
             try {
                 const response = await fetch('/api/leaderboard/click', {

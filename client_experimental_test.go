@@ -38,6 +38,26 @@ func BenchmarkPerChannelWriter(b *testing.B) {
 	wg.Wait() // Wait for all messages to be flushed.
 }
 
+func BenchmarkPerChannelWriter_FlushLatest(b *testing.B) {
+	const numChannels = 10
+	const numKeys = 50
+
+	flushFn := func(items []queue.Item) error {
+		return nil
+	}
+
+	w := newPerChannelWriter(flushFn)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		channelName := "channel-" + strconv.Itoa(i%numChannels)
+		key := "key-" + strconv.Itoa(i%numKeys)
+		item := queue.Item{Channel: channelName, Key: key, FrameType: protocol.FrameTypePushPublication}
+		w.Add(item, channelName, ChannelBatchConfig{MaxDelay: 10 * time.Millisecond, MaxSize: 128, FlushLatestPublication: true})
+	}
+	w.Close(true)
+}
+
 func TestClientSubscribeReceivePublication_ChannelBatching_Delay(t *testing.T) {
 	t.Parallel()
 	node := defaultTestNode()
@@ -180,6 +200,117 @@ func TestClientSubscribeReceivePublication_ChannelBatching_FlushLatestOnly(t *te
 		require.Fail(t, "timeout receiving publication")
 	case <-done:
 	}
+}
+
+func TestChannelWriter_FlushLatestPerKey(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var flushed []queue.Item
+
+	w := newChannelWriter(func(items []queue.Item) error {
+		mu.Lock()
+		flushed = append(flushed, items...)
+		mu.Unlock()
+		return nil
+	})
+
+	config := ChannelBatchConfig{
+		FlushLatestPublication: true,
+		MaxDelay:               100 * time.Millisecond,
+	}
+
+	// Publish 3 updates to key "a", 2 updates to key "b", 1 to key "c".
+	w.Add(queue.Item{Data: []byte("a1"), Key: "a", FrameType: protocol.FrameTypePushPublication}, config)
+	w.Add(queue.Item{Data: []byte("b1"), Key: "b", FrameType: protocol.FrameTypePushPublication}, config)
+	w.Add(queue.Item{Data: []byte("a2"), Key: "a", FrameType: protocol.FrameTypePushPublication}, config)
+	w.Add(queue.Item{Data: []byte("c1"), Key: "c", FrameType: protocol.FrameTypePushPublication}, config)
+	w.Add(queue.Item{Data: []byte("b2"), Key: "b", FrameType: protocol.FrameTypePushPublication}, config)
+	w.Add(queue.Item{Data: []byte("a3"), Key: "a", FrameType: protocol.FrameTypePushPublication}, config)
+
+	// Close triggers flush.
+	w.close(true)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Should have 3 items: latest for "c" (unchanged), "b" (updated), "a" (updated last).
+	// Order: "c" stayed at position from first insert, "b" moved after "c", "a" moved to end.
+	require.Len(t, flushed, 3)
+	require.Equal(t, "c", flushed[0].Key)
+	require.Equal(t, []byte("c1"), flushed[0].Data)
+	require.Equal(t, "b", flushed[1].Key)
+	require.Equal(t, []byte("b2"), flushed[1].Data)
+	require.Equal(t, "a", flushed[2].Key)
+	require.Equal(t, []byte("a3"), flushed[2].Data)
+}
+
+func TestChannelWriter_FlushLatestPerKey_EmptyKeyFallback(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var flushed []queue.Item
+
+	w := newChannelWriter(func(items []queue.Item) error {
+		mu.Lock()
+		flushed = append(flushed, items...)
+		mu.Unlock()
+		return nil
+	})
+
+	config := ChannelBatchConfig{
+		FlushLatestPublication: true,
+		MaxDelay:               100 * time.Millisecond,
+	}
+
+	// Regular publications without keys — should coalesce to single latest (backward compat).
+	w.Add(queue.Item{Data: []byte("msg1"), FrameType: protocol.FrameTypePushPublication}, config)
+	w.Add(queue.Item{Data: []byte("msg2"), FrameType: protocol.FrameTypePushPublication}, config)
+	w.Add(queue.Item{Data: []byte("msg3"), FrameType: protocol.FrameTypePushPublication}, config)
+
+	w.close(true)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Should have exactly 1 item — the latest.
+	require.Len(t, flushed, 1)
+	require.Equal(t, []byte("msg3"), flushed[0].Data)
+}
+
+func TestChannelWriter_FlushLatestPerKey_MixedWithNonPub(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var flushed []queue.Item
+
+	w := newChannelWriter(func(items []queue.Item) error {
+		mu.Lock()
+		flushed = append(flushed, items...)
+		mu.Unlock()
+		return nil
+	})
+
+	config := ChannelBatchConfig{
+		FlushLatestPublication: true,
+		MaxDelay:               100 * time.Millisecond,
+	}
+
+	// Mix of join (non-pub, goes to buffer) and keyed publications.
+	w.Add(queue.Item{Data: []byte("join1"), FrameType: protocol.FrameTypePushJoin}, config)
+	w.Add(queue.Item{Data: []byte("a1"), Key: "a", FrameType: protocol.FrameTypePushPublication}, config)
+	w.Add(queue.Item{Data: []byte("a2"), Key: "a", FrameType: protocol.FrameTypePushPublication}, config)
+	w.Add(queue.Item{Data: []byte("b1"), Key: "b", FrameType: protocol.FrameTypePushPublication}, config)
+
+	w.close(true)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// join1 in buffer + 2 per-key pubs. Buffer first, then pubs in last-updated order.
+	require.Len(t, flushed, 3)
+	require.Equal(t, []byte("join1"), flushed[0].Data)
+	require.Equal(t, "a", flushed[1].Key)
+	require.Equal(t, []byte("a2"), flushed[1].Data)
+	require.Equal(t, "b", flushed[2].Key)
+	require.Equal(t, []byte("b1"), flushed[2].Data)
 }
 
 // timerCanceler implements the TimerCanceler interface.
