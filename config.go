@@ -22,12 +22,14 @@ type MapChannelOptions struct {
 type MapChannelOptionsResolver func(channel string) MapChannelOptions
 
 // DefaultMapChannelOptions returns sensible defaults for map channel options.
+// By default, map channels are streamless (StreamSize=0, StreamTTL=0) — no stream
+// history is maintained. Applications that need stream-based recovery or CAS should
+// opt in via GetMapChannelOptions returning StreamSize > 0 and StreamTTL > 0, and
+// setting EnablePositioning=true or EnableRecovery=true in subscribe options.
 func DefaultMapChannelOptions() MapChannelOptions {
 	return MapChannelOptions{
-		MetaTTL:    time.Hour,
-		StreamSize: 1000,
-		StreamTTL:  5 * time.Minute,
-		KeyTTL:     time.Minute,
+		MetaTTL: time.Hour,
+		KeyTTL:  time.Minute,
 	}
 }
 

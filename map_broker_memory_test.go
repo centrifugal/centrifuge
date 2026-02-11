@@ -65,10 +65,11 @@ func TestMemoryMapBroker_StatefulChannel(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read state
-	entries, streamPos, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, streamPos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.NotEmpty(t, streamPos.Epoch)
 	require.Greater(t, streamPos.Offset, uint64(0))
@@ -80,13 +81,13 @@ func TestMemoryMapBroker_StatefulChannel(t *testing.T) {
 	require.Equal(t, []byte("data2"), state["key2"])
 
 	// Read stream to verify all publications are in history
-	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit: -1, // Get all
 		},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubs, 3) // All 3 publications in stream
+	require.Len(t, streamResult.Publications, 3) // All 3 publications in stream
 }
 
 // TestMemoryMapBroker_StatefulChannelOrdered tests ordered stateful channel.
@@ -111,11 +112,12 @@ func TestMemoryMapBroker_StatefulChannelOrdered(t *testing.T) {
 	}
 
 	// Read ordered state (descending by score)
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 5)
 
@@ -157,10 +159,11 @@ func TestMemoryMapBroker_StateRevision(t *testing.T) {
 	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch) // Same epoch
 
 	// Read state - entries now include per-entry revisions
-	entries, streamPos, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, streamPos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Equal(t, res2.Position.Offset, streamPos.Offset)
 	require.Equal(t, res2.Position.Epoch, streamPos.Epoch)
@@ -197,11 +200,12 @@ func TestMemoryMapBroker_StatePagination(t *testing.T) {
 	}
 
 	// Read state with limit
-	page1, pos1, cursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    3,
 		Cursor:   "",
 		StateTTL: 300 * time.Second,
 	})
+	page1, pos1, cursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.NotEmpty(t, page1)
 
@@ -213,11 +217,12 @@ func TestMemoryMapBroker_StatePagination(t *testing.T) {
 
 	// Continue reading until cursor is empty
 	for cursor != "" {
-		page, pos, newCursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 			Limit:    3,
 			Cursor:   cursor,
 			StateTTL: 300 * time.Second,
 		})
+		page, pos, newCursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
 		require.Equal(t, pos1.Epoch, pos.Epoch) // Same epoch across pages
 
@@ -252,10 +257,11 @@ func TestMemoryMapBroker_EpochHandling(t *testing.T) {
 	epoch1 := res1.Position.Epoch
 
 	// Read state
-	entries, streamPos1, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, streamPos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, epoch1, streamPos1.Epoch)
@@ -276,7 +282,7 @@ func TestMemoryMapBroker_EpochMismatchWhenChannelNotExists(t *testing.T) {
 
 	// Client tries to read state with an old epoch, but channel doesn't exist
 	// (simulates reconnection after server restart)
-	_, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Revision: &StreamPosition{
 			Epoch:  "old_epoch_from_previous_session",
 			Offset: 100,
@@ -296,9 +302,10 @@ func TestMemoryMapBroker_NoEpochWhenChannelNotExists(t *testing.T) {
 	channel := "test_fresh_channel"
 
 	// Fresh subscription - no epoch provided
-	entries, streamPos, cursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
+	entries, streamPos, cursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Empty(t, entries)            // No entries in non-existent channel
 	require.NotEmpty(t, streamPos.Epoch) // Should get a new epoch
@@ -342,10 +349,11 @@ func TestMemoryMapBroker_Idempotency(t *testing.T) {
 	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch)   // Same epoch
 
 	// State should still have original data (second publish was cached/skipped)
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	state := stateToMapMemory(entries)
 	require.Len(t, state, 1)
@@ -398,10 +406,11 @@ func TestMemoryMapBroker_VersionedPublishing(t *testing.T) {
 	require.Equal(t, uint64(2), res3.Position.Offset) // New offset
 
 	// State should have v3 data
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	state := stateToMapMemory(entries)
 	require.Equal(t, []byte("data_v3"), state["key1"])
@@ -435,20 +444,22 @@ func TestMemoryMapBroker_MultipleChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read channel1 state
-	entries1, _, _, err := broker.ReadState(ctx, channel1, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel1, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries1, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	state1 := stateToMapMemory(entries1)
 	require.Len(t, state1, 1)
 	require.Equal(t, []byte("data1"), state1["key1"])
 
 	// Read channel2 state
-	entries2, _, _, err := broker.ReadState(ctx, channel2, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel2, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries2, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	state2 := stateToMapMemory(entries2)
 	require.Len(t, state2, 1)
@@ -490,11 +501,12 @@ func TestMemoryMapBroker_OrderedStateOrdering(t *testing.T) {
 	}
 
 	// Read ordered state - should be sorted by score (descending)
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 5, "Should have all 5 entries")
 
@@ -534,11 +546,12 @@ func TestMemoryMapBroker_OrderedStatePagination(t *testing.T) {
 	}
 
 	// Read first page (limit=5, no cursor)
-	page1, pos1, cursor1, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    5,
 		StateTTL: 300 * time.Second,
 	})
+	page1, pos1, cursor1 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, page1, 5, "First page should have 5 entries")
 	require.NotEmpty(t, cursor1, "Should have cursor for next page")
@@ -550,12 +563,13 @@ func TestMemoryMapBroker_OrderedStatePagination(t *testing.T) {
 	}
 
 	// Read second page (using cursor)
-	page2, pos2, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Cursor:   cursor1,
 		Limit:    5,
 		StateTTL: 300 * time.Second,
 	})
+	page2, pos2, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, page2, 5, "Second page should have 5 entries")
 	require.Equal(t, pos1.Epoch, pos2.Epoch, "Epoch should be consistent across pages")
@@ -602,11 +616,12 @@ func TestMemoryMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 	}
 
 	// Read ordered state
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 5)
 
@@ -642,11 +657,12 @@ func TestMemoryMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 	}
 
 	// Read initial order (descending: 50, 40, 30, 20, 10)
-	entries1, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries1, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Equal(t, "key_5", entries1[0].Key) // Highest score (50)
 	require.Equal(t, "key_1", entries1[4].Key) // Lowest score (10)
@@ -663,11 +679,12 @@ func TestMemoryMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read updated order
-	entries2, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries2, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries2, 5)
 
@@ -706,10 +723,11 @@ func TestMemoryMapBroker_Remove(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify state has 2 keys
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 
@@ -722,24 +740,25 @@ func TestMemoryMapBroker_Remove(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify state has 1 key
-	entries, _, _, err = broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, "key2", entries[0].Key)
 
 	// Verify remove was added to stream
-	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit: -1,
 		},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubs, 3) // key1, key2, remove(key1)
-	require.True(t, pubs[2].Removed)
-	require.Equal(t, "key1", pubs[2].Key)
+	require.Len(t, streamResult.Publications, 3) // key1, key2, remove(key1)
+	require.True(t, streamResult.Publications[2].Removed)
+	require.Equal(t, "key1", streamResult.Publications[2].Key)
 
 	// Remove non-existent key should be suppressed with key_not_found
 	res, err := broker.Remove(ctx, channel, "nonexistent", MapRemoveOptions{
@@ -751,13 +770,13 @@ func TestMemoryMapBroker_Remove(t *testing.T) {
 	require.Equal(t, SuppressReasonKeyNotFound, res.SuppressReason)
 
 	// Verify no extra stream entry was added
-	pubs, _, err = broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult, err = broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit: -1,
 		},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubs, 3) // Still 3 - no entry for nonexistent key
+	require.Len(t, streamResult.Publications, 3) // Still 3 - no entry for nonexistent key
 }
 
 // TestMemoryMapBroker_KeyModeIfNew tests KeyModeIfNew - only write if key doesn't exist.
@@ -794,20 +813,21 @@ func TestMemoryMapBroker_KeyModeIfNew(t *testing.T) {
 	require.Equal(t, uint64(1), res2.Position.Offset, "Offset should not change")
 
 	// Verify state still has original data
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, []byte("player1"), entries[0].Data)
 
 	// Verify stream only has one entry (second was suppressed)
-	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubs, 1)
+	require.Len(t, streamResult.Publications, 1)
 }
 
 // TestMemoryMapBroker_KeyModeIfExists tests KeyModeIfExists - only write if key exists.
@@ -853,10 +873,11 @@ func TestMemoryMapBroker_KeyModeIfExists(t *testing.T) {
 	require.False(t, res3.Suppressed, "Third publish should not be suppressed (key exists)")
 
 	// Verify state has updated data
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, []byte("heartbeat2"), entries[0].Data)
@@ -893,10 +914,11 @@ func TestMemoryMapBroker_KeyModeReplace(t *testing.T) {
 	require.False(t, res2.Suppressed, "Replace should never be suppressed")
 
 	// Verify state has updated data
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, []byte("value2"), entries[0].Data)
@@ -931,11 +953,12 @@ func simulateClientRecovery(
 	pageNum := 0
 
 	for {
-		pubs, streamPos, nextCursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 			Limit:   pageSize,
 			Cursor:  cursor,
 			Ordered: ordered,
 		})
+		pubs, streamPos, nextCursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
 
 		if pageNum == 0 {
@@ -957,7 +980,7 @@ func simulateClientRecovery(
 	}
 
 	// Step 3: Read stream from firstStreamPos
-	streamPubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Since: &firstStreamPos,
 			Limit: -1, // Get all
@@ -966,7 +989,7 @@ func simulateClientRecovery(
 	require.NoError(t, err)
 
 	// Step 4: Apply stream changes
-	for _, pub := range streamPubs {
+	for _, pub := range streamResult.Publications {
 		if pub.Removed {
 			delete(allEntries, pub.Key)
 		} else {
@@ -1002,9 +1025,10 @@ func TestMemoryMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	}
 
 	// Read first page (keys key_00 to key_09 lexicographically)
-	pubs1, streamPos1, cursor1, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 10,
 	})
+	pubs1, streamPos1, cursor1 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs1, 10)
 	require.NotEmpty(t, cursor1)
@@ -1020,10 +1044,11 @@ func TestMemoryMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read second page with cursor
-	pubs2, _, cursor2, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:  10,
 		Cursor: cursor1,
 	})
+	pubs2, _, cursor2 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
 	// Combine state entries, filter by streamPos1
@@ -1041,10 +1066,11 @@ func TestMemoryMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	// Continue if more pages
 	cursor := cursor2
 	for cursor != "" {
-		pubs, _, nextCursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 			Limit:  10,
 			Cursor: cursor,
 		})
+		pubs, _, nextCursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
 		for _, pub := range pubs {
 			if pub.Offset <= streamPos1.Offset {
@@ -1055,7 +1081,7 @@ func TestMemoryMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	}
 
 	// Read stream to get changes since streamPos1
-	streamPubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Since: &streamPos1,
 			Limit: -1,
@@ -1064,7 +1090,7 @@ func TestMemoryMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	require.NoError(t, err)
 
 	// Apply stream changes
-	for _, pub := range streamPubs {
+	for _, pub := range streamResult.Publications {
 		if pub.Removed {
 			delete(stateKeys, pub.Key)
 		}
@@ -1098,9 +1124,10 @@ func TestMemoryMapBroker_UnorderedContinuity_EntryAdded(t *testing.T) {
 	}
 
 	// Read first page
-	pubs1, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 10,
 	})
+	pubs1, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs1, 10)
 
@@ -1144,10 +1171,11 @@ func TestMemoryMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	}
 
 	// Read first page (should get keys with highest scores: key_20, key_19, ..., key_11)
-	pubs1, _, cursor1, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered: true,
 		Limit:   10,
 	})
+	pubs1, _, cursor1 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs1, 10)
 	require.NotEmpty(t, cursor1)
@@ -1203,10 +1231,11 @@ func TestMemoryMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	}
 
 	// Read first page
-	_, _, cursor1, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered: true,
 		Limit:   10,
 	})
+	_, _, cursor1 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
 	// CONCURRENT MODIFICATION: Add entry with LOWEST score
@@ -1221,11 +1250,12 @@ func TestMemoryMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	require.NoError(t, err)
 
 	// Continue reading with cursor - just verify it works
-	pubs2, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered: true,
 		Limit:   10,
 		Cursor:  cursor1,
 	})
+	pubs2, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.NotEmpty(t, pubs2)
 
@@ -1258,10 +1288,11 @@ func TestMemoryMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	}
 
 	// Read first page (key_20 down to key_11)
-	pubs1, streamPos1, cursor1, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered: true,
 		Limit:   10,
 	})
+	pubs1, streamPos1, cursor1 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs1, 10)
 
@@ -1278,11 +1309,12 @@ func TestMemoryMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read second page - key_05 jumped out of this range
-	pubs2, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered: true,
 		Limit:   10,
 		Cursor:  cursor1,
 	})
+	pubs2, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
 	// Combine and filter
@@ -1299,7 +1331,7 @@ func TestMemoryMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	}
 
 	// Read stream and apply changes
-	streamPubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Since: &streamPos1,
 			Limit: -1,
@@ -1307,7 +1339,7 @@ func TestMemoryMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	for _, pub := range streamPubs {
+	for _, pub := range streamResult.Publications {
 		if pub.Removed {
 			delete(stateData, pub.Key)
 		} else {
@@ -1342,10 +1374,11 @@ func TestMemoryMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 	}
 
 	// Read first page (key_20 down to key_11)
-	pubs1, streamPos1, cursor1, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered: true,
 		Limit:   10,
 	})
+	pubs1, streamPos1, cursor1 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
 	// CONCURRENT MODIFICATION: Remove key_10 (first entry of next page)
@@ -1366,11 +1399,12 @@ func TestMemoryMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 
 	cursor := cursor1
 	for cursor != "" {
-		pubs, _, nextCursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 			Ordered: true,
 			Limit:   10,
 			Cursor:  cursor,
 		})
+		pubs, _, nextCursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
 		for _, pub := range pubs {
 			if pub.Offset <= streamPos1.Offset {
@@ -1381,7 +1415,7 @@ func TestMemoryMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 	}
 
 	// Apply stream changes
-	streamPubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Since: &streamPos1,
 			Limit: -1,
@@ -1389,7 +1423,7 @@ func TestMemoryMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	for _, pub := range streamPubs {
+	for _, pub := range streamResult.Publications {
 		if pub.Removed {
 			delete(allStateData, pub.Key)
 		} else {
@@ -1427,10 +1461,11 @@ func TestMemoryMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	}
 
 	// Read first page
-	_, _, cursor1, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered: true,
 		Limit:   10,
 	})
+	_, _, cursor1 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
 	// CONCURRENT MODIFICATIONS:
@@ -1463,11 +1498,12 @@ func TestMemoryMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read second page
-	_, _, cursor2, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered: true,
 		Limit:   10,
 		Cursor:  cursor1,
 	})
+	_, _, cursor2 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
 	// 4. Add new lowest score entry
@@ -1483,11 +1519,12 @@ func TestMemoryMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	// Read remaining pages
 	cursor := cursor2
 	for cursor != "" {
-		_, _, nextCursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 			Ordered: true,
 			Limit:   10,
 			Cursor:  cursor,
 		})
+		_, _, nextCursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
 		cursor = nextCursor
 	}
@@ -1528,9 +1565,10 @@ func TestMemoryMapBroker_CursorFormat(t *testing.T) {
 		}
 
 		// Read first page
-		pubs, _, cursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 			Limit: 10,
 		})
+		pubs, _, cursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
 		require.Len(t, pubs, 10)
 
@@ -1538,10 +1576,11 @@ func TestMemoryMapBroker_CursorFormat(t *testing.T) {
 		require.Equal(t, "key_09", cursor, "Cursor should be last key of page")
 
 		// Read next page with cursor
-		pubs2, _, cursor2, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 			Limit:  10,
 			Cursor: cursor,
 		})
+		pubs2, _, cursor2 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
 		require.Len(t, pubs2, 10)
 
@@ -1570,10 +1609,11 @@ func TestMemoryMapBroker_CursorFormat(t *testing.T) {
 		}
 
 		// Read first page (highest scores first)
-		pubs, _, cursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 			Ordered: true,
 			Limit:   10,
 		})
+		pubs, _, cursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
 		require.Len(t, pubs, 10)
 
@@ -1596,11 +1636,12 @@ func TestMemoryMapBroker_CursorFormat(t *testing.T) {
 		require.Equal(t, "key_11", parts[1], "Cursor key should be key_11")
 
 		// Read next page
-		pubs2, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 			Ordered: true,
 			Limit:   10,
 			Cursor:  cursor,
 		})
+		pubs2, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
 		require.Len(t, pubs2, 10)
 
@@ -1763,13 +1804,14 @@ func TestMemoryMapBroker_Clear(t *testing.T) {
 	}
 
 	// Verify data exists.
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 3)
 
-	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
 	require.NoError(t, err)
-	require.Len(t, pubs, 3)
+	require.Len(t, streamResult.Publications, 3)
 
 	stats, err := broker.Stats(ctx, channel)
 	require.NoError(t, err)
@@ -1780,14 +1822,15 @@ func TestMemoryMapBroker_Clear(t *testing.T) {
 	require.NoError(t, err)
 
 	// State should be empty.
-	entries, _, _, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Empty(t, entries)
 
 	// Stream should be empty.
-	pubs, _, err = broker.ReadStream(ctx, channel, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
+	streamResult, err = broker.ReadStream(ctx, channel, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
 	require.NoError(t, err)
-	require.Empty(t, pubs)
+	require.Empty(t, streamResult.Publications)
 
 	// Stats should show zero keys.
 	stats, err = broker.Stats(ctx, channel)
@@ -1817,12 +1860,14 @@ func TestMemoryMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	// ch1 empty.
-	entries, _, _, err := broker.ReadState(ctx, "ch1", MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	stateRes, err := broker.ReadState(ctx, "ch1", MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Empty(t, entries)
 
 	// ch2 still intact.
-	entries, _, _, err = broker.ReadState(ctx, "ch2", MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	stateRes, err = broker.ReadState(ctx, "ch2", MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 }

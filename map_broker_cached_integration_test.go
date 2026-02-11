@@ -80,9 +80,9 @@ func TestCachedMapBroker_TwoNodes_BasicPublish(t *testing.T) {
 	channel := randomChannel("two_nodes_basic")
 
 	// Load channel on both nodes first
-	_, _, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	_, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
 	require.NoError(t, err)
-	_, _, _, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	_, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
 	require.NoError(t, err)
 
 	// Node 1 publishes
@@ -97,13 +97,15 @@ func TestCachedMapBroker_TwoNodes_BasicPublish(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// Both nodes should see the publication
-	pubs1, pos1, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs1, pos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs1, 1)
 	require.Equal(t, "key1", pubs1[0].Key)
 	require.Equal(t, []byte("from_node1"), pubs1[0].Data)
 
-	pubs2, pos2, _, err := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2, pos2, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs2, 1, "node2 should see publication from node1 via sync")
 	require.Equal(t, "key1", pubs2[0].Key)
@@ -124,9 +126,9 @@ func TestCachedMapBroker_TwoNodes_ConcurrentPublish(t *testing.T) {
 	channel := randomChannel("two_nodes_concurrent")
 
 	// Load channel on both nodes
-	_, _, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	_, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
 	require.NoError(t, err)
-	_, _, _, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	_, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
 	require.NoError(t, err)
 
 	// Concurrent publications from both nodes
@@ -171,10 +173,12 @@ func TestCachedMapBroker_TwoNodes_ConcurrentPublish(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Both nodes should see all 20 keys
-	pubs1, pos1, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs1, pos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
-	pubs2, pos2, _, err := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2, pos2, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
 	// Should have all keys from both nodes
@@ -213,9 +217,9 @@ func TestCachedMapBroker_TwoNodes_UpdateSameKey(t *testing.T) {
 	channel := randomChannel("two_nodes_same_key")
 
 	// Load channel on both nodes
-	_, _, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	_, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
 	require.NoError(t, err)
-	_, _, _, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	_, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
 	require.NoError(t, err)
 
 	// Both nodes update the same key multiple times
@@ -239,11 +243,13 @@ func TestCachedMapBroker_TwoNodes_UpdateSameKey(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Both nodes should have exactly 1 key with the same final value
-	pubs1, pos1, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs1, pos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs1, 1)
 
-	pubs2, pos2, _, err := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2, pos2, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs2, 1)
 
@@ -253,17 +259,17 @@ func TestCachedMapBroker_TwoNodes_UpdateSameKey(t *testing.T) {
 	require.Equal(t, pos1.Offset, pos2.Offset)
 
 	// Stream should have all 10 updates
-	stream1, _, err := cached1.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult1, err := cached1.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err)
-	require.Len(t, stream1, 10, "stream should have all 10 updates")
+	require.Len(t, streamResult1.Publications, 10, "stream should have all 10 updates")
 
-	stream2, _, err := cached2.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult2, err := cached2.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err)
-	require.Len(t, stream2, 10, "stream should have all 10 updates")
+	require.Len(t, streamResult2.Publications, 10, "stream should have all 10 updates")
 }
 
 // TestCachedMapBroker_TwoNodes_GapFilling tests that when a node loads a channel
@@ -276,7 +282,7 @@ func TestCachedMapBroker_TwoNodes_GapFilling(t *testing.T) {
 	channel := randomChannel("two_nodes_gap")
 
 	// Only node 1 loads the channel initially
-	_, _, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	_, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
 	require.NoError(t, err)
 
 	// Node 1 publishes several keys
@@ -290,7 +296,8 @@ func TestCachedMapBroker_TwoNodes_GapFilling(t *testing.T) {
 	}
 
 	// Node 2 now loads the channel - should get all data from backend
-	pubs2, _, _, err := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs2, 5, "node2 should load all 5 keys from backend")
 
@@ -308,11 +315,13 @@ func TestCachedMapBroker_TwoNodes_GapFilling(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Both should have all 10 keys
-	pubs1, pos1, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs1, pos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs1, 10)
 
-	pubs2, pos2, _, err := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2, pos2, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs2, 10, "node2 should have all 10 keys via sync")
 
@@ -329,9 +338,9 @@ func TestCachedMapBroker_TwoNodes_Remove(t *testing.T) {
 	channel := randomChannel("two_nodes_unpublish")
 
 	// Load channel on both nodes
-	_, _, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	_, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
 	require.NoError(t, err)
-	_, _, _, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	_, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
 	require.NoError(t, err)
 
 	// Node 1 publishes some keys
@@ -348,9 +357,11 @@ func TestCachedMapBroker_TwoNodes_Remove(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Verify both have 5 keys
-	pubs1, _, _, _ := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, _ := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs1 := stateRes.Publications
 	require.Len(t, pubs1, 5)
-	pubs2, _, _, _ := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, _ = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2 := stateRes.Publications
 	require.Len(t, pubs2, 5)
 
 	// Node 2 removes some keys
@@ -366,11 +377,13 @@ func TestCachedMapBroker_TwoNodes_Remove(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Both should have 2 keys remaining
-	pubs1, pos1, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs1, pos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs1, 2, "node1 should see removals from node2")
 
-	pubs2, pos2, _, err := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2, pos2, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs2, 2)
 
@@ -395,9 +408,9 @@ func TestCachedMapBroker_TwoNodes_HighConcurrency(t *testing.T) {
 	channel := randomChannel("two_nodes_stress")
 
 	// Load channel on both nodes
-	_, _, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 1000})
+	_, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 1000})
 	require.NoError(t, err)
-	_, _, _, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 1000})
+	_, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 1000})
 	require.NoError(t, err)
 
 	var wg sync.WaitGroup
@@ -447,10 +460,12 @@ func TestCachedMapBroker_TwoNodes_HighConcurrency(t *testing.T) {
 
 	expectedKeys := numGoroutines * pubsPerGoroutine * 2 // 10 * 20 * 2 = 400
 
-	pubs1, pos1, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 1000})
+	stateRes, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 1000})
+	pubs1, pos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
-	pubs2, pos2, _, err := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 1000})
+	stateRes, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 1000})
+	pubs2, pos2, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
 	require.Len(t, pubs1, expectedKeys, "node1 should have all %d keys", expectedKeys)
@@ -546,11 +561,13 @@ func TestCachedMapBroker_TwoNodes_PubSub(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Both nodes should see the publication via PUB/SUB
-	pubs1, pos1, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs1, pos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs1, 1)
 
-	pubs2, pos2, _, err := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2, pos2, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs2, 1, "node2 should see publication from node1 via PUB/SUB")
 
@@ -601,11 +618,13 @@ func TestCachedMapBroker_TwoNodes_UpdateSameKeyPubSub(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Both nodes should have exactly 1 key with the same final value
-	pubs1, pos1, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs1, pos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs1, 1)
 
-	pubs2, pos2, _, err := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2, pos2, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs2, 1)
 
@@ -615,17 +634,17 @@ func TestCachedMapBroker_TwoNodes_UpdateSameKeyPubSub(t *testing.T) {
 	require.Equal(t, pos1.Offset, pos2.Offset)
 
 	// Stream should have all 10 updates
-	stream1, _, err := cached1.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult1, err := cached1.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err)
-	require.Len(t, stream1, 10, "stream should have all 10 updates")
+	require.Len(t, streamResult1.Publications, 10, "stream should have all 10 updates")
 
-	stream2, _, err := cached2.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult2, err := cached2.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err)
-	require.Len(t, stream2, 10, "stream should have all 10 updates")
+	require.Len(t, streamResult2.Publications, 10, "stream should have all 10 updates")
 
 	// Cleanup subscriptions
 	_ = cached1.Unsubscribe(channel)
@@ -660,7 +679,8 @@ func TestCachedMapBroker_TwoNodes_GapFillingPubSub(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify node2 loaded all 5 keys
-	pubs2, _, _, err := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs2, 5, "node2 should load all 5 keys during Subscribe")
 
@@ -678,11 +698,13 @@ func TestCachedMapBroker_TwoNodes_GapFillingPubSub(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Both should have all 10 keys
-	pubs1, pos1, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs1, pos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs1, 10)
 
-	pubs2, pos2, _, err := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2, pos2, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs2, 10, "node2 should have all 10 keys via PUB/SUB")
 
@@ -725,9 +747,11 @@ func TestCachedMapBroker_TwoNodes_RemovePubSub(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Verify both have 5 keys
-	pubs1, _, _, _ := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, _ := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs1 := stateRes.Publications
 	require.Len(t, pubs1, 5)
-	pubs2, _, _, _ := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, _ = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2 := stateRes.Publications
 	require.Len(t, pubs2, 5)
 
 	// Node 2 removes some keys
@@ -743,11 +767,13 @@ func TestCachedMapBroker_TwoNodes_RemovePubSub(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Both should have 2 keys remaining
-	pubs1, pos1, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs1, pos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs1, 2, "node1 should see removals from node2 via PUB/SUB")
 
-	pubs2, pos2, _, err := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2, pos2, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs2, 2)
 
@@ -826,10 +852,12 @@ func TestCachedMapBroker_TwoNodes_ConcurrentPublishPubSub(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Both nodes should see all 20 keys
-	pubs1, pos1, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs1, pos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
-	pubs2, pos2, _, err := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2, pos2, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
 	// Should have all keys from both nodes
@@ -951,9 +979,11 @@ func TestCachedMapBroker_TwoNodes_MissedPubSubMessages(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Verify both have key1
-	pubs1, _, _, _ := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, _ := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs1 := stateRes.Publications
 	require.Len(t, pubs1, 1)
-	pubs2, pos2, _, _ := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, _ = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2, pos2 := stateRes.Publications, stateRes.Position
 	require.Len(t, pubs2, 1)
 	require.Equal(t, uint64(1), pos2.Offset)
 
@@ -969,7 +999,8 @@ func TestCachedMapBroker_TwoNodes_MissedPubSubMessages(t *testing.T) {
 	}
 
 	// Node2's cache still has only key1 (missed 2,3,4 - no PUB/SUB)
-	pubs2, pos2, _, _ = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, _ = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2, pos2 = stateRes.Publications, stateRes.Position
 	require.Len(t, pubs2, 1, "node2 should still have only 1 key (missed PUB/SUB)")
 	require.Equal(t, uint64(1), pos2.Offset)
 
@@ -986,7 +1017,8 @@ func TestCachedMapBroker_TwoNodes_MissedPubSubMessages(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Node2 should now have all 5 keys (gap filled from backend)
-	pubs2, pos2, _, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	pubs2, pos2, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs2, 5, "node2 should have all 5 keys after gap filling")
 	require.Equal(t, uint64(5), pos2.Offset)
@@ -1043,15 +1075,20 @@ func TestCachedMapBroker_TwoNodes_StreamOrderConsistency(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// Read streams from both nodes
-	stream1, pos1, err := cached1.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult1, err := cached1.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err)
 
-	stream2, pos2, err := cached2.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult2, err := cached2.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err)
+
+	stream1 := streamResult1.Publications
+	stream2 := streamResult2.Publications
+	pos1 := streamResult1.Position
+	pos2 := streamResult2.Position
 
 	// Both should have 20 entries
 	require.Len(t, stream1, 20, "node1 stream should have 20 entries")
@@ -1147,10 +1184,12 @@ func TestCachedMapBroker_TwoNodes_HighConcurrencyPubSub(t *testing.T) {
 
 	expectedKeys := numGoroutines * pubsPerGoroutine * 2 // 10 * 20 * 2 = 400
 
-	pubs1, pos1, _, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 1000})
+	stateRes, err := cached1.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 1000})
+	pubs1, pos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
-	pubs2, pos2, _, err := cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 1000})
+	stateRes, err = cached2.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 1000})
+	pubs2, pos2, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
 	require.Len(t, pubs1, expectedKeys, "node1 should have all %d keys via PUB/SUB", expectedKeys)

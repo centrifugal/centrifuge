@@ -74,10 +74,10 @@ type MapCache interface {
 	LoadedChannels() []string
 
 	// GetState retrieves state data from cache.
-	GetState(ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error)
+	GetState(ch string, opts MapReadStateOptions) (MapStateResult, error)
 
 	// GetStream retrieves stream data from cache.
-	GetStream(ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error)
+	GetStream(ch string, opts MapReadStreamOptions) (MapStreamResult, error)
 
 	// GetStats returns statistics about a cached channel.
 	GetStats(ch string) (MapStats, error)
@@ -347,7 +347,7 @@ func (c *mapCacheImpl) LoadedChannels() []string {
 }
 
 // GetState retrieves state data from cache.
-func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) (MapStateResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -355,9 +355,9 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) ([]*Publica
 	if !ok {
 		// Channel not loaded - return empty with zero position
 		if opts.Revision != nil && opts.Revision.Epoch != "" {
-			return nil, StreamPosition{}, "", ErrorUnrecoverablePosition
+			return MapStateResult{}, ErrorUnrecoverablePosition
 		}
-		return nil, StreamPosition{}, "", nil
+		return MapStateResult{}, nil
 	}
 
 	c.lastAccess[ch] = time.Now()
@@ -365,7 +365,7 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) ([]*Publica
 	// Check revision epoch
 	if opts.Revision != nil && opts.Revision.Epoch != "" {
 		if opts.Revision.Epoch != channel.position.Epoch {
-			return nil, channel.position, "", ErrorUnrecoverablePosition
+			return MapStateResult{Position: channel.position}, ErrorUnrecoverablePosition
 		}
 	}
 
@@ -373,9 +373,9 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) ([]*Publica
 	if opts.Key != "" {
 		entry, exists := channel.state[opts.Key]
 		if !exists {
-			return []*Publication{}, channel.position, "", nil
+			return MapStateResult{Position: channel.position}, nil
 		}
-		return []*Publication{entry.Publication}, channel.position, "", nil
+		return MapStateResult{Publications: []*Publication{entry.Publication}, Position: channel.position}, nil
 	}
 
 	// Rebuild sorted keys if dirty
@@ -402,7 +402,7 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) ([]*Publica
 
 	totalKeys := len(channel.sortedKeys)
 	if totalKeys == 0 {
-		return []*Publication{}, channel.position, "", nil
+		return MapStateResult{Position: channel.position}, nil
 	}
 
 	// Handle cursor pagination
@@ -416,7 +416,7 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) ([]*Publica
 	}
 
 	if startIdx >= totalKeys {
-		return []*Publication{}, channel.position, "", nil
+		return MapStateResult{Position: channel.position}, nil
 	}
 
 	endIdx := totalKeys
@@ -446,22 +446,22 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) ([]*Publica
 		pubs[i-startIdx] = entry.Publication
 	}
 
-	return pubs, channel.position, cursor, nil
+	return MapStateResult{Publications: pubs, Position: channel.position, Cursor: cursor}, nil
 }
 
 // GetStream retrieves stream data from cache.
-func (c *mapCacheImpl) GetStream(ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (c *mapCacheImpl) GetStream(ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	channel, ok := c.channels[ch]
 	if !ok {
-		return nil, StreamPosition{}, nil
+		return MapStreamResult{}, nil
 	}
 
 	stream := channel.stream
 	if stream == nil {
-		return nil, channel.position, nil
+		return MapStreamResult{Position: channel.position}, nil
 	}
 
 	// Use the backend position for epoch consistency.
@@ -476,13 +476,13 @@ func (c *mapCacheImpl) GetStream(ch string, opts MapReadStreamOptions) ([]*Publi
 	// Note: limit=-1 means unlimited (limit >= 0 check in memstream.Get)
 	items, _, err := stream.Get(0, false, -1, false) // Get all items
 	if err != nil {
-		return nil, StreamPosition{}, err
+		return MapStreamResult{}, err
 	}
 
 	if filter.Since == nil {
 		// No Since filter - return all or limited items
 		if filter.Limit == 0 {
-			return nil, streamPosition, nil
+			return MapStreamResult{Position: streamPosition}, nil
 		}
 		limit := filter.Limit
 		if limit < 0 || limit > len(items) {
@@ -496,7 +496,7 @@ func (c *mapCacheImpl) GetStream(ch string, opts MapReadStreamOptions) ([]*Publi
 			}
 			pubs[i] = items[idx].Value.(*Publication)
 		}
-		return pubs, streamPosition, nil
+		return MapStreamResult{Publications: pubs, Position: streamPosition}, nil
 	}
 
 	since := filter.Since
@@ -504,7 +504,7 @@ func (c *mapCacheImpl) GetStream(ch string, opts MapReadStreamOptions) ([]*Publi
 	// Check if already up to date
 	if !filter.Reverse {
 		if streamPosition.Offset == since.Offset && since.Epoch == streamPosition.Epoch {
-			return nil, streamPosition, nil
+			return MapStreamResult{Position: streamPosition}, nil
 		}
 	}
 
@@ -542,7 +542,7 @@ func (c *mapCacheImpl) GetStream(ch string, opts MapReadStreamOptions) ([]*Publi
 		}
 	}
 
-	return filtered, streamPosition, nil
+	return MapStreamResult{Publications: filtered, Position: streamPosition}, nil
 }
 
 // GetStats returns statistics about a cached channel.

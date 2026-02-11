@@ -203,7 +203,8 @@ func TestMapSubscribe_StreamPhase(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type: SubscriptionTypeMap,
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
 				},
 			}, nil)
 		})
@@ -490,9 +491,10 @@ func TestMapSubscribe_WithPresence(t *testing.T) {
 
 	// Verify presence was added to clients:{channel}.
 	clientsChannel := "clients:" + channel
-	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, client.uid, entries[0].Key)
@@ -532,9 +534,10 @@ func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 
 	// Verify presence exists in :clients channel.
 	clientsChannel := "clients:" + channel
-	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 
@@ -542,9 +545,10 @@ func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 	client.Unsubscribe(channel)
 
 	// Verify presence was removed.
-	entries, _, _, err = broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 0)
 }
@@ -577,9 +581,10 @@ func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 
 	// Verify presence exists in :clients channel.
 	clientsChannel := "clients:" + channel
-	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 
@@ -588,9 +593,10 @@ func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify presence was removed.
-	entries, _, _, err = broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 0)
 }
@@ -632,9 +638,10 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify key exists.
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, clientID, entries[0].Key)
@@ -643,9 +650,10 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 	client.Unsubscribe(channel)
 
 	// Verify key was removed.
-	entries, _, _, err = broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 0)
 }
@@ -687,9 +695,10 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify key exists.
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 
@@ -698,9 +707,10 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify key was removed.
-	entries, _, _, err = broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 0)
 }
@@ -925,9 +935,10 @@ func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
 
 	// Verify :clients presence was added (key=clientId, full info).
 	clientsChannel := "clients:" + channel
-	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, client.uid, entries[0].Key)
@@ -937,9 +948,10 @@ func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
 
 	// Verify :users presence was added (key=userId, no info).
 	usersChannel := "$users:" + channel
-	entries, _, _, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{
 		Limit: 100,
 	})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, "user1", entries[0].Key)
@@ -985,11 +997,13 @@ func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
 	clientsChannel := "clients:" + channel
 	usersChannel := "$users:" + channel
 
-	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
+	stateRes, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 
-	entries, _, _, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
+	stateRes, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 
@@ -998,12 +1012,14 @@ func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify :clients presence was removed.
-	entries, _, _, err = broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
+	stateRes, err = broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 0)
 
 	// Verify :users presence is NOT removed (TTL-based expiration).
-	entries, _, _, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
+	stateRes, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1) // Still there, will expire via TTL.
 }
@@ -1044,13 +1060,15 @@ func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
 
 	// Verify :clients has two entries (one per connection).
 	clientsChannel := "clients:" + channel
-	entries, _, _, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
+	stateRes, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 
 	// Verify :users has one entry (deduplicated by userId).
 	usersChannel := "$users:" + channel
-	entries, _, _, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
+	stateRes, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, "user1", entries[0].Key)
@@ -1060,12 +1078,14 @@ func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
 	require.NoError(t, err)
 
 	// :clients should have one entry.
-	entries, _, _, err = broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
+	stateRes, err = broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 
 	// :users still has the user (TTL refresh from client2).
-	entries, _, _, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
+	stateRes, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 }
@@ -1102,9 +1122,10 @@ func TestMapBroker_ReadStateByKey(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read single key
-	pubs, pos, cursor, err := broker.ReadState(ctx, ch, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{
 		Key: "key2",
 	})
+	pubs, pos, cursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	require.Equal(t, "key2", pubs[0].Key)
@@ -1113,9 +1134,10 @@ func TestMapBroker_ReadStateByKey(t *testing.T) {
 	require.NotEmpty(t, pos.Epoch)
 
 	// Read non-existent key
-	pubs, _, _, err = broker.ReadState(ctx, ch, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, ch, MapReadStateOptions{
 		Key: "nonexistent",
 	})
+	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 0)
 }
@@ -1137,7 +1159,8 @@ func TestMapBroker_CASSuccess(t *testing.T) {
 	require.False(t, res1.Suppressed)
 
 	// Read current state - position includes offset AND epoch
-	pubs, pos, _, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	pubs, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	expectedPos := StreamPosition{Offset: pubs[0].Offset, Epoch: pos.Epoch}
@@ -1155,7 +1178,8 @@ func TestMapBroker_CASSuccess(t *testing.T) {
 	require.Greater(t, res2.Position.Offset, res1.Position.Offset)
 
 	// Verify the value was updated
-	pubs, _, _, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	stateRes, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	require.Equal(t, []byte(`{"value":15}`), pubs[0].Data)
@@ -1177,7 +1201,8 @@ func TestMapBroker_CASConflict(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read current state
-	pubs, pos, _, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	pubs, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	originalPos := StreamPosition{Offset: pubs[0].Offset, Epoch: pos.Epoch}
@@ -1220,7 +1245,8 @@ func TestMapBroker_CASConflict(t *testing.T) {
 	require.False(t, res2.Suppressed)
 
 	// Verify the value was updated
-	pubs, _, _, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	stateRes, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	require.Equal(t, []byte(`{"value":15}`), pubs[0].Data)
@@ -1242,7 +1268,8 @@ func TestMapBroker_CASNonExistent(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get the epoch
-	_, pos, _, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 1})
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 1})
+	_, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
 	// Try CAS on non-existent key with expected position
@@ -1275,7 +1302,8 @@ func TestMapBroker_CASWrongEpoch(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read current state
-	pubs, _, _, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 
@@ -1298,7 +1326,8 @@ func TestMapBroker_CASWrongEpoch(t *testing.T) {
 	require.Equal(t, []byte(`{"value":10}`), res.CurrentPublication.Data)
 
 	// Verify value unchanged
-	pubs, _, _, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	stateRes, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	require.Equal(t, []byte(`{"value":10}`), pubs[0].Data)
@@ -1322,18 +1351,19 @@ func TestMapBroker_StreamDataDifferentPayloads(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read state - should have full state
-	pubs, pos, _, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	pubs, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	require.Equal(t, []byte(`{"count":100}`), pubs[0].Data)
 
 	// Read stream - should have incremental data
-	streamPubs, _, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{
+	streamResult, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: 10},
 	})
 	require.NoError(t, err)
-	require.Len(t, streamPubs, 1)
-	require.Equal(t, []byte(`{"delta":100}`), streamPubs[0].Data)
+	require.Len(t, streamResult.Publications, 1)
+	require.Equal(t, []byte(`{"delta":100}`), streamResult.Publications[0].Data)
 
 	// Update with CAS: read current position, update with different payloads
 	expectedPos := StreamPosition{Offset: pubs[0].Offset, Epoch: pos.Epoch}
@@ -1348,19 +1378,20 @@ func TestMapBroker_StreamDataDifferentPayloads(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify state has new full state
-	pubs, _, _, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	stateRes, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	require.Equal(t, []byte(`{"count":105}`), pubs[0].Data)
 
 	// Verify stream has both incremental updates
-	streamPubs, _, err = broker.ReadStream(ctx, ch, MapReadStreamOptions{
+	streamResult, err = broker.ReadStream(ctx, ch, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: 10},
 	})
 	require.NoError(t, err)
-	require.Len(t, streamPubs, 2)
-	require.Equal(t, []byte(`{"delta":100}`), streamPubs[0].Data)
-	require.Equal(t, []byte(`{"delta":5}`), streamPubs[1].Data)
+	require.Len(t, streamResult.Publications, 2)
+	require.Equal(t, []byte(`{"delta":100}`), streamResult.Publications[0].Data)
+	require.Equal(t, []byte(`{"delta":5}`), streamResult.Publications[1].Data)
 }
 
 // TestMapBroker_StreamDataWithoutStreamData tests that when StreamData is not set,
@@ -1380,18 +1411,19 @@ func TestMapBroker_StreamDataWithoutStreamData(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read state
-	pubs, _, _, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "item"})
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "item"})
+	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	require.Equal(t, []byte(`{"name":"test","value":42}`), pubs[0].Data)
 
 	// Read stream - should have same data
-	streamPubs, _, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{
+	streamResult, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: 10},
 	})
 	require.NoError(t, err)
-	require.Len(t, streamPubs, 1)
-	require.Equal(t, []byte(`{"name":"test","value":42}`), streamPubs[0].Data)
+	require.Len(t, streamResult.Publications, 1)
+	require.Equal(t, []byte(`{"name":"test","value":42}`), streamResult.Publications[0].Data)
 }
 
 // Tests for STATE→LIVE direct transition optimization (MapStateToLiveEnabled).
@@ -1436,7 +1468,8 @@ func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type: SubscriptionTypeMap,
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
 				},
 			}, nil)
 		})
@@ -1642,7 +1675,8 @@ func TestMapSubscribe_StreamPhaseRecovery(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type: SubscriptionTypeMap,
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
 				},
 			}, nil)
 		})
@@ -1709,7 +1743,8 @@ func TestMapSubscribe_StreamPhaseRecovery_WithoutRecoverFlag(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type: SubscriptionTypeMap,
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
 				},
 			}, nil)
 		})
@@ -1759,7 +1794,8 @@ func TestMapSubscribe_StreamPhaseRecovery_LargeGap(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type: SubscriptionTypeMap,
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
 				},
 			}, nil)
 		})
@@ -1842,7 +1878,8 @@ func TestMapSubscribe_LivePhaseRecovery(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type: SubscriptionTypeMap,
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
 				},
 			}, nil)
 		})

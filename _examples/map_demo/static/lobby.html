@@ -480,6 +480,11 @@
             // Presence will be populated from server data via subscriptions
         });
 
+        centrifuge.on('connecting', () => {
+            document.getElementById('statusDot').classList.remove('connected');
+            document.getElementById('statusText').textContent = 'Connecting...';
+        });
+
         centrifuge.on('disconnected', () => {
             document.getElementById('statusDot').classList.remove('connected');
             document.getElementById('statusText').textContent = 'Disconnected';
@@ -572,10 +577,10 @@
             renderPresence();
         });
 
-        // Subscribe to $users:games channel for tracking unique users.
+        // Subscribe to users:games channel for tracking unique users.
         // Key is userId, no ClientInfo (just key for uniqueness).
         // Users expire via TTL - provides debounce for quick reconnects.
-        const usersSub = centrifuge.newMapUsersSubscription('$users:games');
+        const usersSub = centrifuge.newMapUsersSubscription('users:games');
 
         usersSub.on('subscribed', (ctx) => {
             console.log('Users subscribed, recovered:', ctx.recovered);

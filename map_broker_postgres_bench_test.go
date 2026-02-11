@@ -188,7 +188,7 @@ func BenchmarkPostgresMapBroker_ReadStream(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+			_, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 				Filter: StreamFilter{
 					Limit: 1000,
 					Since: &sp,
@@ -229,7 +229,7 @@ func BenchmarkPostgresMapBroker_ReadStateFull(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 				Limit:    0, // Use default of 100
 				StateTTL: 300 * time.Second,
 			})
@@ -268,7 +268,7 @@ func BenchmarkPostgresMapBroker_ReadStatePaginated(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 				Cursor:   "0",
 				Limit:    100, // Read 100 at a time
 				StateTTL: 300 * time.Second,
@@ -310,7 +310,7 @@ func BenchmarkPostgresMapBroker_ReadStateOrdered(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 				Ordered:  true,
 				Limit:    100,
 				StateTTL: 300 * time.Second,
@@ -456,9 +456,10 @@ func BenchmarkPostgresMapBroker_CAS(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			// Read current state
-			entries, pos, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+			stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 				Key: "shared_counter",
 			})
+			entries, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 			if err != nil || len(entries) == 0 {
 				continue
 			}

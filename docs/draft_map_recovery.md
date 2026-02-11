@@ -1,15 +1,20 @@
 # Map Subscription Synchronization Protocol
 
-This document describes the synchronization protocol for map real-time subscriptions. Map subscriptions provide recoverable state with real-time updates for key-value like data structures.
+This document describes the synchronization protocol for map real-time subscriptions. Map subscriptions provide state with real-time updates for key-value like data structures.
 
 ## Overview
 
-Map subscriptions support two join modes:
+Map subscriptions operate in two consistency modes:
+
+- **Streamless Mode** (default): No stream history. Clients read state and go live. Reconnection requires full state re-sync. Best for presence, leaderboards, and ephemeral data.
+- **Positioned Mode** (opt-in via `EnablePositioning`/`EnableRecovery`): Full stream-based consistency with offset tracking, recovery, and CAS support. Best for inventory, auctions, and collaborative editing.
+
+Within positioned mode, two join strategies are supported:
 
 1. **Paginated Join (Scenario A)**: Client fetches state in pages, then catches up from stream before going live. Best for large states.
 2. **Immediate Join (Scenario B)**: Client gets full state + stream in a single request. Best for small to moderate states.
 
-Both modes provide strict server-driven consistency guarantees.
+Both join strategies provide strict server-driven consistency guarantees.
 
 ## Protocol Phases
 
@@ -18,21 +23,93 @@ The client declares intent using a numeric phase value in the subscribe request:
 | Phase | Name   | Description                                    |
 |-------|--------|------------------------------------------------|
 | 2     | STATE  | Paginating over map state (key-value snapshot) |
-| 1     | STREAM | Paginating over stream (history catch-up)      |
+| 1     | STREAM | Paginating over stream (positioned mode only)  |
 | 0     | LIVE   | Join live pub/sub, or request immediate join   |
+
+> **Note**: Requesting `phase=1` (STREAM) in streamless mode returns `ErrorBadRequest`.
 
 ## Key Definitions
 
-- **offset**: Last stream offset known to the client
+- **offset**: Last stream offset known to the client (0 in streamless mode)
 - **limit**: Maximum number of entries per response
 - **STATE_start**: Server-captured stream top at the start of STATE pagination
 - **STREAM_start**: Server-captured stream top at the start of STREAM pagination
 
-## Core Invariant
+## Core Invariant (Positioned Mode)
 
 Stream catch-up is a finite, bounded process. The client may paginate stream entries only up to STREAM_start, then must go LIVE. If the client cannot catch up in time (entries evicted), the subscription fails with ErrorUnrecoverablePosition.
 
+In streamless mode, no stream invariant exists — the client transitions directly from STATE to LIVE.
+
 ---
+
+## Streamless Mode (Default)
+
+When `EnablePositioning` and `EnableRecovery` are both `false` (the default), the subscription flow is simplified:
+
+### Paginated Join
+
+```
+Client                                    Server
+   │                                         │
+   │──── phase=2, cursor="" ────────────────>│  STATE (page 1)
+   │<─── state entries, cursor="abc" ────────│
+   │                                         │
+   │──── phase=2, cursor="abc" ─────────────>│  STATE (last page)
+   │<─── state entries, phase=0 ─────────────│  Auto-transition to LIVE
+   │                                         │
+   │<════ real-time publications ════════════│  LIVE
+```
+
+On the last state page, the server automatically:
+1. Starts buffering pub/sub messages
+2. Subscribes to pub/sub channel
+3. Reads buffered publications
+4. Returns state entries + buffered publications with `phase=0` (LIVE)
+
+No `MergePublications` or offset-based dedup is needed — keyed data provides natural dedup (last writer wins per key).
+
+### Immediate Join
+
+```
+Client                                    Server
+   │                                         │
+   │──── phase=0, recover=false ────────────>│  Immediate join
+   │<─── state + buffered pubs, phase=0 ─────│  LIVE
+   │                                         │
+   │<════ real-time publications ════════════│  LIVE
+```
+
+Same as positioned immediate join, but no stream read or merge step.
+
+### Reconnection
+
+On reconnect, the client always performs a fresh subscribe (full state re-sync):
+
+```
+Client                                    Server
+   │                                         │
+   │──── phase=0, recover=false ────────────>│  Fresh subscribe
+   │<─── full state, phase=0 ────────────────│  LIVE
+   │                                         │
+   │<════ real-time publications ════════════│  LIVE
+```
+
+The subscribe response includes `recoverable: false`, which tells the client SDK to not set `recover=true` on reconnection. If a streamless client does send `recover=true` (e.g., old SDK), the server redirects to immediate join with full state re-sync.
+
+### Restrictions
+
+- `phase=1` (STREAM) requests return `ErrorBadRequest`
+- `ExpectedPosition` (CAS) is not available — returns error on publish
+- `Version`-based dedup is not available — returns error on publish
+
+---
+
+## Positioned Mode (Opt-in)
+
+The following scenarios apply when `EnablePositioning: true` or `EnableRecovery: true` is set in subscribe options. The publish side must also be configured with `StreamSize > 0` in `MapChannelOptions`.
+
+The subscribe response includes `recoverable: true`, enabling stream-based recovery on reconnect.
 
 ## Scenario A: Paginated Join
 
@@ -118,9 +195,9 @@ recover = false  // Fresh subscription
 
 ---
 
-## Recovery (Reconnection)
+## Recovery (Reconnection, Positioned Mode)
 
-When a client reconnects with a known position, two approaches are supported:
+When a client reconnects with a known position in positioned mode, two approaches are supported:
 
 ### Option 1: Direct to LIVE (Recommended)
 
@@ -177,7 +254,9 @@ This prevents duplicates when client catches up from stream.
 
 When `MapStateToLiveEnabled` is true (configurable), the server can skip the STREAM phase entirely on the last STATE page if the stream hasn't advanced much.
 
-### Trigger Condition
+> **Note**: In streamless mode, the server **always** transitions directly to LIVE on the last state page, regardless of `MapStateToLiveEnabled`. This setting only affects positioned mode.
+
+### Trigger Condition (Positioned Mode)
 
 On the last STATE page (cursor would be empty):
 ```
@@ -214,7 +293,7 @@ Client handles `phase != 2` response during STATE pagination:
 type Config struct {
     // MapStateToLiveEnabled: Allow direct STATE→LIVE transition
     // When true, server may skip STREAM phase on last state page
-    // Default: false
+    // Default: false (only applies to positioned mode)
     MapStateToLiveEnabled bool
 }
 ```
@@ -225,8 +304,9 @@ type Config struct {
 
 | Error | Code | Description |
 |-------|------|-------------|
-| ErrorUnrecoverablePosition | 112 | Stream entries evicted, epoch changed, or position invalid |
+| ErrorUnrecoverablePosition | 112 | Stream entries evicted, epoch changed, or position invalid (positioned mode) |
 | ErrorStateTooLarge | 114 | State exceeds MapMaxImmediateJoinStateSize (immediate join only) |
+| ErrorBadRequest | — | STREAM phase requested in streamless mode |
 
 When ErrorStateTooLarge is returned, client should fall back to paginated join.
 
@@ -407,20 +487,25 @@ message SubscribeResult {
     int32 type = 1;                     // 1=MAP
     int32 phase = 2;                    // Current phase
     string cursor = 3;                  // Next page cursor
-    int64 offset = 4;                   // Stream offset
-    string epoch = 5;                   // Stream epoch
-    repeated Publication publications = 6;  // Stream publications
+    int64 offset = 4;                   // Stream offset (0 in streamless mode)
+    string epoch = 5;                   // Stream epoch ("" in streamless mode)
+    repeated Publication publications = 6;  // Stream/buffered publications
     repeated Publication state = 7;     // State publications (immediate join)
+    bool recoverable = 8;              // True when positioned mode is enabled
     // ... other fields
 }
 ```
+
+The `recoverable` field tells the client SDK whether stream-based recovery is available. When `false` (streamless), the client performs a fresh subscribe on reconnect instead of sending `recover=true`.
 
 ---
 
 ## Design Properties
 
 1. **Server-controlled LIVE transition**: Server decides when client is close enough to go live
-2. **Bounded stream recovery**: Stream catch-up is deterministic and finite
+2. **Bounded stream recovery**: Stream catch-up is deterministic and finite (positioned mode)
 3. **One-RTT fast path**: Immediate join provides single round-trip for small states
-4. **Slow client detection**: Clients too far behind fail fast with clear error
-5. **Consistency during pagination**: State filtering prevents duplicates
+4. **Slow client detection**: Clients too far behind fail fast with clear error (positioned mode)
+5. **Consistency during pagination**: State filtering prevents duplicates (positioned mode)
+6. **Streamless default**: Minimal overhead for common use cases (presence, leaderboards)
+7. **Keyed natural dedup**: Map publications are key-value updates where last writer wins, making offset-based dedup unnecessary in streamless mode

@@ -355,20 +355,6 @@ func (e *RedisMapBroker) stateMetaKey(s *RedisShard, ch string) string {
 	return e.buildKey(s, ch, ":state:meta:")
 }
 
-func (e *RedisMapBroker) cleanupRegistrationKey(s *RedisShard) string {
-	// Cleanup registration key is per-shard, not per-channel
-	// Uses partition-based hash tag for cluster compatibility
-	if !s.isCluster {
-		return e.conf.Prefix + ":cleanup:channels"
-	}
-	if e.conf.NumShardedPubSubPartitions > 0 {
-		// For sharded PUB/SUB, we have one cleanup key per partition
-		// The partition index will be added by the caller
-		return e.conf.Prefix + ":cleanup:channels"
-	}
-	return e.conf.Prefix + ":cleanup:channels"
-}
-
 func (e *RedisMapBroker) cleanupRegistrationKeyForChannel(s *RedisShard, ch string) string {
 	// Get the cleanup registration key with proper hash tag for the channel's partition
 	// Single registration ZSET works for ALL keyed state (presence, state, etc.)
@@ -542,10 +528,20 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 	shardClient := s.shard.client
 
 	// Apply channel options defaults from node config.
-	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = applyChannelOptionsDefaults(
-		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL,
-		e.node.ResolveMapChannelOptions, ch,
-	)
+	chOpts := applyChannelOptionsDefaults(MapChannelOptions{
+		StreamSize: opts.StreamSize, StreamTTL: opts.StreamTTL, MetaTTL: opts.MetaTTL, KeyTTL: opts.KeyTTL,
+	}, e.node.ResolveMapChannelOptions, ch)
+	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL, chOpts.KeyTTL
+
+	// Reject CAS and Version in streamless mode.
+	if opts.StreamSize <= 0 || opts.StreamTTL <= 0 {
+		if opts.ExpectedPosition != nil {
+			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires stream (StreamSize > 0)")
+		}
+		if opts.Version > 0 {
+			return MapPublishResult{}, errors.New("version-based dedup requires stream (StreamSize > 0)")
+		}
+	}
 
 	// Fast path for non-history, non-idempotent, non-keyed publications.
 	if opts.StreamSize == 0 && opts.StreamTTL == 0 && opts.IdempotencyKey == "" && key == "" {
@@ -630,15 +626,20 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 	}
 
 	var streamKey, metaKey, stateHashKey, stateOrderKey, stateExpireKey, stateMetaKey string
+	streamless := opts.StreamSize <= 0 || opts.StreamTTL <= 0
 
-	if opts.StreamSize > 0 && opts.StreamTTL > 0 {
+	if !streamless {
 		streamKey = e.streamKey(s.shard, ch)
 		metaKey = e.metaKey(s.shard, ch)
 	}
 
 	if key != "" {
 		stateHashKey = e.stateHashKey(s.shard, ch)
-		stateMetaKey = e.stateMetaKey(s.shard, ch)
+		if !streamless {
+			// State meta key tracks epoch for consistency between state and stream.
+			// In streamless mode, skip it to prevent multi-node epoch mismatch clearing state.
+			stateMetaKey = e.stateMetaKey(s.shard, ch)
+		}
 		if opts.Ordered {
 			stateOrderKey = e.stateOrderKey(s.shard, ch)
 		}
@@ -770,10 +771,10 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 	shardClient := s.shard.client
 
 	// Apply channel options defaults from node config.
-	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, _ = applyChannelOptionsDefaults(
-		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, 0,
-		e.node.ResolveMapChannelOptions, ch,
-	)
+	chOpts := applyChannelOptionsDefaults(MapChannelOptions{
+		StreamSize: opts.StreamSize, StreamTTL: opts.StreamTTL, MetaTTL: opts.MetaTTL,
+	}, e.node.ResolveMapChannelOptions, ch)
+	opts.StreamSize, opts.StreamTTL, opts.MetaTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL
 
 	var streamKey, metaKey string
 	if opts.StreamSize > 0 && opts.StreamTTL > 0 {
@@ -814,14 +815,27 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 		return MapPublishResult{}, err
 	}
 
+	// Handle idempotency key for remove operations.
+	var resultKey string
+	var resultExpire string
+	if opts.IdempotencyKey != "" {
+		resultKey = e.resultCacheKey(s.shard, ch, opts.IdempotencyKey)
+		if opts.IdempotentResultTTL > 0 {
+			resultExpire = strconv.Itoa(int(opts.IdempotentResultTTL.Seconds()))
+		} else {
+			resultExpire = strconv.Itoa(int(e.conf.IdempotentResultTTL.Seconds()))
+		}
+	}
+
 	// Compute slot-aligned nil key for unused KEYS in cluster mode (see Publish for details).
 	nilKey := ""
-	resultKey := ""
 	stateOrderKey := ""
 	cleanupRegKey := ""
 	if s.shard.isCluster {
 		nilKey = e.buildKey(s.shard, ch, ":nil:")
-		resultKey = nilKey
+		if resultKey == "" {
+			resultKey = nilKey
+		}
 		stateOrderKey = nilKey
 		cleanupRegKey = nilKey
 		if streamKey == "" {
@@ -850,7 +864,8 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 			metaExpire,
 			e.node.ID(), // new_epoch_if_empty
 			publishCommand,
-			"", "0", "0", "", // result_key_expire, use_delta, version, version_epoch
+			resultExpire,           // result_key_expire
+			"0", "0", "",          // use_delta, version, version_epoch
 			"1",    // is_leave (this triggers removal)
 			"0",    // score
 			"0",    // map_member_ttl
@@ -876,7 +891,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 // If opts.Revision is provided and epoch changed, returns empty entries.
 // Returns entries, stream position, next cursor for pagination, and error.
 // Cursor "0" or "" means end of iteration.
-func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
 	// Handle single key lookup (Key filter)
 	if opts.Key != "" {
 		return e.readSingleKey(ctx, ch, opts)
@@ -887,7 +902,7 @@ func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadS
 	return e.readUnorderedState(ctx, ch, opts)
 }
 
-func (e *RedisMapBroker) ReadStateZero(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+func (e *RedisMapBroker) ReadStateZero(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
 	// Handle single key lookup (Key filter)
 	if opts.Key != "" {
 		return e.readSingleKey(ctx, ch, opts)
@@ -900,11 +915,39 @@ func (e *RedisMapBroker) ReadStateZero(ctx context.Context, ch string, opts MapR
 
 // readSingleKey retrieves a single key from the state using HGET instead of HSCAN.
 // This is more efficient for single key lookups and supports CAS read-modify-write patterns.
-func (e *RedisMapBroker) readSingleKey(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+func (e *RedisMapBroker) readSingleKey(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
 	stateHashKey := e.stateHashKey(s.shard, ch)
+
+	chOpts := e.node.ResolveMapChannelOptions(ch)
+	streamless := chOpts.StreamSize <= 0
+
+	if streamless {
+		// Streamless mode: just read the key, no meta needed.
+		valBytes, err := shardClient.Do(ctx, shardClient.B().Hget().Key(stateHashKey).Field(opts.Key).Build()).AsBytes()
+		keyNotFound := rueidis.IsRedisNil(err)
+		if err != nil && !keyNotFound {
+			return MapStateResult{}, err
+		}
+		if keyNotFound || len(valBytes) == 0 {
+			return MapStateResult{}, nil
+		}
+		entryOffset, _, payload, err := parseStateValue(valBytes)
+		if err != nil {
+			return MapStateResult{}, fmt.Errorf("failed to parse state value: %w", err)
+		}
+		var protoPub protocol.Publication
+		if err := protoPub.UnmarshalVT(payload); err != nil {
+			return MapStateResult{}, fmt.Errorf("failed to unmarshal publication: %w", err)
+		}
+		pub := pubFromProto(&protoPub)
+		pub.Key = opts.Key
+		pub.Offset = entryOffset
+		return MapStateResult{Publications: []*Publication{pub}}, nil
+	}
+
 	metaKey := e.metaKey(s.shard, ch)
 
 	// Execute HGET and metadata read in pipeline
@@ -918,13 +961,13 @@ func (e *RedisMapBroker) readSingleKey(ctx context.Context, ch string, opts MapR
 	valBytes, err := results[0].AsBytes()
 	keyNotFound := rueidis.IsRedisNil(err)
 	if err != nil && !keyNotFound {
-		return nil, StreamPosition{}, "", err
+		return MapStateResult{}, err
 	}
 
 	// Parse metadata
 	metaArr, err := results[1].ToArray()
 	if err != nil {
-		return nil, StreamPosition{}, "", err
+		return MapStateResult{}, err
 	}
 
 	var streamPos StreamPosition
@@ -936,34 +979,34 @@ func (e *RedisMapBroker) readSingleKey(ctx context.Context, ch string, opts MapR
 
 	// Validate epoch if client provided state revision
 	if opts.Revision != nil && opts.Revision.Epoch != streamPos.Epoch {
-		return nil, streamPos, "", ErrorUnrecoverablePosition
+		return MapStateResult{Position: streamPos}, ErrorUnrecoverablePosition
 	}
 
 	// Key not found - return empty
 	if keyNotFound || len(valBytes) == 0 {
-		return []*Publication{}, streamPos, "", nil
+		return MapStateResult{Position: streamPos}, nil
 	}
 
 	// Parse value: offset:epoch:payload
 	entryOffset, _, payload, err := parseStateValue(valBytes)
 	if err != nil {
-		return nil, streamPos, "", fmt.Errorf("failed to parse state value: %w", err)
+		return MapStateResult{Position: streamPos}, fmt.Errorf("failed to parse state value: %w", err)
 	}
 
 	// Unmarshal Publication from protobuf payload
 	var protoPub protocol.Publication
 	if err := protoPub.UnmarshalVT(payload); err != nil {
-		return nil, streamPos, "", fmt.Errorf("failed to unmarshal publication: %w", err)
+		return MapStateResult{Position: streamPos}, fmt.Errorf("failed to unmarshal publication: %w", err)
 	}
 
 	pub := pubFromProto(&protoPub)
 	pub.Key = opts.Key
 	pub.Offset = entryOffset
 
-	return []*Publication{pub}, streamPos, "", nil
+	return MapStateResult{Publications: []*Publication{pub}, Position: streamPos}, nil
 }
 
-func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
@@ -976,6 +1019,13 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 	cursor := opts.Cursor
 	if cursor == "" {
 		cursor = "0"
+	}
+
+	chOpts := e.node.ResolveMapChannelOptions(ch)
+	streamless := chOpts.StreamSize <= 0
+	streamlessFlag := "0"
+	if streamless {
+		streamlessFlag = "1"
 	}
 
 	replies, err := e.readUnorderedScript.Exec(ctx, shardClient,
@@ -991,18 +1041,19 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 			strconv.FormatInt(time.Now().Unix(), 10),
 			stateTTL,
 			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10),
+			streamlessFlag,
 		},
 	).ToArray()
 	if err != nil {
-		return nil, StreamPosition{}, "", err
+		return MapStateResult{}, err
 	}
 	if len(replies) < 4 {
-		return nil, StreamPosition{}, "", errors.New("wrong number of replies")
+		return MapStateResult{}, errors.New("wrong number of replies")
 	}
 
 	streamOffset, err := replies[0].AsUint64()
 	if err != nil && !rueidis.IsRedisNil(err) {
-		return nil, StreamPosition{}, "", err
+		return MapStateResult{}, err
 	}
 	streamEpoch, _ := replies[1].ToString()
 	nextCursor, _ := replies[2].ToString()
@@ -1016,7 +1067,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 	// Validate epoch if client provided state revision
 	if opts.Revision != nil && opts.Revision.Epoch != streamEpoch {
 		// Epoch changed, client needs to restart from beginning
-		return nil, streamPos, nextCursor, ErrorUnrecoverablePosition
+		return MapStateResult{Position: streamPos, Cursor: nextCursor}, ErrorUnrecoverablePosition
 	}
 
 	// Parse state values with revisions
@@ -1044,14 +1095,14 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 		pub.Offset = entryOffset
 		pubs = append(pubs, pub)
 	}
-	return pubs, streamPos, nextCursor, nil
+	return MapStateResult{Publications: pubs, Position: streamPos, Cursor: nextCursor}, nil
 }
 
 func (e *RedisMapBroker) readUnorderedStateZero(
 	ctx context.Context,
 	ch string,
 	opts MapReadStateOptions,
-) ([]*Publication, StreamPosition, string, error) {
+) (MapStateResult, error) {
 	s := e.getShard(ch)
 
 	stateTTL := "0"
@@ -1070,6 +1121,12 @@ func (e *RedisMapBroker) readUnorderedStateZero(
 		pubs       []*Publication
 	)
 
+	chOpts := e.node.ResolveMapChannelOptions(ch)
+	streamlessFlag := "0"
+	if chOpts.StreamSize <= 0 {
+		streamlessFlag = "1"
+	}
+
 	err := e.readUnorderedScript.ExecWithReader(
 		ctx,
 		s.shard.client,
@@ -1085,6 +1142,7 @@ func (e *RedisMapBroker) readUnorderedStateZero(
 			strconv.FormatInt(time.Now().Unix(), 10),
 			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10),
 			stateTTL,
+			streamlessFlag,
 		},
 		func(r *bufio.Reader) error {
 			rr := resp.NewReader(r)
@@ -1172,21 +1230,21 @@ func (e *RedisMapBroker) readUnorderedStateZero(
 	)
 
 	if err != nil {
-		return nil, StreamPosition{}, "", err
+		return MapStateResult{}, err
 	}
 
 	// Validate state revision (unchanged semantics)
 	if opts.Revision != nil &&
 		opts.Revision.Epoch != streamPos.Epoch {
-		return nil, streamPos, nextCursor, ErrorUnrecoverablePosition
+		return MapStateResult{Position: streamPos, Cursor: nextCursor}, ErrorUnrecoverablePosition
 	}
 
-	return pubs, streamPos, nextCursor, nil
+	return MapStateResult{Publications: pubs, Position: streamPos, Cursor: nextCursor}, nil
 }
 
 // readOrderedState uses key-based cursor pagination for continuity.
 // Cursor format: "score\x00key" to ensure no entries are skipped during concurrent modifications.
-func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
@@ -1200,6 +1258,12 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 	cursorKey := ""
 	if opts.Cursor != "" {
 		cursorScore, cursorKey = parseOrderedCursor(opts.Cursor)
+	}
+
+	chOpts := e.node.ResolveMapChannelOptions(ch)
+	streamlessFlag := "0"
+	if chOpts.StreamSize <= 0 {
+		streamlessFlag = "1"
 	}
 
 	replies, err := e.readOrderedScript.Exec(ctx, shardClient,
@@ -1216,19 +1280,20 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 			cursorKey,                                // ARGV[3] = cursor_key
 			strconv.FormatInt(time.Now().Unix(), 10), // ARGV[4] = now
 			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10), // ARGV[5] = meta_ttl
-			stateTTL, // ARGV[6] = state_ttl
+			stateTTL,        // ARGV[6] = state_ttl
+			streamlessFlag,  // ARGV[7] = streamless
 		},
 	).ToArray()
 	if err != nil {
-		return nil, StreamPosition{}, "", err
+		return MapStateResult{}, err
 	}
 	if len(replies) < 6 {
-		return nil, StreamPosition{}, "", errors.New("wrong number of replies")
+		return MapStateResult{}, errors.New("wrong number of replies")
 	}
 
 	streamOffset, err := replies[0].AsUint64()
 	if err != nil && !rueidis.IsRedisNil(err) {
-		return nil, StreamPosition{}, "", err
+		return MapStateResult{}, err
 	}
 	streamEpoch, _ := replies[1].ToString()
 	keysArr, _ := replies[2].ToArray()
@@ -1241,7 +1306,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 	// Validate epoch if client provided state revision
 	if opts.Revision != nil && opts.Revision.Epoch != streamEpoch {
 		// Epoch changed, client needs to restart from beginning
-		return nil, streamPos, "", ErrorUnrecoverablePosition
+		return MapStateResult{Position: streamPos}, ErrorUnrecoverablePosition
 	}
 
 	// Parse state values with revisions
@@ -1276,7 +1341,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 		cursor = makeOrderedCursor(nextCursorScore, nextCursorKey)
 	}
 
-	return pubs, streamPos, cursor, nil
+	return MapStateResult{Publications: pubs, Position: streamPos, Cursor: cursor}, nil
 }
 
 // makeOrderedCursor creates a cursor for ordered state: "score\x00key"
@@ -1298,7 +1363,7 @@ func (e *RedisMapBroker) ReadStreamZero(
 	ctx context.Context,
 	ch string,
 	opts MapReadStreamOptions,
-) ([]*Publication, StreamPosition, error) {
+) (MapStreamResult, error) {
 	s := e.getShard(ch)
 
 	var includePubs = true
@@ -1306,9 +1371,10 @@ func (e *RedisMapBroker) ReadStreamZero(
 
 	if opts.Filter.Since != nil {
 		if opts.Filter.Reverse {
-			offset = strconv.FormatUint(opts.Filter.Since.Offset-1, 10)
-			if offset == "0" {
+			if opts.Filter.Since.Offset == 0 {
 				includePubs = false
+			} else {
+				offset = strconv.FormatUint(opts.Filter.Since.Offset-1, 10)
 			}
 		} else {
 			offset = strconv.FormatUint(opts.Filter.Since.Offset+1, 10)
@@ -1507,17 +1573,17 @@ func (e *RedisMapBroker) ReadStreamZero(
 	)
 
 	if err != nil {
-		return nil, StreamPosition{}, err
+		return MapStreamResult{}, err
 	}
 
-	return pubs, streamPos, nil
+	return MapStreamResult{Publications: pubs, Position: streamPos}, nil
 }
 
 // ReadStreamZero2 is a 2-call version of ReadStreamZero with zero-alloc optimizations.
 // Call 1: Get metadata (epoch, top_offset) using simpler Lua script with ExecWithReader
 // Call 2: Read publications using native XRANGE/XREVRANGE with DoWithReader
 // Key difference: Must filter out publications with offset > top_offset (non-atomic).
-func (e *RedisMapBroker) ReadStreamZero2(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *RedisMapBroker) ReadStreamZero2(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 	s := e.getShard(ch)
 
 	// 1. Parse options (same as ReadStream/ReadStreamZero)
@@ -1525,9 +1591,10 @@ func (e *RedisMapBroker) ReadStreamZero2(ctx context.Context, ch string, opts Ma
 	var offset string
 	if opts.Filter.Since != nil {
 		if opts.Filter.Reverse {
-			offset = strconv.FormatUint(opts.Filter.Since.Offset-1, 10)
-			if offset == "0" {
+			if opts.Filter.Since.Offset == 0 {
 				includePubs = false
+			} else {
+				offset = strconv.FormatUint(opts.Filter.Since.Offset-1, 10)
 			}
 		} else {
 			offset = strconv.FormatUint(opts.Filter.Since.Offset+1, 10)
@@ -1612,12 +1679,12 @@ func (e *RedisMapBroker) ReadStreamZero2(ctx context.Context, ch string, opts Ma
 		},
 	)
 	if err != nil {
-		return nil, StreamPosition{}, err
+		return MapStreamResult{}, err
 	}
 
 	// 3. Early return if metadata-only
 	if !includePubs {
-		return nil, streamPos, nil
+		return MapStreamResult{Position: streamPos}, nil
 	}
 
 	topOffset := streamPos.Offset
@@ -1744,23 +1811,24 @@ func (e *RedisMapBroker) ReadStreamZero2(ctx context.Context, ch string, opts Ma
 	})
 
 	if err != nil {
-		return nil, StreamPosition{}, err
+		return MapStreamResult{}, err
 	}
 
-	return pubs, streamPos, nil
+	return MapStreamResult{Publications: pubs, Position: streamPos}, nil
 }
 
 // ReadStream retrieves publication stream for a channel.
-func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 	s := e.getShard(ch)
 
 	var includePubs = true
 	var offset string
 	if opts.Filter.Since != nil {
 		if opts.Filter.Reverse {
-			offset = strconv.FormatUint(opts.Filter.Since.Offset-1, 10)
-			if offset == "0" {
+			if opts.Filter.Since.Offset == 0 {
 				includePubs = false
+			} else {
+				offset = strconv.FormatUint(opts.Filter.Since.Offset-1, 10)
 			}
 		} else {
 			// Use offset+1 because XRANGE is inclusive, but "since" should be exclusive
@@ -1810,51 +1878,51 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 		},
 	).ToArray()
 	if err != nil {
-		return nil, StreamPosition{}, err
+		return MapStreamResult{}, err
 	}
 
 	if len(replies) < 2 {
-		return nil, StreamPosition{}, fmt.Errorf("wrong number of replies: %d", len(replies))
+		return MapStreamResult{}, fmt.Errorf("wrong number of replies: %d", len(replies))
 	}
 
 	topOffset, err := replies[0].AsUint64()
 	if err != nil && !rueidis.IsRedisNil(err) {
-		return nil, StreamPosition{}, fmt.Errorf("could not parse top offset: %w", err)
+		return MapStreamResult{}, fmt.Errorf("could not parse top offset: %w", err)
 	}
 
 	epoch, err := replies[1].ToString()
 	if err != nil {
-		return nil, StreamPosition{}, fmt.Errorf("could not parse epoch: %w", err)
+		return MapStreamResult{}, fmt.Errorf("could not parse epoch: %w", err)
 	}
 
 	streamPos := StreamPosition{Offset: topOffset, Epoch: epoch}
 	if !includePubs || len(replies) < 3 {
-		return nil, streamPos, nil
+		return MapStreamResult{Position: streamPos}, nil
 	}
 
 	pubValues, err := replies[2].ToArray()
 	if err != nil {
-		return nil, StreamPosition{}, err
+		return MapStreamResult{}, err
 	}
 
 	pubs := make([]*Publication, len(pubValues))
 	for j, v := range pubValues {
 		entry, err := v.ToArray()
 		if err != nil {
-			return nil, StreamPosition{}, err
+			return MapStreamResult{}, err
 		}
 		if len(entry) != 2 {
-			return nil, StreamPosition{}, fmt.Errorf("invalid publication format")
+			return MapStreamResult{}, fmt.Errorf("invalid publication format")
 		}
 		id, err := entry[0].ToString()
 		if err != nil {
-			return nil, StreamPosition{}, err
+			return MapStreamResult{}, err
 		}
 
 		// entry[1] is an array of [field, value, field, value, ...]
 		fieldsArr, err := entry[1].ToArray()
 		if err != nil {
-			return nil, StreamPosition{}, err
+			return MapStreamResult{}, err
 		}
 
 		var payload []byte
@@ -1868,22 +1936,22 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 			break
 		}
 		if payload == nil {
-			return nil, StreamPosition{}, errors.New("no payload data found in entry")
+			return MapStreamResult{}, errors.New("no payload data found in entry")
 		}
 
 		hyphenPos := strings.Index(id, "-")
 		if hyphenPos <= 0 {
-			return nil, StreamPosition{}, fmt.Errorf("unexpected offset format: %s", id)
+			return MapStreamResult{}, fmt.Errorf("unexpected offset format: %s", id)
 		}
 		pubOffset, err := strconv.ParseUint(id[:hyphenPos], 10, 64)
 		if err != nil {
-			return nil, StreamPosition{}, err
+			return MapStreamResult{}, err
 		}
 
 		var protoPub protocol.Publication
 		err = protoPub.UnmarshalVT(payload)
 		if err != nil {
-			return nil, StreamPosition{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
+			return MapStreamResult{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 		}
 
 		protoPub.Offset = pubOffset
@@ -1898,14 +1966,14 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 			Score:   protoPub.GetScore(),
 		}
 	}
-	return pubs, streamPos, nil
+	return MapStreamResult{Publications: pubs, Position: streamPos}, nil
 }
 
 // ReadStream2 is a 2-call version of ReadStream that splits metadata and publication reads.
 // Call 1: Get metadata (epoch, top_offset) using simpler Lua script
 // Call 2: Read publications using native XRANGE/XREVRANGE
 // Key difference: Must filter out publications with offset > top_offset (non-atomic).
-func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 	s := e.getShard(ch)
 
 	// 1. Parse options (same as ReadStream)
@@ -1913,9 +1981,10 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 	var offset string
 	if opts.Filter.Since != nil {
 		if opts.Filter.Reverse {
-			offset = strconv.FormatUint(opts.Filter.Since.Offset-1, 10)
-			if offset == "0" {
+			if opts.Filter.Since.Offset == 0 {
 				includePubs = false
+			} else {
+				offset = strconv.FormatUint(opts.Filter.Since.Offset-1, 10)
 			}
 		} else {
 			// Use offset+1 because XRANGE is inclusive, but "since" should be exclusive
@@ -1949,28 +2018,28 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 		[]string{metaExpire, e.node.ID()},
 	).ToArray()
 	if err != nil {
-		return nil, StreamPosition{}, err
+		return MapStreamResult{}, err
 	}
 
 	if len(metaReplies) < 2 {
-		return nil, StreamPosition{}, fmt.Errorf("wrong number of replies: %d", len(metaReplies))
+		return MapStreamResult{}, fmt.Errorf("wrong number of replies: %d", len(metaReplies))
 	}
 
 	topOffset, err := metaReplies[0].AsUint64()
 	if err != nil && !rueidis.IsRedisNil(err) {
-		return nil, StreamPosition{}, fmt.Errorf("could not parse top offset: %w", err)
+		return MapStreamResult{}, fmt.Errorf("could not parse top offset: %w", err)
 	}
 
 	epoch, err := metaReplies[1].ToString()
 	if err != nil {
-		return nil, StreamPosition{}, fmt.Errorf("could not parse epoch: %w", err)
+		return MapStreamResult{}, fmt.Errorf("could not parse epoch: %w", err)
 	}
 
 	streamPos := StreamPosition{Offset: topOffset, Epoch: epoch}
 
 	// 3. Early return if metadata-only
 	if !includePubs {
-		return nil, streamPos, nil
+		return MapStreamResult{Position: streamPos}, nil
 	}
 
 	// 4. Call 2: Execute native XRANGE/XREVRANGE
@@ -1995,7 +2064,7 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 
 	result, err := s.shard.client.Do(ctx, cmd).ToArray()
 	if err != nil {
-		return nil, StreamPosition{}, err
+		return MapStreamResult{}, err
 	}
 
 	// 5. Parse stream entries and filter by topOffset
@@ -2004,24 +2073,24 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 	for _, v := range result {
 		entry, err := v.ToArray()
 		if err != nil {
-			return nil, StreamPosition{}, err
+			return MapStreamResult{}, err
 		}
 		if len(entry) != 2 {
-			return nil, StreamPosition{}, fmt.Errorf("invalid publication format")
+			return MapStreamResult{}, fmt.Errorf("invalid publication format")
 		}
 		id, err := entry[0].ToString()
 		if err != nil {
-			return nil, StreamPosition{}, err
+			return MapStreamResult{}, err
 		}
 
 		// Extract offset from stream ID "123-0" -> 123
 		hyphenPos := strings.Index(id, "-")
 		if hyphenPos <= 0 {
-			return nil, StreamPosition{}, fmt.Errorf("unexpected offset format: %s", id)
+			return MapStreamResult{}, fmt.Errorf("unexpected offset format: %s", id)
 		}
 		pubOffset, err := strconv.ParseUint(id[:hyphenPos], 10, 64)
 		if err != nil {
-			return nil, StreamPosition{}, err
+			return MapStreamResult{}, err
 		}
 
 		// CRITICAL: Filter entries written after metadata read
@@ -2032,7 +2101,7 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 		// entry[1] is an array of [field, value, field, value, ...]
 		fieldsArr, err := entry[1].ToArray()
 		if err != nil {
-			return nil, StreamPosition{}, err
+			return MapStreamResult{}, err
 		}
 
 		var payload []byte
@@ -2046,13 +2115,13 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 			break
 		}
 		if payload == nil {
-			return nil, StreamPosition{}, errors.New("no payload data found in entry")
+			return MapStreamResult{}, errors.New("no payload data found in entry")
 		}
 
 		var protoPub protocol.Publication
 		err = protoPub.UnmarshalVT(payload)
 		if err != nil {
-			return nil, StreamPosition{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
+			return MapStreamResult{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 		}
 
 		protoPub.Offset = pubOffset
@@ -2069,7 +2138,7 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 		})
 	}
 
-	return pubs, streamPos, nil
+	return MapStreamResult{Publications: pubs, Position: streamPos}, nil
 }
 
 // Stats returns short stats of current presence data.
@@ -2104,16 +2173,16 @@ func (e *RedisMapBroker) Stats(ctx context.Context, ch string) (MapStats, error)
 func (e *RedisMapBroker) ReadPresenceState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, error) {
 	// ReadPresenceState is just ReadState - it already returns Publications with Key and Offset set.
 	// This reuses all the state reading logic.
-	pubs, streamPos, _, err := e.ReadState(ctx, ch, opts)
+	result, err := e.ReadState(ctx, ch, opts)
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}
-	return pubs, streamPos, nil
+	return result.Publications, result.Position, nil
 }
 
 // ReadPresenceStream retrieves presence event stream (joins/leaves) for a channel.
 // Returns Publications with Info=ClientInfo and Removed flag (true for leave, false for join).
-func (e *RedisMapBroker) ReadPresenceStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *RedisMapBroker) ReadPresenceStream(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 	// ReadPresenceStream is literally just ReadStream - presence streams store Publications
 	// Publication.Removed distinguishes join (false) from leave (true) events.
 	return e.ReadStream(ctx, ch, opts)
@@ -2354,12 +2423,34 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 		metaExpire = strconv.Itoa(int(opts.MetaTTL.Seconds()))
 	}
 
+	// Determine stream and meta keys based on stream mode.
+	streamKey := e.streamKey(shard, ch)
+	metaKey := e.metaKey(shard, ch)
+	if opts.StreamSize <= 0 {
+		// Streamless mode: stream and meta keys are not used.
+		streamKey = ""
+		metaKey = ""
+	}
+
+	// In Redis Cluster, all KEYS must hash to the same slot. Use slot-aligned
+	// nil_key placeholder for unused keys (same pattern as addMapEntry).
+	nilKey := ""
+	if shard.isCluster {
+		nilKey = e.buildKey(shard, ch, ":nil:")
+		if streamKey == "" {
+			streamKey = nilKey
+		}
+		if metaKey == "" {
+			metaKey = nilKey
+		}
+	}
+
 	_, err := e.cleanupScript.Exec(ctx, shard.client,
 		[]string{
 			e.stateHashKey(shard, ch),   // KEYS[1]: state hash key
 			e.stateExpireKey(shard, ch), // KEYS[2]: state expire zset key
-			e.streamKey(shard, ch),      // KEYS[3]: stream key
-			e.metaKey(shard, ch),        // KEYS[4]: stream meta key
+			streamKey,                   // KEYS[3]: stream key
+			metaKey,                     // KEYS[4]: stream meta key
 			cleanupKey,                  // KEYS[5]: cleanup registration zset key
 		},
 		[]string{
@@ -2374,6 +2465,7 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 			"0",         // ARGV[9]: use_hexpire
 			ch,          // ARGV[10]: channel_for_cleanup
 			"1",         // ARGV[11]: force_consistency
+			nilKey,      // ARGV[12]: nil_key (slot-aligned placeholder, empty to disable)
 		},
 	).ToArray()
 	return err

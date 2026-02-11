@@ -202,7 +202,7 @@ func (h *cachedEventHandler) fillGap(ch string, cachedPos StreamPosition, incomi
 	defer cancel()
 
 	// Fetch missing publications (from cachedPos to incomingOffset-1)
-	missing, _, err := h.backend.ReadStream(ctx, ch, MapReadStreamOptions{
+	missingResult, err := h.backend.ReadStream(ctx, ch, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Since: &cachedPos,
 			Limit: int(incomingOffset - cachedPos.Offset - 1), // Only what's missing
@@ -215,7 +215,7 @@ func (h *cachedEventHandler) fillGap(ch string, cachedPos StreamPosition, incomi
 	}
 
 	// Apply missing publications in order
-	for _, m := range missing {
+	for _, m := range missingResult.Publications {
 		pubPos := StreamPosition{Offset: m.Offset, Epoch: epoch}
 		_ = h.cache.ApplyPublication(ch, m, pubPos, m.Removed)
 	}
@@ -338,6 +338,11 @@ func (e *CachedMapBroker) Unsubscribe(ch string) error {
 	delete(e.streamInitialized, ch)
 	e.streamInitializedMu.Unlock()
 
+	// Clean up per-channel lock
+	e.channelLocksMu.Lock()
+	delete(e.channelLocks, ch)
+	e.channelLocksMu.Unlock()
+
 	return e.backend.Unsubscribe(ch)
 }
 
@@ -359,7 +364,7 @@ func (e *CachedMapBroker) Remove(ctx context.Context, ch string, key string, opt
 // ReadState retrieves the current key-value state for a channel.
 // By default, reads from backend for consistency (safe for CAS operations).
 // If opts.Cached is true (internal subscription flow), reads from cache for performance.
-func (e *CachedMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+func (e *CachedMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
 	// Default: read from backend for consistency (safe for CAS, always fresh).
 	// Application code should always get fresh data.
 	if !opts.Cached {
@@ -374,7 +379,7 @@ func (e *CachedMapBroker) ReadState(ctx context.Context, ch string, opts MapRead
 	// Ensure channel is loaded into cache
 	if err := e.ensureLoaded(ctx, ch); err != nil {
 		e.cache.ClearLoading(ch)
-		return nil, StreamPosition{}, "", err
+		return MapStateResult{}, err
 	}
 
 	// Read from cache
@@ -385,10 +390,10 @@ func (e *CachedMapBroker) ReadState(ctx context.Context, ch string, opts MapRead
 // First call per channel always reads from backend to ensure we catch publications
 // that happened between state load and pub/sub subscription (critical for presence).
 // Subsequent calls use the cached stream (kept updated via pub/sub and sync).
-func (e *CachedMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *CachedMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 	// Ensure channel state is loaded into cache
 	if err := e.ensureLoaded(ctx, ch); err != nil {
-		return nil, StreamPosition{}, err
+		return MapStreamResult{}, err
 	}
 
 	// Check if stream has been initialized for this channel
@@ -404,17 +409,17 @@ func (e *CachedMapBroker) ReadStream(ctx context.Context, ch string, opts MapRea
 	// First call for this channel - MUST read from backend.
 	// This is critical during subscription to catch publications that happened
 	// between state load and pub/sub subscription (e.g., presence notifications).
-	fullPubs, pos, err := e.backend.ReadStream(ctx, ch, MapReadStreamOptions{
+	fullResult, err := e.backend.ReadStream(ctx, ch, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit: -1, // Get full stream for caching
 		},
 	})
 	if err != nil {
-		return nil, StreamPosition{}, err
+		return MapStreamResult{}, err
 	}
 
 	// Populate cache with backend data, preserving any entries added by HandlePublication
-	e.cache.PopulateStream(ch, fullPubs, pos.Epoch)
+	e.cache.PopulateStream(ch, fullResult.Publications, fullResult.Position.Epoch)
 
 	// Mark stream as initialized - subsequent calls will use cache
 	e.streamInitializedMu.Lock()
@@ -450,6 +455,11 @@ func (e *CachedMapBroker) Clear(ctx context.Context, ch string, opts MapClearOpt
 	delete(e.streamInitialized, ch)
 	e.streamInitializedMu.Unlock()
 
+	// Clean up per-channel lock
+	e.channelLocksMu.Lock()
+	delete(e.channelLocks, ch)
+	e.channelLocksMu.Unlock()
+
 	// Clear from backend
 	return e.backend.Clear(ctx, ch, opts)
 }
@@ -466,12 +476,13 @@ func (e *CachedMapBroker) ensureLoaded(ctx context.Context, ch string) error {
 		defer cancel()
 
 		// Load full state from backend
-		statePubs, pos, _, err := e.backend.ReadState(loadCtx, ch, MapReadStateOptions{
+		stateResult, err := e.backend.ReadState(loadCtx, ch, MapReadStateOptions{
 			Limit: 0, // All entries (unlimited)
 		})
 		if err != nil {
 			return nil, nil, StreamPosition{}, err
 		}
+		statePubs, pos := stateResult.Publications, stateResult.Position
 
 		if e.node.logEnabled(LogLevelTrace) {
 			keys := make([]string, 0, len(statePubs))
@@ -629,7 +640,7 @@ func (e *CachedMapBroker) syncChannel(ch string) {
 	cachedEpoch := e.cache.GetEpoch(ch)
 
 	// Fetch new publications from backend
-	pubs, pos, err := e.backend.ReadStream(ctx, ch, MapReadStreamOptions{
+	syncResult, err := e.backend.ReadStream(ctx, ch, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Since: &StreamPosition{Offset: since},
 			Limit: e.conf.SyncBatchSize,
@@ -641,21 +652,21 @@ func (e *CachedMapBroker) syncChannel(ch string) {
 	}
 
 	// Check for epoch mismatch - backend epoch changed, need full reload
-	if cachedEpoch != "" && pos.Epoch != "" && cachedEpoch != pos.Epoch {
+	if cachedEpoch != "" && syncResult.Position.Epoch != "" && cachedEpoch != syncResult.Position.Epoch {
 		e.reloadChannel(ctx, ch)
 		return
 	}
 
 	// Check for gap in stream continuity - if first pub offset > since + 1, we missed publications
-	if len(pubs) > 0 && since > 0 && pubs[0].Offset > since+1 {
+	if len(syncResult.Publications) > 0 && since > 0 && syncResult.Publications[0].Offset > since+1 {
 		e.reloadChannel(ctx, ch)
 		return
 	}
 
 	// Apply each publication to cache and deliver to subscribers
-	for _, pub := range pubs {
+	for _, pub := range syncResult.Publications {
 		// Use publication's own offset for position, preserving epoch from stream position
-		pubPos := StreamPosition{Offset: pub.Offset, Epoch: pos.Epoch}
+		pubPos := StreamPosition{Offset: pub.Offset, Epoch: syncResult.Position.Epoch}
 		_ = e.cache.ApplyPublication(ch, pub, pubPos, pub.Removed)
 
 		// Deliver to subscribers - this handles publications that were missed
@@ -666,11 +677,11 @@ func (e *CachedMapBroker) syncChannel(ch string) {
 	}
 
 	// Update sync cursor
-	if len(pubs) > 0 {
-		e.updateSyncOffset(ch, pubs[len(pubs)-1].Offset)
-	} else if pos.Offset > since {
+	if len(syncResult.Publications) > 0 {
+		e.updateSyncOffset(ch, syncResult.Publications[len(syncResult.Publications)-1].Offset)
+	} else if syncResult.Position.Offset > since {
 		// Update cursor even if no new pubs (position advanced)
-		e.updateSyncOffset(ch, pos.Offset)
+		e.updateSyncOffset(ch, syncResult.Position.Offset)
 	}
 }
 
@@ -688,6 +699,11 @@ func (e *CachedMapBroker) reloadChannel(ctx context.Context, ch string) {
 	e.streamInitializedMu.Lock()
 	delete(e.streamInitialized, ch)
 	e.streamInitializedMu.Unlock()
+
+	// Clean up per-channel lock
+	e.channelLocksMu.Lock()
+	delete(e.channelLocks, ch)
+	e.channelLocksMu.Unlock()
 
 	// Reload by ensuring it's loaded again
 	_ = e.ensureLoaded(ctx, ch)

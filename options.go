@@ -26,6 +26,15 @@ func WithIdempotencyKey(key string) PublishOption {
 	}
 }
 
+// WithKey sets a key for the publication. When set, the publication is associated
+// with a specific key within the channel. This may enable per-key debouncing or
+// channel level per-key batching. The key is delivered to subscribers in the Publication.
+func WithKey(key string) PublishOption {
+	return func(opts *PublishOptions) {
+		opts.Key = key
+	}
+}
+
 // WithDelta tells Broker to use delta streaming.
 func WithDelta(enabled bool) PublishOption {
 	return func(opts *PublishOptions) {
@@ -186,7 +195,7 @@ type SubscribeOptions struct {
 	MapClientPresenceChannelPrefix string
 	// MapUserPresenceChannelPrefix is the prefix for user presence channels.
 	// When set, user presence will be published to {prefix}{channel} on subscribe.
-	// For example, if prefix is "$users:" and channel is "games", presence goes to "$users:games".
+	// For example, if prefix is "users:" and channel is "games", presence goes to "users:games".
 	// Empty string means no user presence publishing.
 	MapUserPresenceChannelPrefix string
 	// MapRemoveOnUnsubscribe enables automatic cleanup of map state when the

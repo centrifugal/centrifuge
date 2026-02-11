@@ -103,7 +103,8 @@ func TestRedisMapBroker_NodeGrouped_Basic(t *testing.T) {
 	require.True(t, result.Position.Offset > 0)
 
 	// Read state back.
-	pubs, _, _, err := e.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+	stateRes, err := e.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 	require.Equal(t, "key1", pubs[0].Key)
@@ -385,7 +386,8 @@ func TestRedisMapBroker_NodeGrouped_Cleanup(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify key exists.
-	pubs, _, _, err := e.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+	stateRes, err := e.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
 
@@ -393,7 +395,8 @@ func TestRedisMapBroker_NodeGrouped_Cleanup(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	// Key should be cleaned up.
-	pubs, _, _, err = e.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+	stateRes, err = e.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 0, "expired key should be cleaned up")
 }

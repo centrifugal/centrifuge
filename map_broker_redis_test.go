@@ -13,6 +13,16 @@ import (
 )
 
 func newTestRedisMapBrokerWithHandler(tb testing.TB, n *Node, h BrokerEventHandler) *RedisMapBroker {
+	if n.config.GetMapChannelOptions == nil {
+		n.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		}
+	}
 	redisConf := testSingleRedisConf(6379)
 	shard, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
@@ -34,6 +44,17 @@ func randomChannel(prefix string) string {
 }
 
 func newTestRedisMapBroker(tb testing.TB, n *Node) *RedisMapBroker {
+	// Configure stream-enabled channel options for tests that use StreamSize in Publish.
+	if n.config.GetMapChannelOptions == nil {
+		n.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		}
+	}
 	redisConf := testSingleRedisConf(6379)
 	shard, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
@@ -92,10 +113,11 @@ func TestRedisMapBroker_StatefulChannel(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read state
-	entries, streamPos, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, streamPos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.NotEmpty(t, streamPos.Epoch)
 	require.Greater(t, streamPos.Offset, uint64(0))
@@ -107,13 +129,13 @@ func TestRedisMapBroker_StatefulChannel(t *testing.T) {
 	require.Equal(t, []byte("data2"), state["key2"])
 
 	// Read stream to verify all publications are in history
-	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	result, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit: -1, // Get all
 		},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubs, 3) // All 3 publications in stream
+	require.Len(t, result.Publications, 3) // All 3 publications in stream
 }
 
 // TestRedisMapBroker_StatefulChannelOrdered tests ordered stateful channel.
@@ -138,11 +160,12 @@ func TestRedisMapBroker_StatefulChannelOrdered(t *testing.T) {
 	}
 
 	// Read ordered state (descending by score)
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 5)
 
@@ -184,10 +207,11 @@ func TestRedisMapBroker_StateRevision(t *testing.T) {
 	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch) // Same epoch
 
 	// Read state - entries now include per-entry revisions
-	entries, streamPos, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, streamPos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Equal(t, res2.Position.Offset, streamPos.Offset)
 	require.Equal(t, res2.Position.Epoch, streamPos.Epoch)
@@ -225,11 +249,12 @@ func TestRedisMapBroker_StatePagination(t *testing.T) {
 
 	// Read state with limit - HSCAN COUNT is a hint, not a guarantee
 	// For small hashes, Redis may return all entries in one go
-	page1, pos1, cursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    3,
 		Cursor:   "",
 		StateTTL: 300 * time.Second,
 	})
+	page1, pos1, cursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.NotEmpty(t, page1)
 
@@ -241,11 +266,12 @@ func TestRedisMapBroker_StatePagination(t *testing.T) {
 
 	// Continue reading until cursor is "0" (end of iteration)
 	for cursor != "" && cursor != "0" {
-		page, pos, newCursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 			Limit:    3,
 			Cursor:   cursor,
 			StateTTL: 300 * time.Second,
 		})
+		page, pos, newCursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
 		require.Equal(t, pos1.Epoch, pos.Epoch) // Same epoch across pages
 
@@ -280,10 +306,11 @@ func TestRedisMapBroker_EpochHandling(t *testing.T) {
 	epoch1 := res1.Position.Epoch
 
 	// Read state
-	entries, streamPos1, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, streamPos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, epoch1, streamPos1.Epoch)
@@ -331,10 +358,11 @@ func TestRedisMapBroker_Idempotency(t *testing.T) {
 	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch)   // Same epoch
 
 	// State should still have original data (second publish was cached/skipped)
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	state := stateToMap(entries)
 	require.Len(t, state, 1)
@@ -387,10 +415,11 @@ func TestRedisMapBroker_VersionedPublishing(t *testing.T) {
 	require.Equal(t, uint64(2), res3.Position.Offset) // New offset
 
 	// State should have v3 data
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	state := stateToMap(entries)
 	require.Equal(t, []byte("data_v3"), state["key1"])
@@ -424,20 +453,22 @@ func TestRedisMapBroker_MultipleChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read channel1 state
-	entries1, _, _, err := broker.ReadState(ctx, channel1, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel1, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries1, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	state1 := stateToMap(entries1)
 	require.Len(t, state1, 1)
 	require.Equal(t, []byte("data1"), state1["key1"])
 
 	// Read channel2 state
-	entries2, _, _, err := broker.ReadState(ctx, channel2, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel2, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries2, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	state2 := stateToMap(entries2)
 	require.Len(t, state2, 1)
@@ -526,67 +557,67 @@ func TestRedisMapBroker_ReadStream2(t *testing.T) {
 	}
 
 	// Test 1: Read all messages (forward)
-	pubs, streamPos, err := broker.ReadStream2(ctx, channel, MapReadStreamOptions{
+	result, err := broker.ReadStream2(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit: -1,
 		},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubs, 5)
-	require.NotEmpty(t, streamPos.Epoch)
-	require.Equal(t, uint64(5), streamPos.Offset)
-	require.Equal(t, []byte("msg_1"), pubs[0].Data)
-	require.Equal(t, []byte("msg_5"), pubs[4].Data)
+	require.Len(t, result.Publications, 5)
+	require.NotEmpty(t, result.Position.Epoch)
+	require.Equal(t, uint64(5), result.Position.Offset)
+	require.Equal(t, []byte("msg_1"), result.Publications[0].Data)
+	require.Equal(t, []byte("msg_5"), result.Publications[4].Data)
 
 	// Test 2: Read all messages (reverse)
-	pubsRev, streamPosRev, err := broker.ReadStream2(ctx, channel, MapReadStreamOptions{
+	resultRev, err := broker.ReadStream2(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit:   -1,
 			Reverse: true,
 		},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubsRev, 5)
-	require.Equal(t, uint64(5), streamPosRev.Offset)
-	require.Equal(t, []byte("msg_5"), pubsRev[0].Data)
-	require.Equal(t, []byte("msg_1"), pubsRev[4].Data)
+	require.Len(t, resultRev.Publications, 5)
+	require.Equal(t, uint64(5), resultRev.Position.Offset)
+	require.Equal(t, []byte("msg_5"), resultRev.Publications[0].Data)
+	require.Equal(t, []byte("msg_1"), resultRev.Publications[4].Data)
 
 	// Test 3: Read with limit
-	pubsLimited, _, err := broker.ReadStream2(ctx, channel, MapReadStreamOptions{
+	resultLimited, err := broker.ReadStream2(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit: 2,
 		},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubsLimited, 2)
-	require.Equal(t, []byte("msg_1"), pubsLimited[0].Data)
-	require.Equal(t, []byte("msg_2"), pubsLimited[1].Data)
+	require.Len(t, resultLimited.Publications, 2)
+	require.Equal(t, []byte("msg_1"), resultLimited.Publications[0].Data)
+	require.Equal(t, []byte("msg_2"), resultLimited.Publications[1].Data)
 
 	// Test 4: Read since offset
-	pubsSince, _, err := broker.ReadStream2(ctx, channel, MapReadStreamOptions{
+	resultSince, err := broker.ReadStream2(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Since: &StreamPosition{
 				Offset: 2,
-				Epoch:  streamPos.Epoch,
+				Epoch:  result.Position.Epoch,
 			},
 			Limit: -1,
 		},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubsSince, 3)
-	require.Equal(t, []byte("msg_3"), pubsSince[0].Data)
-	require.Equal(t, []byte("msg_5"), pubsSince[2].Data)
+	require.Len(t, resultSince.Publications, 3)
+	require.Equal(t, []byte("msg_3"), resultSince.Publications[0].Data)
+	require.Equal(t, []byte("msg_5"), resultSince.Publications[2].Data)
 
 	// Test 5: Metadata-only read
-	pubsMeta, streamPosMeta, err := broker.ReadStream2(ctx, channel, MapReadStreamOptions{
+	resultMeta, err := broker.ReadStream2(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit: 0, // metadata only
 		},
 	})
 	require.NoError(t, err)
-	require.Nil(t, pubsMeta)
-	require.Equal(t, uint64(5), streamPosMeta.Offset)
-	require.NotEmpty(t, streamPosMeta.Epoch)
+	require.Nil(t, resultMeta.Publications)
+	require.Equal(t, uint64(5), resultMeta.Position.Offset)
+	require.NotEmpty(t, resultMeta.Position.Epoch)
 }
 
 // TestRedisMapBroker_ReadStreamZero2 tests the 2-call zero-alloc version of ReadStream.
@@ -608,67 +639,67 @@ func TestRedisMapBroker_ReadStreamZero2(t *testing.T) {
 	}
 
 	// Test 1: Read all messages (forward)
-	pubs, streamPos, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
+	result, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit: -1,
 		},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubs, 5)
-	require.NotEmpty(t, streamPos.Epoch)
-	require.Equal(t, uint64(5), streamPos.Offset)
-	require.Equal(t, []byte("msg_1"), pubs[0].Data)
-	require.Equal(t, []byte("msg_5"), pubs[4].Data)
+	require.Len(t, result.Publications, 5)
+	require.NotEmpty(t, result.Position.Epoch)
+	require.Equal(t, uint64(5), result.Position.Offset)
+	require.Equal(t, []byte("msg_1"), result.Publications[0].Data)
+	require.Equal(t, []byte("msg_5"), result.Publications[4].Data)
 
 	// Test 2: Read all messages (reverse)
-	pubsRev, streamPosRev, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
+	resultRev, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit:   -1,
 			Reverse: true,
 		},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubsRev, 5)
-	require.Equal(t, uint64(5), streamPosRev.Offset)
-	require.Equal(t, []byte("msg_5"), pubsRev[0].Data)
-	require.Equal(t, []byte("msg_1"), pubsRev[4].Data)
+	require.Len(t, resultRev.Publications, 5)
+	require.Equal(t, uint64(5), resultRev.Position.Offset)
+	require.Equal(t, []byte("msg_5"), resultRev.Publications[0].Data)
+	require.Equal(t, []byte("msg_1"), resultRev.Publications[4].Data)
 
 	// Test 3: Read with limit
-	pubsLimited, _, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
+	resultLimited, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit: 2,
 		},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubsLimited, 2)
-	require.Equal(t, []byte("msg_1"), pubsLimited[0].Data)
-	require.Equal(t, []byte("msg_2"), pubsLimited[1].Data)
+	require.Len(t, resultLimited.Publications, 2)
+	require.Equal(t, []byte("msg_1"), resultLimited.Publications[0].Data)
+	require.Equal(t, []byte("msg_2"), resultLimited.Publications[1].Data)
 
 	// Test 4: Read since offset
-	pubsSince, _, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
+	resultSince, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Since: &StreamPosition{
 				Offset: 2,
-				Epoch:  streamPos.Epoch,
+				Epoch:  result.Position.Epoch,
 			},
 			Limit: -1,
 		},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubsSince, 3)
-	require.Equal(t, []byte("msg_3"), pubsSince[0].Data)
-	require.Equal(t, []byte("msg_5"), pubsSince[2].Data)
+	require.Len(t, resultSince.Publications, 3)
+	require.Equal(t, []byte("msg_3"), resultSince.Publications[0].Data)
+	require.Equal(t, []byte("msg_5"), resultSince.Publications[2].Data)
 
 	// Test 5: Metadata-only read
-	pubsMeta, streamPosMeta, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
+	resultMeta, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit: 0, // metadata only
 		},
 	})
 	require.NoError(t, err)
-	require.Nil(t, pubsMeta)
-	require.Equal(t, uint64(5), streamPosMeta.Offset)
-	require.NotEmpty(t, streamPosMeta.Epoch)
+	require.Nil(t, resultMeta.Publications)
+	require.Equal(t, uint64(5), resultMeta.Position.Offset)
+	require.NotEmpty(t, resultMeta.Position.Epoch)
 }
 
 // TestRedisMapBroker_ReadStream2_Compatibility tests that ReadStream2 returns same results as ReadStream.
@@ -690,43 +721,43 @@ func TestRedisMapBroker_ReadStream2_Compatibility(t *testing.T) {
 	}
 
 	// Compare ReadStream and ReadStream2 results
-	pubs1, pos1, err1 := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	result1, err1 := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err1)
 
-	pubs2, pos2, err2 := broker.ReadStream2(ctx, channel, MapReadStreamOptions{
+	result2, err2 := broker.ReadStream2(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err2)
 
 	// Compare results
-	require.Equal(t, len(pubs1), len(pubs2))
-	require.Equal(t, pos1.Offset, pos2.Offset)
-	require.Equal(t, pos1.Epoch, pos2.Epoch)
-	for i := range pubs1 {
-		require.Equal(t, pubs1[i].Data, pubs2[i].Data)
-		require.Equal(t, pubs1[i].Offset, pubs2[i].Offset)
+	require.Equal(t, len(result1.Publications), len(result2.Publications))
+	require.Equal(t, result1.Position.Offset, result2.Position.Offset)
+	require.Equal(t, result1.Position.Epoch, result2.Position.Epoch)
+	for i := range result1.Publications {
+		require.Equal(t, result1.Publications[i].Data, result2.Publications[i].Data)
+		require.Equal(t, result1.Publications[i].Offset, result2.Publications[i].Offset)
 	}
 
 	// Compare ReadStreamZero and ReadStreamZero2 results
-	pubs3, pos3, err3 := broker.ReadStreamZero(ctx, channel, MapReadStreamOptions{
+	result3, err3 := broker.ReadStreamZero(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err3)
 
-	pubs4, pos4, err4 := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
+	result4, err4 := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err4)
 
 	// Compare results
-	require.Equal(t, len(pubs3), len(pubs4))
-	require.Equal(t, pos3.Offset, pos4.Offset)
-	require.Equal(t, pos3.Epoch, pos4.Epoch)
-	for i := range pubs3 {
-		require.Equal(t, pubs3[i].Data, pubs4[i].Data)
-		require.Equal(t, pubs3[i].Offset, pubs4[i].Offset)
+	require.Equal(t, len(result3.Publications), len(result4.Publications))
+	require.Equal(t, result3.Position.Offset, result4.Position.Offset)
+	require.Equal(t, result3.Position.Epoch, result4.Position.Epoch)
+	for i := range result3.Publications {
+		require.Equal(t, result3.Publications[i].Data, result4.Publications[i].Data)
+		require.Equal(t, result3.Publications[i].Offset, result4.Publications[i].Offset)
 	}
 }
 
@@ -777,19 +808,20 @@ func TestRedisMapBroker_CleanupGeneratesRemovalEvents(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify initial stream has 2 publish events.
-	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubs, 2, "Should have 2 publish events in stream")
-	require.False(t, pubs[0].Removed)
-	require.False(t, pubs[1].Removed)
+	require.Len(t, streamResult.Publications, 2, "Should have 2 publish events in stream")
+	require.False(t, streamResult.Publications[0].Removed)
+	require.False(t, streamResult.Publications[1].Removed)
 
 	// Verify state has 2 entries.
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 
@@ -802,15 +834,15 @@ func TestRedisMapBroker_CleanupGeneratesRemovalEvents(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read the stream after cleanup - should have 2 publish + 2 removal events.
-	pubs, _, err = broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult, err = broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubs, 4, "Expected 4 events in stream (2 publish + 2 removal)")
+	require.Len(t, streamResult.Publications, 4, "Expected 4 events in stream (2 publish + 2 removal)")
 
 	// Collect removal events.
 	var removals []*Publication
-	for _, pub := range pubs {
+	for _, pub := range streamResult.Publications {
 		if pub.Removed {
 			removals = append(removals, pub)
 		}
@@ -828,10 +860,11 @@ func TestRedisMapBroker_CleanupGeneratesRemovalEvents(t *testing.T) {
 	require.True(t, removedKeys["key2"], "key2 should be removed")
 
 	// Verify state is now empty.
-	entries, _, _, err = broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 0, "State should be empty after cleanup")
 
@@ -897,22 +930,23 @@ func TestRedisMapBroker_CleanupPartialExpiry(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify only key_short was removed.
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1, "Only key_long should remain")
 	require.Equal(t, "key_long", entries[0].Key)
 
 	// Verify stream has 2 publish + 1 removal event.
-	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubs, 3, "Expected 3 events (2 publish + 1 removal)")
+	require.Len(t, streamResult.Publications, 3, "Expected 3 events (2 publish + 1 removal)")
 
-	lastPub := pubs[2]
+	lastPub := streamResult.Publications[2]
 	require.True(t, lastPub.Removed)
 	require.Equal(t, "key_short", lastPub.Key)
 }
@@ -974,21 +1008,22 @@ func TestRedisMapBroker_CleanupRefreshedTTL(t *testing.T) {
 	require.NoError(t, err)
 
 	// Key should still exist (TTL was refreshed to 600s).
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1, "Key should still exist after TTL refresh")
 	require.Equal(t, "key1", entries[0].Key)
 	require.Equal(t, []byte(`{"v":2}`), entries[0].Data)
 
 	// Verify no removal events in stream (only 2 publish events).
-	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err)
-	for _, pub := range pubs {
+	for _, pub := range streamResult.Publications {
 		require.False(t, pub.Removed, "Should have no removal events after TTL refresh")
 	}
 }
@@ -1098,11 +1133,12 @@ func TestRedisMapBroker_OrderedStateOrdering(t *testing.T) {
 	}
 
 	// Read ordered state - should be sorted by score (ascending)
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 5, "Should have all 5 entries")
 
@@ -1142,11 +1178,12 @@ func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
 	}
 
 	// Read first page (limit=5, no cursor)
-	page1, pos1, cursor1, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    5,
 		StateTTL: 300 * time.Second,
 	})
+	page1, pos1, cursor1 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, page1, 5, "First page should have 5 entries")
 	require.NotEmpty(t, cursor1, "Should have cursor for next page")
@@ -1158,12 +1195,13 @@ func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
 	}
 
 	// Read second page (using cursor)
-	page2, pos2, cursor2, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Cursor:   cursor1,
 		Limit:    5,
 		StateTTL: 300 * time.Second,
 	})
+	page2, pos2, cursor2 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, page2, 5, "Second page should have 5 entries")
 	require.Equal(t, pos1.Epoch, pos2.Epoch, "Epoch should be consistent across pages")
@@ -1175,12 +1213,13 @@ func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
 	}
 
 	// Read third page (using cursor)
-	page3, _, cursor3, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Cursor:   cursor2,
 		Limit:    5,
 		StateTTL: 300 * time.Second,
 	})
+	page3, _, cursor3 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, page3, 5, "Third page should have 5 entries")
 
@@ -1191,12 +1230,13 @@ func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
 	}
 
 	// Read fourth page (using cursor)
-	page4, _, cursor4, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Cursor:   cursor3,
 		Limit:    5,
 		StateTTL: 300 * time.Second,
 	})
+	page4, _, cursor4 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, page4, 5, "Fourth page should have 5 entries")
 	require.Empty(t, cursor4, "Last page should have no cursor")
@@ -1259,11 +1299,12 @@ func TestRedisMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 	}
 
 	// Read ordered state
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 5)
 
@@ -1300,11 +1341,12 @@ func TestRedisMapBroker_OrderedStateWithSameScores(t *testing.T) {
 	}
 
 	// Read ordered state
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 5)
 
@@ -1340,63 +1382,69 @@ func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
 	}
 
 	// Test 1: Zero limit (should return all)
-	all, _, cursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    0,
 		StateTTL: 300 * time.Second,
 	})
+	all, _, cursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, all, 10, "Zero limit should return all entries")
 	require.Empty(t, cursor, "No cursor when returning all entries")
 
 	// Test 2: Limit larger than entries (should return all)
-	largeLimit, _, cursor2, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	largeLimit, _, cursor2 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, largeLimit, 10, "Limit larger than entries should return all")
 	require.Empty(t, cursor2, "No cursor when returning all entries")
 
 	// Test 3: Pagination with limit=3 through all entries
-	page1, _, c1, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    3,
 		StateTTL: 300 * time.Second,
 	})
+	page1, _, c1 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, page1, 3)
 	require.NotEmpty(t, c1)
 
 	// Continue to get remaining entries
-	page2, _, c2, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    3,
 		Cursor:   c1,
 		StateTTL: 300 * time.Second,
 	})
+	page2, _, c2 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, page2, 3)
 	require.NotEmpty(t, c2)
 
-	page3, _, c3, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    3,
 		Cursor:   c2,
 		StateTTL: 300 * time.Second,
 	})
+	page3, _, c3 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, page3, 3)
 	require.NotEmpty(t, c3)
 
 	// Last page should have 1 entry
-	page4, _, c4, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    3,
 		Cursor:   c3,
 		StateTTL: 300 * time.Second,
 	})
+	page4, _, c4 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, page4, 1, "Last page should have 1 remaining entry")
 	require.Empty(t, c4, "No cursor on last page")
@@ -1442,12 +1490,13 @@ func TestRedisMapBroker_OrderedStateFullPagination(t *testing.T) {
 	iterations := 0
 
 	for {
-		entries, _, nextCursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 			Ordered:  true,
 			Cursor:   cursor,
 			Limit:    pageSize,
 			StateTTL: 300 * time.Second,
 		})
+		entries, _, nextCursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
 
 		for _, entry := range entries {
@@ -1502,11 +1551,12 @@ func TestRedisMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 	}
 
 	// Read initial order (descending: 50, 40, 30, 20, 10)
-	entries1, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries1, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Equal(t, "key_5", entries1[0].Key) // Highest score (50)
 	require.Equal(t, "key_1", entries1[4].Key) // Lowest score (10)
@@ -1523,11 +1573,12 @@ func TestRedisMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read updated order
-	entries2, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries2, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries2, 5)
 
@@ -1574,20 +1625,21 @@ func TestRedisMapBroker_KeyModeIfNew(t *testing.T) {
 	require.Equal(t, uint64(1), res2.Position.Offset, "Offset should not change")
 
 	// Verify state still has original data
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, []byte("player1"), entries[0].Data)
 
 	// Verify stream only has one entry (second was suppressed)
-	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubs, 1)
+	require.Len(t, streamResult.Publications, 1)
 }
 
 // TestRedisMapBroker_KeyModeIfExists tests KeyModeIfExists - only write if key exists.
@@ -1633,10 +1685,11 @@ func TestRedisMapBroker_KeyModeIfExists(t *testing.T) {
 	require.False(t, res3.Suppressed, "Third publish should not be suppressed (key exists)")
 
 	// Verify state has updated data
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, []byte("heartbeat2"), entries[0].Data)
@@ -1673,10 +1726,11 @@ func TestRedisMapBroker_KeyModeReplace(t *testing.T) {
 	require.False(t, res2.Suppressed, "Replace should never be suppressed")
 
 	// Verify state has updated data
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, []byte("value2"), entries[0].Data)
@@ -1707,10 +1761,11 @@ func TestRedisMapBroker_Remove(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify state has 2 keys
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 
@@ -1723,10 +1778,11 @@ func TestRedisMapBroker_Remove(t *testing.T) {
 	require.False(t, res.Suppressed)
 
 	// Verify state has 1 key
-	entries, _, _, err = broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit:    100,
 		StateTTL: 300 * time.Second,
 	})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, "key2", entries[0].Key)
@@ -1741,15 +1797,15 @@ func TestRedisMapBroker_Remove(t *testing.T) {
 	require.Equal(t, SuppressReasonKeyNotFound, res.SuppressReason)
 
 	// Verify stream has only 3 entries (key1, key2, remove(key1)) - no entry for nonexistent
-	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Limit: -1,
 		},
 	})
 	require.NoError(t, err)
-	require.Len(t, pubs, 3)
-	require.True(t, pubs[2].Removed)
-	require.Equal(t, "key1", pubs[2].Key)
+	require.Len(t, streamResult.Publications, 3)
+	require.True(t, streamResult.Publications[2].Removed)
+	require.Equal(t, "key1", streamResult.Publications[2].Key)
 }
 
 // TestRedisMapBroker_Aggregation - REMOVED: aggregation feature was removed.
@@ -1866,11 +1922,12 @@ func TestRedisMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	}
 
 	// Read first page (should get keys with highest scores: key_20, key_19, ..., key_11)
-	pubs1, _, cursor1, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    10,
 		StateTTL: 300 * time.Second,
 	})
+	pubs1, _, cursor1 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs1, 10)
 	require.NotEmpty(t, cursor1)
@@ -1928,11 +1985,12 @@ func TestRedisMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	}
 
 	// Read first page
-	_, _, cursor1, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    10,
 		StateTTL: 300 * time.Second,
 	})
+	_, _, cursor1 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
 	// CONCURRENT MODIFICATION: Add entry with LOWEST score
@@ -1948,12 +2006,13 @@ func TestRedisMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	require.NoError(t, err)
 
 	// Continue reading with cursor - just verify it works
-	pubs2, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    10,
 		Cursor:   cursor1,
 		StateTTL: 300 * time.Second,
 	})
+	pubs2, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.NotEmpty(t, pubs2)
 
@@ -1987,11 +2046,12 @@ func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	}
 
 	// Read first page (key_20 down to key_11)
-	pubs1, streamPos1, cursor1, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    10,
 		StateTTL: 300 * time.Second,
 	})
+	pubs1, streamPos1, cursor1 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs1, 10)
 
@@ -2009,12 +2069,13 @@ func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read second page - key_05 jumped out of this range
-	pubs2, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    10,
 		Cursor:   cursor1,
 		StateTTL: 300 * time.Second,
 	})
+	pubs2, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
 	// Combine and filter
@@ -2031,7 +2092,7 @@ func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	}
 
 	// Read stream and apply changes
-	streamPubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Since: &streamPos1,
 			Limit: -1,
@@ -2039,7 +2100,7 @@ func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	for _, pub := range streamPubs {
+	for _, pub := range streamResult.Publications {
 		if pub.Removed {
 			delete(stateData, pub.Key)
 		} else {
@@ -2075,11 +2136,12 @@ func TestRedisMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 	}
 
 	// Read first page (key_20 down to key_11)
-	pubs1, streamPos1, cursor1, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    10,
 		StateTTL: 300 * time.Second,
 	})
+	pubs1, streamPos1, cursor1 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
 	// CONCURRENT MODIFICATION: Remove key_10 (first entry of next page)
@@ -2100,12 +2162,13 @@ func TestRedisMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 
 	cursor := cursor1
 	for cursor != "" {
-		pubs, _, nextCursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 			Ordered:  true,
 			Limit:    10,
 			Cursor:   cursor,
 			StateTTL: 300 * time.Second,
 		})
+		pubs, _, nextCursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
 		for _, pub := range pubs {
 			if pub.Offset <= streamPos1.Offset {
@@ -2116,7 +2179,7 @@ func TestRedisMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 	}
 
 	// Apply stream changes
-	streamPubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Since: &streamPos1,
 			Limit: -1,
@@ -2124,7 +2187,7 @@ func TestRedisMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	for _, pub := range streamPubs {
+	for _, pub := range streamResult.Publications {
 		if pub.Removed {
 			delete(allStateData, pub.Key)
 		} else {
@@ -2163,11 +2226,12 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	}
 
 	// Read first page
-	_, _, cursor1, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    10,
 		StateTTL: 300 * time.Second,
 	})
+	_, _, cursor1 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
 	// CONCURRENT MODIFICATIONS:
@@ -2202,12 +2266,13 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read second page
-	_, _, cursor2, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Ordered:  true,
 		Limit:    10,
 		Cursor:   cursor1,
 		StateTTL: 300 * time.Second,
 	})
+	_, _, cursor2 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
 	// 4. Add new lowest score entry
@@ -2224,12 +2289,13 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	// Read remaining pages
 	cursor := cursor2
 	for cursor != "" {
-		_, _, nextCursor, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 			Ordered:  true,
 			Limit:    10,
 			Cursor:   cursor,
 			StateTTL: 300 * time.Second,
 		})
+		_, _, nextCursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
 		cursor = nextCursor
 	}
@@ -2401,13 +2467,14 @@ func TestRedisMapBroker_Clear(t *testing.T) {
 	}
 
 	// Verify data exists.
-	entries, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 3)
 
-	pubs, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
 	require.NoError(t, err)
-	require.Len(t, pubs, 3)
+	require.Len(t, streamResult.Publications, 3)
 
 	stats, err := broker.Stats(ctx, channel)
 	require.NoError(t, err)
@@ -2418,14 +2485,15 @@ func TestRedisMapBroker_Clear(t *testing.T) {
 	require.NoError(t, err)
 
 	// State should be empty.
-	entries, _, _, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Empty(t, entries)
 
 	// Stream should be empty.
-	pubs, _, err = broker.ReadStream(ctx, channel, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
+	streamResult, err = broker.ReadStream(ctx, channel, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
 	require.NoError(t, err)
-	require.Empty(t, pubs)
+	require.Empty(t, streamResult.Publications)
 
 	// Stats should show zero keys.
 	stats, err = broker.Stats(ctx, channel)
@@ -2457,12 +2525,14 @@ func TestRedisMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	// ch1 empty.
-	entries, _, _, err := broker.ReadState(ctx, ch1, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	stateRes, err := broker.ReadState(ctx, ch1, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Empty(t, entries)
 
 	// ch2 still intact.
-	entries, _, _, err = broker.ReadState(ctx, ch2, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	stateRes, err = broker.ReadState(ctx, ch2, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 }

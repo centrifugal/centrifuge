@@ -41,14 +41,14 @@ func BenchmarkCachedMapBroker_ReadState_Cached(b *testing.B) {
 	}
 
 	// Ensure loaded
-	_, _, _, err = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
+	_, err = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
 	require.NoError(b, err)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, _, _, _ = cached.ReadState(ctx, channel, MapReadStateOptions{
+		_, _ = cached.ReadState(ctx, channel, MapReadStateOptions{
 			Limit: 0, // Get all
 		})
 	}
@@ -89,7 +89,7 @@ func BenchmarkCachedMapBroker_ReadState_ColdLoad(b *testing.B) {
 		b.StartTimer()
 
 		// Cold read triggers load
-		_, _, _, _ = cached.ReadState(ctx, "bench_cold_load", MapReadStateOptions{Limit: 0})
+		_, _ = cached.ReadState(ctx, "bench_cold_load", MapReadStateOptions{Limit: 0})
 
 		b.StopTimer()
 		_ = cached.Close(ctx)
@@ -132,7 +132,7 @@ func BenchmarkCachedMapBroker_ReadState_Parallel(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
+			_, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
 		}
 	})
 }
@@ -173,10 +173,11 @@ func BenchmarkCachedMapBroker_ReadState_Paginated(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		cursor := ""
 		for {
-			_, _, nextCursor, _ := cached.ReadState(ctx, channel, MapReadStateOptions{
+			stateRes, _ := cached.ReadState(ctx, channel, MapReadStateOptions{
 				Limit:  100,
 				Cursor: cursor,
 			})
+			nextCursor := stateRes.Cursor
 			if nextCursor == "" {
 				break
 			}
@@ -290,7 +291,7 @@ func BenchmarkMapCache_EnsureLoaded(b *testing.B) {
 		b.StartTimer()
 
 		// Load one channel
-		_, _, _, _ = cached.ReadState(ctx, fmt.Sprintf("ch%d", i%100), MapReadStateOptions{Limit: 0})
+		_, _ = cached.ReadState(ctx, fmt.Sprintf("ch%d", i%100), MapReadStateOptions{Limit: 0})
 
 		b.StopTimer()
 		_ = cached.Close(ctx)
@@ -361,19 +362,19 @@ func BenchmarkReadState_Direct_vs_Cached(b *testing.B) {
 	}
 
 	// Warm up cached broker
-	_, _, _, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
+	_, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
 
 	b.Run("Direct", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			_, _, _, _ = backend.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
+			_, _ = backend.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
 		}
 	})
 
 	b.Run("Cached", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			_, _, _, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
+			_, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
 		}
 	})
 }
@@ -505,7 +506,7 @@ func BenchmarkCachedMapBroker_ManyChannels(b *testing.B) {
 		localCounter := 0
 		for pb.Next() {
 			ch := fmt.Sprintf("channel_%d", localCounter%1000)
-			_, _, _, _ = cached.ReadState(ctx, ch, MapReadStateOptions{Limit: 0})
+			_, _ = cached.ReadState(ctx, ch, MapReadStateOptions{Limit: 0})
 			localCounter++
 		}
 	})
@@ -557,14 +558,14 @@ func BenchmarkMapReadState_Postgres_Direct_vs_Cached(b *testing.B) {
 	}
 
 	// Warm up cached broker (load into cache)
-	_, _, _, err = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
+	_, err = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
 	require.NoError(b, err)
 
 	b.Run("Postgres_Direct", func(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, _, _, _ = backend.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
+			_, _ = backend.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
 		}
 	})
 
@@ -572,7 +573,7 @@ func BenchmarkMapReadState_Postgres_Direct_vs_Cached(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, _, _, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
+			_, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
 		}
 	})
 
@@ -625,14 +626,14 @@ func BenchmarkMapReadState_Postgres_Parallel(b *testing.B) {
 	}
 
 	// Warm up cache
-	_, _, _, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
+	_, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
 
 	b.Run("Postgres_Direct_Parallel", func(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
-				_, _, _, _ = backend.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
+				_, _ = backend.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
 			}
 		})
 	})
@@ -642,7 +643,7 @@ func BenchmarkMapReadState_Postgres_Parallel(b *testing.B) {
 		b.ResetTimer()
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
-				_, _, _, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
+				_, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: 0})
 			}
 		})
 	})

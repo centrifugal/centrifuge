@@ -33,11 +33,11 @@ type mockRemove struct {
 func (m *mockMapBroker) RegisterEventHandler(BrokerEventHandler) error { return nil }
 func (m *mockMapBroker) Subscribe(string) error                        { return nil }
 func (m *mockMapBroker) Unsubscribe(string) error                      { return nil }
-func (m *mockMapBroker) ReadStream(context.Context, string, MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
-	return nil, StreamPosition{}, nil
+func (m *mockMapBroker) ReadStream(context.Context, string, MapReadStreamOptions) (MapStreamResult, error) {
+	return MapStreamResult{}, nil
 }
-func (m *mockMapBroker) ReadState(context.Context, string, MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
-	return nil, StreamPosition{}, "", nil
+func (m *mockMapBroker) ReadState(context.Context, string, MapReadStateOptions) (MapStateResult, error) {
+	return MapStateResult{}, nil
 }
 func (m *mockMapBroker) Stats(context.Context, string) (MapStats, error) {
 	return MapStats{}, nil

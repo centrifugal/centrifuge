@@ -94,7 +94,7 @@ type MapBroker interface {
 	// The operation:
 	//  1. Updates the key in the state (subject to KeyMode conditions)
 	//  2. Appends the publication to the stream (if StreamSize > 0)
-	//  3. Broadcasts to pub/sub subscribers (if Publish option is true)
+	//  3. Broadcasts to pub/sub subscribers
 	//
 	// Returns MapPublishResult with Suppressed=false when the state was changed.
 	// When Suppressed=true (idempotency, version conflict, or KeyMode condition),
@@ -106,10 +106,10 @@ type MapBroker interface {
 	// The operation:
 	//  1. Removes the key from the state
 	//  2. Appends a removal publication to the stream (if StreamSize > 0)
-	//  3. Broadcasts removal to pub/sub subscribers (if Publish option is true)
+	//  3. Broadcasts removal to pub/sub subscribers
 	//
 	// Returns MapPublishResult with Suppressed=false when the key was removed.
-	// When Suppressed=true (key not found), no stream entry or broadcast occurs.
+	// When Suppressed=true (key not found or idempotency), no stream entry or broadcast occurs.
 	Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error)
 
 	// ReadStream retrieves publications from the channel's history stream.
@@ -121,7 +121,7 @@ type MapBroker interface {
 	// Special Limit values:
 	//  - Limit = 0: Only return current stream position (no publications)
 	//  - Limit = -1: Return all publications (no limit)
-	ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error)
+	ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error)
 
 	// ReadState retrieves the current key-value state for a channel.
 	//
@@ -130,9 +130,7 @@ type MapBroker interface {
 	//
 	// If opts.Revision is provided, validates that the epoch hasn't changed.
 	// Returns ErrorUnrecoverablePosition if epoch changed (client must restart).
-	//
-	// Return values: publications, stream position, next cursor ("" if done), error.
-	ReadState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error)
+	ReadState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error)
 
 	// Stats returns statistics about the channel in storage.
 	Stats(ctx context.Context, ch string) (MapStats, error)
@@ -151,8 +149,10 @@ type MapPublishOptions struct {
 	IdempotentResultTTL time.Duration
 
 	// StreamSize sets the maximum number of entries in the stream (history).
-	// Zero value means using default from MapChannelOptionsResolver.
-	// Older entries are evicted when the limit is reached.
+	// Zero value means using default from MapChannelOptionsResolver (which defaults
+	// to 0, i.e. streamless). Negative values are treated as 0 (disabled).
+	// When StreamSize is 0 after defaults are applied, no stream history is maintained.
+	// CAS (ExpectedPosition) and Version-based dedup require StreamSize > 0.
 	StreamSize int
 	// StreamTTL sets how long stream entries are retained.
 	// Zero value means using default from MapChannelOptionsResolver.
@@ -343,6 +343,24 @@ type MapPublishResult struct {
 	CurrentPublication *Publication
 }
 
+// MapStreamResult contains the result of a ReadStream operation.
+type MapStreamResult struct {
+	// Publications contains the stream entries.
+	Publications []*Publication
+	// Position is the current stream position.
+	Position StreamPosition
+}
+
+// MapStateResult contains the result of a ReadState operation.
+type MapStateResult struct {
+	// Publications contains the state entries (each with Key field set).
+	Publications []*Publication
+	// Position is the current stream position at the time of reading.
+	Position StreamPosition
+	// Cursor is the pagination cursor for the next page ("" if done).
+	Cursor string
+}
+
 // MapClearOptions defines options for removing all channel data.
 // Currently empty but reserved for future options (e.g., selective removal).
 type MapClearOptions struct{}
@@ -352,12 +370,12 @@ type MapClearOptions struct{}
 // If a value is -1 (for durations) or negative (for StreamSize), it's set to 0 (explicitly disabled).
 // Positive values are kept as-is.
 func applyChannelOptionsDefaults(
-	streamSize int, streamTTL, metaTTL, keyTTL time.Duration,
+	opts MapChannelOptions,
 	resolver MapChannelOptionsResolver, channel string,
-) (int, time.Duration, time.Duration, time.Duration) {
-	// Get defaults only if needed
+) MapChannelOptions {
+	// Get defaults only if needed.
 	var defaults MapChannelOptions
-	needDefaults := streamSize == 0 || streamTTL == 0 || metaTTL == 0 || keyTTL == 0
+	needDefaults := opts.StreamSize == 0 || opts.StreamTTL == 0 || opts.MetaTTL == 0 || opts.KeyTTL == 0
 	if needDefaults {
 		defaults = DefaultMapChannelOptions()
 		if resolver != nil {
@@ -365,44 +383,44 @@ func applyChannelOptionsDefaults(
 		}
 	}
 
-	// Apply StreamSize: negative means explicitly disabled (use 0), 0 means use default
-	if streamSize < 0 {
-		streamSize = 0
-	} else if streamSize == 0 {
-		streamSize = defaults.StreamSize
+	// Apply StreamSize: negative means explicitly disabled (use 0), 0 means use default.
+	if opts.StreamSize < 0 {
+		opts.StreamSize = 0
+	} else if opts.StreamSize == 0 {
+		opts.StreamSize = defaults.StreamSize
 	}
 
-	// Apply StreamTTL: -1 means explicitly disabled (use 0), 0 means use default
-	if streamTTL < 0 {
-		streamTTL = 0
-	} else if streamTTL == 0 {
-		streamTTL = defaults.StreamTTL
+	// Apply StreamTTL: -1 means explicitly disabled (use 0), 0 means use default.
+	if opts.StreamTTL < 0 {
+		opts.StreamTTL = 0
+	} else if opts.StreamTTL == 0 {
+		opts.StreamTTL = defaults.StreamTTL
 	}
 
-	// Apply MetaTTL: -1 means explicitly disabled (use 0), 0 means use default
-	if metaTTL < 0 {
-		metaTTL = 0
-	} else if metaTTL == 0 {
-		metaTTL = defaults.MetaTTL
+	// Apply MetaTTL: -1 means explicitly disabled (use 0), 0 means use default.
+	if opts.MetaTTL < 0 {
+		opts.MetaTTL = 0
+	} else if opts.MetaTTL == 0 {
+		opts.MetaTTL = defaults.MetaTTL
 	}
 
-	// Apply KeyTTL: -1 means explicitly disabled (use 0), 0 means use default
-	if keyTTL < 0 {
-		keyTTL = 0
-	} else if keyTTL == 0 {
-		keyTTL = defaults.KeyTTL
+	// Apply KeyTTL: -1 means explicitly disabled (use 0), 0 means use default.
+	if opts.KeyTTL < 0 {
+		opts.KeyTTL = 0
+	} else if opts.KeyTTL == 0 {
+		opts.KeyTTL = defaults.KeyTTL
 	}
 
 	// Ensure MetaTTL is never less than StreamTTL or KeyTTL.
 	// Meta must outlive the data it describes to avoid stale reads.
-	if metaTTL > 0 {
-		if streamTTL > 0 && metaTTL < streamTTL {
-			metaTTL = streamTTL
+	if opts.MetaTTL > 0 {
+		if opts.StreamTTL > 0 && opts.MetaTTL < opts.StreamTTL {
+			opts.MetaTTL = opts.StreamTTL
 		}
-		if keyTTL > 0 && metaTTL < keyTTL {
-			metaTTL = keyTTL
+		if opts.KeyTTL > 0 && opts.MetaTTL < opts.KeyTTL {
+			opts.MetaTTL = opts.KeyTTL
 		}
 	}
 
-	return streamSize, streamTTL, metaTTL, keyTTL
+	return opts
 }

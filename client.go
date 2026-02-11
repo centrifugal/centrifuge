@@ -2021,10 +2021,16 @@ func (c *Client) handlePublish(req *protocol.PublishRequest, cmd *protocol.Comma
 		}
 
 		if reply.Result == nil {
-			_, err := c.node.Publish(
-				event.Channel, event.Data,
+			publishOpts := []PublishOption{
 				WithHistory(reply.Options.HistorySize, reply.Options.HistoryTTL, reply.Options.HistoryMetaTTL),
 				WithClientInfo(reply.Options.ClientInfo),
+			}
+			if reply.Options.Key != "" {
+				publishOpts = append(publishOpts, WithKey(reply.Options.Key))
+			}
+			_, err := c.node.Publish(
+				event.Channel, event.Data,
+				publishOpts...,
 			)
 			if err != nil {
 				c.logWriteInternalErrorFlush(channel, protocol.FrameTypePublish, cmd, err, "error publish", started, rw)

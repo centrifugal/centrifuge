@@ -140,14 +140,17 @@ type PublishOptions struct {
 	// publication. Use it if version may be reused in the future. For example, if
 	// version comes from in-memory system which can lose data, or due to eviction, etc.
 	VersionEpoch string
-
-	// Key is the key for map subscriptions.
+	// Key associates the publication with a specific key within the channel.
+	// For stream subscriptions: enables per-key debouncing via DebouncingBroker
+	// and is delivered to subscribers on the Publication for client-side use.
+	// For map subscriptions: plays central role – state is compacted by key,
+	// delta compression per key, channel batching latest publication is per key.
 	Key string
-	// Removed indicates this is a removal event (used in map subscriptions).
+
+	// Removed indicates this is a removal event in map subscriptions.
 	Removed bool
 	// Score is used for ordered map subscriptions (leaderboards, priority queues).
 	Score int64
-
 	// Offset is the stream offset for map publications. When set, this offset
 	// is used instead of broker-assigned offset (used for map broker fan-out).
 	Offset uint64

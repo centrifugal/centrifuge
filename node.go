@@ -1625,7 +1625,7 @@ func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMe
 			return true, nil
 		}
 		// Use ReadStream with Limit: 0 to only get stream top position.
-		_, streamTop, err := mapBroker.ReadStream(context.Background(), ch, MapReadStreamOptions{
+		streamResult, err := mapBroker.ReadStream(context.Background(), ch, MapReadStreamOptions{
 			Filter:  StreamFilter{Limit: 0},
 			MetaTTL: historyMetaTTL,
 		})
@@ -1633,7 +1633,7 @@ func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMe
 			// Will be checked later.
 			return false, err
 		}
-		return streamTop.Epoch == clientPosition.Epoch && clientPosition.Offset == streamTop.Offset, nil
+		return streamResult.Position.Epoch == clientPosition.Epoch && clientPosition.Offset == streamResult.Position.Offset, nil
 	}
 	mu := n.subLock(ch)
 	mu.Lock()
@@ -1865,13 +1865,6 @@ func (n *Node) HandleControl(data []byte) error {
 	return n.handleControl(data)
 }
 
-// MapStateResult wraps keyed snapshot result.
-type MapStateResult struct {
-	Publications []*Publication
-	Position     StreamPosition
-	Cursor       string
-}
-
 // MapStateRead retrieves keyed snapshot for a channel.
 func (n *Node) MapStateRead(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
 	mapBroker := n.getMapBroker(ch)
@@ -1883,15 +1876,7 @@ func (n *Node) MapStateRead(ctx context.Context, ch string, opts MapReadStateOpt
 	if n.config.UseSingleFlight {
 		key := n.mapStateKey(ch, opts)
 		result, err, _ := mapStateGroup.Do(key, func() (any, error) {
-			pubs, pos, cursor, err := mapBroker.ReadState(ctx, ch, opts)
-			if err != nil {
-				return MapStateResult{}, err
-			}
-			return MapStateResult{
-				Publications: pubs,
-				Position:     pos,
-				Cursor:       cursor,
-			}, nil
+			return mapBroker.ReadState(ctx, ch, opts)
 		})
 		if err != nil {
 			return MapStateResult{}, err
@@ -1899,15 +1884,7 @@ func (n *Node) MapStateRead(ctx context.Context, ch string, opts MapReadStateOpt
 		return result.(MapStateResult), nil
 	}
 
-	pubs, pos, cursor, err := mapBroker.ReadState(ctx, ch, opts)
-	if err != nil {
-		return MapStateResult{}, err
-	}
-	return MapStateResult{
-		Publications: pubs,
-		Position:     pos,
-		Cursor:       cursor,
-	}, nil
+	return mapBroker.ReadState(ctx, ch, opts)
 }
 
 func (n *Node) mapStateKey(ch string, opts MapReadStateOptions) string {
@@ -1930,12 +1907,6 @@ func (n *Node) mapStateKey(ch string, opts MapReadStateOptions) string {
 	return builder.String()
 }
 
-// MapStreamResult wraps keyed stream result.
-type MapStreamResult struct {
-	Publications []*Publication
-	Position     StreamPosition
-}
-
 // MapStreamRead retrieves keyed stream for a channel.
 func (n *Node) MapStreamRead(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 	mapBroker := n.getMapBroker(ch)
@@ -1947,14 +1918,7 @@ func (n *Node) MapStreamRead(ctx context.Context, ch string, opts MapReadStreamO
 	if n.config.UseSingleFlight {
 		key := n.mapStreamKey(ch, opts)
 		result, err, _ := mapStreamGroup.Do(key, func() (any, error) {
-			pubs, pos, err := mapBroker.ReadStream(ctx, ch, opts)
-			if err != nil {
-				return MapStreamResult{}, err
-			}
-			return MapStreamResult{
-				Publications: pubs,
-				Position:     pos,
-			}, nil
+			return mapBroker.ReadStream(ctx, ch, opts)
 		})
 		if err != nil {
 			return MapStreamResult{}, err
@@ -1962,14 +1926,7 @@ func (n *Node) MapStreamRead(ctx context.Context, ch string, opts MapReadStreamO
 		return result.(MapStreamResult), nil
 	}
 
-	pubs, pos, err := mapBroker.ReadStream(ctx, ch, opts)
-	if err != nil {
-		return MapStreamResult{}, err
-	}
-	return MapStreamResult{
-		Publications: pubs,
-		Position:     pos,
-	}, nil
+	return mapBroker.ReadStream(ctx, ch, opts)
 }
 
 func (n *Node) mapStreamKey(ch string, opts MapReadStreamOptions) string {
@@ -1997,11 +1954,11 @@ func (n *Node) MapStreamPosition(ctx context.Context, ch string, metaTTL time.Du
 	}
 	n.metrics.incActionCount("map_stream_position", ch)
 	// ReadStream with Limit=0 returns only the current stream position.
-	_, pos, err := mapBroker.ReadStream(ctx, ch, MapReadStreamOptions{
+	result, err := mapBroker.ReadStream(ctx, ch, MapReadStreamOptions{
 		Filter:  StreamFilter{Limit: 0},
 		MetaTTL: metaTTL,
 	})
-	return pos, err
+	return result.Position, err
 }
 
 // MapStatsResult wraps keyed stats result.

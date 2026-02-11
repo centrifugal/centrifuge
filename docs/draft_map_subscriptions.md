@@ -1,6 +1,34 @@
 # Map Subscriptions
 
-Map Subscriptions is a feature for building real-time collaborative applications with recoverable shared state. It provides a synchronized key-value data structure with change history, enabling clients to join at any time and receive both current state and real-time updates without missing any changes.
+Map Subscriptions is a feature for building real-time collaborative applications with shared state. It provides a synchronized key-value data structure where clients join at any time and receive both current state and real-time updates.
+
+## Consistency Modes
+
+Map subscriptions support two consistency modes, controlled by `EnablePositioning` and `EnableRecovery` in `SubscribeOptions`:
+
+### Streamless Mode (Default)
+
+When neither `EnablePositioning` nor `EnableRecovery` is set (the default), map subscriptions operate without a stream:
+
+- **No stream history**: Publishes update state and broadcast via pub/sub, but no ordered log is maintained
+- **No offset tracking**: Publications have offset=0
+- **Reconnection**: Client receives full state re-sync (no incremental recovery)
+- **Duplicate tolerance**: Keyed data provides natural dedup — last writer wins per key
+- **Performance**: ~35-40% less work per publish (no XADD, no offset increment, no stream reads)
+
+Best for: presence, leaderboards, ephemeral state, IoT dashboards — any use case where state is always available and a page reload gives consistent state.
+
+### Positioned Mode (Opt-in)
+
+When `EnablePositioning: true` or `EnableRecovery: true` is set in subscribe options, the full stream-based consistency model is enabled:
+
+- **Stream history**: Every publish appends to an ordered stream for recovery
+- **Offset tracking**: Each publication gets a monotonically increasing offset
+- **Reconnection recovery**: Client catches up from last known offset without full re-sync
+- **CAS operations**: `ExpectedPosition` for atomic read-modify-write
+- **Version-based dedup**: `Version`/`VersionEpoch` for optimistic concurrency control
+
+Best for: inventory management, auction bidding, collaborative editing — use cases requiring strict consistency and atomic operations.
 
 ## Motivation
 
@@ -13,7 +41,7 @@ Traditional pub/sub systems deliver messages only to currently connected clients
 
 Map Subscriptions solve these problems by combining:
 1. A **key-value snapshot** representing current state
-2. An **ordered stream** of changes for recovery
+2. An **ordered stream** of changes for recovery (when positioned mode is enabled)
 3. A **pub/sub layer** for real-time delivery
 
 ## Use Cases
@@ -53,7 +81,7 @@ Map Subscriptions solve these problems by combining:
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
 │  │   Snapshot   │    │    Stream    │    │   Pub/Sub    │  │
 │  │  (State)     │    │  (History)   │    │  (Live)      │  │
-│  │              │    │              │    │              │  │
+│  │              │    │  (optional)  │    │              │  │
 │  │  key → data  │    │  [offset 1]  │    │  Real-time   │  │
 │  │  key → data  │    │  [offset 2]  │    │  delivery    │  │
 │  │  key → data  │    │  [offset 3]  │    │              │  │
@@ -61,7 +89,11 @@ Map Subscriptions solve these problems by combining:
 │         │                   │                   │           │
 │         └───────────────────┴───────────────────┘           │
 │                             │                                │
-│                    Client Subscription                       │
+│             Streamless Mode (default):                       │
+│                    1. Read state (paginated)                 │
+│                    2. Go live (pub/sub)                      │
+│                                                              │
+│             Positioned Mode (opt-in):                        │
 │                    1. Read state (paginated)                 │
 │                    2. Catch up from stream                   │
 │                    3. Go live (pub/sub)                      │
@@ -106,12 +138,12 @@ type MapPublishOptions struct {
     KeyMode    KeyMode         // Replace (default), IfNew, IfExists
     KeyTTL     time.Duration   // Auto-expire key after duration
 
-    // Stream retention
-    StreamSize int             // Max entries in stream
-    StreamTTL  time.Duration   // Auto-expire stream entries
+    // Stream retention (only meaningful when StreamSize > 0)
+    StreamSize int             // Max entries in stream (default 0 = streamless)
+    StreamTTL  time.Duration   // Auto-expire stream entries (default 0 = disabled)
     MetaTTL    time.Duration   // Keep metadata after stream expires
 
-    // Concurrency control
+    // Concurrency control (requires StreamSize > 0)
     ExpectedPosition *StreamPosition  // CAS: fail if position doesn't match
     Version          uint64           // Optimistic: reject if version <= current
     VersionEpoch     string           // Version namespace
@@ -127,6 +159,8 @@ type MapPublishOptions struct {
     RefreshTTLOnSuppress bool  // Refresh key TTL even if write suppressed
 }
 ```
+
+> **Note**: `ExpectedPosition` (CAS) and `Version`-based dedup require `StreamSize > 0`. Using them with streamless publishing returns an error.
 
 ### Key Modes
 
@@ -187,6 +221,8 @@ node.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
             EnableMap:                      true,
             MapClientPresenceChannelPrefix: "clients:",
             MapUserPresenceChannelPrefix:   "users:",
+            // Presence channels work well in streamless mode (default).
+            // No need for EnablePositioning or EnableRecovery here.
         },
     }, nil)
 })
@@ -232,7 +268,7 @@ node.SetMapBroker(broker)
 
 **Internal structure**:
 - Hash map for key-value state
-- In-memory stream with epoch tracking
+- In-memory stream with epoch tracking (when StreamSize > 0)
 - Background goroutines for TTL cleanup
 - Supports score-based ordering
 
@@ -256,7 +292,7 @@ node.SetMapBroker(broker)
 **Storage model**:
 - `HASH` for unordered state
 - `HASH` + `ZSET` for ordered state (leaderboards)
-- `XADD/XREAD` for stream (Redis Streams)
+- `XADD/XREAD` for stream (Redis Streams, when StreamSize > 0)
 - `HASH` with TTL for idempotency tracking
 
 **Atomic operations** via embedded Lua scripts:
@@ -283,9 +319,9 @@ node.SetMapBroker(broker)
 - Publish directly from application SQL
 
 **Schema** (4 tables):
-- `cf_map_stream`: Change history with per-channel offsets
+- `cf_map_stream`: Change history with per-channel offsets (when StreamSize > 0)
 - `cf_map_state`: Current key-value snapshot
-- `cf_map_meta`: Stream metadata (epoch, top offset)
+- `cf_map_meta`: Stream metadata (epoch, top offset, when StreamSize > 0)
 - `cf_map_idempotency`: Duplicate detection
 
 **Real-time delivery**: Uses PostgreSQL logical replication (WAL) with 16 sharded publications. A WAL reader process delivers changes to connected clients.
@@ -435,10 +471,32 @@ The client subscription protocol uses three phases to ensure consistency:
 | Phase | Value | Description |
 |-------|-------|-------------|
 | STATE | 2 | Paginate through current key-value snapshot |
-| STREAM | 1 | Catch up on changes since snapshot |
+| STREAM | 1 | Catch up on changes since snapshot (positioned mode only) |
 | LIVE | 0 | Real-time pub/sub delivery |
 
-### Subscription Flow
+### Subscription Flow (Streamless Mode)
+
+In streamless mode (default), the STREAM phase is skipped entirely:
+
+```
+Client                                    Server
+   │                                         │
+   │──── phase=2, cursor="" ────────────────>│  STATE (page 1)
+   │<─── state entries, cursor="abc" ────────│
+   │                                         │
+   │──── phase=2, cursor="abc" ─────────────>│  STATE (page 2)
+   │<─── state entries, phase=0 ─────────────│  (last page → LIVE)
+   │                                         │
+   │<════ real-time publications ════════════│  LIVE
+```
+
+On the last state page, the server automatically transitions to LIVE. Any publications buffered during the state read are included. Requesting `phase=1` (STREAM) in streamless mode returns an error.
+
+On reconnect, the client performs a full state re-sync (no incremental recovery).
+
+### Subscription Flow (Positioned Mode)
+
+When `EnablePositioning` or `EnableRecovery` is set, the full three-phase flow is used:
 
 ```
 Client                                    Server
@@ -455,12 +513,14 @@ Client                                    Server
    │<════ real-time publications ════════════│  LIVE
 ```
 
+On reconnect with `recover=true`, the client catches up from its last known stream offset.
+
 For detailed protocol specification including server-controlled LIVE transitions, state filtering, immediate join mode, and recovery, see [Map Recovery Protocol](draft_map_recovery.md).
 
 ### JavaScript SDK Usage
 
 ```typescript
-// Regular map subscription
+// Streamless map subscription (default)
 const sub = centrifuge.newMapSubscription('channel', {
     limit: 100,           // Page size for pagination
     ordered: true,        // Score-based ordering
@@ -469,8 +529,10 @@ const sub = centrifuge.newMapSubscription('channel', {
 sub.on('subscribed', (ctx) => {
     // ctx.state contains initial key-value entries
     for (const entry of ctx.state || []) {
-        console.log(entry.key, entry.data, entry.offset);
+        console.log(entry.key, entry.data);
     }
+    // ctx.recoverable indicates whether stream recovery is available
+    console.log('recoverable:', ctx.recoverable);
 });
 
 sub.on('publication', (ctx) => {
@@ -484,6 +546,8 @@ sub.on('publication', (ctx) => {
 
 sub.subscribe();
 ```
+
+On reconnect, the client SDK automatically respects `recoverable`: when `false` (streamless), reconnection does a fresh subscribe instead of attempting stream recovery.
 
 ## Configuration Reference
 
@@ -506,15 +570,51 @@ type Config struct {
 }
 ```
 
+### Subscribe Options
+
+```go
+node.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+    cb(SubscribeReply{
+        Options: SubscribeOptions{
+            EnableMap: true,
+
+            // Streamless mode (default) — no stream, no recovery:
+            // EnablePositioning: false,
+            // EnableRecovery: false,
+
+            // Positioned mode — stream history + recovery:
+            // EnablePositioning: true,
+            // EnableRecovery: true,
+        },
+    }, nil)
+})
+```
+
+- `EnablePositioning`: Enables stream offset tracking. Required for CAS and version-based dedup.
+- `EnableRecovery`: Enables stream-based recovery on reconnect. Implies positioning.
+
+The subscribe response includes `Recoverable: true` when positioning is enabled, allowing the client SDK to optimize reconnection behavior.
+
 ### Channel Options
 
 ```go
 type MapChannelOptions struct {
-    StreamSize int             // Max stream entries
-    StreamTTL  time.Duration   // Stream entry lifetime
-    MetaTTL    time.Duration   // Metadata lifetime after stream expires
+    StreamSize int             // Max stream entries (default 0 = streamless)
+    StreamTTL  time.Duration   // Stream entry lifetime (default 0 = disabled)
+    MetaTTL    time.Duration   // Metadata lifetime (default 1 hour)
+    KeyTTL     time.Duration   // Key auto-expiration (default 1 minute)
 }
+```
 
+Default values (`DefaultMapChannelOptions()`):
+- `StreamSize: 0` — no stream history (streamless)
+- `StreamTTL: 0` — no stream entry TTL
+- `MetaTTL: 1 hour` — metadata safety net for container-level expiration
+- `KeyTTL: 1 minute` — automatic key expiration
+
+For positioned mode, configure stream settings via the resolver:
+
+```go
 // Configure via callback
 node.Config().GetMapChannelOptions = func(channel string) MapChannelOptions {
     if strings.HasPrefix(channel, "leaderboard:") {
@@ -522,11 +622,14 @@ node.Config().GetMapChannelOptions = func(channel string) MapChannelOptions {
             StreamSize: 1000,
             StreamTTL:  time.Hour,
             MetaTTL:    24 * time.Hour,
+            KeyTTL:     time.Minute,
         }
     }
     return DefaultMapChannelOptions()
 }
 ```
+
+> **Important**: Align publish-side `MapChannelOptions` (StreamSize > 0) with subscribe-side flags (`EnablePositioning`/`EnableRecovery`). A positioned subscriber on a streamless channel will fail during subscription setup.
 
 ## Positioning in the Real-Time Ecosystem
 

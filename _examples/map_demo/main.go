@@ -92,25 +92,10 @@ func main() {
 		MapMinStreamPaginationLimit:  100,  // Minimum limit for stream pagination to prevent excessive round trips.
 		MapMaxImmediateJoinStateSize: 1000, // Max state entries for immediate join (Scenario B).
 		MapStateToLiveEnabled:        true,
-		// Configure channel options per channel - allows different TTLs for different use cases.
+		// Configure channel options per channel.
+		// Most channels use streamless defaults (no stream history).
+		// Only inventory needs stream for CAS (Compare-And-Swap) operations.
 		GetMapChannelOptions: func(channel string) centrifuge.MapChannelOptions {
-			// Cursors need short TTL since they're ephemeral.
-			if channel == "cursors" {
-				return centrifuge.MapChannelOptions{
-					StreamSize: 100,
-					StreamTTL:  time.Minute,
-					MetaTTL:    5 * time.Minute,
-				}
-			}
-			// Game channels need medium TTL.
-			if strings.HasPrefix(channel, "game:") || channel == "games" {
-				return centrifuge.MapChannelOptions{
-					StreamSize: 500,
-					StreamTTL:  5 * time.Minute,
-					MetaTTL:    30 * time.Minute,
-				}
-			}
-			// Inventory and leaderboard need longer TTL for transaction history.
 			if channel == "inventory" || channel == "leaderboard" {
 				return centrifuge.MapChannelOptions{
 					StreamSize: 1000,
@@ -118,7 +103,7 @@ func main() {
 					MetaTTL:    24 * time.Hour,
 				}
 			}
-			// Default for all other channels.
+			// Cursors, games — all streamless (default).
 			return centrifuge.DefaultMapChannelOptions()
 		},
 	})
@@ -180,6 +165,12 @@ func main() {
 
 			opts := centrifuge.SubscribeOptions{
 				Type: e.Type,
+			}
+
+			// Inventory and leaderboard use streams — enable positioned mode with recovery.
+			if e.Channel == "inventory" || e.Channel == "leaderboard" {
+				opts.EnablePositioning = true
+				opts.EnableRecovery = true
 			}
 
 			// Enable map presence for games and individual game channels.
@@ -517,7 +508,9 @@ func handleLeaderboardJoinHTTP(w http.ResponseWriter, r *http.Request) {
 			p_key => $2,
 			p_data => $3,
 			p_score => $4,
-			p_stream_ttl => '1 hour'::interval
+			p_stream_size => 1000,
+			p_stream_ttl => '1 hour'::interval,
+			p_meta_ttl => '24 hours'::interval
 		)
 	`, "leaderboard", req.UserID, entryData, entry.Score).Scan(
 		&resultID, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset,
@@ -597,7 +590,9 @@ func handleLeaderboardClickHTTP(w http.ResponseWriter, r *http.Request) {
 			p_key => $1,
 			p_data => $2,
 			p_score => $3,
-			p_stream_ttl => '1 hour'::interval
+			p_stream_size => 1000,
+			p_stream_ttl => '1 hour'::interval,
+			p_meta_ttl => '24 hours'::interval
 		)
 	`, req.UserID, newData, entry.Score).Scan(
 		&resultID, &channelOffset, &epoch, &suppressed, &suppressReason, &returnedData, &returnedOffset,
@@ -650,10 +645,10 @@ func handleLeaderboardLeaveHTTP(w http.ResponseWriter, r *http.Request) {
 			$1,   -- key (userId)
 			NULL, -- client_id
 			$1,   -- user_id
-			'1 hour'::interval, -- stream_ttl
-			NULL, -- idempotency_key
-			NULL, -- idempotency_ttl
-			NULL  -- meta_ttl
+			'1 hour'::interval,    -- stream_ttl
+			NULL,                  -- idempotency_key
+			NULL,                  -- idempotency_ttl
+			'24 hours'::interval   -- meta_ttl
 		)
 	`, req.UserID).Scan(&resultID, &channelOffset, &epoch, &suppressed, &suppressReason)
 

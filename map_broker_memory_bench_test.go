@@ -168,7 +168,7 @@ func BenchmarkMemoryMapBroker_ReadStream(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+			_, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 				Filter: StreamFilter{
 					Limit: 1000,
 					Since: &sp,
@@ -209,7 +209,7 @@ func BenchmarkMemoryMapBroker_ReadStateFull(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 				Limit:    0, // Read all
 				StateTTL: 300 * time.Second,
 			})
@@ -248,7 +248,7 @@ func BenchmarkMemoryMapBroker_ReadStatePaginated(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 				Cursor:   "0",
 				Limit:    100, // Read 100 at a time
 				StateTTL: 300 * time.Second,
@@ -290,7 +290,7 @@ func BenchmarkMemoryMapBroker_ReadStateOrdered(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 				Ordered:  true,
 				Limit:    100,
 				StateTTL: 300 * time.Second,

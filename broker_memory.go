@@ -101,10 +101,13 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Pub
 	}
 
 	pub := &Publication{
-		Data: data,
-		Info: opts.ClientInfo,
-		Tags: opts.Tags,
-		Time: time.Now().UnixMilli(),
+		Data:    data,
+		Info:    opts.ClientInfo,
+		Tags:    opts.Tags,
+		Time:    time.Now().UnixMilli(),
+		Key:     opts.Key,
+		Removed: opts.Removed,
+		Score:   opts.Score,
 	}
 	var prevPub *Publication
 	if opts.HistorySize > 0 && opts.HistoryTTL > 0 {

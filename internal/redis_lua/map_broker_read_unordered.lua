@@ -8,6 +8,7 @@
 -- ARGV[3] = now (current timestamp)
 -- ARGV[4] = meta_ttl (seconds, 0 to disable)
 -- ARGV[5] = state_ttl (seconds, 0 to disable - refreshes TTL on read)
+-- ARGV[6] = streamless ("1" = skip meta/epoch logic, "0" = normal streamed mode)
 
 local hash_key = KEYS[1]
 local expire_key = KEYS[2]
@@ -20,35 +21,43 @@ local now_str = ARGV[3]
 local now = tonumber(now_str)
 local meta_ttl = tonumber(ARGV[4])
 local state_ttl = tonumber(ARGV[5])
+local streamless = ARGV[6] == "1"
 
--- Update meta TTL and get current offset
-local epoch = redis.call("hget", meta_key, "e")
-if not epoch then
-    epoch = now_str
-    redis.call("hset", meta_key, "e", epoch)
-end
+local epoch = ""
+local offset = "0"
 
-local offset = redis.call("hget", meta_key, "s")
-if not offset then
-    offset = "0"
-end
+if not streamless then
+    -- Update meta TTL and get current offset
+    if meta_key ~= '' then
+        epoch = redis.call("hget", meta_key, "e")
+        if not epoch then
+            epoch = now_str
+            redis.call("hset", meta_key, "e", epoch)
+        end
 
-if meta_ttl > 0 then
-    redis.call("expire", meta_key, meta_ttl)
-end
+        offset = redis.call("hget", meta_key, "s")
+        if not offset then
+            offset = "0"
+        end
 
--- Validate state epoch against stream epoch
-if state_meta_key ~= '' then
-    local state_meta_exists = redis.call("exists", state_meta_key)
-    if state_meta_exists == 0 then
-        -- No state metadata = state is invalid/evicted
-        return {offset, epoch, "0", {}}
+        if meta_ttl > 0 then
+            redis.call("expire", meta_key, meta_ttl)
+        end
     end
 
-    local state_epoch = redis.call("hget", state_meta_key, "epoch")
-    if state_epoch ~= epoch then
-        -- Epoch mismatch = state is stale (from old epoch)
-        return {offset, epoch, "0", {}}
+    -- Validate state epoch against stream epoch
+    if state_meta_key ~= '' then
+        local state_meta_exists = redis.call("exists", state_meta_key)
+        if state_meta_exists == 0 then
+            -- No state metadata = state is invalid/evicted
+            return {offset, epoch, "0", {}}
+        end
+
+        local state_epoch = redis.call("hget", state_meta_key, "epoch")
+        if state_epoch ~= epoch then
+            -- Epoch mismatch = state is stale (from old epoch)
+            return {offset, epoch, "0", {}}
+        end
     end
 end
 
@@ -63,7 +72,7 @@ if state_ttl > 0 then
     if expire_key ~= '' then
         redis.call("expire", expire_key, state_ttl)
     end
-    if state_meta_key ~= '' then
+    if not streamless and state_meta_key ~= '' then
         redis.call("expire", state_meta_key, state_ttl)
     end
 end

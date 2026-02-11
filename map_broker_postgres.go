@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -272,10 +273,9 @@ func (e *PostgresMapBroker) getReadPool() *pgxpool.Pool {
 func pgGenerateEpoch() string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	b := make([]byte, 4)
-	n := time.Now().UnixNano()
+	_, _ = cryptorand.Read(b)
 	for i := range b {
-		b[i] = letters[n%int64(len(letters))]
-		n = n / int64(len(letters))
+		b[i] = letters[b[i]%byte(len(letters))]
 	}
 	return string(b)
 }
@@ -315,6 +315,13 @@ func (e *PostgresMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 		return errors.New("postgres map broker: already running")
 	}
 
+	// Start the inner broker's pub/sub if configured (for multi-node fan-out).
+	if e.conf.Broker != nil {
+		if err := e.conf.Broker.RegisterBrokerEventHandler(h); err != nil {
+			return fmt.Errorf("postgres map broker: register inner broker: %w", err)
+		}
+	}
+
 	// Start TTL and cleanup workers (always needed)
 	go e.runTTLExpirationWorker()
 	go e.runStreamCleanupWorker()
@@ -352,10 +359,15 @@ func (e *PostgresMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 }
 
 // Close shuts down the broker.
-func (e *PostgresMapBroker) Close(_ context.Context) error {
+func (e *PostgresMapBroker) Close(ctx context.Context) error {
 	e.closeOnce.Do(func() {
 		e.cancelFunc() // Cancel context to unblock WaitForNotification
 		close(e.closeCh)
+		if e.conf.Broker != nil {
+			if closer, ok := e.conf.Broker.(Closer); ok {
+				_ = closer.Close(ctx)
+			}
+		}
 		e.pool.Close()
 		if e.readPool != nil {
 			e.readPool.Close()
@@ -405,10 +417,20 @@ func parseSuppressReason(reason *string) SuppressReason {
 // Publish publishes data to a map channel using the cf_map_publish SQL function.
 func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
 	// Apply channel options defaults from node config.
-	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = applyChannelOptionsDefaults(
-		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL,
-		e.node.ResolveMapChannelOptions, ch,
-	)
+	chOpts := applyChannelOptionsDefaults(MapChannelOptions{
+		StreamSize: opts.StreamSize, StreamTTL: opts.StreamTTL, MetaTTL: opts.MetaTTL, KeyTTL: opts.KeyTTL,
+	}, e.node.ResolveMapChannelOptions, ch)
+	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL, chOpts.KeyTTL
+
+	// Reject CAS and Version in streamless mode.
+	if opts.StreamSize <= 0 || opts.StreamTTL <= 0 {
+		if opts.ExpectedPosition != nil {
+			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires stream (StreamSize > 0)")
+		}
+		if opts.Version > 0 {
+			return MapPublishResult{}, errors.New("version-based dedup requires stream (StreamSize > 0)")
+		}
+	}
 
 	// Prepare client info fields
 	var clientID, userID *string
@@ -571,10 +593,10 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 // Remove removes a key from keyed state using the cf_map_remove SQL function.
 func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
 	// Apply channel options defaults from node config.
-	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, _ = applyChannelOptionsDefaults(
-		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, 0,
-		e.node.ResolveMapChannelOptions, ch,
-	)
+	chOpts := applyChannelOptionsDefaults(MapChannelOptions{
+		StreamSize: opts.StreamSize, StreamTTL: opts.StreamTTL, MetaTTL: opts.MetaTTL,
+	}, e.node.ResolveMapChannelOptions, ch)
+	opts.StreamSize, opts.StreamTTL, opts.MetaTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL
 
 	// Prepare TTLs as interval strings.
 	// NULL = no TTL, > 0 = use as-is.
@@ -642,13 +664,13 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 }
 
 // ReadState retrieves keyed state with revisions.
-func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
 	pool := e.getReadPool()
 
 	// Use REPEATABLE READ transaction to ensure atomic read of meta + state.
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return nil, StreamPosition{}, "", err
+		return MapStateResult{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -662,19 +684,19 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 		// Channel doesn't exist yet
 		if opts.Revision != nil && opts.Revision.Epoch != "" {
 			// Client sent an epoch but channel is gone - unrecoverable
-			return nil, StreamPosition{}, "", ErrorUnrecoverablePosition
+			return MapStateResult{}, ErrorUnrecoverablePosition
 		}
 		// Rollback read-only tx, then create channel meta with epoch.
 		// This matches MemoryMapBroker behavior where empty channels have an epoch.
 		_ = tx.Rollback(ctx)
 		pos, err := e.ensureChannelMeta(ctx, ch)
 		if err != nil {
-			return nil, StreamPosition{}, "", err
+			return MapStateResult{}, err
 		}
-		return nil, pos, "", nil
+		return MapStateResult{Position: pos}, nil
 	}
 	if err != nil {
-		return nil, StreamPosition{}, "", err
+		return MapStateResult{}, err
 	}
 
 	streamPos := StreamPosition{Offset: uint64(topOffset), Epoch: epoch}
@@ -682,7 +704,7 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 	// Check revision epoch
 	if opts.Revision != nil && opts.Revision.Epoch != "" {
 		if opts.Revision.Epoch != epoch {
-			return nil, streamPos, "", ErrorUnrecoverablePosition
+			return MapStateResult{Position: streamPos}, ErrorUnrecoverablePosition
 		}
 	}
 
@@ -699,10 +721,10 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 		`, ch, opts.Key).Scan(&p.Key, &p.Data, &tagsJSON, &p.Offset, &clientID, &userID, &connInfo, &chanInfo)
 
 		if errors.Is(err, pgx.ErrNoRows) {
-			return []*Publication{}, streamPos, "", nil
+			return MapStateResult{Position: streamPos}, nil
 		}
 		if err != nil {
-			return nil, StreamPosition{}, "", err
+			return MapStateResult{}, err
 		}
 		if len(tagsJSON) > 0 {
 			_ = json.Unmarshal(tagsJSON, &p.Tags)
@@ -717,7 +739,7 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 				p.Info.UserID = *userID
 			}
 		}
-		return []*Publication{&p}, streamPos, "", nil
+		return MapStateResult{Publications: []*Publication{&p}, Position: streamPos}, nil
 	}
 
 	// Paginated state read.
@@ -756,7 +778,7 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 
 	rows, err := tx.Query(ctx, query, ch, limit+1, offset)
 	if err != nil {
-		return nil, StreamPosition{}, "", err
+		return MapStateResult{}, err
 	}
 	defer rows.Close()
 
@@ -768,7 +790,7 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 		var clientID, userID *string
 		var connInfo, chanInfo []byte
 		if err := rows.Scan(&p.Key, &p.Data, &tagsJSON, &p.Offset, &score, &clientID, &userID, &connInfo, &chanInfo); err != nil {
-			return nil, StreamPosition{}, "", err
+			return MapStateResult{}, err
 		}
 		if len(tagsJSON) > 0 {
 			_ = json.Unmarshal(tagsJSON, &p.Tags)
@@ -795,17 +817,17 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 		nextCursor = strconv.Itoa(offset + limit)
 	}
 
-	return pubs, streamPos, nextCursor, nil
+	return MapStateResult{Publications: pubs, Position: streamPos, Cursor: nextCursor}, nil
 }
 
 // ReadStream retrieves publications from stream.
-func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 	pool := e.getReadPool()
 
 	// Use REPEATABLE READ transaction to ensure atomic read of meta + stream.
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return nil, StreamPosition{}, err
+		return MapStreamResult{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -821,18 +843,18 @@ func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapR
 		_ = tx.Rollback(ctx)
 		pos, err := e.ensureChannelMeta(ctx, ch)
 		if err != nil {
-			return nil, StreamPosition{}, err
+			return MapStreamResult{}, err
 		}
-		return nil, pos, nil
+		return MapStreamResult{Position: pos}, nil
 	}
 	if err != nil {
-		return nil, StreamPosition{}, err
+		return MapStreamResult{}, err
 	}
 
 	streamPos := StreamPosition{Offset: uint64(topOffset), Epoch: epoch}
 
 	if opts.Filter.Limit == 0 {
-		return nil, streamPos, nil
+		return MapStreamResult{Position: streamPos}, nil
 	}
 
 	sinceOffset := int64(0)
@@ -841,41 +863,66 @@ func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapR
 	}
 
 	limit := opts.Filter.Limit
-	if limit < 0 {
-		limit = 10000
-	}
+	unlimited := limit < 0
 
 	// Query by per-channel offset (not global id).
 	var query string
 	if opts.Filter.Reverse {
-		query = `
-			SELECT key, data, tags, channel_offset, removed, score, client_id, user_id, conn_info, chan_info
-			FROM cf_map_stream
-			WHERE channel = $1 AND channel_offset < $2
-			ORDER BY channel_offset DESC
-			LIMIT $3
-		`
 		if opts.Filter.Since == nil {
 			sinceOffset = topOffset + 1
 		}
+		if unlimited {
+			query = `
+				SELECT key, data, tags, channel_offset, removed, score, client_id, user_id, conn_info, chan_info
+				FROM cf_map_stream
+				WHERE channel = $1 AND channel_offset < $2
+				ORDER BY channel_offset DESC
+			`
+		} else {
+			query = `
+				SELECT key, data, tags, channel_offset, removed, score, client_id, user_id, conn_info, chan_info
+				FROM cf_map_stream
+				WHERE channel = $1 AND channel_offset < $2
+				ORDER BY channel_offset DESC
+				LIMIT $3
+			`
+		}
 	} else {
-		query = `
-			SELECT key, data, tags, channel_offset, removed, score, client_id, user_id, conn_info, chan_info
-			FROM cf_map_stream
-			WHERE channel = $1 AND channel_offset > $2
-			ORDER BY channel_offset ASC
-			LIMIT $3
-		`
+		if unlimited {
+			query = `
+				SELECT key, data, tags, channel_offset, removed, score, client_id, user_id, conn_info, chan_info
+				FROM cf_map_stream
+				WHERE channel = $1 AND channel_offset > $2
+				ORDER BY channel_offset ASC
+			`
+		} else {
+			query = `
+				SELECT key, data, tags, channel_offset, removed, score, client_id, user_id, conn_info, chan_info
+				FROM cf_map_stream
+				WHERE channel = $1 AND channel_offset > $2
+				ORDER BY channel_offset ASC
+				LIMIT $3
+			`
+		}
 	}
 
-	rows, err := tx.Query(ctx, query, ch, sinceOffset, limit)
+	var rows pgx.Rows
+	if unlimited {
+		rows, err = tx.Query(ctx, query, ch, sinceOffset)
+	} else {
+		rows, err = tx.Query(ctx, query, ch, sinceOffset, limit)
+	}
 	if err != nil {
-		return nil, StreamPosition{}, err
+		return MapStreamResult{}, err
 	}
 	defer rows.Close()
 
 	// Pre-allocate slice with expected capacity.
-	pubs := make([]*Publication, 0, limit)
+	allocHint := limit
+	if unlimited {
+		allocHint = 64
+	}
+	pubs := make([]*Publication, 0, allocHint)
 	for rows.Next() {
 		var p Publication
 		var removed bool
@@ -884,7 +931,7 @@ func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapR
 		var clientID, userID *string
 		var connInfo, chanInfo []byte
 		if err := rows.Scan(&p.Key, &p.Data, &tagsJSON, &p.Offset, &removed, &score, &clientID, &userID, &connInfo, &chanInfo); err != nil {
-			return nil, StreamPosition{}, err
+			return MapStreamResult{}, err
 		}
 		p.Removed = removed
 		if score != nil {
@@ -906,7 +953,7 @@ func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapR
 		pubs = append(pubs, &p)
 	}
 
-	return pubs, streamPos, nil
+	return MapStreamResult{Publications: pubs, Position: streamPos}, nil
 }
 
 // Stats returns state statistics.
@@ -927,13 +974,28 @@ func (e *PostgresMapBroker) Stats(ctx context.Context, ch string) (MapStats, err
 
 // Clear deletes all data for a channel.
 func (e *PostgresMapBroker) Clear(ctx context.Context, ch string, _ MapClearOptions) error {
-	_, err := e.pool.Exec(ctx, `
-		DELETE FROM cf_map_stream WHERE channel = $1;
-		DELETE FROM cf_map_state WHERE channel = $1;
-		DELETE FROM cf_map_meta WHERE channel = $1;
-		DELETE FROM cf_map_idempotency WHERE channel = $1;
-	`, ch)
-	return err
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	_, err = tx.Exec(ctx, `DELETE FROM cf_map_stream WHERE channel = $1`, ch)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `DELETE FROM cf_map_state WHERE channel = $1`, ch)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `DELETE FROM cf_map_meta WHERE channel = $1`, ch)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `DELETE FROM cf_map_idempotency WHERE channel = $1`, ch)
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // ============================================================================

@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"container/heap"
 	"context"
+	"errors"
 	"sort"
 	"strconv"
 	"sync"
@@ -102,10 +103,20 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 	defer mu.Unlock()
 
 	// Apply channel options defaults from node config.
-	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = applyChannelOptionsDefaults(
-		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL,
-		e.node.ResolveMapChannelOptions, ch,
-	)
+	chOpts := applyChannelOptionsDefaults(MapChannelOptions{
+		StreamSize: opts.StreamSize, StreamTTL: opts.StreamTTL, MetaTTL: opts.MetaTTL, KeyTTL: opts.KeyTTL,
+	}, e.node.ResolveMapChannelOptions, ch)
+	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL, chOpts.KeyTTL
+
+	// Reject CAS and Version in streamless mode.
+	if opts.StreamSize <= 0 || opts.StreamTTL <= 0 {
+		if opts.ExpectedPosition != nil {
+			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires stream (StreamSize > 0)")
+		}
+		if opts.Version > 0 {
+			return MapPublishResult{}, errors.New("version-based dedup requires stream (StreamSize > 0)")
+		}
+	}
 
 	if opts.IdempotencyKey != "" {
 		if res, ok := e.getResultFromCache(ch, opts.IdempotencyKey); ok {
@@ -184,10 +195,16 @@ func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opt
 	defer mu.Unlock()
 
 	// Apply channel options defaults from node config.
-	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, _ = applyChannelOptionsDefaults(
-		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, 0,
-		e.node.ResolveMapChannelOptions, ch,
-	)
+	chOpts := applyChannelOptionsDefaults(MapChannelOptions{
+		StreamSize: opts.StreamSize, StreamTTL: opts.StreamTTL, MetaTTL: opts.MetaTTL,
+	}, e.node.ResolveMapChannelOptions, ch)
+	opts.StreamSize, opts.StreamTTL, opts.MetaTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL
+
+	if opts.IdempotencyKey != "" {
+		if res, ok := e.getResultFromCache(ch, opts.IdempotencyKey); ok {
+			return MapPublishResult{Position: res, Suppressed: true, SuppressReason: SuppressReasonIdempotency}, nil
+		}
+	}
 
 	streamTop, applied, err := e.mapHub.remove(ch, key, opts)
 	if err != nil {
@@ -196,6 +213,14 @@ func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opt
 
 	if !applied {
 		return MapPublishResult{Position: streamTop, Suppressed: true, SuppressReason: SuppressReasonKeyNotFound}, nil
+	}
+
+	if opts.IdempotencyKey != "" {
+		resultExpireSeconds := int64(defaultIdempotentResultExpireSeconds)
+		if opts.IdempotentResultTTL != 0 {
+			resultExpireSeconds = int64(opts.IdempotentResultTTL.Seconds())
+		}
+		e.saveResultToCache(ch, opts.IdempotencyKey, streamTop, resultExpireSeconds)
 	}
 
 	if e.eventHandler != nil {
@@ -212,12 +237,12 @@ func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opt
 }
 
 // ReadStream retrieves publications from stream.
-func (e *MemoryMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *MemoryMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 	return e.mapHub.getStream(ch, opts)
 }
 
 // ReadState retrieves keyed state with revisions.
-func (e *MemoryMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+func (e *MemoryMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
 	return e.mapHub.getState(ch, opts)
 }
 
@@ -308,12 +333,13 @@ type mapHub struct {
 
 // mapChannel represents keyed state for a single channel.
 type mapChannel struct {
-	stream          *memstream.Stream
-	state           map[string]*stateEntry // key -> entry
-	ordered         bool
-	scores          map[string]int64 // key -> score (for ordered state)
-	sortedKeys      []string         // cached sorted keys by score (descending) for ordered state
-	sortedKeysDirty bool             // true if sortedKeys needs rebuilding
+	stream            *memstream.Stream
+	state             map[string]*stateEntry // key -> entry
+	ordered           bool
+	scores            map[string]int64 // key -> score (for ordered state)
+	sortedKeys        []string         // cached sorted keys by score (descending) for ordered state
+	sortedKeysDirty   bool             // true if sortedKeys needs rebuilding
+	lastSortedOrdered bool             // tracks whether last sort used ordered (score) or unordered (lexicographic)
 }
 
 type stateEntry struct {
@@ -855,7 +881,7 @@ func (h *mapHub) clear(ch string) {
 	delete(h.removes, ch)
 }
 
-func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 	// Update meta TTL before acquiring read lock
 	historyMetaTTL := opts.MetaTTL
 	if historyMetaTTL == 0 {
@@ -876,7 +902,7 @@ func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) ([]*Publication
 		h.Lock()
 		streamPos := h.createStreamPosition(ch)
 		h.Unlock()
-		return nil, streamPos, nil
+		return MapStreamResult{Position: streamPos}, nil
 	}
 
 	filter := opts.Filter
@@ -887,7 +913,7 @@ func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) ([]*Publication
 		h.Lock()
 		streamPos := h.createStreamPosition(ch)
 		h.Unlock()
-		return nil, streamPos, nil
+		return MapStreamResult{Position: streamPos}, nil
 	}
 
 	streamPosition := StreamPosition{
@@ -898,12 +924,12 @@ func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) ([]*Publication
 	if filter.Since == nil {
 		if filter.Limit == 0 {
 			h.RUnlock()
-			return nil, streamPosition, nil
+			return MapStreamResult{Position: streamPosition}, nil
 		}
 		items, _, err := stream.Get(0, false, filter.Limit, filter.Reverse)
 		if err != nil {
 			h.RUnlock()
-			return nil, StreamPosition{}, err
+			return MapStreamResult{}, err
 		}
 		pubs := make([]*Publication, len(items))
 		for i, item := range items {
@@ -912,7 +938,7 @@ func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) ([]*Publication
 			pubs[i] = pub
 		}
 		h.RUnlock()
-		return pubs, streamPosition, nil
+		return MapStreamResult{Publications: pubs, Position: streamPosition}, nil
 	}
 
 	since := filter.Since
@@ -920,7 +946,7 @@ func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) ([]*Publication
 	if !filter.Reverse {
 		if streamPosition.Offset == since.Offset && since.Epoch == stream.Epoch() {
 			h.RUnlock()
-			return nil, streamPosition, nil
+			return MapStreamResult{Position: streamPosition}, nil
 		}
 	}
 
@@ -932,7 +958,7 @@ func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) ([]*Publication
 	items, _, err := stream.Get(streamOffset, true, filter.Limit, filter.Reverse)
 	if err != nil {
 		h.RUnlock()
-		return nil, StreamPosition{}, err
+		return MapStreamResult{}, err
 	}
 
 	pubs := make([]*Publication, len(items))
@@ -942,10 +968,10 @@ func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) ([]*Publication
 		pubs[i] = pub
 	}
 	h.RUnlock()
-	return pubs, streamPosition, nil
+	return MapStreamResult{Publications: pubs, Position: streamPosition}, nil
 }
 
-func (h *mapHub) getState(ch string, opts MapReadStateOptions) ([]*Publication, StreamPosition, string, error) {
+func (h *mapHub) getState(ch string, opts MapReadStateOptions) (MapStateResult, error) {
 	// Always use write lock since we cache sorted keys for all state
 	h.Lock()
 	defer h.Unlock()
@@ -960,9 +986,9 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) ([]*Publication, 
 		// If client provided a revision (epoch), the channel is gone - return unrecoverable.
 		// This happens when server restarts and client tries to reconnect with old epoch.
 		if opts.Revision != nil && opts.Revision.Epoch != "" {
-			return nil, h.createStreamPosition(ch), "", ErrorUnrecoverablePosition
+			return MapStateResult{Position: h.createStreamPosition(ch)}, ErrorUnrecoverablePosition
 		}
-		return nil, h.createStreamPosition(ch), "", nil
+		return MapStateResult{Position: h.createStreamPosition(ch)}, nil
 	}
 
 	var streamPosition StreamPosition
@@ -977,7 +1003,7 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) ([]*Publication, 
 	if opts.Revision != nil {
 		if streamPosition.Epoch != opts.Revision.Epoch {
 			// Epoch changed, client needs to restart from beginning
-			return nil, streamPosition, "", ErrorUnrecoverablePosition
+			return MapStateResult{Position: streamPosition}, ErrorUnrecoverablePosition
 		}
 	}
 
@@ -985,15 +1011,16 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) ([]*Publication, 
 	if opts.Key != "" {
 		entry, exists := channel.state[opts.Key]
 		if !exists {
-			return []*Publication{}, streamPosition, "", nil
+			return MapStateResult{Position: streamPosition}, nil
 		}
-		return []*Publication{entry.Publication}, streamPosition, "", nil
+		return MapStateResult{Publications: []*Publication{entry.Publication}, Position: streamPosition}, nil
 	}
 
 	var pubs []*Publication
 
-	// Rebuild sorted keys if dirty (applies to both ordered and non-ordered)
-	if channel.sortedKeysDirty || len(channel.sortedKeys) != len(channel.state) {
+	// Rebuild sorted keys if dirty or sort order changed since last call.
+	wantOrdered := opts.Ordered && channel.ordered
+	if channel.sortedKeysDirty || len(channel.sortedKeys) != len(channel.state) || channel.lastSortedOrdered != wantOrdered {
 		channel.sortedKeys = make([]string, 0, len(channel.state))
 		for key := range channel.state {
 			channel.sortedKeys = append(channel.sortedKeys, key)
@@ -1001,7 +1028,7 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) ([]*Publication, 
 
 		// Sort by score (descending) for ordered state, lexicographically for non-ordered
 		// For ordered: use (score DESC, key DESC) to match Redis native ZREVRANGE ordering
-		if opts.Ordered && channel.ordered {
+		if wantOrdered {
 			sort.Slice(channel.sortedKeys, func(i, j int) bool {
 				si := channel.scores[channel.sortedKeys[i]]
 				sj := channel.scores[channel.sortedKeys[j]]
@@ -1014,11 +1041,12 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) ([]*Publication, 
 			sort.Strings(channel.sortedKeys) // Lexicographic sort for consistency
 		}
 		channel.sortedKeysDirty = false
+		channel.lastSortedOrdered = wantOrdered
 	}
 
 	totalKeys := len(channel.sortedKeys)
 	if totalKeys == 0 {
-		return []*Publication{}, streamPosition, "", nil
+		return MapStateResult{Position: streamPosition}, nil
 	}
 
 	// Key-based cursor pagination for continuity during concurrent modifications.
@@ -1040,7 +1068,7 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) ([]*Publication, 
 	}
 
 	if startIdx >= totalKeys {
-		return []*Publication{}, streamPosition, "", nil
+		return MapStateResult{Position: streamPosition}, nil
 	}
 
 	endIdx := totalKeys
@@ -1075,7 +1103,7 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) ([]*Publication, 
 		pubs[i-startIdx] = entry.Publication
 	}
 
-	return pubs, streamPosition, cursor, nil
+	return MapStateResult{Publications: pubs, Position: streamPosition, Cursor: cursor}, nil
 }
 
 // makeOrderedCursor creates a cursor for ordered state: "score\x00key"

@@ -37,19 +37,21 @@ import (
 //
 // Key differences from normal subscriptions:
 //
-// EnablePositioning and EnableRecovery options DO NOT APPLY to map subscriptions.
-// These capabilities are inherent to the map subscription model:
+// EnablePositioning and EnableRecovery options control whether stream-based consistency
+// is used for map subscriptions, similar to how they work for regular subscriptions:
 //
-//   - Positioning is always enabled: Map subscriptions always track stream position
-//     (offset/epoch) because the state+stream protocol requires it for consistency.
+//   - When both are false (default): Streamless mode. No stream history is maintained.
+//     State is always available, but recovery on reconnect requires a full state re-sync.
+//     CAS (ExpectedPosition) and Version-based dedup are not available.
 //
-//   - Recovery is always enabled: The entire map subscription model is built around
-//     state recovery. Clients receive a state plus stream catch-up, ensuring they
-//     can always recover the complete current state.
+//   - When either is true: Stream mode. Publications are tracked with offsets, stream
+//     history is maintained, and clients can recover missed publications on reconnect.
+//     CAS and Version features are available.
 //
-// When Type is SubscriptionTypeMap in SubscribeOptions, the subscription automatically gets:
-//   - Stream position tracking (equivalent to EnablePositioning)
-//   - State recovery via state + stream (superior to EnableRecovery)
+// When Type is SubscriptionTypeMap in SubscribeOptions, the subscription gets:
+//   - State delivery (always)
+//   - Stream position tracking (if EnablePositioning or EnableRecovery)
+//   - Stream-based recovery (if EnablePositioning or EnableRecovery)
 //   - Delta compression support for stream catch-up (if negotiated)
 //   - Tags filtering for stream and live publications (if allowed)
 //
@@ -354,7 +356,12 @@ func (c *Client) handleMapStatePhase(
 	// Check for direct STATE→LIVE transition on last page.
 	// If stream hasn't advanced much, skip STREAM phase entirely.
 	if c.node.config.MapStateToLiveEnabled && nextCursor == "" {
-		// Get current stream position to check if we can go LIVE directly.
+		positioning := state.options.EnablePositioning || state.options.EnableRecovery
+		if !positioning {
+			// Streamless: always go LIVE on last page (no stream to paginate through).
+			return c.handleMapStateToLive(req, reply, state, cmd, started, rw, pubs, streamPos)
+		}
+		// Positioned: check if stream is close enough to skip stream phase.
 		currentStreamPos, err := c.node.MapStreamPosition(c.ctx, channel, state.options.HistoryMetaTTL)
 		if err == nil {
 			// Use limit as threshold - if stream is within one page, go LIVE.
@@ -453,94 +460,117 @@ func (c *Client) handleMapStateToLive(
 		return ErrorInternal
 	}
 
-	// Read stream from statePos to catch any updates since state was read.
-	streamLimit := -1 // No limit by default.
-	if c.node.config.MapRecoveryMaxPublicationLimit > 0 {
-		streamLimit = c.node.config.MapRecoveryMaxPublicationLimit
-	}
+	positioning := opts.EnablePositioning || opts.EnableRecovery
 
 	var recoveredPubs []*protocol.Publication
-	streamOpts := MapReadStreamOptions{
-		Filter: StreamFilter{
-			Since: &StreamPosition{
-				Offset: statePos.Offset,
-				Epoch:  statePos.Epoch,
-			},
-			Limit: streamLimit,
-		},
-		MetaTTL: opts.HistoryMetaTTL,
-	}
+	var latestOffset uint64
+	streamPos := statePos
 
-	streamResult, err := c.node.MapStreamRead(c.ctx, channel, streamOpts)
-	if err != nil {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
-		c.cleanupMapSubscribing(channel)
-		if errors.Is(err, ErrorUnrecoverablePosition) {
+	if positioning {
+		// Positioned mode: read stream from statePos to catch any updates since state was read.
+		streamLimit := -1 // No limit by default.
+		if c.node.config.MapRecoveryMaxPublicationLimit > 0 {
+			streamLimit = c.node.config.MapRecoveryMaxPublicationLimit
+		}
+
+		streamOpts := MapReadStreamOptions{
+			Filter: StreamFilter{
+				Since: &StreamPosition{
+					Offset: statePos.Offset,
+					Epoch:  statePos.Epoch,
+				},
+				Limit: streamLimit,
+			},
+			MetaTTL: opts.HistoryMetaTTL,
+		}
+
+		streamResult, err := c.node.MapStreamRead(c.ctx, channel, streamOpts)
+		if err != nil {
+			c.pubSubSync.StopBuffering(channel)
+			_ = c.node.removeSubscription(channel, c)
+			c.cleanupMapSubscribing(channel)
+			if errors.Is(err, ErrorUnrecoverablePosition) {
+				return ErrorUnrecoverablePosition
+			}
+			c.node.logger.log(newErrorLogEntry(err, "error reading stream for state-to-live phase", map[string]any{
+				"channel": channel, "user": c.user, "client": c.uid,
+			}))
+			return ErrorInternal
+		}
+		pubs := streamResult.Publications
+		streamPos = streamResult.Position
+
+		// Check if we got exactly the limit - client may be too far behind.
+		if streamLimit > 0 && len(pubs) >= streamLimit {
+			c.pubSubSync.StopBuffering(channel)
+			_ = c.node.removeSubscription(channel, c)
+			c.cleanupMapSubscribing(channel)
 			return ErrorUnrecoverablePosition
 		}
-		c.node.logger.log(newErrorLogEntry(err, "error reading stream for state-to-live phase", map[string]any{
-			"channel": channel, "user": c.user, "client": c.uid,
-		}))
-		return ErrorInternal
-	}
-	pubs := streamResult.Publications
-	streamPos := streamResult.Position
 
-	// Check if we got exactly the limit - client may be too far behind.
-	if streamLimit > 0 && len(pubs) >= streamLimit {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
-		c.cleanupMapSubscribing(channel)
-		return ErrorUnrecoverablePosition
-	}
-
-	// Convert stream publications to protocol format.
-	for _, pub := range pubs {
-		recoveredPubs = append(recoveredPubs, pubToProto(pub))
-	}
-
-	// Lock buffer and read buffered publications.
-	bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
-
-	// Merge recovered and buffered publications.
-	var maxSeenOffset uint64
-	var okMerge bool
-	recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
-	if !okMerge {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
-		c.cleanupMapSubscribing(channel)
-		return &DisconnectInsufficientState
-	}
-
-	// Update offset if we saw higher.
-	latestOffset := streamPos.Offset
-	if maxSeenOffset > latestOffset {
-		latestOffset = maxSeenOffset
-	}
-	if len(recoveredPubs) > 0 {
-		lastPubOffset := recoveredPubs[len(recoveredPubs)-1].Offset
-		if lastPubOffset > latestOffset {
-			latestOffset = lastPubOffset
+		// Convert stream publications to protocol format.
+		for _, pub := range pubs {
+			recoveredPubs = append(recoveredPubs, pubToProto(pub))
 		}
-	}
 
-	// Apply tags filter to stream publications (after offset calculation).
-	if sub.tagsFilter != nil {
-		filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
-		for _, pub := range recoveredPubs {
-			match, _ := filter.Match(sub.tagsFilter.filter, pub.Tags)
-			if match {
-				filteredPubs = append(filteredPubs, pub)
+		// Lock buffer and read buffered publications.
+		bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
+
+		// Merge recovered and buffered publications.
+		var maxSeenOffset uint64
+		var okMerge bool
+		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
+		if !okMerge {
+			c.pubSubSync.StopBuffering(channel)
+			_ = c.node.removeSubscription(channel, c)
+			c.cleanupMapSubscribing(channel)
+			return &DisconnectInsufficientState
+		}
+
+		// Update offset if we saw higher.
+		latestOffset = streamPos.Offset
+		if maxSeenOffset > latestOffset {
+			latestOffset = maxSeenOffset
+		}
+		if len(recoveredPubs) > 0 {
+			lastPubOffset := recoveredPubs[len(recoveredPubs)-1].Offset
+			if lastPubOffset > latestOffset {
+				latestOffset = lastPubOffset
 			}
 		}
-		recoveredPubs = filteredPubs
-	}
 
-	// Apply delta compression to recovered publications if enabled.
-	if deltaEnabled && req.Delta == string(DeltaTypeFossil) {
-		recoveredPubs = c.makeRecoveredPubsDeltaFossil(recoveredPubs)
+		// Apply tags filter to stream publications (after offset calculation).
+		if sub.tagsFilter != nil {
+			filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
+			for _, pub := range recoveredPubs {
+				match, _ := filter.Match(sub.tagsFilter.filter, pub.Tags)
+				if match {
+					filteredPubs = append(filteredPubs, pub)
+				}
+			}
+			recoveredPubs = filteredPubs
+		}
+
+		// Apply delta compression to recovered publications if enabled.
+		if deltaEnabled && req.Delta == string(DeltaTypeFossil) {
+			recoveredPubs = c.makeRecoveredPubsDeltaFossil(recoveredPubs)
+		}
+	} else {
+		// Streamless mode: use buffered publications directly (no stream read, no merge).
+		bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
+		recoveredPubs = bufferedPubs
+
+		// Apply tags filter to buffered publications.
+		if sub.tagsFilter != nil {
+			filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
+			for _, pub := range recoveredPubs {
+				match, _ := filter.Match(sub.tagsFilter.filter, pub.Tags)
+				if match {
+					filteredPubs = append(filteredPubs, pub)
+				}
+			}
+			recoveredPubs = filteredPubs
+		}
 	}
 
 	// Convert state publications to protocol format.
@@ -556,6 +586,9 @@ func (c *Client) handleMapStateToLive(
 		Epoch:  streamPos.Epoch,
 		Offset: latestOffset,
 		Delta:  deltaEnabled,
+	}
+	if positioning {
+		res.Recoverable = true
 	}
 	if chanID > 0 {
 		res.Id = chanID
@@ -625,6 +658,12 @@ func (c *Client) handleMapStreamPhase(
 	rw *replyWriter,
 ) error {
 	channel := req.Channel
+
+	// Reject stream phase in streamless mode.
+	if !reply.Options.EnablePositioning && !reply.Options.EnableRecovery {
+		c.cleanupMapSubscribing(channel)
+		return ErrorBadRequest
+	}
 
 	// Check for existing subscription state or recovery mode.
 	c.mu.RLock()
@@ -923,11 +962,12 @@ func (c *Client) handleMapStreamToLive(
 
 	// Build response with phase=0 (LIVE).
 	res := &protocol.SubscribeResult{
-		Type:   1, // MAP type
-		Phase:  MapPhaseLive,
-		Epoch:  streamPos.Epoch,
-		Offset: latestOffset,
-		Delta:  deltaEnabled,
+		Type:        1, // MAP type
+		Phase:       MapPhaseLive,
+		Epoch:       streamPos.Epoch,
+		Offset:      latestOffset,
+		Delta:       deltaEnabled,
+		Recoverable: true,
 	}
 	if chanID > 0 {
 		res.Id = chanID
@@ -951,37 +991,7 @@ func (c *Client) handleMapStreamToLive(
 	c.releaseSubscribeCommandReply(protoReply)
 
 	// Build channel context with map flag.
-	var channelFlags uint16
-	channelFlags |= flagSubscribed
-	channelFlags |= flagPositioning
-	channelFlags |= flagMap
-	if deltaEnabled && req.Delta == string(DeltaTypeFossil) {
-		channelFlags |= flagDeltaAllowed
-	}
-	if isPresence {
-		channelFlags |= flagMapPresence
-	}
-	if opts.EmitPresence {
-		channelFlags |= flagEmitPresence
-	}
-	if opts.EmitJoinLeave {
-		channelFlags |= flagEmitJoinLeave
-	}
-	if opts.PushJoinLeave {
-		channelFlags |= flagPushJoinLeave
-	}
-	if reply.ClientSideRefresh {
-		channelFlags |= flagClientSideRefresh
-	}
-	if opts.MapClientPresenceChannelPrefix != "" {
-		channelFlags |= flagMapClientPresence
-	}
-	if opts.MapUserPresenceChannelPrefix != "" {
-		channelFlags |= flagMapUserPresence
-	}
-	if opts.MapRemoveOnUnsubscribe {
-		channelFlags |= flagCleanupOnUnsubscribe
-	}
+	channelFlags := c.buildMapChannelFlags(deltaEnabled, req.Delta, isPresence, opts, reply)
 
 	channelContext := ChannelContext{
 		flags:    channelFlags,
@@ -1217,91 +1227,114 @@ func (c *Client) handleMapImmediateJoin(
 		statePubs = filteredPubs
 	}
 
-	// Read stream from statePos to catch any updates that happened during state read.
-	streamLimit := -1 // No limit by default.
-	if c.node.config.MapRecoveryMaxPublicationLimit > 0 {
-		streamLimit = c.node.config.MapRecoveryMaxPublicationLimit
-	}
+	positioning := opts.EnablePositioning || opts.EnableRecovery
 
 	var recoveredPubs []*protocol.Publication
-	streamOpts := MapReadStreamOptions{
-		Filter: StreamFilter{
-			Since: &StreamPosition{
-				Offset: statePos.Offset,
-				Epoch:  statePos.Epoch,
-			},
-			Limit: streamLimit,
-		},
-		MetaTTL: opts.HistoryMetaTTL,
-	}
+	var latestOffset uint64
+	streamPos := statePos
 
-	streamResult, err := c.node.MapStreamRead(c.ctx, channel, streamOpts)
-	if err != nil {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
-		if errors.Is(err, ErrorUnrecoverablePosition) {
+	if positioning {
+		// Positioned mode: read stream from statePos to catch any updates during state read.
+		streamLimit := -1 // No limit by default.
+		if c.node.config.MapRecoveryMaxPublicationLimit > 0 {
+			streamLimit = c.node.config.MapRecoveryMaxPublicationLimit
+		}
+
+		streamOpts := MapReadStreamOptions{
+			Filter: StreamFilter{
+				Since: &StreamPosition{
+					Offset: statePos.Offset,
+					Epoch:  statePos.Epoch,
+				},
+				Limit: streamLimit,
+			},
+			MetaTTL: opts.HistoryMetaTTL,
+		}
+
+		streamResult, err := c.node.MapStreamRead(c.ctx, channel, streamOpts)
+		if err != nil {
+			c.pubSubSync.StopBuffering(channel)
+			_ = c.node.removeSubscription(channel, c)
+			if errors.Is(err, ErrorUnrecoverablePosition) {
+				return ErrorUnrecoverablePosition
+			}
+			c.node.logger.log(newErrorLogEntry(err, "error reading stream for immediate join", map[string]any{
+				"channel": channel, "user": c.user, "client": c.uid,
+			}))
+			return ErrorInternal
+		}
+		pubs := streamResult.Publications
+		streamPos = streamResult.Position
+
+		// Check if we got exactly the limit - client may be too far behind.
+		if streamLimit > 0 && len(pubs) >= streamLimit {
+			c.pubSubSync.StopBuffering(channel)
+			_ = c.node.removeSubscription(channel, c)
 			return ErrorUnrecoverablePosition
 		}
-		c.node.logger.log(newErrorLogEntry(err, "error reading stream for immediate join", map[string]any{
-			"channel": channel, "user": c.user, "client": c.uid,
-		}))
-		return ErrorInternal
-	}
-	pubs := streamResult.Publications
-	streamPos := streamResult.Position
 
-	// Check if we got exactly the limit - client may be too far behind.
-	if streamLimit > 0 && len(pubs) >= streamLimit {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
-		return ErrorUnrecoverablePosition
-	}
-
-	// Convert to protocol publications.
-	for _, pub := range pubs {
-		recoveredPubs = append(recoveredPubs, pubToProto(pub))
-	}
-
-	// Lock buffer and read buffered publications.
-	bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
-
-	// Merge recovered and buffered publications.
-	var maxSeenOffset uint64
-	var okMerge bool
-	recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
-	if !okMerge {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
-		return &DisconnectInsufficientState
-	}
-
-	// Update offset if we saw higher.
-	latestOffset := streamPos.Offset
-	if maxSeenOffset > latestOffset {
-		latestOffset = maxSeenOffset
-	}
-	if len(recoveredPubs) > 0 {
-		lastPubOffset := recoveredPubs[len(recoveredPubs)-1].Offset
-		if lastPubOffset > latestOffset {
-			latestOffset = lastPubOffset
+		// Convert to protocol publications.
+		for _, pub := range pubs {
+			recoveredPubs = append(recoveredPubs, pubToProto(pub))
 		}
-	}
 
-	// Apply tags filter to stream publications (after offset calculation).
-	if sub.tagsFilter != nil {
-		filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
-		for _, pub := range recoveredPubs {
-			match, _ := filter.Match(sub.tagsFilter.filter, pub.Tags)
-			if match {
-				filteredPubs = append(filteredPubs, pub)
+		// Lock buffer and read buffered publications.
+		bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
+
+		// Merge recovered and buffered publications.
+		var maxSeenOffset uint64
+		var okMerge bool
+		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
+		if !okMerge {
+			c.pubSubSync.StopBuffering(channel)
+			_ = c.node.removeSubscription(channel, c)
+			return &DisconnectInsufficientState
+		}
+
+		// Update offset if we saw higher.
+		latestOffset = streamPos.Offset
+		if maxSeenOffset > latestOffset {
+			latestOffset = maxSeenOffset
+		}
+		if len(recoveredPubs) > 0 {
+			lastPubOffset := recoveredPubs[len(recoveredPubs)-1].Offset
+			if lastPubOffset > latestOffset {
+				latestOffset = lastPubOffset
 			}
 		}
-		recoveredPubs = filteredPubs
-	}
 
-	// Apply delta compression to recovered publications if enabled.
-	if deltaEnabled && req.Delta == string(DeltaTypeFossil) {
-		recoveredPubs = c.makeRecoveredPubsDeltaFossil(recoveredPubs)
+		// Apply tags filter to stream publications (after offset calculation).
+		if sub.tagsFilter != nil {
+			filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
+			for _, pub := range recoveredPubs {
+				match, _ := filter.Match(sub.tagsFilter.filter, pub.Tags)
+				if match {
+					filteredPubs = append(filteredPubs, pub)
+				}
+			}
+			recoveredPubs = filteredPubs
+		}
+
+		// Apply delta compression to recovered publications if enabled.
+		if deltaEnabled && req.Delta == string(DeltaTypeFossil) {
+			recoveredPubs = c.makeRecoveredPubsDeltaFossil(recoveredPubs)
+		}
+	} else {
+		// Streamless mode: use buffered publications directly (no stream read, no merge).
+		bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
+		recoveredPubs = bufferedPubs
+
+		// Apply tags filter to buffered publications.
+		if sub.tagsFilter != nil {
+			filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
+			for _, pub := range recoveredPubs {
+				match, _ := filter.Match(sub.tagsFilter.filter, pub.Tags)
+				if match {
+					filteredPubs = append(filteredPubs, pub)
+				}
+			}
+			recoveredPubs = filteredPubs
+		}
 	}
 
 	// Convert state publications to protocol format.
@@ -1319,6 +1352,9 @@ func (c *Client) handleMapImmediateJoin(
 		Delta:        deltaEnabled,
 		State:        stateProtos,   // Full state for immediate join
 		Publications: recoveredPubs, // Stream publications
+	}
+	if positioning {
+		res.Recoverable = true
 	}
 	if chanID > 0 {
 		res.Id = chanID
@@ -1383,6 +1419,12 @@ func (c *Client) handleMapRecoveryJoin(
 	rw *replyWriter,
 ) error {
 	channel := req.Channel
+
+	// In streamless mode, redirect recovery to immediate join (full state re-sync).
+	if !opts.EnablePositioning && !opts.EnableRecovery {
+		c.cleanupMapSubscribing(channel)
+		return c.handleMapImmediateJoin(req, reply, opts, isPresence, cmd, started, rw)
+	}
 
 	// Build subscription info first, validate before subscribing.
 	useID := opts.AllowChannelCompaction && req.Flag&subscriptionFlagChannelCompression != 0
@@ -1532,11 +1574,12 @@ func (c *Client) handleMapRecoveryJoin(
 
 	// Build response.
 	res := &protocol.SubscribeResult{
-		Type:   1, // MAP type
-		Phase:  MapPhaseLive,
-		Epoch:  streamPos.Epoch,
-		Offset: latestOffset,
-		Delta:  deltaEnabled,
+		Type:        1, // MAP type
+		Phase:       MapPhaseLive,
+		Epoch:       streamPos.Epoch,
+		Offset:      latestOffset,
+		Delta:       deltaEnabled,
+		Recoverable: true,
 	}
 	if chanID > 0 {
 		res.Id = chanID
@@ -1599,8 +1642,10 @@ func (c *Client) handleMapRecoveryJoin(
 func (c *Client) buildMapChannelFlags(deltaEnabled bool, delta string, isPresence bool, opts SubscribeOptions, reply SubscribeReply) uint16 {
 	var channelFlags uint16
 	channelFlags |= flagSubscribed
-	channelFlags |= flagPositioning // Map subscriptions are always positioned.
-	channelFlags |= flagMap         // Mark as map subscription.
+	if opts.EnablePositioning || opts.EnableRecovery {
+		channelFlags |= flagPositioning
+	}
+	channelFlags |= flagMap // Mark as map subscription.
 	if deltaEnabled && delta == string(DeltaTypeFossil) {
 		channelFlags |= flagDeltaAllowed
 	}

@@ -211,6 +211,11 @@
             updateUserCount();
         });
 
+        centrifuge.on('connecting', () => {
+            document.getElementById('statusDot').classList.remove('connected');
+            document.getElementById('statusText').textContent = 'Connecting...';
+        });
+
         centrifuge.on('disconnected', () => {
             document.getElementById('statusDot').classList.remove('connected');
             document.getElementById('statusText').textContent = 'Disconnected';
