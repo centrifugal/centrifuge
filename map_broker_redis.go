@@ -2423,34 +2423,19 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 		metaExpire = strconv.Itoa(int(opts.MetaTTL.Seconds()))
 	}
 
-	// Determine stream and meta keys based on stream mode.
-	streamKey := e.streamKey(shard, ch)
-	metaKey := e.metaKey(shard, ch)
+	// Determine streamless mode — all KEYS are always real (slot-aligned) keys,
+	// and the Lua script uses the streamless flag to skip stream/meta operations.
+	streamlessFlag := "0"
 	if opts.StreamSize <= 0 {
-		// Streamless mode: stream and meta keys are not used.
-		streamKey = ""
-		metaKey = ""
-	}
-
-	// In Redis Cluster, all KEYS must hash to the same slot. Use slot-aligned
-	// nil_key placeholder for unused keys (same pattern as addMapEntry).
-	nilKey := ""
-	if shard.isCluster {
-		nilKey = e.buildKey(shard, ch, ":nil:")
-		if streamKey == "" {
-			streamKey = nilKey
-		}
-		if metaKey == "" {
-			metaKey = nilKey
-		}
+		streamlessFlag = "1"
 	}
 
 	_, err := e.cleanupScript.Exec(ctx, shard.client,
 		[]string{
 			e.stateHashKey(shard, ch),   // KEYS[1]: state hash key
 			e.stateExpireKey(shard, ch), // KEYS[2]: state expire zset key
-			streamKey,                   // KEYS[3]: stream key
-			metaKey,                     // KEYS[4]: stream meta key
+			e.streamKey(shard, ch),      // KEYS[3]: stream key
+			e.metaKey(shard, ch),        // KEYS[4]: stream meta key
 			cleanupKey,                  // KEYS[5]: cleanup registration zset key
 		},
 		[]string{
@@ -2465,7 +2450,7 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 			"0",         // ARGV[9]: use_hexpire
 			ch,          // ARGV[10]: channel_for_cleanup
 			"1",         // ARGV[11]: force_consistency
-			nilKey,      // ARGV[12]: nil_key (slot-aligned placeholder, empty to disable)
+			streamlessFlag, // ARGV[12]: streamless ("1" = skip stream/meta, "0" = normal)
 		},
 	).ToArray()
 	return err

@@ -1247,6 +1247,7 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 	require.NotNil(t, sourceNode, "need a source node with slots")
 	t.Logf("phase 2: resharding 1000 slots from %s to %s", sourceNode.id[:8], newNodeID[:8])
 	reshardToNode(t, 7001, sourceNode.id, newNodeID, 1000)
+	waitForClusterConverge(t, 7001, 30*time.Second)
 
 	// Force rueidis to discover the new node by issuing commands that will get
 	// MOVED redirects for the migrated slots.
@@ -1304,7 +1305,15 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 	t.Log("phase 3: removing node on port 7004")
 
 	reshardToNode(t, 7001, newNodeID, sourceNode.id, 1000)
+	waitForClusterConverge(t, 7001, 30*time.Second)
 	removeNodeFromCluster(t, 7001, newNodeID)
+	waitForClusterConverge(t, 7001, 30*time.Second)
+
+	// Shut down 7004 so rueidis detects the connection is dead and drops it
+	// from its internal Nodes() map. Without this, rueidis keeps the stale
+	// connection alive and buildNodeMapping returns 4 nodes indefinitely.
+	cleanupNode()
+	time.Sleep(2 * time.Second)
 
 	// Force rueidis to notice the topology change.
 	forceRueidisTopologyRefresh(t, e1.shards[0].shard.client)
@@ -1312,6 +1321,7 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 	// Poll until we see 3 nodes.
 	deadline = time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
+		forceRueidisTopologyRefresh(t, e1.shards[0].shard.client)
 		if e1.refreshTopology(wrapper) {
 			t.Log("phase 3: topology change detected, triggering rebuild")
 			e1.closeTopologyDone(wrapper)
@@ -1324,7 +1334,6 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 		if nodeCount == 3 {
 			break
 		}
-		forceRueidisTopologyRefresh(t, e1.shards[0].shard.client)
 		time.Sleep(1 * time.Second)
 	}
 

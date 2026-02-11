@@ -33,23 +33,13 @@ Storage format in state hash: offset:epoch:publication_bytes
 -- ARGV[9]  = use_hexpire ("0" or "1")
 -- ARGV[10] = channel_for_cleanup_zset (channel name to update in cleanup ZSET)
 -- ARGV[11] = force_consistency ("0" or "1" - force epoch change on eviction)
--- ARGV[12] = nil_key (slot-aligned placeholder for unused KEYS in cluster mode, empty '' to disable)
+-- ARGV[12] = streamless ("1" = skip stream/meta operations, "0" = normal streamed mode)
 
 local state_hash_key = KEYS[1]
 local state_expire_key = KEYS[2]
 local stream_key = KEYS[3]
 local meta_key = KEYS[4]
 local cleanup_registration_key = KEYS[5]
-
--- In Redis Cluster, all KEYS must hash to the same slot. For unused keys we pass
--- a slot-aligned placeholder instead of '' (empty string hashes to slot 0). Convert
--- those placeholders back to '' so all existing conditional checks still work.
-local nil_key = ARGV[12] or ""
-if nil_key ~= "" then
-    if stream_key == nil_key then stream_key = '' end
-    if meta_key == nil_key then meta_key = '' end
-    if cleanup_registration_key == nil_key then cleanup_registration_key = '' end
-end
 
 local now = tonumber(ARGV[1])
 local batch_size = tonumber(ARGV[2])
@@ -60,6 +50,7 @@ local stream_ttl = ARGV[6]
 local meta_expire = ARGV[7]
 local new_epoch_if_empty = ARGV[8]
 local channel_for_cleanup = ARGV[10]
+local streamless = ARGV[12] == "1"
 
 -- Helper: encode an integer as a protobuf varint
 local function encode_varint(value)
@@ -116,14 +107,11 @@ if #expired == 0 then
     return { 0, "0", "", "ok" }
 end
 
--- Determine if stream is enabled (stream_size > 0).
-local has_stream = tonumber(stream_size) > 0
-
--- Get or create epoch
+-- Get or create epoch (only in streamed mode)
 local current_epoch
 local top_offset = 0
 
-if has_stream and meta_key ~= '' then
+if not streamless then
     current_epoch = redis.call("hget", meta_key, "e")
     if not current_epoch then
         current_epoch = new_epoch_if_empty
@@ -144,7 +132,7 @@ for _, entry_key in ipairs(expired) do
         -- Construct minimal removal payload (key + removed + timestamp)
         local removal_payload = construct_minimal_leave(entry_key, now)
 
-        if meta_key ~= '' then
+        if not streamless then
             -- Increment offset for the removal event
             top_offset = redis.call("hincrby", meta_key, "s", 1)
 
@@ -152,10 +140,8 @@ for _, entry_key in ipairs(expired) do
             if meta_expire ~= '0' then
                 redis.call("expire", meta_key, meta_expire)
             end
-        end
 
-        -- Write removal event to stream
-        if stream_key ~= '' then
+            -- Write removal event to stream
             redis.call("xadd", stream_key, "MAXLEN", stream_size, top_offset, "e", current_epoch, "d", removal_payload)
             if tonumber(stream_ttl) > 0 then
                 redis.call("expire", stream_key, tonumber(stream_ttl))
@@ -181,7 +167,7 @@ end
 update_cleanup_registration()
 
 local final_offset = 0
-if meta_key ~= '' then
+if not streamless then
     final_offset = redis.call("hget", meta_key, "s") or 0
 end
 
