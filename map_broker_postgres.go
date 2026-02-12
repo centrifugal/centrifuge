@@ -768,7 +768,7 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 	}
 
 	// Parse cursor as offset.
-	offset := opts.Offset
+	var offset int
 	if opts.Cursor != "" {
 		parsedOffset, err := strconv.Atoi(opts.Cursor)
 		if err == nil {
@@ -1507,11 +1507,16 @@ func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 		opts := e.node.ResolveMapChannelOptions(ek.channel)
 
 		// Remove handles deletion and emits removal to stream.
-		_, _ = e.Remove(ctx, ek.channel, ek.key, MapRemoveOptions{
+		if _, err := e.Remove(ctx, ek.channel, ek.key, MapRemoveOptions{
 			StreamSize: opts.StreamSize,
 			StreamTTL:  opts.StreamTTL,
 			MetaTTL:    opts.MetaTTL,
-		})
+		}); err != nil {
+			e.node.logger.log(newErrorLogEntry(err, "error removing expired key", map[string]any{
+				"channel": ek.channel,
+				"key":     ek.key,
+			}))
+		}
 	}
 }
 
@@ -1535,22 +1540,28 @@ func (e *PostgresMapBroker) runStreamCleanupWorker() {
 
 func (e *PostgresMapBroker) cleanupExpiredEntries(ctx context.Context) {
 	// Remove expired stream entries
-	_, _ = e.pool.Exec(ctx, `
+	if _, err := e.pool.Exec(ctx, `
 		DELETE FROM cf_map_stream
 		WHERE expires_at IS NOT NULL AND expires_at < NOW()
-	`)
+	`); err != nil {
+		e.node.logger.log(newErrorLogEntry(err, "error cleaning up expired stream entries", map[string]any{}))
+	}
 
 	// Remove expired stream metadata
-	_, _ = e.pool.Exec(ctx, `
+	if _, err := e.pool.Exec(ctx, `
 		DELETE FROM cf_map_meta
 		WHERE expires_at IS NOT NULL AND expires_at < NOW()
-	`)
+	`); err != nil {
+		e.node.logger.log(newErrorLogEntry(err, "error cleaning up expired stream metadata", map[string]any{}))
+	}
 
 	// Remove expired idempotency keys
-	_, _ = e.pool.Exec(ctx, `
+	if _, err := e.pool.Exec(ctx, `
 		DELETE FROM cf_map_idempotency
 		WHERE expires_at < NOW()
-	`)
+	`); err != nil {
+		e.node.logger.log(newErrorLogEntry(err, "error cleaning up expired idempotency keys", map[string]any{}))
+	}
 }
 
 // ============================================================================

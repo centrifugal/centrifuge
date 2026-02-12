@@ -78,13 +78,10 @@ if state_ttl > 0 then
     end
 end
 
--- Cleanup expired entries
-local expired = redis.call("zrangebyscore", expire_key, "-inf", now_str)
-if #expired > 0 then
-    redis.call("hdel", hash_key, unpack(expired))
-    redis.call("zrem", order_key, unpack(expired))
-    redis.call("zremrangebyscore", expire_key, "-inf", now_str)
-end
+-- NOTE: We intentionally do NOT cleanup expired entries inline here.
+-- Expired entries MUST be removed by the cleanup worker (map_broker_cleanup.lua)
+-- which generates LEAVE events for the stream and publishes removal notifications.
+-- Silently removing entries here would cause clients to miss removal events.
 
 -- Key-based cursor pagination using native Redis ordering (score DESC, key DESC).
 -- For cursor (cursor_score, cursor_key), we need entries "after" it:

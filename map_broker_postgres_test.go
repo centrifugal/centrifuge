@@ -131,8 +131,8 @@ func TestPostgresMapBroker_StatefulChannel(t *testing.T) {
 
 	// Read state
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, streamPos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -178,9 +178,9 @@ func TestPostgresMapBroker_StatefulChannelOrdered(t *testing.T) {
 
 	// Read ordered state (descending by score)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:  true,
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Ordered: true,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -225,8 +225,8 @@ func TestPostgresMapBroker_StateRevision(t *testing.T) {
 
 	// Read state - entries now include per-entry revisions
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, streamPos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -266,9 +266,9 @@ func TestPostgresMapBroker_StatePagination(t *testing.T) {
 
 	// Read state with limit
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:    3,
-		Cursor:   "",
-		StateTTL: 300 * time.Second,
+		Limit:   3,
+		Cursor:  "",
+		MetaTTL: 300 * time.Second,
 	})
 	page1, pos1, cursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -283,9 +283,9 @@ func TestPostgresMapBroker_StatePagination(t *testing.T) {
 	// Continue reading until cursor is empty
 	for cursor != "" {
 		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-			Limit:    3,
-			Cursor:   cursor,
-			StateTTL: 300 * time.Second,
+			Limit:   3,
+			Cursor:  cursor,
+			MetaTTL: 300 * time.Second,
 		})
 		page, pos, newCursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
@@ -373,8 +373,8 @@ func TestPostgresMapBroker_Idempotency(t *testing.T) {
 
 	// State should still have original data
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -417,8 +417,8 @@ func TestPostgresMapBroker_KeyMode(t *testing.T) {
 
 	// Verify state still has original data
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -1856,7 +1856,7 @@ func TestPostgresMapBroker_Clear(t *testing.T) {
 	}
 
 	// Verify data exists.
-	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, MetaTTL: 300 * time.Second})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 3)
@@ -1874,7 +1874,7 @@ func TestPostgresMapBroker_Clear(t *testing.T) {
 	require.NoError(t, err)
 
 	// State should be empty.
-	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, MetaTTL: 300 * time.Second})
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Empty(t, entries)
@@ -1912,13 +1912,13 @@ func TestPostgresMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	// ch1 empty.
-	stateRes, err := broker.ReadState(ctx, "test_clear_iso_ch1", MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	stateRes, err := broker.ReadState(ctx, "test_clear_iso_ch1", MapReadStateOptions{Limit: 100, MetaTTL: 300 * time.Second})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Empty(t, entries)
 
 	// ch2 still intact.
-	stateRes, err = broker.ReadState(ctx, "test_clear_iso_ch2", MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	stateRes, err = broker.ReadState(ctx, "test_clear_iso_ch2", MapReadStateOptions{Limit: 100, MetaTTL: 300 * time.Second})
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)

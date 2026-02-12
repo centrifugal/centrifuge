@@ -2215,3 +2215,11 @@ func TestCachedMapBroker_BufferPublicationRace(t *testing.T) {
 	require.True(t, keys["initial"], "initial key should be present")
 	require.True(t, keys["buffered"], "buffered key should be present")
 }
+
+func TestCachedMapBroker_ReadStream_Table(t *testing.T) {
+	testMapBrokerReadStream(t, func(t *testing.T) MapBroker {
+		node, _ := New(Config{})
+		cached, _ := newTestCachedMapBroker(t, node)
+		return cached
+	})
+}

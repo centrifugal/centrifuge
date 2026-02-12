@@ -20,6 +20,7 @@ Storage format in state hash: offset:epoch:publication_bytes
 -- KEYS[3] = stream key (for removal events)
 -- KEYS[4] = stream meta key (for offset/epoch)
 -- KEYS[5] = cleanup registration zset key (for scheduling)
+-- KEYS[6] = state order zset key (always passed, ZREM is no-op if key doesn't exist)
 
 -- ==== ARGV ====
 -- ARGV[1]  = now (unix timestamp)
@@ -40,6 +41,7 @@ local state_expire_key = KEYS[2]
 local stream_key = KEYS[3]
 local meta_key = KEYS[4]
 local cleanup_registration_key = KEYS[5]
+local state_order_key = KEYS[6]
 
 local now = tonumber(ARGV[1])
 local batch_size = tonumber(ARGV[2])
@@ -142,7 +144,7 @@ for _, entry_key in ipairs(expired) do
             end
 
             -- Write removal event to stream
-            redis.call("xadd", stream_key, "MAXLEN", stream_size, top_offset, "e", current_epoch, "d", removal_payload)
+            redis.call("xadd", stream_key, "MAXLEN", "~", stream_size, top_offset, "e", current_epoch, "d", removal_payload)
             if tonumber(stream_ttl) > 0 then
                 redis.call("expire", stream_key, tonumber(stream_ttl))
             end
@@ -154,9 +156,11 @@ for _, entry_key in ipairs(expired) do
             redis.call(publish_command, channel, pub_payload)
         end
 
-        -- Remove from state hash and expire zset
+        -- Remove from state hash, expire zset, and order zset.
+        -- ZREM on order key is a no-op if the channel doesn't use ordered state.
         redis.call("hdel", state_hash_key, entry_key)
         redis.call("zrem", state_expire_key, entry_key)
+        redis.call("zrem", state_order_key, entry_key)
 
         removed_count = removed_count + 1
     end

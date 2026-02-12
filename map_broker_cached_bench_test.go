@@ -327,7 +327,7 @@ func BenchmarkMapCache_ApplyPublication(b *testing.B) {
 			Data:   []byte("data"),
 			Time:   time.Now().UnixMilli(),
 		}
-		_ = cache.ApplyPublication(channel, pub, StreamPosition{Offset: uint64(i + 1), Epoch: "test"}, false)
+		_, _ = cache.ApplyPublication(channel, pub, StreamPosition{Offset: uint64(i + 1), Epoch: "test"}, false)
 	}
 }
 

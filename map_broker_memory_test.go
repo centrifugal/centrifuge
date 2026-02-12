@@ -66,8 +66,8 @@ func TestMemoryMapBroker_StatefulChannel(t *testing.T) {
 
 	// Read state
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, streamPos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -113,9 +113,9 @@ func TestMemoryMapBroker_StatefulChannelOrdered(t *testing.T) {
 
 	// Read ordered state (descending by score)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:  true,
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Ordered: true,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -160,8 +160,8 @@ func TestMemoryMapBroker_StateRevision(t *testing.T) {
 
 	// Read state - entries now include per-entry revisions
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, streamPos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -201,9 +201,9 @@ func TestMemoryMapBroker_StatePagination(t *testing.T) {
 
 	// Read state with limit
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:    3,
-		Cursor:   "",
-		StateTTL: 300 * time.Second,
+		Limit:   3,
+		Cursor:  "",
+		MetaTTL: 300 * time.Second,
 	})
 	page1, pos1, cursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -218,9 +218,9 @@ func TestMemoryMapBroker_StatePagination(t *testing.T) {
 	// Continue reading until cursor is empty
 	for cursor != "" {
 		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-			Limit:    3,
-			Cursor:   cursor,
-			StateTTL: 300 * time.Second,
+			Limit:   3,
+			Cursor:  cursor,
+			MetaTTL: 300 * time.Second,
 		})
 		page, pos, newCursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
@@ -258,8 +258,8 @@ func TestMemoryMapBroker_EpochHandling(t *testing.T) {
 
 	// Read state
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, streamPos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -350,8 +350,8 @@ func TestMemoryMapBroker_Idempotency(t *testing.T) {
 
 	// State should still have original data (second publish was cached/skipped)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -407,8 +407,8 @@ func TestMemoryMapBroker_VersionedPublishing(t *testing.T) {
 
 	// State should have v3 data
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -445,8 +445,8 @@ func TestMemoryMapBroker_MultipleChannels(t *testing.T) {
 
 	// Read channel1 state
 	stateRes, err := broker.ReadState(ctx, channel1, MapReadStateOptions{
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries1, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -456,8 +456,8 @@ func TestMemoryMapBroker_MultipleChannels(t *testing.T) {
 
 	// Read channel2 state
 	stateRes, err = broker.ReadState(ctx, channel2, MapReadStateOptions{
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries2, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -502,9 +502,9 @@ func TestMemoryMapBroker_OrderedStateOrdering(t *testing.T) {
 
 	// Read ordered state - should be sorted by score (descending)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:  true,
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Ordered: true,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -547,9 +547,9 @@ func TestMemoryMapBroker_OrderedStatePagination(t *testing.T) {
 
 	// Read first page (limit=5, no cursor)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:  true,
-		Limit:    5,
-		StateTTL: 300 * time.Second,
+		Ordered: true,
+		Limit:   5,
+		MetaTTL: 300 * time.Second,
 	})
 	page1, pos1, cursor1 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -564,10 +564,10 @@ func TestMemoryMapBroker_OrderedStatePagination(t *testing.T) {
 
 	// Read second page (using cursor)
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:  true,
-		Cursor:   cursor1,
-		Limit:    5,
-		StateTTL: 300 * time.Second,
+		Ordered: true,
+		Cursor:  cursor1,
+		Limit:   5,
+		MetaTTL: 300 * time.Second,
 	})
 	page2, pos2, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -617,9 +617,9 @@ func TestMemoryMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 
 	// Read ordered state
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:  true,
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Ordered: true,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -658,9 +658,9 @@ func TestMemoryMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 
 	// Read initial order (descending: 50, 40, 30, 20, 10)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:  true,
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Ordered: true,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries1, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -680,9 +680,9 @@ func TestMemoryMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 
 	// Read updated order
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered:  true,
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Ordered: true,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries2, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -724,8 +724,8 @@ func TestMemoryMapBroker_Remove(t *testing.T) {
 
 	// Verify state has 2 keys
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -741,8 +741,8 @@ func TestMemoryMapBroker_Remove(t *testing.T) {
 
 	// Verify state has 1 key
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -814,8 +814,8 @@ func TestMemoryMapBroker_KeyModeIfNew(t *testing.T) {
 
 	// Verify state still has original data
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -874,8 +874,8 @@ func TestMemoryMapBroker_KeyModeIfExists(t *testing.T) {
 
 	// Verify state has updated data
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -915,8 +915,8 @@ func TestMemoryMapBroker_KeyModeReplace(t *testing.T) {
 
 	// Verify state has updated data
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:    100,
-		StateTTL: 300 * time.Second,
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -1804,7 +1804,7 @@ func TestMemoryMapBroker_Clear(t *testing.T) {
 	}
 
 	// Verify data exists.
-	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, MetaTTL: 300 * time.Second})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 3)
@@ -1822,7 +1822,7 @@ func TestMemoryMapBroker_Clear(t *testing.T) {
 	require.NoError(t, err)
 
 	// State should be empty.
-	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, MetaTTL: 300 * time.Second})
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Empty(t, entries)
@@ -1860,14 +1860,21 @@ func TestMemoryMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	// ch1 empty.
-	stateRes, err := broker.ReadState(ctx, "ch1", MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	stateRes, err := broker.ReadState(ctx, "ch1", MapReadStateOptions{Limit: 100, MetaTTL: 300 * time.Second})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Empty(t, entries)
 
 	// ch2 still intact.
-	stateRes, err = broker.ReadState(ctx, "ch2", MapReadStateOptions{Limit: 100, StateTTL: 300 * time.Second})
+	stateRes, err = broker.ReadState(ctx, "ch2", MapReadStateOptions{Limit: 100, MetaTTL: 300 * time.Second})
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
+}
+
+func TestMemoryMapBroker_ReadStream_Table(t *testing.T) {
+	testMapBrokerReadStream(t, func(t *testing.T) MapBroker {
+		node, _ := New(Config{})
+		return newTestMemoryMapBroker(t, node)
+	})
 }

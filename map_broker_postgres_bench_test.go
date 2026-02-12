@@ -230,8 +230,8 @@ func BenchmarkPostgresMapBroker_ReadStateFull(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-				Limit:    0, // Use default of 100
-				StateTTL: 300 * time.Second,
+				Limit:   0, // Use default of 100
+				MetaTTL: 300 * time.Second,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -269,9 +269,8 @@ func BenchmarkPostgresMapBroker_ReadStatePaginated(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-				Cursor:   "0",
-				Limit:    100, // Read 100 at a time
-				StateTTL: 300 * time.Second,
+				Limit:   100, // Read 100 at a time
+				MetaTTL: 300 * time.Second,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -311,9 +310,9 @@ func BenchmarkPostgresMapBroker_ReadStateOrdered(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-				Ordered:  true,
-				Limit:    100,
-				StateTTL: 300 * time.Second,
+				Ordered: true,
+				Limit:   100,
+				MetaTTL: 300 * time.Second,
 			})
 			if err != nil {
 				b.Fatal(err)

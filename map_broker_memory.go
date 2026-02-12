@@ -844,6 +844,22 @@ func (h *mapHub) remove(ch string, key string, opts MapRemoveOptions) (StreamPos
 			h.nextExpireCheck = expireAt
 		}
 
+		// Refresh MetaTTL so the channel isn't garbage-collected while active.
+		historyMetaTTL := opts.MetaTTL
+		if historyMetaTTL == 0 {
+			historyMetaTTL = h.historyMetaTTL
+		}
+		if historyMetaTTL > 0 {
+			removeAt := time.Now().Unix() + int64(historyMetaTTL.Seconds())
+			if _, ok := h.removes[ch]; !ok {
+				heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
+			}
+			h.removes[ch] = removeAt
+			if h.nextRemoveCheck == 0 || h.nextRemoveCheck > removeAt {
+				h.nextRemoveCheck = removeAt
+			}
+		}
+
 		offset, _ := channel.stream.Add(removePub, opts.StreamSize, 0, "")
 		removePub.Offset = offset // Set offset on publication for delivery
 		streamPosition = StreamPosition{
@@ -943,8 +959,14 @@ func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) (MapStreamResul
 
 	since := filter.Since
 
+	// Validate epoch if provided.
+	if since.Epoch != "" && since.Epoch != stream.Epoch() {
+		h.RUnlock()
+		return MapStreamResult{}, ErrorUnrecoverablePosition
+	}
+
 	if !filter.Reverse {
-		if streamPosition.Offset == since.Offset && since.Epoch == stream.Epoch() {
+		if streamPosition.Offset == since.Offset {
 			h.RUnlock()
 			return MapStreamResult{Position: streamPosition}, nil
 		}
@@ -976,9 +998,14 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) (MapStateResult, 
 	h.Lock()
 	defer h.Unlock()
 
-	// Update meta TTL
-	if opts.StateTTL > 0 {
-		h.updateMetaTTL(ch, opts.StateTTL)
+	// Update meta TTL (use node config as fallback, same as getStream).
+	// This ensures auto-created channels get scheduled for removal.
+	metaTTL := opts.MetaTTL
+	if metaTTL == 0 {
+		metaTTL = h.historyMetaTTL
+	}
+	if metaTTL > 0 {
+		h.updateMetaTTL(ch, metaTTL)
 	}
 
 	channel, ok := h.channels[ch]

@@ -87,7 +87,8 @@ type MapCache interface {
 
 	// ApplyPublication applies a publication to the cache.
 	// If removed is true, the publication represents a key removal.
-	ApplyPublication(ch string, pub *Publication, pos StreamPosition, removed bool) error
+	// Returns true if the publication was actually applied (not skipped as duplicate).
+	ApplyPublication(ch string, pub *Publication, pos StreamPosition, removed bool) (bool, error)
 
 	// ApplyState replaces the entire state for a channel.
 	// If opts is non-nil, uses those options; otherwise preserves existing options
@@ -501,9 +502,14 @@ func (c *mapCacheImpl) GetStream(ch string, opts MapReadStreamOptions) (MapStrea
 
 	since := filter.Since
 
-	// Check if already up to date
+	// Validate epoch if provided.
+	if since.Epoch != "" && since.Epoch != streamPosition.Epoch {
+		return MapStreamResult{}, ErrorUnrecoverablePosition
+	}
+
+	// Check if already up to date.
 	if !filter.Reverse {
-		if streamPosition.Offset == since.Offset && since.Epoch == streamPosition.Epoch {
+		if streamPosition.Offset == since.Offset {
 			return MapStreamResult{Position: streamPosition}, nil
 		}
 	}
@@ -585,23 +591,24 @@ func (c *mapCacheImpl) GetPosition(ch string) StreamPosition {
 }
 
 // ApplyPublication applies a publication to the cache.
-func (c *mapCacheImpl) ApplyPublication(ch string, pub *Publication, pos StreamPosition, removed bool) error {
+func (c *mapCacheImpl) ApplyPublication(ch string, pub *Publication, pos StreamPosition, removed bool) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.applyPublicationLocked(ch, pub, pos, removed)
 }
 
 // applyPublicationLocked applies a publication while holding the lock.
-func (c *mapCacheImpl) applyPublicationLocked(ch string, pub *Publication, pos StreamPosition, removed bool) error {
+// Returns true if the publication was actually applied (not skipped as duplicate).
+func (c *mapCacheImpl) applyPublicationLocked(ch string, pub *Publication, pos StreamPosition, removed bool) (bool, error) {
 	channel, ok := c.channels[ch]
 	if !ok {
 		// Channel not loaded, nothing to update
-		return nil
+		return false, nil
 	}
 
 	// Skip if this offset was already applied (prevents duplicates from concurrent paths)
 	if pub.Offset <= channel.position.Offset {
-		return nil
+		return false, nil
 	}
 
 	// Update position
@@ -647,7 +654,7 @@ func (c *mapCacheImpl) applyPublicationLocked(ch string, pub *Publication, pos S
 
 	c.lastAccess[ch] = time.Now()
 
-	return nil
+	return true, nil
 }
 
 // PopulateStream populates the stream with initial data from backend.

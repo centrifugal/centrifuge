@@ -278,11 +278,8 @@ type MapReadStateOptions struct {
 	// Limit is the maximum number of entries to return per page.
 	Limit int
 
-	// Offset skips entries in the result (alternative to cursor pagination).
-	Offset int
-
-	// StateTTL extends the state metadata TTL when reading.
-	StateTTL time.Duration
+	// MetaTTL extends the state metadata TTL when reading.
+	MetaTTL time.Duration
 
 	// Key filters to a single entry by exact key match.
 	// When set, returns at most one publication (or empty if key not found).

@@ -379,12 +379,11 @@ if state_hash_key ~= '' and is_leave ~= "1" then
     if state_meta_key ~= '' then
         redis.call("hset", state_meta_key, "epoch", current_epoch)
         redis.call("hset", state_meta_key, "updated_at", tostring(now))
-        -- Snapshot meta should persist as long as stream meta (meta_expire)
-        -- Using keyed_member_ttl was wrong - it's too short for presence (30s)
+        -- State meta should persist as long as stream meta (meta_expire).
+        -- Do NOT fall back to keyed_member_ttl - it's per-key TTL (e.g. 30s for
+        -- presence) which is too short and causes premature epoch invalidation.
         if meta_expire ~= '0' then
             redis.call("expire", state_meta_key, tonumber(meta_expire))
-        elseif tonumber(keyed_member_ttl) > 0 then
-            redis.call("expire", state_meta_key, tonumber(keyed_member_ttl))
         end
     end
 end
@@ -392,42 +391,12 @@ end
 -- ==== Step 6: Update append log (if stream keys provided) ====
 if stream_key ~= '' and meta_key ~= '' then
     if top_offset == 1 then
-        -- Offset is 1 - could be first message ever OR epoch change
-        -- Only clear if there's old data from a DIFFERENT epoch
-        local should_clear = false
-        if state_meta_key ~= '' then
-            local old_epoch = redis.call("hget", state_meta_key, "epoch")
-            if old_epoch and old_epoch ~= current_epoch then
-                -- Epoch changed - old state exists from different epoch
-                should_clear = true
-            end
-        end
-
-        -- Delete the existing stream (always on offset 1)
+        -- Offset is 1 - delete existing stream to start fresh.
+        -- State clearing on epoch change is already handled in Step 5.
         redis.call("del", stream_key)
-
-        if should_clear then
-            -- Clear state data from previous epoch
-            if state_hash_key ~= '' then
-                redis.call("del", state_hash_key)
-            end
-            if state_order_key ~= '' then
-                redis.call("del", state_order_key)
-            end
-            if state_expire_key ~= '' then
-                redis.call("del", state_expire_key)
-            end
-            if state_meta_key ~= '' then
-                redis.call("del", state_meta_key)
-            end
-            -- Remove channel from cleanup registration (no entries left after epoch change)
-            if cleanup_registration_key ~= '' and channel_for_cleanup ~= '' then
-                redis.call("zrem", cleanup_registration_key, channel_for_cleanup)
-            end
-        end
     end
 
-    local xadd_args = { stream_key, "MAXLEN", stream_size, top_offset, "e", current_epoch, "d", message_payload }
+    local xadd_args = { stream_key, "MAXLEN", "~", stream_size, top_offset, "e", current_epoch, "d", message_payload }
     redis.call("xadd", unpack(xadd_args))
     if tonumber(stream_ttl) > 0 then
         redis.call("expire", stream_key, tonumber(stream_ttl))

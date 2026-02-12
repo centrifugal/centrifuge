@@ -185,7 +185,11 @@ func (h *cachedEventHandler) HandlePublication(ch string, pub *Publication, sp S
 			}
 
 			// Now apply the incoming publication
-			_ = h.cache.ApplyPublication(ch, pub, sp, pub.Removed)
+			_, _ = h.cache.ApplyPublication(ch, pub, sp, pub.Removed)
+
+			// Update sync offset so syncChannel doesn't re-fetch publications
+			// already delivered via pub/sub, avoiding duplicate delivery.
+			h.broker.updateSyncOffset(ch, pub.Offset)
 		})
 	}
 	// Forward to original handler
@@ -217,7 +221,7 @@ func (h *cachedEventHandler) fillGap(ch string, cachedPos StreamPosition, incomi
 	// Apply missing publications in order
 	for _, m := range missingResult.Publications {
 		pubPos := StreamPosition{Offset: m.Offset, Epoch: epoch}
-		_ = h.cache.ApplyPublication(ch, m, pubPos, m.Removed)
+		_, _ = h.cache.ApplyPublication(ch, m, pubPos, m.Removed)
 	}
 }
 
@@ -321,10 +325,16 @@ func (e *CachedMapBroker) Subscribe(ch string) error {
 	}
 
 	// Preload cache - this ensures cache is populated before first read
-	// and HandlePublication can update it for real-time changes
+	// and HandlePublication can update it for real-time changes.
 	ctx, cancel := context.WithTimeout(context.Background(), e.conf.LoadTimeout)
 	defer cancel()
-	_ = e.ensureLoaded(ctx, ch)
+	if err := e.ensureLoaded(ctx, ch); err != nil {
+		// Cache load failed — unsubscribe from pub/sub to avoid a state where
+		// pub/sub is active but cache is empty (publications would be dropped).
+		_ = e.backend.Unsubscribe(ch)
+		e.cache.ClearLoading(ch)
+		return err
+	}
 	return nil
 }
 
@@ -531,6 +541,11 @@ func (e *CachedMapBroker) runSyncLoop() {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
+	// Less frequent cleanup of stale per-channel state (locks, sync state)
+	// for channels evicted from cache by LRU or idle timeout.
+	cleanupTicker := time.NewTicker(time.Minute)
+	defer cleanupTicker.Stop()
+
 	for {
 		select {
 		case <-e.closeCh:
@@ -541,8 +556,43 @@ func (e *CachedMapBroker) runSyncLoop() {
 			return
 		case <-ticker.C:
 			e.dispatchDueSyncs()
+		case <-cleanupTicker.C:
+			e.cleanupStaleChannelState()
 		}
 	}
+}
+
+// cleanupStaleChannelState removes per-channel locks and sync state
+// for channels no longer in cache (evicted by LRU or idle timeout).
+func (e *CachedMapBroker) cleanupStaleChannelState() {
+	loaded := make(map[string]struct{})
+	for _, ch := range e.cache.LoadedChannels() {
+		loaded[ch] = struct{}{}
+	}
+
+	e.channelLocksMu.Lock()
+	for ch := range e.channelLocks {
+		if _, ok := loaded[ch]; !ok {
+			delete(e.channelLocks, ch)
+		}
+	}
+	e.channelLocksMu.Unlock()
+
+	e.syncStateMu.Lock()
+	for ch := range e.syncState {
+		if _, ok := loaded[ch]; !ok {
+			delete(e.syncState, ch)
+		}
+	}
+	e.syncStateMu.Unlock()
+
+	e.streamInitializedMu.Lock()
+	for ch := range e.streamInitialized {
+		if _, ok := loaded[ch]; !ok {
+			delete(e.streamInitialized, ch)
+		}
+	}
+	e.streamInitializedMu.Unlock()
 }
 
 // dispatchDueSyncs finds channels due for sync and dispatches them.
@@ -667,11 +717,11 @@ func (e *CachedMapBroker) syncChannel(ch string) {
 	for _, pub := range syncResult.Publications {
 		// Use publication's own offset for position, preserving epoch from stream position
 		pubPos := StreamPosition{Offset: pub.Offset, Epoch: syncResult.Position.Epoch}
-		_ = e.cache.ApplyPublication(ch, pub, pubPos, pub.Removed)
+		applied, _ := e.cache.ApplyPublication(ch, pub, pubPos, pub.Removed)
 
-		// Deliver to subscribers - this handles publications that were missed
-		// because this node wasn't subscribed to pub/sub when they were published.
-		if e.eventHandler != nil {
+		// Only deliver to subscribers if the publication was actually applied.
+		// If skipped (already applied by pub/sub), avoid duplicate delivery.
+		if applied && e.eventHandler != nil {
 			_ = e.eventHandler.HandlePublication(ch, pub, pubPos, false, nil)
 		}
 	}
