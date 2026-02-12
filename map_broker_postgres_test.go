@@ -158,6 +158,14 @@ func TestPostgresMapBroker_StatefulChannel(t *testing.T) {
 // TestPostgresMapBroker_StatefulChannelOrdered tests ordered stateful channel.
 func TestPostgresMapBroker_StatefulChannelOrdered(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -167,7 +175,6 @@ func TestPostgresMapBroker_StatefulChannelOrdered(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
 			Data:       []byte(fmt.Sprintf("data%d", i)),
-			Ordered:    true,
 			Score:      int64(i * 10), // Scores: 0, 10, 20, 30, 40
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -178,7 +185,6 @@ func TestPostgresMapBroker_StatefulChannelOrdered(t *testing.T) {
 
 	// Read ordered state (descending by score)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   100,
 		MetaTTL: 300 * time.Second,
 	})

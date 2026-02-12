@@ -283,10 +283,9 @@ func (c *Client) handleMapStatePhase(
 	}
 
 	opts := MapReadStateOptions{
-		Cached:  true, // Use cache for subscription state delivery
-		Cursor:  req.Cursor,
-		Limit:   limit,
-		Ordered: req.Ordered,
+		Cached: true, // Use cache for subscription state delivery
+		Cursor: req.Cursor,
+		Limit:  limit,
 	}
 
 	// If client provided position, validate epoch.

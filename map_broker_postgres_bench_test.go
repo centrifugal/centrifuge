@@ -38,6 +38,38 @@ func setupPostgresMapBrokerBench(b *testing.B) (*PostgresMapBroker, func()) {
 	}
 }
 
+func setupPostgresMapBrokerBenchOrdered(b *testing.B) (*PostgresMapBroker, func()) {
+	b.Helper()
+
+	connString := getPostgresConnString(b)
+
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Ordered: true,
+		}
+	}
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	_ = broker.RegisterEventHandler(nil)
+
+	// Clean up tables
+	ctx := context.Background()
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'bench_%'")
+
+	return broker, func() {
+		_ = broker.Close(context.Background())
+		_ = node.Shutdown(context.Background())
+	}
+}
+
 // BenchmarkPostgresMapBroker_PublishStreamOnly benchmarks publishing to stream.
 func BenchmarkPostgresMapBroker_PublishStreamOnly(b *testing.B) {
 	broker, cleanup := setupPostgresMapBrokerBench(b)
@@ -98,7 +130,7 @@ func BenchmarkPostgresMapBroker_PublishMapStateSimple(b *testing.B) {
 
 // BenchmarkPostgresMapBroker_PublishMapStateOrdered benchmarks ordered keyed state.
 func BenchmarkPostgresMapBroker_PublishMapStateOrdered(b *testing.B) {
-	broker, cleanup := setupPostgresMapBrokerBench(b)
+	broker, cleanup := setupPostgresMapBrokerBenchOrdered(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -115,7 +147,6 @@ func BenchmarkPostgresMapBroker_PublishMapStateOrdered(b *testing.B) {
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 				Data:       data,
-				Ordered:    true,
 				Score:      i,
 				StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
 				StreamTTL:  300 * time.Second,
@@ -281,7 +312,7 @@ func BenchmarkPostgresMapBroker_ReadStatePaginated(b *testing.B) {
 
 // BenchmarkPostgresMapBroker_ReadStateOrdered benchmarks reading ordered state.
 func BenchmarkPostgresMapBroker_ReadStateOrdered(b *testing.B) {
-	broker, cleanup := setupPostgresMapBrokerBench(b)
+	broker, cleanup := setupPostgresMapBrokerBenchOrdered(b)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -293,7 +324,6 @@ func BenchmarkPostgresMapBroker_ReadStateOrdered(b *testing.B) {
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       data,
-			Ordered:    true,
 			Score:      int64(i),
 			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
 			StreamTTL:  300 * time.Second,
@@ -310,7 +340,6 @@ func BenchmarkPostgresMapBroker_ReadStateOrdered(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-				Ordered: true,
 				Limit:   100,
 				MetaTTL: 300 * time.Second,
 			})

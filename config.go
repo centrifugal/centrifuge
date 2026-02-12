@@ -16,6 +16,10 @@ type MapChannelOptions struct {
 	StreamTTL time.Duration
 	// KeyTTL is the default TTL for keys in the channel.
 	KeyTTL time.Duration
+	// Ordered enables score-based ordering in the state. When true, entries
+	// are returned sorted by Score (descending) instead of by key.
+	// Use for leaderboards, priority queues, and sorted collections.
+	Ordered bool
 }
 
 // MapChannelOptionsResolver returns channel options for a channel.

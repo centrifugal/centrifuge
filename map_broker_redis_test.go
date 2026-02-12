@@ -160,7 +160,17 @@ func TestRedisMapBroker_StatefulChannel(t *testing.T) {
 
 // TestRedisMapBroker_StatefulChannelOrdered tests ordered stateful channel.
 func TestRedisMapBroker_StatefulChannelOrdered(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		},
+	})
 	broker := newTestRedisMapBroker(t, node)
 
 	ctx := context.Background()
@@ -170,7 +180,6 @@ func TestRedisMapBroker_StatefulChannelOrdered(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
 			Data:       []byte(fmt.Sprintf("data%d", i)),
-			Ordered:    true,
 			Score:      int64(i * 10), // Scores: 0, 10, 20, 30, 40
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -181,7 +190,6 @@ func TestRedisMapBroker_StatefulChannelOrdered(t *testing.T) {
 
 	// Read ordered state (descending by score)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   100,
 		MetaTTL: 300 * time.Second,
 	})
@@ -1121,7 +1129,17 @@ func TestRedisMapBroker_CleanupRegistration(t *testing.T) {
 // TestRedisMapBroker_OrderedStateOrdering tests that ordered  state return entries
 // in correct score order (ascending by score).
 func TestRedisMapBroker_OrderedStateOrdering(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		},
+	})
 	broker := newTestRedisMapBroker(t, node)
 
 	ctx := context.Background()
@@ -1143,7 +1161,6 @@ func TestRedisMapBroker_OrderedStateOrdering(t *testing.T) {
 	for _, tc := range testCases {
 		_, err := broker.Publish(ctx, channel, tc.key, MapPublishOptions{
 			Data:       []byte(tc.data),
-			Ordered:    true,
 			Score:      tc.score,
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -1154,7 +1171,6 @@ func TestRedisMapBroker_OrderedStateOrdering(t *testing.T) {
 
 	// Read ordered state - should be sorted by score (ascending)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   100,
 		MetaTTL: 300 * time.Second,
 	})
@@ -1174,7 +1190,17 @@ func TestRedisMapBroker_OrderedStateOrdering(t *testing.T) {
 // TestRedisMapBroker_OrderedStatePagination tests that pagination over ordered state
 // maintains correct ordering across pages.
 func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		},
+	})
 	broker := newTestRedisMapBroker(t, node)
 
 	ctx := context.Background()
@@ -1188,7 +1214,6 @@ func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
 
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       []byte(data),
-			Ordered:    true,
 			Score:      score,
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -1199,7 +1224,6 @@ func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
 
 	// Read first page (limit=5, no cursor)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   5,
 		MetaTTL: 300 * time.Second,
 	})
@@ -1216,7 +1240,6 @@ func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
 
 	// Read second page (using cursor)
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Cursor:  cursor1,
 		Limit:   5,
 		MetaTTL: 300 * time.Second,
@@ -1234,7 +1257,6 @@ func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
 
 	// Read third page (using cursor)
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Cursor:  cursor2,
 		Limit:   5,
 		MetaTTL: 300 * time.Second,
@@ -1251,7 +1273,6 @@ func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
 
 	// Read fourth page (using cursor)
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Cursor:  cursor3,
 		Limit:   5,
 		MetaTTL: 300 * time.Second,
@@ -1288,7 +1309,17 @@ func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
 
 // TestRedisMapBroker_OrderedStateWithNegativeScores tests ordering with negative scores.
 func TestRedisMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		},
+	})
 	broker := newTestRedisMapBroker(t, node)
 
 	ctx := context.Background()
@@ -1309,7 +1340,6 @@ func TestRedisMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 	for _, tc := range testCases {
 		_, err := broker.Publish(ctx, channel, tc.key, MapPublishOptions{
 			Data:       []byte("data"),
-			Ordered:    true,
 			Score:      tc.score,
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -1320,7 +1350,6 @@ func TestRedisMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 
 	// Read ordered state
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   100,
 		MetaTTL: 300 * time.Second,
 	})
@@ -1339,7 +1368,17 @@ func TestRedisMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 
 // TestRedisMapBroker_OrderedStateWithSameScores tests ordering stability when scores are equal.
 func TestRedisMapBroker_OrderedStateWithSameScores(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		},
+	})
 	broker := newTestRedisMapBroker(t, node)
 
 	ctx := context.Background()
@@ -1351,7 +1390,6 @@ func TestRedisMapBroker_OrderedStateWithSameScores(t *testing.T) {
 		key := fmt.Sprintf("key_%d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       []byte(fmt.Sprintf("data_%d", i)),
-			Ordered:    true,
 			Score:      100, // Same score for all
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -1362,7 +1400,6 @@ func TestRedisMapBroker_OrderedStateWithSameScores(t *testing.T) {
 
 	// Read ordered state
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   100,
 		MetaTTL: 300 * time.Second,
 	})
@@ -1382,7 +1419,17 @@ func TestRedisMapBroker_OrderedStateWithSameScores(t *testing.T) {
 
 // TestRedisMapBroker_OrderedStatePaginationBoundaries tests edge cases in cursor-based pagination.
 func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		},
+	})
 	broker := newTestRedisMapBroker(t, node)
 
 	ctx := context.Background()
@@ -1392,7 +1439,6 @@ func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
 	for i := 1; i <= 10; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key_%02d", i), MapPublishOptions{
 			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Ordered:    true,
 			Score:      int64(i * 10),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -1403,7 +1449,6 @@ func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
 
 	// Test 1: Zero limit (should return all)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   0,
 		MetaTTL: 300 * time.Second,
 	})
@@ -1414,7 +1459,6 @@ func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
 
 	// Test 2: Limit larger than entries (should return all)
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   100,
 		MetaTTL: 300 * time.Second,
 	})
@@ -1425,7 +1469,6 @@ func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
 
 	// Test 3: Pagination with limit=3 through all entries
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   3,
 		MetaTTL: 300 * time.Second,
 	})
@@ -1436,7 +1479,6 @@ func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
 
 	// Continue to get remaining entries
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   3,
 		Cursor:  c1,
 		MetaTTL: 300 * time.Second,
@@ -1447,7 +1489,6 @@ func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
 	require.NotEmpty(t, c2)
 
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   3,
 		Cursor:  c2,
 		MetaTTL: 300 * time.Second,
@@ -1459,7 +1500,6 @@ func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
 
 	// Last page should have 1 entry
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   3,
 		Cursor:  c3,
 		MetaTTL: 300 * time.Second,
@@ -1482,7 +1522,17 @@ func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
 
 // TestRedisMapBroker_OrderedStateFullPagination tests complete cursor-based pagination loop.
 func TestRedisMapBroker_OrderedStateFullPagination(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		},
+	})
 	broker := newTestRedisMapBroker(t, node)
 
 	ctx := context.Background()
@@ -1495,7 +1545,6 @@ func TestRedisMapBroker_OrderedStateFullPagination(t *testing.T) {
 	for i := 1; i <= totalEntries; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key_%03d", i), MapPublishOptions{
 			Data:       []byte(fmt.Sprintf("data_%03d", i)),
-			Ordered:    true,
 			Score:      int64(i * 10),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -1511,7 +1560,6 @@ func TestRedisMapBroker_OrderedStateFullPagination(t *testing.T) {
 
 	for {
 		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-			Ordered: true,
 			Cursor:  cursor,
 			Limit:   pageSize,
 			MetaTTL: 300 * time.Second,
@@ -1551,7 +1599,17 @@ func TestRedisMapBroker_OrderedStateFullPagination(t *testing.T) {
 // TestRedisMapBroker_OrderedStateUpdatePreservesOrder tests that updating an entry's score
 // changes its position in the ordered state.
 func TestRedisMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		},
+	})
 	broker := newTestRedisMapBroker(t, node)
 
 	ctx := context.Background()
@@ -1561,7 +1619,6 @@ func TestRedisMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 	for i := 1; i <= 5; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key_%d", i), MapPublishOptions{
 			Data:       []byte(fmt.Sprintf("data_%d", i)),
-			Ordered:    true,
 			Score:      int64(i * 10), // 10, 20, 30, 40, 50
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -1572,7 +1629,6 @@ func TestRedisMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 
 	// Read initial order (descending: 50, 40, 30, 20, 10)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   100,
 		MetaTTL: 300 * time.Second,
 	})
@@ -1584,7 +1640,6 @@ func TestRedisMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 	// Update key_1 to have highest score (60)
 	_, err = broker.Publish(ctx, channel, "key_1", MapPublishOptions{
 		Data:       []byte("updated_data"),
-		Ordered:    true,
 		Score:      60, // Now highest
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -1594,7 +1649,6 @@ func TestRedisMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 
 	// Read updated order
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   100,
 		MetaTTL: 300 * time.Second,
 	})
@@ -1922,7 +1976,17 @@ func TestRedisMapBroker_UnorderedContinuity_EntryAdded(t *testing.T) {
 // TestRedisMapBroker_OrderedContinuity_HigherScoreAdded tests that adding
 // an entry with higher score during ordered pagination doesn't cause data loss.
 func TestRedisMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		},
+	})
 	broker := newTestRedisMapBroker(t, node)
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_continuity_higher")
@@ -1932,7 +1996,6 @@ func TestRedisMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -1943,7 +2006,6 @@ func TestRedisMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 
 	// Read first page (should get keys with highest scores: key_20, key_19, ..., key_11)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   10,
 		MetaTTL: 300 * time.Second,
 	})
@@ -1959,7 +2021,6 @@ func TestRedisMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	// This entry would appear at position 0, shifting all entries
 	_, err = broker.Publish(ctx, channel, "key_top", MapPublishOptions{
 		Data:       []byte("data_top"),
-		Ordered:    true,
 		Score:      5000, // Higher than any existing
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -1985,7 +2046,17 @@ func TestRedisMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 // TestRedisMapBroker_OrderedContinuity_LowerScoreAdded tests that adding
 // an entry with lower score during ordered pagination works correctly.
 func TestRedisMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		},
+	})
 	broker := newTestRedisMapBroker(t, node)
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_continuity_lower")
@@ -1995,7 +2066,6 @@ func TestRedisMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -2006,7 +2076,6 @@ func TestRedisMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 
 	// Read first page
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   10,
 		MetaTTL: 300 * time.Second,
 	})
@@ -2017,7 +2086,6 @@ func TestRedisMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	// This entry appears at end, shouldn't affect pagination much
 	_, err = broker.Publish(ctx, channel, "key_bottom", MapPublishOptions{
 		Data:       []byte("data_bottom"),
-		Ordered:    true,
 		Score:      1, // Lower than any existing
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -2027,7 +2095,6 @@ func TestRedisMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 
 	// Continue reading with cursor - just verify it works
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   10,
 		Cursor:  cursor1,
 		MetaTTL: 300 * time.Second,
@@ -2046,7 +2113,17 @@ func TestRedisMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 // TestRedisMapBroker_OrderedContinuity_ScoreChanged tests that changing
 // an entry's score during pagination (causing reordering) doesn't lose data.
 func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		},
+	})
 	broker := newTestRedisMapBroker(t, node)
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_continuity_score_change")
@@ -2056,7 +2133,6 @@ func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -2067,7 +2143,6 @@ func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 
 	// Read first page (key_20 down to key_11)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   10,
 		MetaTTL: 300 * time.Second,
 	})
@@ -2080,7 +2155,6 @@ func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	// This entry was NOT in first page, but now would appear at position 0
 	_, err = broker.Publish(ctx, channel, "key_05", MapPublishOptions{
 		Data:       []byte("data_05_updated"),
-		Ordered:    true,
 		Score:      3000,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -2090,7 +2164,6 @@ func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 
 	// Read second page - key_05 jumped out of this range
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   10,
 		Cursor:  cursor1,
 		MetaTTL: 300 * time.Second,
@@ -2136,7 +2209,17 @@ func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 // TestRedisMapBroker_OrderedContinuity_EntryRemoved tests that removing
 // an entry during ordered pagination doesn't cause data loss.
 func TestRedisMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		},
+	})
 	broker := newTestRedisMapBroker(t, node)
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_continuity_remove")
@@ -2146,7 +2229,6 @@ func TestRedisMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -2157,7 +2239,6 @@ func TestRedisMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 
 	// Read first page (key_20 down to key_11)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   10,
 		MetaTTL: 300 * time.Second,
 	})
@@ -2183,7 +2264,6 @@ func TestRedisMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 	cursor := cursor1
 	for cursor != "" {
 		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-			Ordered: true,
 			Limit:   10,
 			Cursor:  cursor,
 			MetaTTL: 300 * time.Second,
@@ -2226,7 +2306,17 @@ func TestRedisMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 // TestRedisMapBroker_OrderedContinuity_MultipleChanges tests recovery
 // with multiple concurrent changes during pagination.
 func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		},
+	})
 	broker := newTestRedisMapBroker(t, node)
 	ctx := context.Background()
 	channel := randomChannel("test_ordered_continuity_multi")
@@ -2236,7 +2326,6 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
@@ -2247,7 +2336,6 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 
 	// Read first page
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   10,
 		MetaTTL: 300 * time.Second,
 	})
@@ -2258,7 +2346,6 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	// 1. Add new highest score entry
 	_, err = broker.Publish(ctx, channel, "key_new_top", MapPublishOptions{
 		Data:       []byte("data_new_top"),
-		Ordered:    true,
 		Score:      5000,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -2277,7 +2364,6 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	// 3. Update score of an entry (move it)
 	_, err = broker.Publish(ctx, channel, "key_05", MapPublishOptions{
 		Data:       []byte("data_05_moved"),
-		Ordered:    true,
 		Score:      4000, // Move from 500 to 4000
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -2287,7 +2373,6 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 
 	// Read second page
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Ordered: true,
 		Limit:   10,
 		Cursor:  cursor1,
 		MetaTTL: 300 * time.Second,
@@ -2298,7 +2383,6 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	// 4. Add new lowest score entry
 	_, err = broker.Publish(ctx, channel, "key_new_bottom", MapPublishOptions{
 		Data:       []byte("data_new_bottom"),
-		Ordered:    true,
 		Score:      1,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -2310,7 +2394,6 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	cursor := cursor2
 	for cursor != "" {
 		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-			Ordered: true,
 			Limit:   10,
 			Cursor:  cursor,
 			MetaTTL: 300 * time.Second,

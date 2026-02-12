@@ -79,8 +79,20 @@ func BenchmarkRedisMapBroker_PublishMapStateSimple(b *testing.B) {
 
 // BenchmarkRedisMapBroker_PublishMapStateOrdered benchmarks ordered keyed state (HASH+ZSET).
 func BenchmarkRedisMapBroker_PublishMapStateOrdered(b *testing.B) {
-	broker, cleanup := setupMapBrokerBench(b)
-	defer cleanup()
+	b.Helper()
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 10000,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     300 * time.Second,
+			}
+		},
+	})
+	broker := newTestRedisMapBroker(b, node)
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	ctx := context.Background()
 	channel := randomChannel("bench_map_ordered")
@@ -96,7 +108,6 @@ func BenchmarkRedisMapBroker_PublishMapStateOrdered(b *testing.B) {
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 				Data:       data,
-				Ordered:    true,
 				Score:      i,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
@@ -262,8 +273,20 @@ func BenchmarkRedisMapBroker_ReadStatePaginated(b *testing.B) {
 
 // BenchmarkRedisMapBroker_ReadStateOrdered benchmarks reading ordered state.
 func BenchmarkRedisMapBroker_ReadStateOrdered(b *testing.B) {
-	broker, cleanup := setupMapBrokerBench(b)
-	defer cleanup()
+	b.Helper()
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 10000,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     300 * time.Second,
+			}
+		},
+	})
+	broker := newTestRedisMapBroker(b, node)
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	ctx := context.Background()
 	channel := randomChannel("bench_read_state_ordered")
@@ -274,7 +297,6 @@ func BenchmarkRedisMapBroker_ReadStateOrdered(b *testing.B) {
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       data,
-			Ordered:    true,
 			Score:      int64(i),
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
@@ -291,7 +313,6 @@ func BenchmarkRedisMapBroker_ReadStateOrdered(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-				Ordered: true,
 				Limit:   100,
 				MetaTTL: 300 * time.Second,
 			})

@@ -1894,8 +1894,6 @@ func (n *Node) mapStateKey(ch string, opts MapReadStateOptions) string {
 	builder.WriteString(opts.Cursor)
 	builder.WriteString(",limit:")
 	builder.WriteString(strconv.Itoa(opts.Limit))
-	builder.WriteString(",ordered:")
-	builder.WriteString(strconv.FormatBool(opts.Ordered))
 	builder.WriteString(",key:")
 	builder.WriteString(opts.Key)
 	if opts.Revision != nil {

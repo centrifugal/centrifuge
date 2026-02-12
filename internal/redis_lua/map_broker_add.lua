@@ -189,7 +189,7 @@ if meta_key ~= '' then
     end
 
     -- ==== Step 2c: CAS position check (BEFORE incrementing offset) ====
-    if expected_offset ~= "" and expected_epoch ~= "" and message_key ~= "" and state_hash_key ~= "" and is_leave ~= "1" then
+    if expected_offset ~= "" and expected_epoch ~= "" and message_key ~= "" and state_hash_key ~= "" then
         local current_value = redis.call("hget", state_hash_key, message_key)
 
         -- First check epoch matches current channel epoch

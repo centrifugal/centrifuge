@@ -78,8 +78,20 @@ func BenchmarkMemoryMapBroker_PublishMapStateSimple(b *testing.B) {
 
 // BenchmarkMemoryMapBroker_PublishMapStateOrdered benchmarks ordered keyed state.
 func BenchmarkMemoryMapBroker_PublishMapStateOrdered(b *testing.B) {
-	broker, cleanup := setupMemoryMapBrokerBench(b)
-	defer cleanup()
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Ordered:    true,
+			StreamSize: 10000,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker, _ := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	_ = broker.RegisterEventHandler(nil)
+	b.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+	})
 
 	ctx := context.Background()
 	channel := "bench_map_ordered"
@@ -95,7 +107,6 @@ func BenchmarkMemoryMapBroker_PublishMapStateOrdered(b *testing.B) {
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 				Data:       data,
-				Ordered:    true,
 				Score:      i,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
@@ -261,8 +272,20 @@ func BenchmarkMemoryMapBroker_ReadStatePaginated(b *testing.B) {
 
 // BenchmarkMemoryMapBroker_ReadStateOrdered benchmarks reading ordered state.
 func BenchmarkMemoryMapBroker_ReadStateOrdered(b *testing.B) {
-	broker, cleanup := setupMemoryMapBrokerBench(b)
-	defer cleanup()
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Ordered:    true,
+			StreamSize: 10000,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker, _ := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	_ = broker.RegisterEventHandler(nil)
+	b.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+	})
 
 	ctx := context.Background()
 	channel := "bench_read_state_ordered"
@@ -273,7 +296,6 @@ func BenchmarkMemoryMapBroker_ReadStateOrdered(b *testing.B) {
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:       data,
-			Ordered:    true,
 			Score:      int64(i),
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
@@ -290,7 +312,6 @@ func BenchmarkMemoryMapBroker_ReadStateOrdered(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-				Ordered: true,
 				Limit:   100,
 				MetaTTL: 300 * time.Second,
 			})

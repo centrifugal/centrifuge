@@ -497,7 +497,8 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 
 	// Prepare score
 	var score *int64
-	if opts.Ordered || opts.Score != 0 {
+	ordered := e.node.ResolveMapChannelOptions(ch).Ordered
+	if ordered || opts.Score != 0 {
 		score = &opts.Score
 	}
 
@@ -598,6 +599,13 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 	}, e.node.ResolveMapChannelOptions, ch)
 	opts.StreamSize, opts.StreamTTL, opts.MetaTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL
 
+	// Reject CAS in streamless mode.
+	if opts.StreamSize <= 0 || opts.StreamTTL <= 0 {
+		if opts.ExpectedPosition != nil {
+			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires stream (StreamSize > 0)")
+		}
+	}
+
 	// Prepare TTLs as interval strings.
 	// NULL = no TTL, > 0 = use as-is.
 	var streamTTL, metaTTL, idempotencyTTL *string
@@ -624,6 +632,13 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 		idempotencyKey = &opts.IdempotencyKey
 	}
 
+	// Prepare expected position for CAS
+	var expectedOffset *int64
+	if opts.ExpectedPosition != nil {
+		eo := int64(opts.ExpectedPosition.Offset)
+		expectedOffset = &eo
+	}
+
 	// Call cf_map_remove function
 	// p_skip_outbox = true when using WAL mode (outbox is skipped, WAL reader handles delivery)
 	// p_num_shards = Outbox.NumShards (for shard_id calculation)
@@ -635,16 +650,18 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 	var epoch string
 	var suppressed bool
 	var suppressReason *string
+	var currentData []byte
+	var currentOffset *int64
 
 	// Client info is not available in remove options
 	var clientID, userID *string
 	err := e.pool.QueryRow(ctx, `
-		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason
-		FROM cf_map_remove($1, $2, $3, $4, $5::interval, $6, $7::interval, $8::interval, $9, $10)
+		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset
+		FROM cf_map_remove($1, $2, $3, $4, $5::interval, $6, $7::interval, $8::interval, $9, $10, $11)
 	`,
 		ch, key, clientID, userID, streamTTL, idempotencyKey, idempotencyTTL, metaTTL,
-		skipOutbox, numShards,
-	).Scan(&id, &channelOffset, &epoch, &suppressed, &suppressReason)
+		skipOutbox, numShards, expectedOffset,
+	).Scan(&id, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset)
 
 	if err != nil {
 		return MapPublishResult{}, err
@@ -653,11 +670,19 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 	newPos := StreamPosition{Offset: uint64(channelOffset), Epoch: epoch}
 
 	if suppressed {
-		return MapPublishResult{
+		result := MapPublishResult{
 			Position:       newPos,
 			Suppressed:     true,
 			SuppressReason: parseSuppressReason(suppressReason),
-		}, nil
+		}
+		if suppressReason != nil && *suppressReason == "position_mismatch" && currentOffset != nil {
+			result.CurrentPublication = &Publication{
+				Offset: uint64(*currentOffset),
+				Key:    key,
+				Data:   currentData,
+			}
+		}
+		return result, nil
 	}
 
 	return MapPublishResult{Position: newPos}, nil
@@ -742,41 +767,58 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 		return MapStateResult{Publications: []*Publication{&p}, Position: streamPos}, nil
 	}
 
-	// Paginated state read.
-	var query string
-	if opts.Ordered {
-		query = `
-			SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
-			FROM cf_map_state
-			WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
-			ORDER BY score DESC, key
-			LIMIT $2 OFFSET $3
-		`
-	} else {
-		query = `
-			SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
-			FROM cf_map_state
-			WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
-			ORDER BY key
-			LIMIT $2 OFFSET $3
-		`
-	}
+	// Paginated state read using keyset pagination (no OFFSET).
+	ordered := e.node.ResolveMapChannelOptions(ch).Ordered
 
 	limit := opts.Limit
 	if limit <= 0 {
 		limit = 100
 	}
 
-	// Parse cursor as offset.
-	var offset int
-	if opts.Cursor != "" {
-		parsedOffset, err := strconv.Atoi(opts.Cursor)
-		if err == nil {
-			offset = parsedOffset
+	var rows pgx.Rows
+	if ordered {
+		// Ordered: sort by (score DESC, key DESC) to match memory/redis.
+		if opts.Cursor == "" {
+			rows, err = tx.Query(ctx, `
+				SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
+				FROM cf_map_state
+				WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
+				ORDER BY score DESC, key DESC
+				LIMIT $2
+			`, ch, limit+1)
+		} else {
+			// Parse cursor: "score\x00key"
+			cursorScore, cursorKey := parseOrderedCursor(opts.Cursor)
+			cursorScoreInt, _ := strconv.ParseInt(cursorScore, 10, 64)
+			rows, err = tx.Query(ctx, `
+				SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
+				FROM cf_map_state
+				WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
+				  AND (score < $3 OR (score = $3 AND key < $4))
+				ORDER BY score DESC, key DESC
+				LIMIT $2
+			`, ch, limit+1, cursorScoreInt, cursorKey)
+		}
+	} else {
+		// Unordered: sort by key ASC.
+		if opts.Cursor == "" {
+			rows, err = tx.Query(ctx, `
+				SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
+				FROM cf_map_state
+				WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
+				ORDER BY key
+				LIMIT $2
+			`, ch, limit+1)
+		} else {
+			rows, err = tx.Query(ctx, `
+				SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
+				FROM cf_map_state
+				WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW()) AND key > $3
+				ORDER BY key
+				LIMIT $2
+			`, ch, limit+1, opts.Cursor)
 		}
 	}
-
-	rows, err := tx.Query(ctx, query, ch, limit+1, offset)
 	if err != nil {
 		return MapStateResult{}, err
 	}
@@ -814,7 +856,12 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 	var nextCursor string
 	if len(pubs) > limit {
 		pubs = pubs[:limit]
-		nextCursor = strconv.Itoa(offset + limit)
+		lastPub := pubs[limit-1]
+		if ordered {
+			nextCursor = makeOrderedCursor(strconv.FormatInt(lastPub.Score, 10), lastPub.Key)
+		} else {
+			nextCursor = lastPub.Key
+		}
 	}
 
 	return MapStateResult{Publications: pubs, Position: streamPos, Cursor: nextCursor}, nil
@@ -1478,9 +1525,11 @@ func (e *PostgresMapBroker) runTTLExpirationWorker() {
 
 func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 	// Find expired keys (don't delete yet - let Remove handle deletion).
+	// Limit batch size to avoid large result sets during mass expiration.
 	rows, err := e.pool.Query(ctx, `
 		SELECT channel, key FROM cf_map_state
 		WHERE expires_at IS NOT NULL AND expires_at <= NOW()
+		LIMIT 1000
 	`)
 	if err != nil {
 		return

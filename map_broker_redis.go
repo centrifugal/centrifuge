@@ -633,6 +633,8 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		metaKey = e.metaKey(s.shard, ch)
 	}
 
+	ordered := e.node.ResolveMapChannelOptions(ch).Ordered
+
 	if key != "" {
 		stateHashKey = e.stateHashKey(s.shard, ch)
 		if !streamless {
@@ -640,7 +642,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 			// In streamless mode, skip it to prevent multi-node epoch mismatch clearing state.
 			stateMetaKey = e.stateMetaKey(s.shard, ch)
 		}
-		if opts.Ordered {
+		if ordered {
 			stateOrderKey = e.stateOrderKey(s.shard, ch)
 		}
 		stateExpireKey = e.stateExpireKey(s.shard, ch)
@@ -776,6 +778,13 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 	}, e.node.ResolveMapChannelOptions, ch)
 	opts.StreamSize, opts.StreamTTL, opts.MetaTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL
 
+	// Reject CAS in streamless mode.
+	if opts.StreamSize <= 0 || opts.StreamTTL <= 0 {
+		if opts.ExpectedPosition != nil {
+			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires stream (StreamSize > 0)")
+		}
+	}
+
 	var streamKey, metaKey string
 	if opts.StreamSize > 0 && opts.StreamTTL > 0 {
 		streamKey = e.streamKey(s.shard, ch)
@@ -827,6 +836,14 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 		}
 	}
 
+	// Prepare ExpectedPosition arguments for CAS
+	expectedOffset := ""
+	expectedEpoch := ""
+	if opts.ExpectedPosition != nil {
+		expectedOffset = strconv.FormatUint(opts.ExpectedPosition.Offset, 10)
+		expectedEpoch = opts.ExpectedPosition.Epoch
+	}
+
 	// Compute slot-aligned nil key for unused KEYS in cluster mode (see Publish for details).
 	nilKey := ""
 	stateOrderKey := ""
@@ -872,10 +889,10 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 			"0",    // use_hexpire
 			"",     // channel_for_cleanup (not used for unpublish)
 			"",     // key_mode (not used for unpublish)
-			"0",    // refresh_ttl_on_suppress (not used for unpublish)
-			"",     // expected_offset (not used for unpublish)
-			"",     // expected_epoch (not used for unpublish)
-			"",     // state_payload (not used for unpublish)
+			"0",              // refresh_ttl_on_suppress (not used for unpublish)
+			expectedOffset,   // expected_offset (for CAS)
+			expectedEpoch,    // expected_epoch (for CAS)
+			"",               // state_payload (not used for unpublish)
 			nilKey, // nil_key (slot-aligned placeholder for unused KEYS)
 		},
 	).ToArray()
@@ -896,7 +913,7 @@ func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadS
 	if opts.Key != "" {
 		return e.readSingleKey(ctx, ch, opts)
 	}
-	if opts.Ordered {
+	if e.node.ResolveMapChannelOptions(ch).Ordered {
 		return e.readOrderedState(ctx, ch, opts)
 	}
 	return e.readUnorderedState(ctx, ch, opts)
@@ -907,7 +924,7 @@ func (e *RedisMapBroker) ReadStateZero(ctx context.Context, ch string, opts MapR
 	if opts.Key != "" {
 		return e.readSingleKey(ctx, ch, opts)
 	}
-	if opts.Ordered {
+	if e.node.ResolveMapChannelOptions(ch).Ordered {
 		return e.readOrderedState(ctx, ch, opts)
 	}
 	return e.readUnorderedStateZero(ctx, ch, opts)
@@ -1039,8 +1056,8 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 			cursor,
 			strconv.Itoa(opts.Limit),
 			strconv.FormatInt(time.Now().Unix(), 10),
-			stateTTL,
 			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10),
+			stateTTL,
 			streamlessFlag,
 		},
 	).ToArray()
@@ -1344,20 +1361,6 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 	return MapStateResult{Publications: pubs, Position: streamPos, Cursor: cursor}, nil
 }
 
-// makeOrderedCursor creates a cursor for ordered state: "score\x00key"
-func makeOrderedCursor(score, key string) string {
-	return score + "\x00" + key
-}
-
-// parseOrderedCursor parses an ordered cursor into score and key strings.
-func parseOrderedCursor(cursor string) (string, string) {
-	for i := 0; i < len(cursor); i++ {
-		if cursor[i] == '\x00' {
-			return cursor[:i], cursor[i+1:]
-		}
-	}
-	return "", ""
-}
 
 func (e *RedisMapBroker) ReadStreamZero(
 	ctx context.Context,

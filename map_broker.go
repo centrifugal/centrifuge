@@ -2,6 +2,8 @@ package centrifuge
 
 import (
 	"context"
+	"sort"
+	"strconv"
 	"time"
 )
 
@@ -181,6 +183,8 @@ type MapPublishOptions struct {
 	ClientInfo *ClientInfo
 	// UseDelta enables delta compression. When true, only the difference from
 	// the previous value is stored/sent (requires client support).
+	// Note: delta is automatically disabled when StreamData is set, because
+	// StreamData provides explicit incremental data, making delta redundant.
 	UseDelta bool
 
 	// Version enables optimistic concurrency control. If set, the publish only
@@ -190,10 +194,8 @@ type MapPublishOptions struct {
 	// VersionEpoch scopes the Version. Different epochs reset version comparison.
 	VersionEpoch string
 
-	// Ordered enables score-based ordering in the state. When true, entries
-	// are returned sorted by Score (descending) instead of insertion order.
-	Ordered bool
-	// Score is the sort value when Ordered=true. Higher scores appear first.
+	// Score is the sort value when Ordered=true (configured in MapChannelOptions).
+	// Higher scores appear first.
 	// Use for leaderboards, priority queues, and sorted collections.
 	Score int64
 
@@ -231,6 +233,11 @@ type MapRemoveOptions struct {
 	// MetaTTL sets how long stream metadata is retained.
 	// Zero value means using default from MapChannelOptionsResolver.
 	MetaTTL time.Duration
+
+	// ExpectedPosition enables Compare-And-Swap semantics for removal.
+	// If set, remove only succeeds if the key's current position (offset+epoch) matches.
+	// Returns Suppressed=true with SuppressReasonPositionMismatch on mismatch.
+	ExpectedPosition *StreamPosition
 }
 
 // StreamFilter controls which publications are returned from ReadStream.
@@ -266,10 +273,6 @@ type MapReadStateOptions struct {
 	// If provided, the server validates that the epoch hasn't changed.
 	// Returns ErrorUnrecoverablePosition if epoch changed (state invalidated).
 	Revision *StreamPosition
-
-	// Ordered returns entries sorted by Score (descending) instead of by key.
-	// Only meaningful for channels using ordered publishing (Ordered=true in publish).
-	Ordered bool
 
 	// Cursor is the pagination cursor from a previous ReadState call.
 	// Empty string starts from the beginning.
@@ -420,4 +423,45 @@ func applyChannelOptionsDefaults(
 	}
 
 	return opts
+}
+
+// makeOrderedCursor creates a cursor for ordered state: "score\x00key".
+func makeOrderedCursor(score, key string) string {
+	return score + "\x00" + key
+}
+
+// parseOrderedCursor parses an ordered cursor into score and key strings.
+func parseOrderedCursor(cursor string) (string, string) {
+	for i := 0; i < len(cursor); i++ {
+		if cursor[i] == '\x00' {
+			return cursor[:i], cursor[i+1:]
+		}
+	}
+	return "", ""
+}
+
+// findUnorderedCursorPosition finds the position after the cursor key using binary search.
+// Returns the index of the first key > cursor in a sorted slice.
+func findUnorderedCursorPosition(sortedKeys []string, cursor string) int {
+	return sort.Search(len(sortedKeys), func(i int) bool {
+		return sortedKeys[i] > cursor
+	})
+}
+
+// findOrderedCursorPosition finds the position after the cursor (score, key) in ordered state.
+// For ordered state sorted by (score DESC, key DESC), finds first entry where:
+// - score < cursorScore, OR
+// - score == cursorScore AND key < cursorKey
+func findOrderedCursorPosition(sortedKeys []string, scores map[string]int64, cursor string) int {
+	cursorScoreStr, cursorKey := parseOrderedCursor(cursor)
+	cursorScore, _ := strconv.ParseInt(cursorScoreStr, 10, 64)
+
+	return sort.Search(len(sortedKeys), func(i int) bool {
+		key := sortedKeys[i]
+		score := scores[key]
+		if score != cursorScore {
+			return score < cursorScore // Score descending: looking for score < cursorScore
+		}
+		return key < cursorKey // Same score, key descending: looking for key < cursorKey
+	})
 }

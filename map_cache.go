@@ -218,7 +218,10 @@ func (c *mapCacheImpl) EnsureLoaded(ctx context.Context, ch string, opts MapChan
 			options:  opts,
 		}
 
-		// Populate state and detect if ordered (any non-zero score means ordered)
+		// Set ordered from channel options
+		channel.ordered = opts.Ordered
+
+		// Populate state
 		for _, pub := range statePubs {
 			entry := &cachedStateEntry{
 				Key:         pub.Key,
@@ -227,7 +230,6 @@ func (c *mapCacheImpl) EnsureLoaded(ctx context.Context, ch string, opts MapChan
 			}
 			channel.state[pub.Key] = entry
 			if pub.Score != 0 {
-				channel.ordered = true
 				channel.scores[pub.Key] = pub.Score
 			}
 		}
@@ -386,7 +388,7 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) (MapStateRe
 			channel.sortedKeys = append(channel.sortedKeys, key)
 		}
 
-		if opts.Ordered && channel.ordered {
+		if channel.ordered {
 			sort.Slice(channel.sortedKeys, func(i, j int) bool {
 				si := channel.scores[channel.sortedKeys[i]]
 				sj := channel.scores[channel.sortedKeys[j]]
@@ -409,10 +411,10 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) (MapStateRe
 	// Handle cursor pagination
 	var startIdx int
 	if opts.Cursor != "" {
-		if opts.Ordered && channel.ordered {
-			startIdx = c.findOrderedCursorPosition(channel, opts.Cursor)
+		if channel.ordered {
+			startIdx = findOrderedCursorPosition(channel.sortedKeys, channel.scores, opts.Cursor)
 		} else {
-			startIdx = c.findUnorderedCursorPosition(channel.sortedKeys, opts.Cursor)
+			startIdx = findUnorderedCursorPosition(channel.sortedKeys, opts.Cursor)
 		}
 	}
 
@@ -431,9 +433,9 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) (MapStateRe
 
 		if endIdx < totalKeys {
 			lastKey := channel.sortedKeys[endIdx-1]
-			if opts.Ordered && channel.ordered {
+			if channel.ordered {
 				lastScore := channel.scores[lastKey]
-				cursor = c.makeOrderedCursor(lastScore, lastKey)
+				cursor = makeOrderedCursor(strconv.FormatInt(lastScore, 10), lastKey)
 			} else {
 				cursor = lastKey
 			}
@@ -644,9 +646,8 @@ func (c *mapCacheImpl) applyPublicationLocked(ch string, pub *Publication, pos S
 			Publication: pub,
 			Score:       pub.Score,
 		}
-		// Update scores and ordered flag if publication has a score
+		// Update scores if publication has a score
 		if pub.Score != 0 {
-			channel.ordered = true
 			channel.scores[pub.Key] = pub.Score
 		}
 	}
@@ -769,6 +770,7 @@ func (c *mapCacheImpl) ApplyState(ch string, pubs []*Publication, pos StreamPosi
 		position:        pos,
 		sortedKeysDirty: true,
 		options:         channelOpts,
+		ordered:         channelOpts.Ordered,
 	}
 
 	for _, pub := range pubs {
@@ -778,7 +780,6 @@ func (c *mapCacheImpl) ApplyState(ch string, pubs []*Publication, pos StreamPosi
 			Score:       pub.Score,
 		}
 		if pub.Score != 0 {
-			channel.ordered = true
 			channel.scores[pub.Key] = pub.Score
 		}
 	}
@@ -851,42 +852,6 @@ func (c *mapCacheImpl) evictIdleChannels() {
 	}
 }
 
-// makeOrderedCursor creates a cursor for ordered state.
-func (c *mapCacheImpl) makeOrderedCursor(score int64, key string) string {
-	return strconv.FormatInt(score, 10) + "\x00" + key
-}
-
-// parseOrderedCursor parses an ordered cursor into score and key.
-func (c *mapCacheImpl) parseOrderedCursor(cursor string) (int64, string) {
-	for i := 0; i < len(cursor); i++ {
-		if cursor[i] == '\x00' {
-			score, _ := strconv.ParseInt(cursor[:i], 10, 64)
-			return score, cursor[i+1:]
-		}
-	}
-	return 0, ""
-}
-
-// findUnorderedCursorPosition finds the position after the cursor key.
-func (c *mapCacheImpl) findUnorderedCursorPosition(sortedKeys []string, cursor string) int {
-	return sort.Search(len(sortedKeys), func(i int) bool {
-		return sortedKeys[i] > cursor
-	})
-}
-
-// findOrderedCursorPosition finds the position after the cursor in ordered state.
-func (c *mapCacheImpl) findOrderedCursorPosition(channel *cachedChannel, cursor string) int {
-	cursorScore, cursorKey := c.parseOrderedCursor(cursor)
-
-	return sort.Search(len(channel.sortedKeys), func(i int) bool {
-		key := channel.sortedKeys[i]
-		score := channel.scores[key]
-		if score != cursorScore {
-			return score < cursorScore
-		}
-		return key < cursorKey
-	})
-}
 
 // mapCacheWithEviction extends mapCacheImpl with priority-based eviction.
 type mapCacheWithEviction struct {
