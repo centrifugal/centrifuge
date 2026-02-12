@@ -2,26 +2,9 @@ package memstream
 
 import (
 	"container/list"
-	"time"
 
-	"github.com/centrifugal/centrifuge/internal/saferand"
+	"github.com/centrifugal/centrifuge/internal/epoch"
 )
-
-var random = saferand.New(time.Now().UnixNano())
-
-var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-
-func randString(n int) string {
-	b := make([]rune, n)
-	for i := range b {
-		b[i] = letters[random.Intn(len(letters))]
-	}
-	return string(b)
-}
-
-func genEpoch() string {
-	return randString(4)
-}
 
 // Item to be kept inside stream.
 type Item struct {
@@ -52,7 +35,7 @@ func New() *Stream {
 	return &Stream{
 		list:  list.New(),
 		index: make(map[uint64]*list.Element),
-		epoch: genEpoch(),
+		epoch: epoch.Generate(),
 	}
 }
 
@@ -99,7 +82,7 @@ func (s *Stream) TopVersionEpoch() string {
 // Reset stream.
 func (s *Stream) Reset() {
 	s.top = 0
-	s.epoch = genEpoch()
+	s.epoch = epoch.Generate()
 	s.Clear()
 }
 

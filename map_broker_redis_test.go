@@ -1447,14 +1447,14 @@ func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Test 1: Zero limit (should return all)
+	// Test 1: Limit -1 (should return all)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   0,
+		Limit:   -1,
 		MetaTTL: 300 * time.Second,
 	})
 	all, _, cursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
-	require.Len(t, all, 10, "Zero limit should return all entries")
+	require.Len(t, all, 10, "Limit -1 should return all entries")
 	require.Empty(t, cursor, "No cursor when returning all entries")
 
 	// Test 2: Limit larger than entries (should return all)

@@ -2,15 +2,16 @@ package centrifuge
 
 import (
 	"context"
-	cryptorand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/epoch"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -268,16 +269,9 @@ func (e *PostgresMapBroker) getReadPool() *pgxpool.Pool {
 	return e.pool
 }
 
-// pgGenerateEpoch creates a random 4-character epoch string.
-// This matches the format used by MemoryMapBroker's memstream.
+// pgGenerateEpoch creates a random epoch string using the shared epoch package.
 func pgGenerateEpoch() string {
-	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	b := make([]byte, 4)
-	_, _ = cryptorand.Read(b)
-	for i := range b {
-		b[i] = letters[b[i]%byte(len(letters))]
-	}
-	return string(b)
+	return epoch.Generate()
 }
 
 // ensureChannelMeta creates the channel meta if it doesn't exist and returns the stream position.
@@ -552,9 +546,15 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 
 	useDelta := opts.UseDelta && len(opts.StreamData) == 0
 
+	// StreamData is stored in stream/outbox; state always uses Data.
+	var streamData []byte
+	if len(opts.StreamData) > 0 {
+		streamData = opts.StreamData
+	}
+
 	err := e.pool.QueryRow(ctx, `
 		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset
-		FROM cf_map_publish($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::interval, $12::interval, $13, $14::interval, $15, $16, $17, $18, $19, $20, $21, $22::interval, $23, $24, $25, $26)
+		FROM cf_map_publish($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::interval, $12::interval, $13, $14::interval, $15, $16, $17, $18, $19, $20, $21, $22::interval, $23, $24, $25, $26, $27)
 	`,
 		ch, key, opts.Data, tagsJSON,
 		clientID, userID, connInfo, chanInfo, subscribedAt,
@@ -562,7 +562,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		expectedOffset, score, version, versionEpoch,
 		keyVersion, keyVersionEpoch,
 		idempotencyKey, idempotencyTTL, opts.RefreshTTLOnSuppress,
-		useDelta, skipOutbox, numShards,
+		useDelta, skipOutbox, numShards, streamData,
 	).Scan(&id, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset)
 
 	if err != nil {
@@ -767,12 +767,19 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 		return MapStateResult{Publications: []*Publication{&p}, Position: streamPos}, nil
 	}
 
+	// Limit=0: return only stream position (no entries).
+	if opts.Limit == 0 {
+		return MapStateResult{Position: streamPos}, nil
+	}
+
 	// Paginated state read using keyset pagination (no OFFSET).
 	ordered := e.node.ResolveMapChannelOptions(ch).Ordered
 
 	limit := opts.Limit
-	if limit <= 0 {
-		limit = 100
+	if limit < 0 {
+		// -1 means no client-imposed limit. Use a large SQL limit as a safety
+		// bound — if more entries exist, a cursor is returned for pagination.
+		limit = 100000
 	}
 
 	var rows pgx.Rows
@@ -907,6 +914,10 @@ func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapR
 	sinceOffset := int64(0)
 	if opts.Filter.Since != nil {
 		sinceOffset = int64(opts.Filter.Since.Offset)
+		// Validate epoch if provided.
+		if opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != epoch {
+			return MapStreamResult{}, ErrorUnrecoverablePosition
+		}
 	}
 
 	limit := opts.Filter.Limit
@@ -1042,6 +1053,10 @@ func (e *PostgresMapBroker) Clear(ctx context.Context, ch string, _ MapClearOpti
 	if err != nil {
 		return err
 	}
+	_, err = tx.Exec(ctx, `DELETE FROM cf_map_outbox WHERE channel = $1`, ch)
+	if err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -1144,7 +1159,7 @@ func (e *PostgresMapBroker) runWALReaderLoop(ctx context.Context, shardID int, l
 
 	// Create replication connection (separate from regular pool)
 	replConnStr := e.conf.ConnString
-	if replConnStr[len(replConnStr)-1] != '?' && !contains(replConnStr, "?") {
+	if replConnStr[len(replConnStr)-1] != '?' && !strings.Contains(replConnStr, "?") {
 		replConnStr += "?replication=database"
 	} else {
 		replConnStr += "&replication=database"
@@ -1176,7 +1191,7 @@ func (e *PostgresMapBroker) runWALReaderLoop(ctx context.Context, shardID int, l
 			pglogrepl.CreateReplicationSlotOptions{Temporary: false})
 		if err != nil {
 			// Ignore "already exists" error (race with another node)
-			if !contains(err.Error(), "already exists") {
+			if !strings.Contains(err.Error(), "already exists") {
 				return fmt.Errorf("create replication slot: %w", err)
 			}
 			// Slot was created by another node, query its position
@@ -1434,20 +1449,6 @@ func decodePgBytea(data []byte) []byte {
 	return data
 }
 
-// contains is a simple string contains helper.
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr) >= 0))
-}
-
-func findSubstring(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
-}
 
 func (e *PostgresMapBroker) logError(msg string, err error, shardID int) {
 	if e.node != nil {
@@ -1524,47 +1525,53 @@ func (e *PostgresMapBroker) runTTLExpirationWorker() {
 }
 
 func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
-	// Find expired keys (don't delete yet - let Remove handle deletion).
-	// Limit batch size to avoid large result sets during mass expiration.
+	// Use batch SQL function that atomically: finds expired keys, re-checks TTL after lock
+	// (avoiding TOCTOU race), removes from state, and writes removal events to stream+outbox.
+	skipOutbox := e.conf.WAL.Enabled
+	numShards := e.conf.Outbox.NumShards
+
+	// Use default TTLs for stream/meta on removal events.
+	defaults := e.node.ResolveMapChannelOptions("")
+	var streamTTL, metaTTL *string
+	if defaults.StreamTTL > 0 {
+		s := strconv.Itoa(int(defaults.StreamTTL.Seconds())) + " seconds"
+		streamTTL = &s
+	}
+	if defaults.MetaTTL > 0 {
+		s := strconv.Itoa(int(defaults.MetaTTL.Seconds())) + " seconds"
+		metaTTL = &s
+	}
+
 	rows, err := e.pool.Query(ctx, `
-		SELECT channel, key FROM cf_map_state
-		WHERE expires_at IS NOT NULL AND expires_at <= NOW()
-		LIMIT 1000
-	`)
+		SELECT out_channel, out_key, out_offset, out_epoch
+		FROM cf_map_expire_keys($1, $2, $3, $4::interval, $5::interval)
+	`, 1000, skipOutbox, numShards, streamTTL, metaTTL)
 	if err != nil {
+		e.node.logger.log(newErrorLogEntry(err, "error in batch key expiration", nil))
 		return
 	}
 	defer rows.Close()
 
-	// Collect expired keys first to avoid holding rows open during Remove calls.
-	type expiredKey struct {
-		channel string
-		key     string
-	}
-	var expiredKeys []expiredKey
 	for rows.Next() {
-		var ch, key string
-		if err := rows.Scan(&ch, &key); err != nil {
+		var ch, key, epochStr string
+		var offset int64
+		if err := rows.Scan(&ch, &key, &offset, &epochStr); err != nil {
 			continue
 		}
-		expiredKeys = append(expiredKeys, expiredKey{channel: ch, key: key})
-	}
-
-	// Now unpublish each expired key (this deletes from state and emits to stream).
-	for _, ek := range expiredKeys {
-		// Get channel options for this channel.
-		opts := e.node.ResolveMapChannelOptions(ek.channel)
-
-		// Remove handles deletion and emits removal to stream.
-		if _, err := e.Remove(ctx, ek.channel, ek.key, MapRemoveOptions{
-			StreamSize: opts.StreamSize,
-			StreamTTL:  opts.StreamTTL,
-			MetaTTL:    opts.MetaTTL,
-		}); err != nil {
-			e.node.logger.log(newErrorLogEntry(err, "error removing expired key", map[string]any{
-				"channel": ek.channel,
-				"key":     ek.key,
-			}))
+		// Emit removal event to subscribers (outbox/WAL handles delivery to other nodes).
+		if e.eventHandler != nil {
+			pub := &Publication{
+				Key:     key,
+				Removed: true,
+				Offset:  uint64(offset),
+				Time:    time.Now().UnixMilli(),
+			}
+			pos := StreamPosition{Offset: uint64(offset), Epoch: epochStr}
+			if err := e.eventHandler.HandlePublication(ch, pub, pos, false, nil); err != nil {
+				e.node.logger.log(newErrorLogEntry(err, "error handling expired key publication", map[string]any{
+					"channel": ch, "key": key,
+				}))
+			}
 		}
 	}
 }

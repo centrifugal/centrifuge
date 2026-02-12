@@ -120,6 +120,7 @@ type mapCacheImpl struct {
 	loading       map[string]bool           // Channels currently being loaded
 	loadingBuffer map[string][]*bufferedPub // Publications buffered during loading
 	lastAccess    map[string]time.Time
+	evictQueue    priority.Queue // min-heap by access time for O(log N) LRU eviction
 	conf          MapCacheConfig
 	closeCh       chan struct{}
 	closeOnce     sync.Once
@@ -152,6 +153,7 @@ func newMapCache(conf MapCacheConfig) *mapCacheImpl {
 		loading:       make(map[string]bool),
 		loadingBuffer: make(map[string][]*bufferedPub),
 		lastAccess:    make(map[string]time.Time),
+		evictQueue:    priority.MakeQueue(),
 		conf:          conf,
 		closeCh:       make(chan struct{}),
 	}
@@ -174,7 +176,7 @@ func (c *mapCacheImpl) EnsureLoaded(ctx context.Context, ch string, opts MapChan
 	if loaded {
 		// Update last access under write lock
 		c.mu.Lock()
-		c.lastAccess[ch] = time.Now()
+		c.touchAccessLocked(ch)
 		c.mu.Unlock()
 		return nil
 	}
@@ -229,7 +231,7 @@ func (c *mapCacheImpl) EnsureLoaded(ctx context.Context, ch string, opts MapChan
 				Score:       pub.Score,
 			}
 			channel.state[pub.Key] = entry
-			if pub.Score != 0 {
+			if channel.ordered || pub.Score != 0 {
 				channel.scores[pub.Key] = pub.Score
 			}
 		}
@@ -254,7 +256,7 @@ func (c *mapCacheImpl) EnsureLoaded(ctx context.Context, ch string, opts MapChan
 
 		c.channels[ch] = channel
 		c.loaded[ch] = true
-		c.lastAccess[ch] = time.Now()
+		c.touchAccessLocked(ch)
 
 		// Apply any publications that arrived during loading
 		buffered := c.loadingBuffer[ch]
@@ -287,6 +289,16 @@ func (c *mapCacheImpl) evictLocked(ch string) {
 	delete(c.loading, ch)
 	delete(c.loadingBuffer, ch)
 	delete(c.lastAccess, ch)
+}
+
+// EvictAndMarkLoading atomically evicts a channel and marks it as loading.
+// This prevents a window where the channel is neither loaded nor loading,
+// which would cause incoming pub/sub publications to be silently dropped.
+func (c *mapCacheImpl) EvictAndMarkLoading(ch string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.evictLocked(ch)
+	c.loading[ch] = true
 }
 
 // IsLoaded returns true if the channel is currently in cache.
@@ -363,7 +375,7 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) (MapStateRe
 		return MapStateResult{}, nil
 	}
 
-	c.lastAccess[ch] = time.Now()
+	c.touchAccessLocked(ch)
 
 	// Check revision epoch
 	if opts.Revision != nil && opts.Revision.Epoch != "" {
@@ -372,13 +384,18 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) (MapStateRe
 		}
 	}
 
-	// Handle single key lookup
+	// Handle single key lookup — takes priority over Limit.
 	if opts.Key != "" {
 		entry, exists := channel.state[opts.Key]
 		if !exists {
 			return MapStateResult{Position: channel.position}, nil
 		}
 		return MapStateResult{Publications: []*Publication{entry.Publication}, Position: channel.position}, nil
+	}
+
+	// Limit=0: return only stream position (no entries).
+	if opts.Limit == 0 {
+		return MapStateResult{Position: channel.position}, nil
 	}
 
 	// Rebuild sorted keys if dirty
@@ -476,7 +493,8 @@ func (c *mapCacheImpl) GetStream(ch string, opts MapReadStreamOptions) (MapStrea
 	// Get all items from stream - we'll filter by backend offset below.
 	// The memstream's internal offsets don't match backend offsets, so we can't
 	// use offset-based retrieval directly.
-	// Note: limit=-1 means unlimited (limit >= 0 check in memstream.Get)
+	// TODO: this is O(N) per call. Consider adding a secondary index mapping
+	// backend offset -> memstream position for efficient range queries.
 	items, _, err := stream.Get(0, false, -1, false) // Get all items
 	if err != nil {
 		return MapStreamResult{}, err
@@ -608,8 +626,10 @@ func (c *mapCacheImpl) applyPublicationLocked(ch string, pub *Publication, pos S
 		return false, nil
 	}
 
-	// Skip if this offset was already applied (prevents duplicates from concurrent paths)
-	if pub.Offset <= channel.position.Offset {
+	// Skip if this offset was already applied (prevents duplicates from concurrent paths).
+	// For streamless channels (Offset=0), skip dedup — offsets aren't tracked,
+	// and state updates are idempotent (key-value overwrite).
+	if pub.Offset > 0 && pub.Offset <= channel.position.Offset {
 		return false, nil
 	}
 
@@ -646,14 +666,14 @@ func (c *mapCacheImpl) applyPublicationLocked(ch string, pub *Publication, pos S
 			Publication: pub,
 			Score:       pub.Score,
 		}
-		// Update scores if publication has a score
-		if pub.Score != 0 {
+		// Always update score in ordered mode (score=0 is valid).
+		if channel.ordered || pub.Score != 0 {
 			channel.scores[pub.Key] = pub.Score
 		}
 	}
 	channel.sortedKeysDirty = true
 
-	c.lastAccess[ch] = time.Now()
+	c.touchAccessLocked(ch)
 
 	return true, nil
 }
@@ -742,7 +762,7 @@ func (c *mapCacheImpl) PopulateStream(ch string, pubs []*Publication, epoch stri
 		}
 	}
 
-	c.lastAccess[ch] = time.Now()
+	c.touchAccessLocked(ch)
 }
 
 // ApplyState replaces the entire state for a channel.
@@ -779,14 +799,14 @@ func (c *mapCacheImpl) ApplyState(ch string, pubs []*Publication, pos StreamPosi
 			Publication: pub,
 			Score:       pub.Score,
 		}
-		if pub.Score != 0 {
+		if channel.ordered || pub.Score != 0 {
 			channel.scores[pub.Key] = pub.Score
 		}
 	}
 
 	c.channels[ch] = channel
 	c.loaded[ch] = true
-	c.lastAccess[ch] = time.Now()
+	c.touchAccessLocked(ch)
 
 	return nil
 }
@@ -799,28 +819,33 @@ func (c *mapCacheImpl) Close() error {
 	return nil
 }
 
+// touchAccessLocked updates the access time for a channel and pushes to the evict queue.
+// Must be called with lock held.
+func (c *mapCacheImpl) touchAccessLocked(ch string) {
+	now := time.Now()
+	c.lastAccess[ch] = now
+	if c.conf.MaxChannels > 0 {
+		heap.Push(&c.evictQueue, &priority.Item{Value: ch, Priority: now.UnixNano()})
+	}
+}
+
 // maybeEvictLocked evicts channels if MaxChannels is exceeded.
+// Uses a min-heap for O(log N) LRU eviction with lazy deletion of stale entries.
 // Must be called with lock held.
 func (c *mapCacheImpl) maybeEvictLocked() {
 	if c.conf.MaxChannels <= 0 {
 		return
 	}
 
-	for len(c.channels) >= c.conf.MaxChannels {
-		// Find least recently used channel
-		var oldestCh string
-		var oldestTime time.Time
-		for ch, t := range c.lastAccess {
-			if oldestCh == "" || t.Before(oldestTime) {
-				oldestCh = ch
-				oldestTime = t
-			}
+	for len(c.channels) >= c.conf.MaxChannels && c.evictQueue.Len() > 0 {
+		item := heap.Pop(&c.evictQueue).(*priority.Item)
+		ch := item.Value
+		// Skip stale entries: channel was evicted or accessed more recently.
+		accessTime, exists := c.lastAccess[ch]
+		if !exists || accessTime.UnixNano() != item.Priority {
+			continue
 		}
-		if oldestCh != "" {
-			c.evictLocked(oldestCh)
-		} else {
-			break
-		}
+		c.evictLocked(ch)
 	}
 }
 
@@ -850,31 +875,4 @@ func (c *mapCacheImpl) evictIdleChannels() {
 			c.evictLocked(ch)
 		}
 	}
-}
-
-
-// mapCacheWithEviction extends mapCacheImpl with priority-based eviction.
-type mapCacheWithEviction struct {
-	*mapCacheImpl
-	accessQueue priority.Queue
-	accessMap   map[string]int64 // ch -> last access timestamp
-}
-
-// newMapCacheWithEviction creates a cache with LRU eviction support.
-func newMapCacheWithEviction(conf MapCacheConfig) *mapCacheWithEviction {
-	c := &mapCacheWithEviction{
-		mapCacheImpl: newMapCache(conf),
-		accessQueue:  priority.MakeQueue(),
-		accessMap:    make(map[string]int64),
-	}
-	return c
-}
-
-// updateAccess updates the access time for a channel in the priority queue.
-func (c *mapCacheWithEviction) updateAccess(ch string) {
-	now := time.Now().UnixNano()
-	if _, exists := c.accessMap[ch]; !exists {
-		heap.Push(&c.accessQueue, &priority.Item{Value: ch, Priority: now})
-	}
-	c.accessMap[ch] = now
 }

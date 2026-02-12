@@ -16,8 +16,8 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/bpool"
 	"github.com/centrifugal/centrifuge/internal/convert"
+	"github.com/centrifugal/centrifuge/internal/epoch"
 	"github.com/centrifugal/protocol"
-	"github.com/google/uuid"
 	"github.com/redis/rueidis"
 	"github.com/redis/rueidis/resp"
 )
@@ -737,7 +737,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 			strconv.FormatInt(int64(opts.StreamTTL.Seconds()), 10),
 			chID, // channel (for Lua to publish)
 			metaExpire,
-			uuid.New().String(), // new_epoch_if_empty
+			epoch.Generate(), // new_epoch_if_empty
 			publishCommand,
 			resultExpire,
 			useDelta,
@@ -879,7 +879,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 			strconv.FormatInt(int64(opts.StreamTTL.Seconds()), 10),
 			chID, // channel (for Lua to publish)
 			metaExpire,
-			e.node.ID(), // new_epoch_if_empty
+			epoch.Generate(), // new_epoch_if_empty
 			publishCommand,
 			resultExpire, // result_key_expire
 			"0", "0", "", // use_delta, version, version_epoch
@@ -909,9 +909,20 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 // Returns entries, stream position, next cursor for pagination, and error.
 // Cursor "0" or "" means end of iteration.
 func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
-	// Handle single key lookup (Key filter)
+	// Handle single key lookup (Key filter) — takes priority over Limit.
 	if opts.Key != "" {
 		return e.readSingleKey(ctx, ch, opts)
+	}
+	// Limit=0: return only stream position (no entries).
+	if opts.Limit == 0 {
+		streamResult, err := e.ReadStream(ctx, ch, MapReadStreamOptions{
+			Filter:  StreamFilter{Limit: 0},
+			MetaTTL: opts.MetaTTL,
+		})
+		if err != nil {
+			return MapStateResult{}, err
+		}
+		return MapStateResult{Position: streamResult.Position}, nil
 	}
 	if e.node.ResolveMapChannelOptions(ch).Ordered {
 		return e.readOrderedState(ctx, ch, opts)
@@ -920,9 +931,20 @@ func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadS
 }
 
 func (e *RedisMapBroker) ReadStateZero(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
-	// Handle single key lookup (Key filter)
+	// Handle single key lookup (Key filter) — takes priority over Limit.
 	if opts.Key != "" {
 		return e.readSingleKey(ctx, ch, opts)
+	}
+	// Limit=0: return only stream position (no entries).
+	if opts.Limit == 0 {
+		streamResult, err := e.ReadStream(ctx, ch, MapReadStreamOptions{
+			Filter:  StreamFilter{Limit: 0},
+			MetaTTL: opts.MetaTTL,
+		})
+		if err != nil {
+			return MapStateResult{}, err
+		}
+		return MapStateResult{Position: streamResult.Position}, nil
 	}
 	if e.node.ResolveMapChannelOptions(ch).Ordered {
 		return e.readOrderedState(ctx, ch, opts)
@@ -1045,6 +1067,13 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 		streamlessFlag = "1"
 	}
 
+	// In Lua scripts, limit=0 means "return all", limit>0 means paginate.
+	// Convert negative limit (e.g. -1 = all) to 0 for Lua.
+	luaLimit := opts.Limit
+	if luaLimit < 0 {
+		luaLimit = 0
+	}
+
 	replies, err := e.readUnorderedScript.Exec(ctx, shardClient,
 		[]string{
 			e.stateHashKey(s.shard, ch),
@@ -1054,7 +1083,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 		},
 		[]string{
 			cursor,
-			strconv.Itoa(opts.Limit),
+			strconv.Itoa(luaLimit),
 			strconv.FormatInt(time.Now().Unix(), 10),
 			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10),
 			stateTTL,
@@ -1144,6 +1173,12 @@ func (e *RedisMapBroker) readUnorderedStateZero(
 		streamlessFlag = "1"
 	}
 
+	// In Lua scripts, limit=0 means "return all", limit>0 means paginate.
+	luaLimit := opts.Limit
+	if luaLimit < 0 {
+		luaLimit = 0
+	}
+
 	err := e.readUnorderedScript.ExecWithReader(
 		ctx,
 		s.shard.client,
@@ -1155,7 +1190,7 @@ func (e *RedisMapBroker) readUnorderedStateZero(
 		},
 		[]string{
 			cursor,
-			strconv.Itoa(opts.Limit),
+			strconv.Itoa(luaLimit),
 			strconv.FormatInt(time.Now().Unix(), 10),
 			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10),
 			stateTTL,
@@ -1283,6 +1318,12 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 		streamlessFlag = "1"
 	}
 
+	// In Lua scripts, limit=0 means "return all", limit>0 means paginate.
+	luaLimit := opts.Limit
+	if luaLimit < 0 {
+		luaLimit = 0
+	}
+
 	replies, err := e.readOrderedScript.Exec(ctx, shardClient,
 		[]string{
 			e.stateHashKey(s.shard, ch),
@@ -1292,7 +1333,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 			e.stateMetaKey(s.shard, ch),
 		},
 		[]string{
-			strconv.Itoa(opts.Limit),                 // ARGV[1] = limit
+			strconv.Itoa(luaLimit),                   // ARGV[1] = limit
 			cursorScore,                              // ARGV[2] = cursor_score
 			cursorKey,                                // ARGV[3] = cursor_key
 			strconv.FormatInt(time.Now().Unix(), 10), // ARGV[4] = now

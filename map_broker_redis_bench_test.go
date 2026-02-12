@@ -222,7 +222,7 @@ func BenchmarkRedisMapBroker_ReadStateFull(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-				Limit:   0, // Read all
+				Limit:   -1, // Read all
 				MetaTTL: 300 * time.Second,
 			})
 			if err != nil {

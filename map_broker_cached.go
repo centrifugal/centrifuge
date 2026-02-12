@@ -25,8 +25,9 @@ type CachedMapBrokerConfig struct {
 	SyncJitter float64
 
 	// SyncConcurrency limits parallel sync operations.
-	// 0 means unbounded (spawn goroutine per sync).
-	// Default: 0
+	// 0 means use default (64 workers).
+	// -1 means unbounded (spawn goroutine per sync, use with caution).
+	// Default: 64
 	SyncConcurrency int
 
 	// SyncBatchSize is max publications to fetch per sync poll.
@@ -44,7 +45,7 @@ func DefaultCachedMapBrokerConfig() CachedMapBrokerConfig {
 		Cache:           DefaultMapCacheConfig(),
 		SyncInterval:    30 * time.Second,
 		SyncJitter:      0.1, // 10% jitter
-		SyncConcurrency: 0,
+		SyncConcurrency: 64,
 		SyncBatchSize:   1000,
 		LoadTimeout:     5 * time.Second,
 	}
@@ -59,6 +60,9 @@ func (c CachedMapBrokerConfig) setDefaults() CachedMapBrokerConfig {
 	}
 	if c.SyncJitter > 1 {
 		c.SyncJitter = 1
+	}
+	if c.SyncConcurrency == 0 {
+		c.SyncConcurrency = 64
 	}
 	if c.SyncBatchSize <= 0 {
 		c.SyncBatchSize = 1000
@@ -179,8 +183,9 @@ func (h *cachedEventHandler) HandlePublication(ch string, pub *Publication, sp S
 				h.fillGap(ch, cachedPos, pub.Offset, sp.Epoch)
 			}
 
-			// Skip if this offset was already applied (can happen with concurrent local writes)
-			if pub.Offset <= h.cache.GetPosition(ch).Offset {
+			// Skip if this offset was already applied (can happen with concurrent local writes).
+			// For streamless channels (Offset=0), always apply — no offsets to compare.
+			if pub.Offset > 0 && pub.Offset <= h.cache.GetPosition(ch).Offset {
 				return
 			}
 
@@ -267,12 +272,18 @@ func (e *CachedMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 	}
 
 	// Start sync loop (handles cross-node updates for channels loaded before
-	// backend started delivering publications)
-	go e.runSyncLoop()
+	// backend started delivering publications).
+	// Track in wg so the counter never reaches zero while dispatchDueSyncs
+	// may call wg.Add(1) — prevents race between wg.Wait() and wg.Add().
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		e.runSyncLoop()
+	}()
 	return nil
 }
 
-// Close shuts down the cached broker.
+// Close shuts down the cached broker and the underlying backend (if it implements Closer).
 func (e *CachedMapBroker) Close(ctx context.Context) error {
 	e.closeOnce.Do(func() {
 		close(e.closeCh)
@@ -280,6 +291,12 @@ func (e *CachedMapBroker) Close(ctx context.Context) error {
 		e.wg.Wait()
 		_ = e.cache.Close()
 	})
+	type Closer interface {
+		Close(context.Context) error
+	}
+	if closer, ok := e.backend.(Closer); ok {
+		return closer.Close(ctx)
+	}
 	return nil
 }
 
@@ -487,7 +504,7 @@ func (e *CachedMapBroker) ensureLoaded(ctx context.Context, ch string) error {
 
 		// Load full state from backend
 		stateResult, err := e.backend.ReadState(loadCtx, ch, MapReadStateOptions{
-			Limit: 0, // All entries (unlimited)
+			Limit: -1, // All entries (unlimited)
 		})
 		if err != nil {
 			return nil, nil, StreamPosition{}, err
@@ -529,7 +546,7 @@ func (e *CachedMapBroker) resolveChannelOptions(ch string) MapChannelOptions {
 // runSyncLoop runs the background sync scheduler.
 // It checks which channels need syncing and dispatches them to workers.
 func (e *CachedMapBroker) runSyncLoop() {
-	// Start worker pool if bounded concurrency
+	// Start worker pool (SyncConcurrency > 0 = bounded, < 0 = unbounded/no pool)
 	if e.conf.SyncConcurrency > 0 {
 		for i := 0; i < e.conf.SyncConcurrency; i++ {
 			e.wg.Add(1)
@@ -692,12 +709,15 @@ func (e *CachedMapBroker) syncChannel(ch string) {
 	// Fetch new publications from backend
 	syncResult, err := e.backend.ReadStream(ctx, ch, MapReadStreamOptions{
 		Filter: StreamFilter{
-			Since: &StreamPosition{Offset: since},
+			Since: &StreamPosition{Offset: since, Epoch: cachedEpoch},
 			Limit: e.conf.SyncBatchSize,
 		},
 	})
 	if err != nil {
-		// Sync errors are expected during transient failures, don't log to avoid noise
+		if errors.Is(err, ErrorUnrecoverablePosition) {
+			e.reloadChannel(ctx, ch)
+		}
+		// Other sync errors are expected during transient failures, don't log to avoid noise
 		return
 	}
 
@@ -737,8 +757,9 @@ func (e *CachedMapBroker) syncChannel(ch string) {
 
 // reloadChannel evicts the channel from cache and reloads it from backend.
 func (e *CachedMapBroker) reloadChannel(ctx context.Context, ch string) {
-	// Evict from cache
-	e.cache.Evict(ch)
+	// Atomically evict and mark as loading so publications arriving between
+	// evict and ensureLoaded are buffered rather than silently dropped.
+	e.cache.EvictAndMarkLoading(ch)
 
 	// Clear sync state
 	e.syncStateMu.Lock()
@@ -755,8 +776,11 @@ func (e *CachedMapBroker) reloadChannel(ctx context.Context, ch string) {
 	delete(e.channelLocks, ch)
 	e.channelLocksMu.Unlock()
 
-	// Reload by ensuring it's loaded again
-	_ = e.ensureLoaded(ctx, ch)
+	// Reload from backend
+	if err := e.ensureLoaded(ctx, ch); err != nil {
+		e.node.logger.log(newErrorLogEntry(err, "error reloading channel", map[string]any{"channel": ch}))
+		e.cache.ClearLoading(ch)
+	}
 }
 
 // getSyncOffset returns the last synced offset for a channel.

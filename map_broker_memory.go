@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,7 +27,7 @@ type MemoryMapBroker struct {
 	closeOnce         sync.Once
 	closeCh           chan struct{}
 	pubLocks          map[int]*sync.Mutex
-	resultCache       map[string]StreamPosition
+	resultCache       map[string]map[string]StreamPosition // ch -> idempotencyKey -> position
 	resultCacheMu     sync.RWMutex
 	nextExpireCheck   int64
 	resultExpireQueue priority.Queue
@@ -44,14 +45,14 @@ func NewMemoryMapBroker(n *Node, _ MemoryMapBrokerConfig) (*MemoryMapBroker, err
 		pubLocks[i] = &sync.Mutex{}
 	}
 	closeCh := make(chan struct{})
-	mapHub := newMapHub(n, n.config.HistoryMetaTTL, closeCh)
+	mapHub := newMapHub(n, n.config.HistoryMetaTTL, pubLocks, closeCh)
 	mapHub.setChannelOptionsResolver(n.ResolveMapChannelOptions)
 	e := &MemoryMapBroker{
 		node:        n,
 		mapHub:      mapHub,
 		pubLocks:    pubLocks,
 		closeCh:     closeCh,
-		resultCache: map[string]StreamPosition{},
+		resultCache: make(map[string]map[string]StreamPosition),
 	}
 	return e, nil
 }
@@ -181,10 +182,7 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 
 	if e.eventHandler != nil {
 		// Publish streamPub (with StreamData if set) to subscribers.
-		err = e.eventHandler.HandlePublication(ch, streamPub, streamTop, opts.UseDelta, prevPub)
-		if err != nil {
-			e.node.logger.log(newErrorLogEntry(err, "error handling publication in channel", map[string]any{"channel": ch}))
-		}
+		return MapPublishResult{Position: streamTop}, e.eventHandler.HandlePublication(ch, streamPub, streamTop, opts.UseDelta, prevPub)
 	}
 
 	return MapPublishResult{Position: streamTop}, nil
@@ -261,15 +259,24 @@ func (e *MemoryMapBroker) Stats(ctx context.Context, ch string) (MapStats, error
 func (e *MemoryMapBroker) getResultFromCache(ch string, key string) (StreamPosition, bool) {
 	e.resultCacheMu.RLock()
 	defer e.resultCacheMu.RUnlock()
-	res, ok := e.resultCache[ch+"\x00"+key]
+	chCache, ok := e.resultCache[ch]
+	if !ok {
+		return StreamPosition{}, false
+	}
+	res, ok := chCache[key]
 	return res, ok
 }
 
 func (e *MemoryMapBroker) saveResultToCache(ch string, key string, sp StreamPosition, resultExpireSeconds int64) {
 	e.resultCacheMu.Lock()
 	defer e.resultCacheMu.Unlock()
+	chCache, ok := e.resultCache[ch]
+	if !ok {
+		chCache = make(map[string]StreamPosition)
+		e.resultCache[ch] = chCache
+	}
+	chCache[key] = sp
 	cacheKey := ch + "\x00" + key
-	e.resultCache[cacheKey] = sp
 	expireAt := time.Now().Unix() + resultExpireSeconds
 	heap.Push(&e.resultExpireQueue, &priority.Item{Value: cacheKey, Priority: expireAt})
 	if e.nextExpireCheck == 0 || e.nextExpireCheck > expireAt {
@@ -280,12 +287,7 @@ func (e *MemoryMapBroker) saveResultToCache(ch string, key string, sp StreamPosi
 func (e *MemoryMapBroker) clearResultCache(ch string) {
 	e.resultCacheMu.Lock()
 	defer e.resultCacheMu.Unlock()
-	prefix := ch + "\x00"
-	for key := range e.resultCache {
-		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
-			delete(e.resultCache, key)
-		}
-	}
+	delete(e.resultCache, ch)
 }
 
 func (e *MemoryMapBroker) expireResultCache() {
@@ -313,8 +315,17 @@ func (e *MemoryMapBroker) expireResultCache() {
 				nextExpireCheck = expireAt
 				break
 			}
-			key := item.Value
-			delete(e.resultCache, key)
+			combined := item.Value
+			if idx := strings.IndexByte(combined, '\x00'); idx >= 0 {
+				ch := combined[:idx]
+				key := combined[idx+1:]
+				if chCache, ok := e.resultCache[ch]; ok {
+					delete(chCache, key)
+					if len(chCache) == 0 {
+						delete(e.resultCache, ch)
+					}
+				}
+			}
 		}
 		e.nextExpireCheck = nextExpireCheck
 		e.resultCacheMu.Unlock()
@@ -341,6 +352,7 @@ type mapHub struct {
 	keyExpires             map[string]int64   // "ch:key" -> expireAt
 	eventHandler           BrokerEventHandler // for publishing removal events
 	channelOptionsResolver MapChannelOptionsResolver
+	pubLocks               map[int]*sync.Mutex // for ordering HandlePublication calls
 }
 
 // mapChannel represents keyed state for a single channel.
@@ -363,7 +375,7 @@ type stateEntry struct {
 	ExpireAt    int64 // Unix timestamp for key TTL expiration (0 = no expiration)
 }
 
-func newMapHub(node *Node, historyMetaTTL time.Duration, closeCh chan struct{}) *mapHub {
+func newMapHub(node *Node, historyMetaTTL time.Duration, pubLocks map[int]*sync.Mutex, closeCh chan struct{}) *mapHub {
 	return &mapHub{
 		node:           node,
 		channels:       make(map[string]*mapChannel),
@@ -375,6 +387,7 @@ func newMapHub(node *Node, historyMetaTTL time.Duration, closeCh chan struct{}) 
 		closeCh:        closeCh,
 		keyExpireQueue: priority.MakeQueue(),
 		keyExpires:     make(map[string]int64),
+		pubLocks:       pubLocks,
 	}
 }
 
@@ -486,9 +499,9 @@ func (h *mapHub) removeChannels() {
 
 // expiredKeyEvent holds data for publishing removal events after lock is released.
 type expiredKeyEvent struct {
-	channel   string
-	pub       *Publication
-	streamPos StreamPosition
+	channel    string
+	key        string
+	streamSize int
 }
 
 // expireKeys handles TTL-based expiration of individual state keys.
@@ -510,7 +523,9 @@ func (h *mapHub) expireKeys() {
 }
 
 func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
-	// Collect expired keys while holding lock
+	// Phase 1: Under hub lock — collect expired keys and remove from state.
+	// Stream.Add is deferred to phase 2 (under pubLock) to maintain lock ordering
+	// consistent with Publish: pubLock → hub lock (prevents potential deadlock).
 	var expiredEvents []expiredKeyEvent
 	var eventHandler BrokerEventHandler
 
@@ -574,7 +589,7 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 			continue
 		}
 
-		// Remove the expired key
+		// Remove the expired key from state (stream.Add deferred to phase 2).
 		delete(channel.state, key)
 		delete(h.keyExpires, chKey)
 		channel.sortedKeysDirty = true
@@ -582,49 +597,56 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 			delete(channel.scores, key)
 		}
 
-		// Prepare removal event (add to stream while holding lock)
 		if eventHandler != nil {
-			// Get channel options for this channel
 			opts := DefaultMapChannelOptions()
 			if h.channelOptionsResolver != nil {
 				opts = h.channelOptionsResolver(ch)
 			}
-			removePub := &Publication{
-				Key:     key,
-				Removed: true,
-				Time:    time.Now().UnixMilli(),
-				Info:    entry.Publication.Info,
-			}
-			var streamPos StreamPosition
-			if opts.StreamSize > 0 && channel.stream != nil {
-				// Add removal to stream only in streamed mode
-				offset, _ := channel.stream.Add(removePub, opts.StreamSize, 0, "")
-				removePub.Offset = offset
-				streamPos = StreamPosition{
-					Offset: offset,
-					Epoch:  channel.stream.Epoch(),
-				}
-			} else if channel.stream != nil {
-				// Streamless: use current position without writing
-				streamPos = StreamPosition{
-					Offset: channel.stream.Top(),
-					Epoch:  channel.stream.Epoch(),
-				}
-			}
 			expiredEvents = append(expiredEvents, expiredKeyEvent{
-				channel:   ch,
-				pub:       removePub,
-				streamPos: streamPos,
+				channel:    ch,
+				key:        key,
+				streamSize: opts.StreamSize,
 			})
 		}
 	}
 	h.nextKeyExpireCheck = *nextKeyExpireCheck
 	h.Unlock()
 
-	// Publish removal events after releasing lock to avoid deadlock
+	// Phase 2: Under pubLock → hub lock — add to stream and deliver events.
+	// This matches Publish's lock ordering: pubLock → hub lock → HandlePublication.
 	for _, event := range expiredEvents {
-		if err := eventHandler.HandlePublication(event.channel, event.pub, event.streamPos, false, nil); err != nil {
-			h.node.logger.log(newErrorLogEntry(err, "error handling expired key publication", map[string]any{"channel": event.channel, "key": event.pub.Key}))
+		var mu *sync.Mutex
+		if h.pubLocks != nil {
+			mu = h.pubLocks[index(event.channel, numPubLocks)]
+			mu.Lock()
+		}
+
+		removePub := &Publication{
+			Key:     event.key,
+			Removed: true,
+			Time:    time.Now().UnixMilli(),
+		}
+		var streamPos StreamPosition
+
+		h.Lock()
+		channel, ok := h.channels[event.channel]
+		if ok && channel.stream != nil {
+			if event.streamSize > 0 {
+				offset, _ := channel.stream.Add(removePub, event.streamSize, 0, "")
+				removePub.Offset = offset
+				streamPos = StreamPosition{Offset: offset, Epoch: channel.stream.Epoch()}
+			} else {
+				streamPos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
+			}
+		}
+		h.Unlock()
+
+		err := eventHandler.HandlePublication(event.channel, removePub, streamPos, false, nil)
+		if mu != nil {
+			mu.Unlock()
+		}
+		if err != nil {
+			h.node.logger.log(newErrorLogEntry(err, "error handling expired key publication", map[string]any{"channel": event.channel, "key": event.key}))
 		}
 	}
 }
@@ -827,16 +849,13 @@ func (h *mapHub) remove(ch string, key string, opts MapRemoveOptions) (StreamPos
 
 	channel, ok := h.channels[ch]
 	if !ok {
+		// Channel doesn't exist — no position to report. All implementations
+		// (Redis, Postgres) return empty position here since no meta exists.
 		return StreamPosition{}, nil, SuppressReasonKeyNotFound, nil
 	}
 
-	// Get the entry before removing to extract Info if present
-	var info *ClientInfo
 	entry, keyExists := channel.state[key]
-	if keyExists {
-		// Get ClientInfo from Publication (for presence)
-		info = entry.Publication.Info
-	} else {
+	if !keyExists {
 		// Key doesn't exist, nothing to remove
 		var streamPosition StreamPosition
 		if channel.stream != nil {
@@ -876,7 +895,6 @@ func (h *mapHub) remove(ch string, key string, opts MapRemoveOptions) (StreamPos
 		Key:     key,
 		Removed: true,
 		Time:    time.Now().UnixMilli(),
-		Info:    info,
 	}
 
 	var streamPosition StreamPosition
@@ -1054,17 +1072,28 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) (MapStateResult, 
 	}
 
 	// Acquire read lock to get channel pointer.
-	h.RLock()
-	channel, ok := h.channels[ch]
-	if !ok {
+	// Use bounded retry loop to handle TOCTOU between RUnlock and Lock upgrade:
+	// if channel is created by another goroutine between our RUnlock and Lock,
+	// we retry under RLock instead of recursing (prevents theoretical infinite recursion).
+	var channel *mapChannel
+	for attempts := 0; ; attempts++ {
+		h.RLock()
+		var ok bool
+		channel, ok = h.channels[ch]
+		if ok {
+			break // Channel found — proceed with read under RLock.
+		}
 		h.RUnlock()
 		// Channel not found — need write lock to create stream position.
 		h.Lock()
 		// Re-check after acquiring write lock (TOCTOU: another goroutine may have created it).
 		if _, exists := h.channels[ch]; exists {
 			h.Unlock()
-			// Channel was created between RUnlock and Lock — retry under RLock.
-			return h.getState(ch, opts)
+			if attempts >= 2 {
+				// Extremely unlikely: channel keeps getting created/deleted.
+				return MapStateResult{}, nil
+			}
+			continue // Retry under RLock.
 		}
 		if opts.Revision != nil && opts.Revision.Epoch != "" {
 			pos := h.createStreamPosition(ch)
@@ -1096,13 +1125,18 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) (MapStateResult, 
 		}
 	}
 
-	// Handle single key lookup (Key filter)
+	// Handle single key lookup (Key filter) — takes priority over Limit.
 	if opts.Key != "" {
 		entry, exists := channel.state[opts.Key]
 		if !exists {
 			return MapStateResult{Position: streamPosition}, nil
 		}
 		return MapStateResult{Publications: []*Publication{entry.Publication}, Position: streamPosition}, nil
+	}
+
+	// Limit=0: return only stream position (no entries).
+	if opts.Limit == 0 {
+		return MapStateResult{Position: streamPosition}, nil
 	}
 
 	var pubs []*Publication
@@ -1210,8 +1244,12 @@ func (h *mapHub) getStats(ch string) (MapStats, error) {
 	}, nil
 }
 
+// createStreamPosition initializes a channel with an empty stream if it doesn't exist.
+// This is intentionally called from read paths (ReadState, ReadStream) because we need
+// a stable epoch for the channel — clients use it to detect position invalidation.
+// Without this, a channel created lazily on the first Publish could have its epoch change
+// between a ReadState and the subsequent ReadStream, breaking recovery.
 func (h *mapHub) createStreamPosition(ch string) StreamPosition {
-	// Create a new stream if needed
 	channel, ok := h.channels[ch]
 	if !ok {
 		stream := memstream.New()

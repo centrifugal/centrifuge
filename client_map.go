@@ -685,6 +685,25 @@ func (c *Client) handleMapStreamPhase(
 			subscribingCh: make(chan struct{}),
 			epoch:         req.Epoch,
 		}
+		// Process tags filter for recovery subscriptions (same as state phase).
+		if req.Tf != nil {
+			if !reply.Options.AllowTagsFilter {
+				c.node.logger.log(newLogEntry(LogLevelInfo, "tags filter not allowed for map channel", map[string]any{
+					"channel": channel, "user": c.user, "client": c.uid,
+				}))
+				return ErrorBadRequest
+			}
+			if err := filter.Validate(req.Tf); err != nil {
+				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid tags filter for map channel", map[string]any{
+					"channel": channel, "user": c.user, "client": c.uid,
+				}))
+				return ErrorBadRequest
+			}
+			state.tagsFilter = &tagsFilter{
+				filter: req.Tf,
+				hash:   filter.Hash(req.Tf),
+			}
+		}
 		c.mu.Lock()
 		if c.mapSubscribing == nil {
 			c.mapSubscribing = make(map[string]*mapSubscribeState)

@@ -202,7 +202,8 @@ CREATE OR REPLACE FUNCTION cf_map_publish(
     p_refresh_ttl_on_suppress BOOLEAN DEFAULT FALSE,
     p_use_delta BOOLEAN DEFAULT FALSE,
     p_skip_outbox BOOLEAN DEFAULT FALSE,
-    p_num_shards INTEGER DEFAULT 16
+    p_num_shards INTEGER DEFAULT 16,
+    p_stream_data BYTEA DEFAULT NULL
 ) RETURNS TABLE(
     result_id BIGINT,
     channel_offset BIGINT,
@@ -230,7 +231,7 @@ BEGIN
 
     -- 1. Get or create stream metadata
     INSERT INTO cf_map_meta (channel, top_offset, epoch, updated_at)
-    VALUES (p_channel, 0, substr(md5(random()::text), 1, 4), NOW())
+    VALUES (p_channel, 0, substr(md5(random()::text || random()::text), 1, 8), NOW())
     ON CONFLICT (channel) DO NOTHING;
 
     SELECT top_offset, m.epoch, COALESCE(version, 0), version_epoch
@@ -323,7 +324,7 @@ BEGIN
     INSERT INTO cf_map_stream (
         channel, channel_offset, epoch, key, data, tags, client_id, user_id, conn_info, chan_info, subscribed_at, score, previous_data, expires_at, shard_id
     ) VALUES (
-        p_channel, v_offset, v_epoch, p_key, p_data, p_tags, p_client_id, p_user_id, p_conn_info, p_chan_info, p_subscribed_at, p_score, v_previous_data,
+        p_channel, v_offset, v_epoch, p_key, COALESCE(p_stream_data, p_data), p_tags, p_client_id, p_user_id, p_conn_info, p_chan_info, p_subscribed_at, p_score, v_previous_data,
         CASE WHEN p_stream_ttl IS NOT NULL THEN NOW() + p_stream_ttl ELSE NULL END,
         v_shard_id
     ) RETURNING cf_map_stream.id INTO v_id;
@@ -334,7 +335,7 @@ BEGIN
             shard_id, channel, channel_offset, epoch, key, data, tags, removed, score,
             client_id, user_id, conn_info, chan_info, previous_data
         ) VALUES (
-            v_shard_id, p_channel, v_offset, v_epoch, p_key, p_data, p_tags, FALSE, p_score,
+            v_shard_id, p_channel, v_offset, v_epoch, p_key, COALESCE(p_stream_data, p_data), p_tags, FALSE, p_score,
             p_client_id, p_user_id, p_conn_info, p_chan_info, v_previous_data
         );
     END IF;
@@ -385,7 +386,8 @@ CREATE OR REPLACE FUNCTION cf_map_publish_strict(
     p_refresh_ttl_on_suppress BOOLEAN DEFAULT FALSE,
     p_use_delta BOOLEAN DEFAULT FALSE,
     p_skip_outbox BOOLEAN DEFAULT FALSE,
-    p_num_shards INTEGER DEFAULT 16
+    p_num_shards INTEGER DEFAULT 16,
+    p_stream_data BYTEA DEFAULT NULL
 ) RETURNS TABLE(
     result_id BIGINT,
     channel_offset BIGINT,
@@ -402,7 +404,7 @@ BEGIN
         p_expected_offset, p_score, p_version, p_version_epoch,
         p_key_version, p_key_version_epoch,
         p_idempotency_key, p_idempotency_ttl, p_refresh_ttl_on_suppress,
-        p_use_delta, p_skip_outbox, p_num_shards
+        p_use_delta, p_skip_outbox, p_num_shards, p_stream_data
     );
 
     IF v_result.suppressed THEN
@@ -564,5 +566,90 @@ BEGIN
     END IF;
 
     RETURN QUERY SELECT v_result.result_id, v_result.channel_offset, v_result.epoch;
+END;
+$$ LANGUAGE plpgsql;
+
+-- cf_map_expire_keys: Atomically expire keys that have passed their TTL.
+-- Finds expired keys, removes from state, increments stream offsets, and writes
+-- removal events to stream and optionally outbox — all in one round trip.
+-- Uses FOR UPDATE SKIP LOCKED to avoid contention with concurrent writers.
+-- Re-checks expires_at after locking to avoid TOCTOU race (key TTL refreshed between scan and lock).
+CREATE OR REPLACE FUNCTION cf_map_expire_keys(
+    p_batch_size INT DEFAULT 1000,
+    p_skip_outbox BOOLEAN DEFAULT FALSE,
+    p_num_shards INTEGER DEFAULT 16,
+    p_stream_ttl INTERVAL DEFAULT NULL,
+    p_meta_ttl INTERVAL DEFAULT NULL
+) RETURNS TABLE(
+    out_channel TEXT,
+    out_key TEXT,
+    out_offset BIGINT,
+    out_epoch TEXT
+) AS $$
+DECLARE
+    rec RECORD;
+    v_offset BIGINT;
+    v_epoch TEXT;
+    v_shard_id INTEGER;
+BEGIN
+    FOR rec IN
+        SELECT channel, key FROM cf_map_state
+        WHERE expires_at IS NOT NULL AND expires_at <= NOW()
+        LIMIT p_batch_size
+        FOR UPDATE SKIP LOCKED
+    LOOP
+        -- Re-check expiration after lock (key may have been refreshed).
+        PERFORM 1 FROM cf_map_state
+        WHERE channel = rec.channel AND key = rec.key
+          AND expires_at IS NOT NULL AND expires_at <= NOW();
+        IF NOT FOUND THEN
+            CONTINUE;
+        END IF;
+
+        -- Get stream metadata.
+        SELECT top_offset, m.epoch INTO v_offset, v_epoch
+        FROM cf_map_meta m WHERE m.channel = rec.channel FOR UPDATE;
+
+        IF NOT FOUND THEN
+            DELETE FROM cf_map_state WHERE channel = rec.channel AND key = rec.key;
+            CONTINUE;
+        END IF;
+
+        v_shard_id := abs(hashtext(rec.channel)) % p_num_shards;
+
+        -- Increment offset.
+        UPDATE cf_map_meta SET
+            top_offset = top_offset + 1,
+            expires_at = COALESCE(CASE WHEN p_meta_ttl IS NOT NULL THEN NOW() + p_meta_ttl ELSE NULL END, expires_at),
+            updated_at = NOW()
+        WHERE channel = rec.channel
+        RETURNING top_offset INTO v_offset;
+
+        -- Delete from state.
+        DELETE FROM cf_map_state WHERE channel = rec.channel AND key = rec.key;
+
+        -- Insert removal into stream.
+        INSERT INTO cf_map_stream (channel, channel_offset, epoch, key, removed, expires_at, shard_id)
+        VALUES (
+            rec.channel, v_offset, v_epoch, rec.key, TRUE,
+            CASE WHEN p_stream_ttl IS NOT NULL THEN NOW() + p_stream_ttl ELSE NULL END,
+            v_shard_id
+        );
+
+        -- Insert into outbox (unless skipped).
+        IF NOT p_skip_outbox THEN
+            INSERT INTO cf_map_outbox (
+                shard_id, channel, channel_offset, epoch, key, removed
+            ) VALUES (
+                v_shard_id, rec.channel, v_offset, v_epoch, rec.key, TRUE
+            );
+        END IF;
+
+        out_channel := rec.channel;
+        out_key := rec.key;
+        out_offset := v_offset;
+        out_epoch := v_epoch;
+        RETURN NEXT;
+    END LOOP;
 END;
 $$ LANGUAGE plpgsql;

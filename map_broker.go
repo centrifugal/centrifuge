@@ -278,7 +278,10 @@ type MapReadStateOptions struct {
 	// Empty string starts from the beginning.
 	Cursor string
 
-	// Limit is the maximum number of entries to return per page.
+	// Limit controls maximum entries returned per page:
+	//  -1 = no limit (return all entries in state)
+	//   0 = return only current stream position (no entries)
+	//  >0 = return at most this many entries
 	Limit int
 
 	// MetaTTL extends the state metadata TTL when reading.
@@ -413,13 +416,11 @@ func applyChannelOptionsDefaults(
 
 	// Ensure MetaTTL is never less than StreamTTL or KeyTTL.
 	// Meta must outlive the data it describes to avoid stale reads.
-	if opts.MetaTTL > 0 {
-		if opts.StreamTTL > 0 && opts.MetaTTL < opts.StreamTTL {
-			opts.MetaTTL = opts.StreamTTL
-		}
-		if opts.KeyTTL > 0 && opts.MetaTTL < opts.KeyTTL {
-			opts.MetaTTL = opts.KeyTTL
-		}
+	if opts.StreamTTL > 0 && opts.MetaTTL < opts.StreamTTL {
+		opts.MetaTTL = opts.StreamTTL
+	}
+	if opts.KeyTTL > 0 && opts.MetaTTL < opts.KeyTTL {
+		opts.MetaTTL = opts.KeyTTL
 	}
 
 	return opts
