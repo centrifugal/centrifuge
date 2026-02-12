@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -103,10 +104,13 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 	mu.Lock()
 	defer mu.Unlock()
 
+	// Resolve channel options once for this operation.
+	resolved := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
+
 	// Apply channel options defaults from node config.
 	chOpts := applyChannelOptionsDefaults(MapChannelOptions{
 		StreamSize: opts.StreamSize, StreamTTL: opts.StreamTTL, MetaTTL: opts.MetaTTL, KeyTTL: opts.KeyTTL,
-	}, e.node.ResolveMapChannelOptions, ch)
+	}, resolved)
 	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL, chOpts.KeyTTL
 
 	// Reject CAS and Version in streamless mode.
@@ -152,7 +156,7 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 		streamPub = statePub
 	}
 
-	ordered := e.node.ResolveMapChannelOptions(ch).Ordered
+	ordered := resolved.Ordered
 
 	var prevPub *Publication
 	streamTop, prevPub, suppressReason, err := e.mapHub.add(ch, key, statePub, streamPub, ordered, opts)
@@ -190,14 +194,21 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 
 // Remove removes a key from keyed state.
 func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
+	if key == "" {
+		return MapPublishResult{}, fmt.Errorf("key is required for remove")
+	}
+
 	mu := e.pubLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
 
+	// Resolve channel options once for this operation.
+	resolved := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
+
 	// Apply channel options defaults from node config.
 	chOpts := applyChannelOptionsDefaults(MapChannelOptions{
 		StreamSize: opts.StreamSize, StreamTTL: opts.StreamTTL, MetaTTL: opts.MetaTTL,
-	}, e.node.ResolveMapChannelOptions, ch)
+	}, resolved)
 	opts.StreamSize, opts.StreamTTL, opts.MetaTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL
 
 	// Reject CAS in streamless mode.
@@ -702,9 +713,7 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 				existingEntry.ExpireAt = expireAt
 				// Update TTL tracking
 				chKey := h.makeChKey(ch, key)
-				if _, exists := h.keyExpires[chKey]; !exists {
-					heap.Push(&h.keyExpireQueue, &priority.Item{Value: chKey, Priority: expireAt})
-				}
+				heap.Push(&h.keyExpireQueue, &priority.Item{Value: chKey, Priority: expireAt})
 				h.keyExpires[chKey] = expireAt
 				if h.nextKeyExpireCheck == 0 || h.nextKeyExpireCheck > expireAt {
 					h.nextKeyExpireCheck = expireAt
@@ -830,9 +839,11 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 		// Handle key TTL expiration tracking
 		if opts.KeyTTL > 0 {
 			chKey := h.makeChKey(ch, key)
-			if _, exists := h.keyExpires[chKey]; !exists {
-				heap.Push(&h.keyExpireQueue, &priority.Item{Value: chKey, Priority: expireAt})
-			}
+			// Always push new heap entry. When a key is refreshed, the old heap entry
+			// becomes stale and will be discarded in expireKeysIteration (which checks
+			// storedExpireAt > poppedExpireAt). Pushing unconditionally ensures the heap
+			// has an entry with the correct (latest) expiration time.
+			heap.Push(&h.keyExpireQueue, &priority.Item{Value: chKey, Priority: expireAt})
 			h.keyExpires[chKey] = expireAt
 			if h.nextKeyExpireCheck == 0 || h.nextKeyExpireCheck > expireAt {
 				h.nextKeyExpireCheck = expireAt

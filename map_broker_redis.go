@@ -527,10 +527,13 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
+	// Resolve channel options once for this operation.
+	resolved := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
+
 	// Apply channel options defaults from node config.
 	chOpts := applyChannelOptionsDefaults(MapChannelOptions{
 		StreamSize: opts.StreamSize, StreamTTL: opts.StreamTTL, MetaTTL: opts.MetaTTL, KeyTTL: opts.KeyTTL,
-	}, e.node.ResolveMapChannelOptions, ch)
+	}, resolved)
 	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL, chOpts.KeyTTL
 
 	// Reject CAS and Version in streamless mode.
@@ -633,7 +636,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		metaKey = e.metaKey(s.shard, ch)
 	}
 
-	ordered := e.node.ResolveMapChannelOptions(ch).Ordered
+	ordered := resolved.Ordered
 
 	if key != "" {
 		stateHashKey = e.stateHashKey(s.shard, ch)
@@ -772,10 +775,13 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
+	// Resolve channel options once for this operation.
+	resolved := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
+
 	// Apply channel options defaults from node config.
 	chOpts := applyChannelOptionsDefaults(MapChannelOptions{
 		StreamSize: opts.StreamSize, StreamTTL: opts.StreamTTL, MetaTTL: opts.MetaTTL,
-	}, e.node.ResolveMapChannelOptions, ch)
+	}, resolved)
 	opts.StreamSize, opts.StreamTTL, opts.MetaTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL
 
 	// Reject CAS in streamless mode.
@@ -909,9 +915,12 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 // Returns entries, stream position, next cursor for pagination, and error.
 // Cursor "0" or "" means end of iteration.
 func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
+	// Resolve channel options once for this operation.
+	resolved := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
+
 	// Handle single key lookup (Key filter) — takes priority over Limit.
 	if opts.Key != "" {
-		return e.readSingleKey(ctx, ch, opts)
+		return e.readSingleKeyWithOpts(ctx, ch, opts, resolved)
 	}
 	// Limit=0: return only stream position (no entries).
 	if opts.Limit == 0 {
@@ -924,16 +933,19 @@ func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadS
 		}
 		return MapStateResult{Position: streamResult.Position}, nil
 	}
-	if e.node.ResolveMapChannelOptions(ch).Ordered {
+	if resolved.Ordered {
 		return e.readOrderedState(ctx, ch, opts)
 	}
 	return e.readUnorderedState(ctx, ch, opts)
 }
 
 func (e *RedisMapBroker) ReadStateZero(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
+	// Resolve channel options once for this operation.
+	resolved := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
+
 	// Handle single key lookup (Key filter) — takes priority over Limit.
 	if opts.Key != "" {
-		return e.readSingleKey(ctx, ch, opts)
+		return e.readSingleKeyWithOpts(ctx, ch, opts, resolved)
 	}
 	// Limit=0: return only stream position (no entries).
 	if opts.Limit == 0 {
@@ -946,22 +958,21 @@ func (e *RedisMapBroker) ReadStateZero(ctx context.Context, ch string, opts MapR
 		}
 		return MapStateResult{Position: streamResult.Position}, nil
 	}
-	if e.node.ResolveMapChannelOptions(ch).Ordered {
+	if resolved.Ordered {
 		return e.readOrderedState(ctx, ch, opts)
 	}
 	return e.readUnorderedStateZero(ctx, ch, opts)
 }
 
-// readSingleKey retrieves a single key from the state using HGET instead of HSCAN.
+// readSingleKeyWithOpts retrieves a single key from the state using HGET instead of HSCAN.
 // This is more efficient for single key lookups and supports CAS read-modify-write patterns.
-func (e *RedisMapBroker) readSingleKey(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
+func (e *RedisMapBroker) readSingleKeyWithOpts(ctx context.Context, ch string, opts MapReadStateOptions, resolved MapChannelOptions) (MapStateResult, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
 	stateHashKey := e.stateHashKey(s.shard, ch)
 
-	chOpts := e.node.ResolveMapChannelOptions(ch)
-	streamless := chOpts.StreamSize <= 0
+	streamless := resolved.StreamSize <= 0
 
 	if streamless {
 		// Streamless mode: just read the key, no meta needed.

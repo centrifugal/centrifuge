@@ -1923,3 +1923,24 @@ func TestMemoryMapBroker_ReadStream_Table(t *testing.T) {
 		return newTestMemoryMapBroker(t, node)
 	})
 }
+
+func TestMemoryMapBroker_EpochOnEmptyChannel(t *testing.T) {
+	testMapBrokerEpochOnEmptyChannel(t, func(t *testing.T) MapBroker {
+		node, _ := New(Config{})
+		return newTestMemoryMapBroker(t, node)
+	})
+}
+
+func TestMemoryMapBroker_ReadStateAllEntries(t *testing.T) {
+	testMapBrokerReadStateAllEntries(t, func(t *testing.T) MapBroker {
+		node, _ := New(Config{})
+		return newTestMemoryMapBroker(t, node)
+	})
+}
+
+func TestMemoryMapBroker_RemoveEmptyKey(t *testing.T) {
+	testMapBrokerRemoveEmptyKey(t, func(t *testing.T) MapBroker {
+		node, _ := New(Config{})
+		return newTestMemoryMapBroker(t, node)
+	})
+}

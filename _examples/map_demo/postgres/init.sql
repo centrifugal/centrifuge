@@ -574,12 +574,14 @@ $$ LANGUAGE plpgsql;
 -- removal events to stream and optionally outbox — all in one round trip.
 -- Uses FOR UPDATE SKIP LOCKED to avoid contention with concurrent writers.
 -- Re-checks expires_at after locking to avoid TOCTOU race (key TTL refreshed between scan and lock).
+-- When p_channel is not NULL, only expires keys for that specific channel (allows per-channel TTL options).
 CREATE OR REPLACE FUNCTION cf_map_expire_keys(
     p_batch_size INT DEFAULT 1000,
     p_skip_outbox BOOLEAN DEFAULT FALSE,
     p_num_shards INTEGER DEFAULT 16,
     p_stream_ttl INTERVAL DEFAULT NULL,
-    p_meta_ttl INTERVAL DEFAULT NULL
+    p_meta_ttl INTERVAL DEFAULT NULL,
+    p_channel TEXT DEFAULT NULL
 ) RETURNS TABLE(
     out_channel TEXT,
     out_key TEXT,
@@ -595,6 +597,7 @@ BEGIN
     FOR rec IN
         SELECT channel, key FROM cf_map_state
         WHERE expires_at IS NOT NULL AND expires_at <= NOW()
+          AND (p_channel IS NULL OR channel = p_channel)
         LIMIT p_batch_size
         FOR UPDATE SKIP LOCKED
     LOOP

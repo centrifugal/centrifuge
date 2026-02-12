@@ -34,8 +34,7 @@ import (
 type PostgresMapBroker struct {
 	node         *Node
 	conf         PostgresMapBrokerConfig
-	pool         *pgxpool.Pool // Primary pool for writes
-	readPool     *pgxpool.Pool // Replica pool for reads (optional)
+	pool *pgxpool.Pool // Primary pool for writes
 	eventHandler BrokerEventHandler
 	closeCh      chan struct{}
 	closeOnce    sync.Once
@@ -264,7 +263,7 @@ func NewPostgresMapBroker(n *Node, conf PostgresMapBrokerConfig) (*PostgresMapBr
 	return e, nil
 }
 
-// getReadPool returns the read pool (only primary - replica can't be used from atomicity perspective).
+// getReadPool returns the pool for read operations.
 func (e *PostgresMapBroker) getReadPool() *pgxpool.Pool {
 	return e.pool
 }
@@ -363,9 +362,6 @@ func (e *PostgresMapBroker) Close(ctx context.Context) error {
 			}
 		}
 		e.pool.Close()
-		if e.readPool != nil {
-			e.readPool.Close()
-		}
 	})
 	return nil
 }
@@ -410,10 +406,13 @@ func parseSuppressReason(reason *string) SuppressReason {
 
 // Publish publishes data to a map channel using the cf_map_publish SQL function.
 func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
+	// Resolve channel options once for this operation.
+	resolved := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
+
 	// Apply channel options defaults from node config.
 	chOpts := applyChannelOptionsDefaults(MapChannelOptions{
 		StreamSize: opts.StreamSize, StreamTTL: opts.StreamTTL, MetaTTL: opts.MetaTTL, KeyTTL: opts.KeyTTL,
-	}, e.node.ResolveMapChannelOptions, ch)
+	}, resolved)
 	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL, chOpts.KeyTTL
 
 	// Reject CAS and Version in streamless mode.
@@ -491,7 +490,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 
 	// Prepare score
 	var score *int64
-	ordered := e.node.ResolveMapChannelOptions(ch).Ordered
+	ordered := resolved.Ordered
 	if ordered || opts.Score != 0 {
 		score = &opts.Score
 	}
@@ -593,10 +592,17 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 
 // Remove removes a key from keyed state using the cf_map_remove SQL function.
 func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
+	if key == "" {
+		return MapPublishResult{}, fmt.Errorf("key is required for remove")
+	}
+
+	// Resolve channel options once for this operation.
+	resolved := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
+
 	// Apply channel options defaults from node config.
 	chOpts := applyChannelOptionsDefaults(MapChannelOptions{
 		StreamSize: opts.StreamSize, StreamTTL: opts.StreamTTL, MetaTTL: opts.MetaTTL,
-	}, e.node.ResolveMapChannelOptions, ch)
+	}, resolved)
 	opts.StreamSize, opts.StreamTTL, opts.MetaTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL
 
 	// Reject CAS in streamless mode.
@@ -1525,54 +1531,74 @@ func (e *PostgresMapBroker) runTTLExpirationWorker() {
 }
 
 func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
-	// Use batch SQL function that atomically: finds expired keys, re-checks TTL after lock
-	// (avoiding TOCTOU race), removes from state, and writes removal events to stream+outbox.
 	skipOutbox := e.conf.WAL.Enabled
 	numShards := e.conf.Outbox.NumShards
 
-	// Use default TTLs for stream/meta on removal events.
-	defaults := e.node.ResolveMapChannelOptions("")
-	var streamTTL, metaTTL *string
-	if defaults.StreamTTL > 0 {
-		s := strconv.Itoa(int(defaults.StreamTTL.Seconds())) + " seconds"
-		streamTTL = &s
-	}
-	if defaults.MetaTTL > 0 {
-		s := strconv.Itoa(int(defaults.MetaTTL.Seconds())) + " seconds"
-		metaTTL = &s
-	}
-
-	rows, err := e.pool.Query(ctx, `
-		SELECT out_channel, out_key, out_offset, out_epoch
-		FROM cf_map_expire_keys($1, $2, $3, $4::interval, $5::interval)
-	`, 1000, skipOutbox, numShards, streamTTL, metaTTL)
+	// Find distinct channels with expired keys to resolve per-channel options.
+	channelRows, err := e.pool.Query(ctx, `
+		SELECT DISTINCT channel FROM cf_map_state
+		WHERE expires_at IS NOT NULL AND expires_at <= NOW()
+		LIMIT 100
+	`)
 	if err != nil {
-		e.node.logger.log(newErrorLogEntry(err, "error in batch key expiration", nil))
+		e.node.logger.log(newErrorLogEntry(err, "error querying channels for key expiration", nil))
 		return
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var ch, key, epochStr string
-		var offset int64
-		if err := rows.Scan(&ch, &key, &offset, &epochStr); err != nil {
+	var channels []string
+	for channelRows.Next() {
+		var ch string
+		if err := channelRows.Scan(&ch); err != nil {
 			continue
 		}
-		// Emit removal event to subscribers (outbox/WAL handles delivery to other nodes).
-		if e.eventHandler != nil {
-			pub := &Publication{
-				Key:     key,
-				Removed: true,
-				Offset:  uint64(offset),
-				Time:    time.Now().UnixMilli(),
+		channels = append(channels, ch)
+	}
+	channelRows.Close()
+
+	// Process each channel with its own resolved options.
+	for _, ch := range channels {
+		chOpts := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
+		var streamTTL, metaTTL *string
+		if chOpts.StreamTTL > 0 {
+			s := strconv.Itoa(int(chOpts.StreamTTL.Seconds())) + " seconds"
+			streamTTL = &s
+		}
+		if chOpts.MetaTTL > 0 {
+			s := strconv.Itoa(int(chOpts.MetaTTL.Seconds())) + " seconds"
+			metaTTL = &s
+		}
+
+		rows, err := e.pool.Query(ctx, `
+			SELECT out_channel, out_key, out_offset, out_epoch
+			FROM cf_map_expire_keys($1, $2, $3, $4::interval, $5::interval, $6)
+		`, 1000, skipOutbox, numShards, streamTTL, metaTTL, ch)
+		if err != nil {
+			e.node.logger.log(newErrorLogEntry(err, "error in batch key expiration", map[string]any{"channel": ch}))
+			continue
+		}
+
+		for rows.Next() {
+			var expCh, key, epochStr string
+			var offset int64
+			if err := rows.Scan(&expCh, &key, &offset, &epochStr); err != nil {
+				continue
 			}
-			pos := StreamPosition{Offset: uint64(offset), Epoch: epochStr}
-			if err := e.eventHandler.HandlePublication(ch, pub, pos, false, nil); err != nil {
-				e.node.logger.log(newErrorLogEntry(err, "error handling expired key publication", map[string]any{
-					"channel": ch, "key": key,
-				}))
+			// Emit removal event to subscribers (outbox/WAL handles delivery to other nodes).
+			if e.eventHandler != nil {
+				pub := &Publication{
+					Key:     key,
+					Removed: true,
+					Offset:  uint64(offset),
+					Time:    time.Now().UnixMilli(),
+				}
+				pos := StreamPosition{Offset: uint64(offset), Epoch: epochStr}
+				if err := e.eventHandler.HandlePublication(expCh, pub, pos, false, nil); err != nil {
+					e.node.logger.log(newErrorLogEntry(err, "error handling expired key publication", map[string]any{
+						"channel": expCh, "key": key,
+					}))
+				}
 			}
 		}
+		rows.Close()
 	}
 }
 

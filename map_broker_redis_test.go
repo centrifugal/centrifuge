@@ -2646,3 +2646,24 @@ func TestRedisMapBroker_ReadStream_Table(t *testing.T) {
 		return newTestRedisMapBroker(t, node)
 	})
 }
+
+func TestRedisMapBroker_EpochOnEmptyChannel(t *testing.T) {
+	testMapBrokerEpochOnEmptyChannel(t, func(t *testing.T) MapBroker {
+		node, _ := New(Config{})
+		return newTestRedisMapBroker(t, node)
+	})
+}
+
+func TestRedisMapBroker_ReadStateAllEntries(t *testing.T) {
+	testMapBrokerReadStateAllEntries(t, func(t *testing.T) MapBroker {
+		node, _ := New(Config{})
+		return newTestRedisMapBroker(t, node)
+	})
+}
+
+func TestRedisMapBroker_RemoveEmptyKey(t *testing.T) {
+	testMapBrokerRemoveEmptyKey(t, func(t *testing.T) MapBroker {
+		node, _ := New(Config{})
+		return newTestRedisMapBroker(t, node)
+	})
+}

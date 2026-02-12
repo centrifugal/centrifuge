@@ -368,23 +368,24 @@ type MapStateResult struct {
 // Currently empty but reserved for future options (e.g., selective removal).
 type MapClearOptions struct{}
 
+// resolveChannelOptions resolves channel options from the resolver, falling back to defaults.
+// Used by broker implementations to resolve once per operation and avoid repeated resolver calls.
+func resolveChannelOptions(resolver MapChannelOptionsResolver, channel string) MapChannelOptions {
+	if resolver != nil {
+		return resolver(channel)
+	}
+	return DefaultMapChannelOptions()
+}
+
 // applyChannelOptionsDefaults fills in missing channel options from the resolver.
 // If a value is 0, it's replaced with the default from resolver.
 // If a value is -1 (for durations) or negative (for StreamSize), it's set to 0 (explicitly disabled).
 // Positive values are kept as-is.
 func applyChannelOptionsDefaults(
 	opts MapChannelOptions,
-	resolver MapChannelOptionsResolver, channel string,
+	resolved MapChannelOptions,
 ) MapChannelOptions {
-	// Get defaults only if needed.
-	var defaults MapChannelOptions
-	needDefaults := opts.StreamSize == 0 || opts.StreamTTL == 0 || opts.MetaTTL == 0 || opts.KeyTTL == 0
-	if needDefaults {
-		defaults = DefaultMapChannelOptions()
-		if resolver != nil {
-			defaults = resolver(channel)
-		}
-	}
+	defaults := resolved
 
 	// Apply StreamSize: negative means explicitly disabled (use 0), 0 means use default.
 	if opts.StreamSize < 0 {
