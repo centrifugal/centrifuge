@@ -782,6 +782,18 @@ func (n *Node) publish(ch string, data []byte, opts ...PublishOption) (PublishRe
 	for _, opt := range opts {
 		opt(pubOpts)
 	}
+
+	// Validate history TTL configuration if history is enabled.
+	if pubOpts.HistorySize > 0 && pubOpts.HistoryTTL > 0 {
+		historyMetaTTL := pubOpts.HistoryMetaTTL
+		if historyMetaTTL == 0 {
+			historyMetaTTL = n.config.HistoryMetaTTL
+		}
+		if historyMetaTTL > 0 && historyMetaTTL < pubOpts.HistoryTTL {
+			return PublishResult{}, ErrorIncorrectHistoryTTLConfiguration
+		}
+	}
+
 	n.metrics.incMessagesSent("publication", ch)
 	streamPos, fromCache, err := n.getBroker(ch).Publish(ch, data, *pubOpts)
 	if err != nil {
