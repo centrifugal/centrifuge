@@ -14,7 +14,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.5
+          version: v2.9
           args: --timeout 3m0s --verbose
   build:
     name: Test with Go ${{ matrix.go-version }} Redis ${{ matrix.redis-version }}
@@ -23,7 +23,7 @@ jobs:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     strategy:
       matrix:
-        go-version: ["1.24", "1.25"]
+        go-version: ["1.25", "1.26"]
         redis-version: [6, 7]
     steps:
       - name: Install Go stable version
@@ -43,7 +43,7 @@ jobs:
         run: go test -v -race -tags integration -coverprofile=coverage.out $(go list ./... | grep -v /_examples/)
 
       - name: Upload code coverage to codecov
-        if: matrix.go-version == '1.25' && matrix.redis-version == 7
+        if: matrix.go-version == '1.26' && matrix.redis-version == 7
         uses: codecov/codecov-action@v4
         with:
           file: ./coverage.out
