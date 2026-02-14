@@ -1,9 +1,7 @@
 -- ============================================================================
 -- PostgreSQL MapBroker Schema and Functions
--- ============================================================================
--- NOTE: You can use PostgresMapBroker.EnsureSchema() to create this schema
--- automatically instead of running this script manually. EnsureSchema() uses
--- JSONB for data columns by default (set BinaryData=true for BYTEA).
+-- Auto-created by EnsureSchema(). All statements are idempotent.
+-- __DATA_TYPE__ is replaced at runtime with JSONB (default) or BYTEA.
 -- ============================================================================
 
 -- Stream Table (Change History + Fan-out)
@@ -11,39 +9,33 @@ CREATE TABLE IF NOT EXISTS cf_map_stream (
     id              BIGSERIAL PRIMARY KEY,
     channel         TEXT NOT NULL,
     channel_offset  BIGINT NOT NULL,
-    epoch           TEXT NOT NULL DEFAULT '',  -- Denormalized from cf_map_meta for WAL reader
+    epoch           TEXT NOT NULL DEFAULT '',
     key             TEXT NOT NULL,
-    data            JSONB,
+    data            __DATA_TYPE__,
     tags            JSONB,
     client_id       TEXT,
     user_id         TEXT,
-    conn_info       JSONB,
-    chan_info       JSONB,
+    conn_info       __DATA_TYPE__,
+    chan_info        __DATA_TYPE__,
     subscribed_at   TIMESTAMPTZ,
     removed         BOOLEAN DEFAULT FALSE,
     score           BIGINT,
-    previous_data   JSONB,          -- Previous key data for delta computation
+    previous_data   __DATA_TYPE__,
     expires_at      TIMESTAMPTZ,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
-    -- Shard number for partitioned logical replication (0 to N-1)
-    -- Stored as regular column, computed by functions with p_num_shards parameter
     shard_id        SMALLINT NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS cf_map_stream_channel_offset_idx ON cf_map_stream (channel, channel_offset);
-CREATE INDEX IF NOT EXISTS cf_map_stream_channel_id_idx ON cf_map_stream (channel, id DESC);  -- For efficient stream trimming
+CREATE INDEX IF NOT EXISTS cf_map_stream_channel_id_idx ON cf_map_stream (channel, id DESC);
 CREATE INDEX IF NOT EXISTS cf_map_stream_expires_idx ON cf_map_stream (expires_at) WHERE expires_at IS NOT NULL;
--- Composite index for cursor-based outbox polling (shard_id, id)
 CREATE INDEX IF NOT EXISTS cf_map_stream_shard_cursor_idx ON cf_map_stream (shard_id, id);
 
--- Set REPLICA IDENTITY to FULL for logical replication (needed to decode all columns)
 ALTER TABLE cf_map_stream REPLICA IDENTITY FULL;
 
 -- ============================================================================
--- Outbox Cursor Table (tracks per-shard delivery progress)
+-- Outbox Cursor Table
 -- ============================================================================
--- Outbox workers read from cf_map_stream using cursors instead of a separate table.
--- Each shard tracks its last processed stream id here.
 
 CREATE TABLE IF NOT EXISTS cf_map_outbox_cursor (
     shard_id          INTEGER PRIMARY KEY,
@@ -52,60 +44,18 @@ CREATE TABLE IF NOT EXISTS cf_map_outbox_cursor (
 );
 
 -- ============================================================================
--- Logical Replication Publications (for WAL-based change streaming - opt-in)
--- ============================================================================
--- Create sharded publications for parallel WAL readers.
--- Each publication filters by shard number, allowing N readers to split the load.
--- Default: 16 shards (adjust shard_id column and publications as needed)
-
-DROP PUBLICATION IF EXISTS cf_map_stream_shard_0;
-DROP PUBLICATION IF EXISTS cf_map_stream_shard_1;
-DROP PUBLICATION IF EXISTS cf_map_stream_shard_2;
-DROP PUBLICATION IF EXISTS cf_map_stream_shard_3;
-DROP PUBLICATION IF EXISTS cf_map_stream_shard_4;
-DROP PUBLICATION IF EXISTS cf_map_stream_shard_5;
-DROP PUBLICATION IF EXISTS cf_map_stream_shard_6;
-DROP PUBLICATION IF EXISTS cf_map_stream_shard_7;
-DROP PUBLICATION IF EXISTS cf_map_stream_shard_8;
-DROP PUBLICATION IF EXISTS cf_map_stream_shard_9;
-DROP PUBLICATION IF EXISTS cf_map_stream_shard_10;
-DROP PUBLICATION IF EXISTS cf_map_stream_shard_11;
-DROP PUBLICATION IF EXISTS cf_map_stream_shard_12;
-DROP PUBLICATION IF EXISTS cf_map_stream_shard_13;
-DROP PUBLICATION IF EXISTS cf_map_stream_shard_14;
-DROP PUBLICATION IF EXISTS cf_map_stream_shard_15;
-DROP PUBLICATION IF EXISTS cf_map_stream_all;
-
-CREATE PUBLICATION cf_map_stream_shard_0 FOR TABLE cf_map_stream WHERE (shard_id = 0);
-CREATE PUBLICATION cf_map_stream_shard_1 FOR TABLE cf_map_stream WHERE (shard_id = 1);
-CREATE PUBLICATION cf_map_stream_shard_2 FOR TABLE cf_map_stream WHERE (shard_id = 2);
-CREATE PUBLICATION cf_map_stream_shard_3 FOR TABLE cf_map_stream WHERE (shard_id = 3);
-CREATE PUBLICATION cf_map_stream_shard_4 FOR TABLE cf_map_stream WHERE (shard_id = 4);
-CREATE PUBLICATION cf_map_stream_shard_5 FOR TABLE cf_map_stream WHERE (shard_id = 5);
-CREATE PUBLICATION cf_map_stream_shard_6 FOR TABLE cf_map_stream WHERE (shard_id = 6);
-CREATE PUBLICATION cf_map_stream_shard_7 FOR TABLE cf_map_stream WHERE (shard_id = 7);
-CREATE PUBLICATION cf_map_stream_shard_8 FOR TABLE cf_map_stream WHERE (shard_id = 8);
-CREATE PUBLICATION cf_map_stream_shard_9 FOR TABLE cf_map_stream WHERE (shard_id = 9);
-CREATE PUBLICATION cf_map_stream_shard_10 FOR TABLE cf_map_stream WHERE (shard_id = 10);
-CREATE PUBLICATION cf_map_stream_shard_11 FOR TABLE cf_map_stream WHERE (shard_id = 11);
-CREATE PUBLICATION cf_map_stream_shard_12 FOR TABLE cf_map_stream WHERE (shard_id = 12);
-CREATE PUBLICATION cf_map_stream_shard_13 FOR TABLE cf_map_stream WHERE (shard_id = 13);
-CREATE PUBLICATION cf_map_stream_shard_14 FOR TABLE cf_map_stream WHERE (shard_id = 14);
-CREATE PUBLICATION cf_map_stream_shard_15 FOR TABLE cf_map_stream WHERE (shard_id = 15);
-
--- Also create a publication for all shards (single reader mode)
-CREATE PUBLICATION cf_map_stream_all FOR TABLE cf_map_stream;
-
 -- Snapshot Table (Current State)
+-- ============================================================================
+
 CREATE TABLE IF NOT EXISTS cf_map_state (
     channel             TEXT NOT NULL,
     key                 TEXT NOT NULL,
-    data                JSONB,
+    data                __DATA_TYPE__,
     tags                JSONB,
     client_id           TEXT,
     user_id             TEXT,
-    conn_info           JSONB,
-    chan_info           JSONB,
+    conn_info           __DATA_TYPE__,
+    chan_info            __DATA_TYPE__,
     subscribed_at       TIMESTAMPTZ,
     score               BIGINT,
     key_version         BIGINT DEFAULT 0,
@@ -124,7 +74,10 @@ CREATE INDEX IF NOT EXISTS cf_map_state_expires_idx
     ON cf_map_state (expires_at)
     WHERE expires_at IS NOT NULL;
 
+-- ============================================================================
 -- Stream Metadata Table
+-- ============================================================================
+
 CREATE TABLE IF NOT EXISTS cf_map_meta (
     channel         TEXT PRIMARY KEY,
     top_offset      BIGINT NOT NULL DEFAULT 0,
@@ -140,7 +93,10 @@ CREATE INDEX IF NOT EXISTS cf_map_meta_expires_idx
     ON cf_map_meta (expires_at)
     WHERE expires_at IS NOT NULL;
 
+-- ============================================================================
 -- Idempotency Table
+-- ============================================================================
+
 CREATE TABLE IF NOT EXISTS cf_map_idempotency (
     channel         TEXT NOT NULL,
     idempotency_key TEXT NOT NULL,
@@ -156,18 +112,15 @@ CREATE INDEX IF NOT EXISTS cf_map_idempotency_expires_idx ON cf_map_idempotency 
 -- Functions
 -- ============================================================================
 
--- cf_map_publish: Main publishing function
--- Parameters:
---   p_num_shards: Number of shards for shard_id calculation (default: 16)
 CREATE OR REPLACE FUNCTION cf_map_publish(
     p_channel TEXT,
     p_key TEXT,
-    p_data JSONB,
+    p_data __DATA_TYPE__,
     p_tags JSONB DEFAULT NULL,
     p_client_id TEXT DEFAULT NULL,
     p_user_id TEXT DEFAULT NULL,
-    p_conn_info JSONB DEFAULT NULL,
-    p_chan_info JSONB DEFAULT NULL,
+    p_conn_info __DATA_TYPE__ DEFAULT NULL,
+    p_chan_info __DATA_TYPE__ DEFAULT NULL,
     p_subscribed_at TIMESTAMPTZ DEFAULT NULL,
     p_key_mode TEXT DEFAULT NULL,
     p_key_ttl INTERVAL DEFAULT NULL,
@@ -185,14 +138,14 @@ CREATE OR REPLACE FUNCTION cf_map_publish(
     p_refresh_ttl_on_suppress BOOLEAN DEFAULT FALSE,
     p_use_delta BOOLEAN DEFAULT FALSE,
     p_num_shards INTEGER DEFAULT 16,
-    p_stream_data JSONB DEFAULT NULL
+    p_stream_data __DATA_TYPE__ DEFAULT NULL
 ) RETURNS TABLE(
     result_id BIGINT,
     channel_offset BIGINT,
     epoch TEXT,
     suppressed BOOLEAN,
     suppress_reason TEXT,
-    current_data JSONB,
+    current_data __DATA_TYPE__,
     current_offset BIGINT
 ) AS $$
 DECLARE
@@ -201,8 +154,8 @@ DECLARE
     v_epoch TEXT;
     v_exists BOOLEAN;
     v_current_offset BIGINT;
-    v_current_data JSONB;
-    v_previous_data JSONB;
+    v_current_data __DATA_TYPE__;
+    v_previous_data __DATA_TYPE__;
     v_current_version BIGINT;
     v_stream_version BIGINT;
     v_stream_version_epoch TEXT;
@@ -228,7 +181,7 @@ BEGIN
           AND expires_at > NOW();
         IF FOUND THEN
             RETURN QUERY SELECT NULL::BIGINT, v_current_offset, v_epoch, TRUE,
-                'idempotency'::TEXT, NULL::JSONB, NULL::BIGINT;
+                'idempotency'::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
             RETURN;
         END IF;
     END IF;
@@ -252,11 +205,11 @@ BEGIN
                 UPDATE cf_map_state SET expires_at = NOW() + p_key_ttl, updated_at = NOW()
                 WHERE channel = p_channel AND key = p_key;
             END IF;
-            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'key_exists'::TEXT, NULL::JSONB, NULL::BIGINT;
+            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'key_exists'::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
             RETURN;
         END IF;
         IF p_key_mode = 'if_exists' AND NOT v_exists THEN
-            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'key_not_found'::TEXT, NULL::JSONB, NULL::BIGINT;
+            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'key_not_found'::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
             RETURN;
         END IF;
     END IF;
@@ -265,7 +218,7 @@ BEGIN
     IF p_version IS NOT NULL THEN
         IF (p_version_epoch IS NULL OR p_version_epoch = v_stream_version_epoch)
            AND p_version <= v_stream_version THEN
-            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'version'::TEXT, NULL::JSONB, NULL::BIGINT;
+            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'version'::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
             RETURN;
         END IF;
     END IF;
@@ -326,14 +279,14 @@ BEGIN
         );
     END IF;
 
-    -- 11. Save idempotency key
+    -- 10. Save idempotency key
     IF p_idempotency_key IS NOT NULL THEN
         INSERT INTO cf_map_idempotency (channel, idempotency_key, result_offset, result_id, expires_at)
         VALUES (p_channel, p_idempotency_key, v_offset, v_id, NOW() + COALESCE(p_idempotency_ttl, INTERVAL '5 minutes'))
         ON CONFLICT DO NOTHING;
     END IF;
 
-    RETURN QUERY SELECT v_id, v_offset, v_epoch, FALSE, NULL::TEXT, NULL::JSONB, NULL::BIGINT;
+    RETURN QUERY SELECT v_id, v_offset, v_epoch, FALSE, NULL::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -341,12 +294,12 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION cf_map_publish_strict(
     p_channel TEXT,
     p_key TEXT,
-    p_data JSONB,
+    p_data __DATA_TYPE__,
     p_tags JSONB DEFAULT NULL,
     p_client_id TEXT DEFAULT NULL,
     p_user_id TEXT DEFAULT NULL,
-    p_conn_info JSONB DEFAULT NULL,
-    p_chan_info JSONB DEFAULT NULL,
+    p_conn_info __DATA_TYPE__ DEFAULT NULL,
+    p_chan_info __DATA_TYPE__ DEFAULT NULL,
     p_subscribed_at TIMESTAMPTZ DEFAULT NULL,
     p_key_mode TEXT DEFAULT NULL,
     p_key_ttl INTERVAL DEFAULT NULL,
@@ -364,7 +317,7 @@ CREATE OR REPLACE FUNCTION cf_map_publish_strict(
     p_refresh_ttl_on_suppress BOOLEAN DEFAULT FALSE,
     p_use_delta BOOLEAN DEFAULT FALSE,
     p_num_shards INTEGER DEFAULT 16,
-    p_stream_data JSONB DEFAULT NULL
+    p_stream_data __DATA_TYPE__ DEFAULT NULL
 ) RETURNS TABLE(
     result_id BIGINT,
     channel_offset BIGINT,
@@ -413,8 +366,6 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- cf_map_remove: Remove a key
--- Parameters:
---   p_num_shards: Number of shards for shard_id calculation (default: 16)
 CREATE OR REPLACE FUNCTION cf_map_remove(
     p_channel TEXT,
     p_key TEXT,
@@ -432,7 +383,7 @@ CREATE OR REPLACE FUNCTION cf_map_remove(
     epoch TEXT,
     suppressed BOOLEAN,
     suppress_reason TEXT,
-    current_data JSONB,
+    current_data __DATA_TYPE__,
     current_offset BIGINT
 ) AS $$
 DECLARE
@@ -442,7 +393,7 @@ DECLARE
     v_exists BOOLEAN;
     v_shard_id INTEGER;
     v_current_offset BIGINT;
-    v_current_data JSONB;
+    v_current_data __DATA_TYPE__;
 BEGIN
     -- Calculate shard_id from channel hash
     v_shard_id := abs(hashtext(p_channel)) % p_num_shards;
@@ -452,7 +403,7 @@ BEGIN
     FROM cf_map_meta m WHERE m.channel = p_channel;
 
     IF NOT FOUND THEN
-        RETURN QUERY SELECT NULL::BIGINT, 0::BIGINT, ''::TEXT, TRUE, 'key_not_found'::TEXT, NULL::JSONB, NULL::BIGINT;
+        RETURN QUERY SELECT NULL::BIGINT, 0::BIGINT, ''::TEXT, TRUE, 'key_not_found'::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
         RETURN;
     END IF;
 
@@ -463,7 +414,7 @@ BEGIN
         WHERE channel = p_channel AND idempotency_key = p_idempotency_key
           AND expires_at > NOW();
         IF FOUND THEN
-            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'idempotency'::TEXT, NULL::JSONB, NULL::BIGINT;
+            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'idempotency'::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
             RETURN;
         END IF;
     END IF;
@@ -482,7 +433,7 @@ BEGIN
     -- 4. Check if key exists
     SELECT EXISTS(SELECT 1 FROM cf_map_state WHERE channel = p_channel AND key = p_key) INTO v_exists;
     IF NOT v_exists THEN
-        RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'key_not_found'::TEXT, NULL::JSONB, NULL::BIGINT;
+        RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'key_not_found'::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
         RETURN;
     END IF;
 
@@ -512,7 +463,7 @@ BEGIN
         ON CONFLICT DO NOTHING;
     END IF;
 
-    RETURN QUERY SELECT v_id, v_offset, v_epoch, FALSE, NULL::TEXT, NULL::JSONB, NULL::BIGINT;
+    RETURN QUERY SELECT v_id, v_offset, v_epoch, FALSE, NULL::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -552,11 +503,6 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- cf_map_expire_keys: Atomically expire keys that have passed their TTL.
--- Finds expired keys, removes from state, increments stream offsets, and writes
--- removal events to stream and optionally outbox — all in one round trip.
--- Uses FOR UPDATE SKIP LOCKED to avoid contention with concurrent writers.
--- Re-checks expires_at after locking to avoid TOCTOU race (key TTL refreshed between scan and lock).
--- When p_channel is not NULL, only expires keys for that specific channel (allows per-channel TTL options).
 CREATE OR REPLACE FUNCTION cf_map_expire_keys(
     p_batch_size INT DEFAULT 1000,
     p_num_shards INTEGER DEFAULT 16,

@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,9 @@ import (
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+//go:embed internal/postgres_sql/schema.sql
+var postgresSchemaSQL string
 
 // PostgresMapBroker is MapBroker implementation using PostgreSQL for persistent
 // map subscriptions. It provides durability, CAS operations, and transactional
@@ -143,6 +147,11 @@ type PostgresMapBrokerConfig struct {
 	// WAL configures the WAL-based delivery mode (opt-in).
 	// Set WAL.Enabled = true to use logical replication instead of outbox.
 	WAL WALConfig
+
+	// BinaryData uses BYTEA columns instead of JSONB for data fields.
+	// Default: false (JSONB — suitable for JSON payloads, enables JSONB queries).
+	// Set to true if data payloads are not valid JSON (binary/protobuf).
+	BinaryData bool
 }
 
 func (c *PostgresMapBrokerConfig) setDefaults() {
@@ -329,6 +338,248 @@ func (e *PostgresMapBroker) Close(ctx context.Context) error {
 		}
 		e.pool.Close()
 	})
+	return nil
+}
+
+// SchemaObject identifies a database object involved in a schema error.
+type SchemaObject struct {
+	Type string // "table", "index", "function", "publication"
+	Name string
+}
+
+// SchemaError wraps a schema-related error with object and operation info.
+type SchemaError struct {
+	Object SchemaObject
+	Op     string // "create", "verify"
+	Err    error
+}
+
+func (e *SchemaError) Error() string {
+	return fmt.Sprintf("schema %s %s %q: %v", e.Op, e.Object.Type, e.Object.Name, e.Err)
+}
+
+func (e *SchemaError) Unwrap() error {
+	return e.Err
+}
+
+// EnsureSchema creates all required database objects idempotently.
+// It executes the embedded schema SQL (tables, indexes, functions) and,
+// when WAL mode is enabled, creates publications for each shard.
+//
+// Data columns use JSONB by default (suitable for JSON payloads).
+// Set BinaryData=true in config to use BYTEA instead.
+//
+// This method is safe to call multiple times — all DDL uses
+// CREATE IF NOT EXISTS / CREATE OR REPLACE. If the schema already exists
+// with a different data type (e.g. BYTEA→JSONB), columns are altered and
+// functions are dropped/recreated automatically.
+func (e *PostgresMapBroker) EnsureSchema(ctx context.Context) error {
+	dataType := "JSONB"
+	if e.conf.BinaryData {
+		dataType = "BYTEA"
+	}
+	dataTypeLower := strings.ToLower(dataType)
+
+	// Check if schema exists with a different data type and migrate if needed.
+	// We probe cf_map_state.data — if the table exists but has a different type,
+	// we need to ALTER columns and DROP/recreate functions (CREATE OR REPLACE
+	// cannot change parameter/return types).
+	if err := e.migrateDataTypeIfNeeded(ctx, dataTypeLower); err != nil {
+		return err
+	}
+
+	sql := strings.ReplaceAll(postgresSchemaSQL, "__DATA_TYPE__", dataType)
+
+	if _, err := e.pool.Exec(ctx, sql); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			return &SchemaError{
+				Object: SchemaObject{Type: "schema", Name: pgErr.TableName},
+				Op:     "create",
+				Err:    err,
+			}
+		}
+		return &SchemaError{
+			Object: SchemaObject{Type: "schema", Name: ""},
+			Op:     "create",
+			Err:    err,
+		}
+	}
+
+	// Create publications for WAL mode.
+	if e.conf.WAL.Enabled {
+		if err := e.ensurePublications(ctx); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// migrateDataTypeIfNeeded checks if existing schema uses a different data type
+// and migrates columns + drops functions if needed.
+func (e *PostgresMapBroker) migrateDataTypeIfNeeded(ctx context.Context, wantType string) error {
+	var currentType string
+	err := e.pool.QueryRow(ctx,
+		`SELECT data_type FROM information_schema.columns
+		 WHERE table_name = 'cf_map_state' AND column_name = 'data'`,
+	).Scan(&currentType)
+	if err != nil {
+		// Table doesn't exist yet — nothing to migrate.
+		return nil
+	}
+
+	if currentType == wantType {
+		return nil // Already the right type.
+	}
+
+	// Data type mismatch — need to alter columns and drop functions.
+	// Functions must be dropped first because they reference the column types
+	// and CREATE OR REPLACE cannot change parameter/return types.
+	funcs := []string{
+		"cf_map_publish", "cf_map_publish_strict",
+		"cf_map_remove", "cf_map_remove_strict",
+		"cf_map_expire_keys",
+	}
+	for _, fn := range funcs {
+		if _, err := e.pool.Exec(ctx, fmt.Sprintf("DROP FUNCTION IF EXISTS %s CASCADE", fn)); err != nil {
+			return &SchemaError{
+				Object: SchemaObject{Type: "function", Name: fn},
+				Op:     "drop",
+				Err:    err,
+			}
+		}
+	}
+
+	// Alter columns in existing tables.
+	pgType := strings.ToUpper(wantType) // JSONB or BYTEA
+	columns := []struct {
+		table  string
+		column string
+	}{
+		{"cf_map_stream", "data"},
+		{"cf_map_stream", "conn_info"},
+		{"cf_map_stream", "chan_info"},
+		{"cf_map_stream", "previous_data"},
+		{"cf_map_state", "data"},
+		{"cf_map_state", "conn_info"},
+		{"cf_map_state", "chan_info"},
+	}
+	for _, col := range columns {
+		// PostgreSQL can't directly cast between JSONB and BYTEA.
+		// JSONB → BYTEA: go through TEXT (JSON text representation as bytes).
+		// BYTEA → JSONB: interpret bytes as UTF-8 and parse as JSON.
+		var usingExpr string
+		if pgType == "BYTEA" {
+			usingExpr = fmt.Sprintf("%s::text::bytea", col.column)
+		} else {
+			usingExpr = fmt.Sprintf("convert_from(%s, 'UTF8')::jsonb", col.column)
+		}
+		sql := fmt.Sprintf(
+			"ALTER TABLE %s ALTER COLUMN %s TYPE %s USING %s",
+			col.table, col.column, pgType, usingExpr,
+		)
+		if _, err := e.pool.Exec(ctx, sql); err != nil {
+			return &SchemaError{
+				Object: SchemaObject{Type: "table", Name: col.table},
+				Op:     "alter",
+				Err:    fmt.Errorf("alter column %s: %w", col.column, err),
+			}
+		}
+	}
+
+	return nil
+}
+
+// ensurePublications creates shard publications and the "all" publication for WAL mode.
+// It checks existing publications and only creates missing ones.
+func (e *PostgresMapBroker) ensurePublications(ctx context.Context) error {
+	numShards := e.conf.NumShards
+
+	// Query existing cf_map_stream publications.
+	rows, err := e.pool.Query(ctx,
+		`SELECT pubname FROM pg_publication WHERE pubname LIKE 'cf_map_stream_%'`)
+	if err != nil {
+		return &SchemaError{
+			Object: SchemaObject{Type: "publication", Name: ""},
+			Op:     "verify",
+			Err:    fmt.Errorf("query pg_publication: %w", err),
+		}
+	}
+	defer rows.Close()
+
+	existing := make(map[string]bool)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return &SchemaError{
+				Object: SchemaObject{Type: "publication", Name: ""},
+				Op:     "verify",
+				Err:    fmt.Errorf("scan pg_publication: %w", err),
+			}
+		}
+		existing[name] = true
+	}
+	rows.Close()
+
+	// Count shard publications (exclude "all").
+	shardCount := 0
+	for name := range existing {
+		if strings.HasPrefix(name, "cf_map_stream_shard_") {
+			shardCount++
+		}
+	}
+
+	if shardCount > 0 && shardCount != numShards {
+		return &SchemaError{
+			Object: SchemaObject{Type: "publication", Name: "cf_map_stream_shard_*"},
+			Op:     "verify",
+			Err: fmt.Errorf(
+				"found %d shard publications but NumShards=%d; "+
+					"drop existing publications and re-run EnsureSchema, or adjust NumShards to match",
+				shardCount, numShards),
+		}
+	}
+
+	// Create missing shard publications.
+	for i := 0; i < numShards; i++ {
+		name := fmt.Sprintf("cf_map_stream_shard_%d", i)
+		if existing[name] {
+			continue
+		}
+		sql := fmt.Sprintf(
+			"CREATE PUBLICATION %s FOR TABLE cf_map_stream WHERE (shard_id = %d)", name, i)
+		if _, err := e.pool.Exec(ctx, sql); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "42710" {
+				// duplicate_object — another node created it concurrently, that's fine.
+				continue
+			}
+			return &SchemaError{
+				Object: SchemaObject{Type: "publication", Name: name},
+				Op:     "create",
+				Err:    err,
+			}
+		}
+	}
+
+	// Create "all" publication if missing.
+	if !existing["cf_map_stream_all"] {
+		if _, err := e.pool.Exec(ctx,
+			"CREATE PUBLICATION cf_map_stream_all FOR TABLE cf_map_stream"); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "42710" {
+				// duplicate_object — concurrent creation, fine.
+			} else {
+				return &SchemaError{
+					Object: SchemaObject{Type: "publication", Name: "cf_map_stream_all"},
+					Op:     "create",
+					Err:    err,
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,6 +34,7 @@ func newTestPostgresMapBrokerWithOutbox(tb testing.TB, n *Node) *PostgresMapBrok
 	e, err := NewPostgresMapBroker(n, PostgresMapBrokerConfig{
 		ConnString: connString,
 		NumShards:  4, // Fewer shards for faster tests
+		BinaryData: true,
 		Outbox: OutboxConfig{
 			PollInterval: 10 * time.Millisecond,
 			BatchSize:    100,
@@ -40,8 +42,10 @@ func newTestPostgresMapBrokerWithOutbox(tb testing.TB, n *Node) *PostgresMapBrok
 	})
 	require.NoError(tb, err)
 
-	// Clean up tables before test
 	ctx := context.Background()
+	require.NoError(tb, e.EnsureSchema(ctx))
+
+	// Clean up tables before test
 	cleanupTestTables(ctx, e)
 
 	err = e.RegisterEventHandler(nil)
@@ -60,6 +64,7 @@ func newTestPostgresMapBrokerWithWAL(tb testing.TB, n *Node) *PostgresMapBroker 
 
 	e, err := NewPostgresMapBroker(n, PostgresMapBrokerConfig{
 		ConnString: connString,
+		BinaryData: true,
 		WAL: WALConfig{
 			Enabled:           true,
 			HeartbeatInterval: 5 * time.Second,
@@ -67,8 +72,11 @@ func newTestPostgresMapBrokerWithWAL(tb testing.TB, n *Node) *PostgresMapBroker 
 	})
 	require.NoError(tb, err)
 
-	// Clean up tables before test
 	ctx := context.Background()
+	require.NoError(tb, e.EnsureSchema(ctx))
+	dropStaleReplicationSlots(ctx, e.pool)
+
+	// Clean up tables before test
 	cleanupTestTables(ctx, e)
 
 	tb.Cleanup(func() {
@@ -76,6 +84,26 @@ func newTestPostgresMapBrokerWithWAL(tb testing.TB, n *Node) *PostgresMapBroker 
 		_ = n.Shutdown(context.Background())
 	})
 	return e
+}
+
+// dropStaleReplicationSlots drops all inactive cf_map replication slots.
+// Stale slots from previous test runs can be far behind the current WAL
+// position, causing WAL reader tests to timeout replaying old WAL data.
+func dropStaleReplicationSlots(ctx context.Context, pool *pgxpool.Pool) {
+	rows, _ := pool.Query(ctx,
+		`SELECT slot_name FROM pg_replication_slots WHERE slot_name LIKE 'cf_map_%' AND NOT active`)
+	if rows != nil {
+		var names []string
+		for rows.Next() {
+			var n string
+			_ = rows.Scan(&n)
+			names = append(names, n)
+		}
+		rows.Close()
+		for _, n := range names {
+			_, _ = pool.Exec(ctx, fmt.Sprintf("SELECT pg_drop_replication_slot('%s')", n))
+		}
+	}
 }
 
 func cleanupTestTables(ctx context.Context, e *PostgresMapBroker) {
@@ -760,6 +788,7 @@ func TestPostgresMapBroker_WALReader(t *testing.T) {
 	// Create PostgreSQL map broker with WAL mode (single-node, local delivery)
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
+		BinaryData: true,
 		WAL: WALConfig{
 			Enabled:           true,
 			ShardIDs:          nil, // nil means try all shards
@@ -767,6 +796,8 @@ func TestPostgresMapBroker_WALReader(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	require.NoError(t, broker.EnsureSchema(ctx))
+	dropStaleReplicationSlots(ctx, broker.pool)
 
 	// Clean up tables before test
 	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'test_wal_%'")
@@ -876,13 +907,15 @@ func TestPostgresMapBroker_WALReaderOrdering(t *testing.T) {
 
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
+		BinaryData: true,
 		WAL: WALConfig{
 			Enabled:           true,
 			HeartbeatInterval: 5 * time.Second,
 		},
 	})
 	require.NoError(t, err)
-	_ = ctx
+	require.NoError(t, broker.EnsureSchema(ctx))
+	dropStaleReplicationSlots(ctx, broker.pool)
 
 	// Use unique channel name per test run
 	channel := fmt.Sprintf("test_wal_order_%d", time.Now().UnixNano())
@@ -961,13 +994,15 @@ func TestPostgresMapBroker_WALReaderMetadata(t *testing.T) {
 
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
+		BinaryData: true,
 		WAL: WALConfig{
 			Enabled:           true,
 			HeartbeatInterval: 5 * time.Second,
 		},
 	})
 	require.NoError(t, err)
-	_ = ctx
+	require.NoError(t, broker.EnsureSchema(ctx))
+	dropStaleReplicationSlots(ctx, broker.pool)
 
 	// Use unique channel name per test run
 	channel := fmt.Sprintf("test_wal_meta_%d", time.Now().UnixNano())
@@ -1120,6 +1155,7 @@ func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 	// Create PostgreSQL map broker with WAL mode and broker for multi-node delivery
 	pgBroker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
+		BinaryData: true,
 		Broker:     broker,
 		WAL: WALConfig{
 			Enabled:           true,
@@ -1127,6 +1163,8 @@ func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	require.NoError(t, pgBroker.EnsureSchema(ctx))
+	dropStaleReplicationSlots(ctx, pgBroker.pool)
 
 	// Clean up tables before test
 	_, _ = pgBroker.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'test_wal_broker_%'")
@@ -1210,6 +1248,7 @@ func TestPostgresMapBroker_OutboxOrdering(t *testing.T) {
 	// Create broker with outbox mode (default)
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
+		BinaryData: true,
 		NumShards:  4,
 		Outbox: OutboxConfig{
 			PollInterval: 10 * time.Millisecond,
@@ -1217,6 +1256,7 @@ func TestPostgresMapBroker_OutboxOrdering(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	require.NoError(t, broker.EnsureSchema(ctx))
 
 	// Use unique channel name per test run
 	channel := fmt.Sprintf("test_outbox_order_%d", time.Now().UnixNano())
@@ -1302,12 +1342,14 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 
 	broker1, err := NewPostgresMapBroker(node1, PostgresMapBrokerConfig{
 		ConnString: connString,
+		BinaryData: true,
 		NumShards:  4,
 		Outbox: OutboxConfig{
 			PollInterval: 10 * time.Millisecond,
 		},
 	})
 	require.NoError(t, err)
+	require.NoError(t, broker1.EnsureSchema(ctx))
 
 	cleanupTestTables(ctx, broker1)
 
@@ -1335,6 +1377,7 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 
 	broker2, err := NewPostgresMapBroker(node2, PostgresMapBrokerConfig{
 		ConnString: connString,
+		BinaryData: true,
 		NumShards:  4,
 		Outbox: OutboxConfig{
 			PollInterval: 10 * time.Millisecond,
@@ -1404,12 +1447,14 @@ func TestPostgresMapBroker_OutboxConcurrentPublish(t *testing.T) {
 
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
+		BinaryData: true,
 		NumShards:  4,
 		Outbox: OutboxConfig{
 			PollInterval: 10 * time.Millisecond,
 		},
 	})
 	require.NoError(t, err)
+	require.NoError(t, broker.EnsureSchema(ctx))
 
 	channel := fmt.Sprintf("test_outbox_concurrent_%d", time.Now().UnixNano())
 	cleanupTestTables(ctx, broker)
@@ -1528,6 +1573,7 @@ func TestPostgresMapBroker_OutboxWithBroker(t *testing.T) {
 	// Create PostgreSQL map broker with broker for multi-node delivery
 	pgBroker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
+		BinaryData: true,
 		Broker:     broker,
 		NumShards:  4,
 		Outbox: OutboxConfig{
@@ -1535,6 +1581,7 @@ func TestPostgresMapBroker_OutboxWithBroker(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	require.NoError(t, pgBroker.EnsureSchema(ctx))
 
 	cleanupTestTables(ctx, pgBroker)
 
@@ -1622,6 +1669,7 @@ func TestPostgresMapBroker_Delta_Outbox(t *testing.T) {
 
 	e, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
+		BinaryData: true,
 		NumShards:  4,
 		Outbox: OutboxConfig{
 			PollInterval: 10 * time.Millisecond,
@@ -1631,6 +1679,7 @@ func TestPostgresMapBroker_Delta_Outbox(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
+	require.NoError(t, e.EnsureSchema(ctx))
 	cleanupTestTables(ctx, e)
 
 	err = e.RegisterEventHandler(handler)
@@ -1813,6 +1862,7 @@ func TestPostgresMapBroker_CursorBasedDelivery(t *testing.T) {
 
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
+		BinaryData: true,
 		NumShards:  4,
 		Outbox: OutboxConfig{
 			PollInterval: 10 * time.Millisecond,
@@ -1820,6 +1870,7 @@ func TestPostgresMapBroker_CursorBasedDelivery(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	require.NoError(t, broker.EnsureSchema(ctx))
 
 	channel := fmt.Sprintf("test_cursor_%d", time.Now().UnixNano())
 	cleanupTestTables(ctx, broker)
@@ -1925,4 +1976,426 @@ func TestPostgresMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
+}
+
+// ============================================================================
+// EnsureSchema Tests
+// ============================================================================
+
+// dropAllSchemaObjects drops all centrifuge map objects in reverse dependency order.
+func dropAllSchemaObjects(ctx context.Context, pool *pgxpool.Pool) {
+	// Drop publications first (they depend on the table).
+	rows, _ := pool.Query(ctx, `SELECT pubname FROM pg_publication WHERE pubname LIKE 'cf_map_stream_%'`)
+	if rows != nil {
+		var names []string
+		for rows.Next() {
+			var n string
+			_ = rows.Scan(&n)
+			names = append(names, n)
+		}
+		rows.Close()
+		for _, n := range names {
+			_, _ = pool.Exec(ctx, fmt.Sprintf("DROP PUBLICATION IF EXISTS %s", n))
+		}
+	}
+
+	// Drop functions (they depend on tables).
+	_, _ = pool.Exec(ctx, "DROP FUNCTION IF EXISTS cf_map_publish CASCADE")
+	_, _ = pool.Exec(ctx, "DROP FUNCTION IF EXISTS cf_map_publish_strict CASCADE")
+	_, _ = pool.Exec(ctx, "DROP FUNCTION IF EXISTS cf_map_remove CASCADE")
+	_, _ = pool.Exec(ctx, "DROP FUNCTION IF EXISTS cf_map_remove_strict CASCADE")
+	_, _ = pool.Exec(ctx, "DROP FUNCTION IF EXISTS cf_map_expire_keys CASCADE")
+
+	// Drop tables.
+	_, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS cf_map_idempotency CASCADE")
+	_, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS cf_map_outbox_cursor CASCADE")
+	_, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS cf_map_stream CASCADE")
+	_, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS cf_map_state CASCADE")
+	_, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS cf_map_meta CASCADE")
+}
+
+// verifySchemaComplete checks that all expected tables, indexes, functions, and replica identity exist.
+func verifySchemaComplete(t *testing.T, ctx context.Context, pool *pgxpool.Pool, expectJSONB bool) {
+	t.Helper()
+
+	// Check tables exist.
+	for _, table := range []string{"cf_map_stream", "cf_map_outbox_cursor", "cf_map_state", "cf_map_meta", "cf_map_idempotency"} {
+		var exists bool
+		err := pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = $1)`, table).Scan(&exists)
+		require.NoError(t, err)
+		require.True(t, exists, "table %s should exist", table)
+	}
+
+	// Check indexes exist.
+	for _, idx := range []string{
+		"cf_map_stream_channel_offset_idx",
+		"cf_map_stream_channel_id_idx",
+		"cf_map_stream_expires_idx",
+		"cf_map_stream_shard_cursor_idx",
+		"cf_map_state_ordered_idx",
+		"cf_map_state_expires_idx",
+		"cf_map_meta_expires_idx",
+		"cf_map_idempotency_expires_idx",
+	} {
+		var exists bool
+		err := pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM pg_indexes WHERE indexname = $1)`, idx).Scan(&exists)
+		require.NoError(t, err)
+		require.True(t, exists, "index %s should exist", idx)
+	}
+
+	// Check functions exist.
+	for _, fn := range []string{"cf_map_publish", "cf_map_publish_strict", "cf_map_remove", "cf_map_remove_strict", "cf_map_expire_keys"} {
+		var exists bool
+		err := pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM pg_proc WHERE proname = $1)`, fn).Scan(&exists)
+		require.NoError(t, err)
+		require.True(t, exists, "function %s should exist", fn)
+	}
+
+	// Check REPLICA IDENTITY FULL on cf_map_stream.
+	var relreplident string
+	err := pool.QueryRow(ctx,
+		`SELECT relreplident::text FROM pg_class WHERE relname = 'cf_map_stream'`).Scan(&relreplident)
+	require.NoError(t, err)
+	require.Equal(t, "f", relreplident, "cf_map_stream should have REPLICA IDENTITY FULL")
+
+	// Check data column types.
+	expectedType := "jsonb"
+	if !expectJSONB {
+		expectedType = "bytea"
+	}
+
+	dataColumns := []struct {
+		table  string
+		column string
+	}{
+		{"cf_map_stream", "data"},
+		{"cf_map_stream", "previous_data"},
+		{"cf_map_stream", "conn_info"},
+		{"cf_map_stream", "chan_info"},
+		{"cf_map_state", "data"},
+		{"cf_map_state", "conn_info"},
+		{"cf_map_state", "chan_info"},
+	}
+	for _, dc := range dataColumns {
+		var dataType string
+		err := pool.QueryRow(ctx,
+			`SELECT data_type FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`,
+			dc.table, dc.column).Scan(&dataType)
+		require.NoError(t, err, "column %s.%s should exist", dc.table, dc.column)
+		require.Equal(t, expectedType, dataType, "column %s.%s should be %s", dc.table, dc.column, expectedType)
+	}
+
+	// tags should always be JSONB regardless of BinaryData setting.
+	for _, table := range []string{"cf_map_stream", "cf_map_state"} {
+		var dataType string
+		err := pool.QueryRow(ctx,
+			`SELECT data_type FROM information_schema.columns WHERE table_name = $1 AND column_name = 'tags'`,
+			table).Scan(&dataType)
+		require.NoError(t, err)
+		require.Equal(t, "jsonb", dataType, "%s.tags should always be jsonb", table)
+	}
+}
+
+// TestPostgresMapBroker_EnsureSchema_Fresh tests creating schema from scratch.
+func TestPostgresMapBroker_EnsureSchema_Fresh(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, _ := New(Config{})
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+		NumShards:  4,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = broker.Close(ctx)
+		_ = node.Shutdown(ctx)
+	})
+
+	// Drop everything first.
+	dropAllSchemaObjects(ctx, broker.pool)
+
+	// Create from scratch.
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	// Verify all objects exist with JSONB (default).
+	verifySchemaComplete(t, ctx, broker.pool, true)
+}
+
+// TestPostgresMapBroker_EnsureSchema_Idempotent tests calling EnsureSchema twice.
+func TestPostgresMapBroker_EnsureSchema_Idempotent(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, _ := New(Config{})
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+		NumShards:  4,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = broker.Close(ctx)
+		_ = node.Shutdown(ctx)
+	})
+
+	dropAllSchemaObjects(ctx, broker.pool)
+
+	// First call.
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	// Second call — should succeed without errors.
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	verifySchemaComplete(t, ctx, broker.pool, true)
+}
+
+// TestPostgresMapBroker_EnsureSchema_PartialState tests that EnsureSchema handles partial schema.
+func TestPostgresMapBroker_EnsureSchema_PartialState(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, _ := New(Config{})
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+		NumShards:  4,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = broker.Close(ctx)
+		_ = node.Shutdown(ctx)
+	})
+
+	// Drop everything.
+	dropAllSchemaObjects(ctx, broker.pool)
+
+	// Create only some tables manually.
+	_, err = broker.pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS cf_map_meta (
+		channel TEXT PRIMARY KEY, top_offset BIGINT NOT NULL DEFAULT 0,
+		epoch TEXT NOT NULL DEFAULT '', version BIGINT DEFAULT 0,
+		version_epoch TEXT, created_at TIMESTAMPTZ DEFAULT NOW(),
+		updated_at TIMESTAMPTZ DEFAULT NOW(), expires_at TIMESTAMPTZ
+	)`)
+	require.NoError(t, err)
+
+	// EnsureSchema should create the rest.
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	verifySchemaComplete(t, ctx, broker.pool, true)
+}
+
+// TestPostgresMapBroker_EnsureSchema_WALPublications tests that publications are created in WAL mode.
+func TestPostgresMapBroker_EnsureSchema_WALPublications(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, _ := New(Config{})
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+		NumShards:  4,
+		WAL: WALConfig{
+			Enabled: true,
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = broker.Close(ctx)
+		_ = node.Shutdown(ctx)
+	})
+
+	// Drop everything (including existing publications).
+	dropAllSchemaObjects(ctx, broker.pool)
+
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	// Verify shard publications exist.
+	for i := 0; i < 4; i++ {
+		name := fmt.Sprintf("cf_map_stream_shard_%d", i)
+		var exists bool
+		err := broker.pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM pg_publication WHERE pubname = $1)`, name).Scan(&exists)
+		require.NoError(t, err)
+		require.True(t, exists, "publication %s should exist", name)
+	}
+
+	// Verify "all" publication.
+	var exists bool
+	err = broker.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM pg_publication WHERE pubname = 'cf_map_stream_all')`,
+	).Scan(&exists)
+	require.NoError(t, err)
+	require.True(t, exists, "publication cf_map_stream_all should exist")
+}
+
+// TestPostgresMapBroker_EnsureSchema_NumShardsMismatch tests error on shard count mismatch.
+func TestPostgresMapBroker_EnsureSchema_NumShardsMismatch(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, _ := New(Config{})
+
+	// First, create schema with 4 shards.
+	broker4, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+		NumShards:  4,
+		WAL:        WALConfig{Enabled: true},
+	})
+	require.NoError(t, err)
+
+	dropAllSchemaObjects(ctx, broker4.pool)
+
+	err = broker4.EnsureSchema(ctx)
+	require.NoError(t, err)
+	_ = broker4.Close(ctx)
+
+	// Now try with 8 shards — should error.
+	broker8, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+		NumShards:  8,
+		WAL:        WALConfig{Enabled: true},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = broker8.Close(ctx)
+		_ = node.Shutdown(ctx)
+	})
+
+	err = broker8.EnsureSchema(ctx)
+	require.Error(t, err)
+
+	var schemaErr *SchemaError
+	require.ErrorAs(t, err, &schemaErr)
+	require.Equal(t, "publication", schemaErr.Object.Type)
+	require.Equal(t, "verify", schemaErr.Op)
+	require.Contains(t, schemaErr.Err.Error(), "found 4 shard publications but NumShards=8")
+}
+
+// TestPostgresMapBroker_EnsureSchema_OutboxNoPublications tests that outbox mode skips publications.
+func TestPostgresMapBroker_EnsureSchema_OutboxNoPublications(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, _ := New(Config{})
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+		NumShards:  4,
+		// WAL.Enabled is false (default) — outbox mode.
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = broker.Close(ctx)
+		_ = node.Shutdown(ctx)
+	})
+
+	dropAllSchemaObjects(ctx, broker.pool)
+
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	// No publications should be created in outbox mode.
+	var count int
+	err = broker.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM pg_publication WHERE pubname LIKE 'cf_map_stream_%'`).Scan(&count)
+	require.NoError(t, err)
+	require.Equal(t, 0, count, "outbox mode should not create publications")
+
+	// Tables/functions should still exist.
+	verifySchemaComplete(t, ctx, broker.pool, true)
+}
+
+// TestPostgresMapBroker_EnsureSchema_BinaryData tests BYTEA columns when BinaryData=true.
+func TestPostgresMapBroker_EnsureSchema_BinaryData(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, _ := New(Config{})
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+		NumShards:  4,
+		BinaryData: true,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = broker.Close(ctx)
+		_ = node.Shutdown(ctx)
+	})
+
+	dropAllSchemaObjects(ctx, broker.pool)
+
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	// Verify data columns are BYTEA.
+	verifySchemaComplete(t, ctx, broker.pool, false)
+}
+
+// TestPostgresMapBroker_EnsureSchema_FunctionalAfterSetup tests that the broker works after EnsureSchema.
+func TestPostgresMapBroker_EnsureSchema_FunctionalAfterSetup(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, _ := New(Config{})
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+		NumShards:  4,
+		Outbox: OutboxConfig{
+			PollInterval: 10 * time.Millisecond,
+		},
+	})
+	require.NoError(t, err)
+
+	// Drop everything and recreate from scratch.
+	dropAllSchemaObjects(ctx, broker.pool)
+
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	err = broker.RegisterEventHandler(nil)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = broker.Close(ctx)
+		_ = node.Shutdown(ctx)
+	})
+
+	channel := fmt.Sprintf("test_ensure_func_%d", time.Now().UnixNano())
+
+	// Publish.
+	res, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte(`{"hello":"world"}`),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.False(t, res.Suppressed)
+	require.Equal(t, uint64(1), res.Position.Offset)
+
+	// ReadState.
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 1)
+	require.Equal(t, "key1", stateRes.Publications[0].Key)
+	// JSONB normalizes whitespace, so compare via JSONEq.
+	require.JSONEq(t, `{"hello":"world"}`, string(stateRes.Publications[0].Data))
+
+	// Remove.
+	removeRes, err := broker.Remove(ctx, channel, "key1", MapRemoveOptions{
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.False(t, removeRes.Suppressed)
+
+	// Verify removed.
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Empty(t, stateRes.Publications)
 }
