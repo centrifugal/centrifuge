@@ -101,17 +101,28 @@
             padding: 14px 16px;
             border-bottom: 1px solid rgba(255,255,255,0.05);
             font-size: 15px;
-            transition: background 0.3s ease;
         }
         .ticker-table tr:hover td {
             background: rgba(255,255,255,0.05);
         }
-        .ticker-table tr.flash td {
-            animation: row-flash 0.6s ease;
+        .ticker-table td.price {
+            transition: color 0.1s ease;
         }
-        @keyframes row-flash {
-            0%   { background: rgba(103, 126, 234, 0.3); }
-            100% { background: transparent; }
+        .ticker-table td.tick-up {
+            animation: val-up 1.2s ease-out;
+        }
+        .ticker-table td.tick-down {
+            animation: val-down 1.2s ease-out;
+        }
+        @keyframes val-up {
+            0%   { color: #2ecc71; }
+            60%  { color: #2ecc71; }
+            100% { color: inherit; }
+        }
+        @keyframes val-down {
+            0%   { color: #e74c3c; }
+            60%  { color: #e74c3c; }
+            100% { color: inherit; }
         }
         .symbol {
             font-weight: 700;
@@ -227,11 +238,12 @@
     <script>
         const userId = 'user_' + Math.random().toString(36).substr(2, 8);
 
-        // Current ticker state: key (symbol) -> data.
+        // Current ticker state: key (symbol) -> { data, prev }.
         const tickers = new Map();
 
-        // Track which keys just updated for flash animation.
-        const flashKeys = new Set();
+        // Track which keys just updated with direction info.
+        // symbol -> { bid: 'up'|'down'|null, ask: 'up'|'down'|null }
+        const tickChanges = new Map();
 
         // Sector map for display.
         const sectorLabels = {
@@ -270,10 +282,11 @@
         sub.on('subscribed', (ctx) => {
             console.log('Subscribed to tickers channel, sector:', currentSector || 'all');
             tickers.clear();
+            tickChanges.clear();
             if (ctx.state) {
                 for (const pub of ctx.state) {
                     if (pub.key && pub.data) {
-                        tickers.set(pub.key, pub.data);
+                        tickers.set(pub.key, { data: pub.data, prev: null });
                     }
                 }
             }
@@ -288,9 +301,17 @@
             if (!ctx.key) return;
             if (ctx.removed) {
                 tickers.delete(ctx.key);
+                tickChanges.delete(ctx.key);
             } else if (ctx.data) {
-                flashKeys.add(ctx.key);
-                tickers.set(ctx.key, ctx.data);
+                const existing = tickers.get(ctx.key);
+                const prev = existing ? existing.data : null;
+                tickers.set(ctx.key, { data: ctx.data, prev });
+                if (prev) {
+                    tickChanges.set(ctx.key, {
+                        bid: ctx.data.bid > prev.bid ? 'up' : ctx.data.bid < prev.bid ? 'down' : null,
+                        ask: ctx.data.ask > prev.ask ? 'up' : ctx.data.ask < prev.ask ? 'down' : null,
+                    });
+                }
             }
             if (!renderPending) {
                 renderPending = true;
@@ -334,7 +355,8 @@
 
             for (let i = 0; i < sorted.length; i++) {
                 const symbol = sorted[i];
-                const data = tickers.get(symbol);
+                const entry = tickers.get(symbol);
+                const data = entry.data;
                 let tr = rowElements.get(symbol);
 
                 if (!tr) {
@@ -358,12 +380,11 @@
                 cells[3].textContent = formatPrice(data.ask);
                 cells[4].textContent = updatedTime;
 
-                // Flash only rows that changed this batch.
-                if (flashKeys.has(symbol)) {
-                    tr.classList.remove('flash');
-                    // Force reflow so the animation restarts.
-                    void tr.offsetWidth;
-                    tr.classList.add('flash');
+                // Highlight individual values that changed.
+                const change = tickChanges.get(symbol);
+                if (change) {
+                    applyTickClass(cells[2], change.bid);
+                    applyTickClass(cells[3], change.ask);
                 }
 
                 // Insert in sorted order.
@@ -372,7 +393,7 @@
                     body.insertBefore(tr, nextSibling);
                 }
             }
-            flashKeys.clear();
+            tickChanges.clear();
         }
 
         // Sector lookup from symbol (used when tags aren't in the data payload).
@@ -386,6 +407,14 @@
 
         function getSectorFromSymbol(symbol) {
             return symbolSectors[symbol] || '';
+        }
+
+        function applyTickClass(cell, direction) {
+            if (!direction) return;
+            const cls = direction === 'up' ? 'tick-up' : 'tick-down';
+            cell.classList.remove('tick-up', 'tick-down');
+            void cell.offsetWidth; // force reflow to restart animation
+            cell.classList.add(cls);
         }
 
         function formatPrice(price) {

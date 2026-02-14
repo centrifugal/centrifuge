@@ -391,8 +391,11 @@
         const resultsSub = centrifuge.newMapSubscription('poll:results', { limit: 50, ordered: true });
 
         metaSub.on('subscribed', (ctx) => {
-            currentMeta = null;
+            // Only rebuild state when the server provides a state snapshot.
+            // On reconnect (phase 2) with no missed publications, ctx.state
+            // is undefined — keep the cached state to avoid a loader flash.
             if (ctx.state) {
+                currentMeta = null;
                 for (const pub of ctx.state) {
                     if (pub.key && pub.data) {
                         currentMeta = pub.data;
@@ -415,7 +418,12 @@
 
         metaSub.on('publication', (ctx) => {
             if (ctx.removed) {
-                currentMeta = null;
+                // Only clear if the removed key is the current poll's key.
+                // Stale keys from previous runs may be cleaned up without
+                // affecting the active poll display.
+                if (currentMeta && ctx.key === currentMeta.pollId) {
+                    currentMeta = null;
+                }
             } else if (ctx.data) {
                 currentMeta = ctx.data;
             }
@@ -423,8 +431,8 @@
         });
 
         resultsSub.on('subscribed', (ctx) => {
-            results.clear();
             if (ctx.state) {
+                results.clear();
                 for (const pub of ctx.state) {
                     if (pub.key && pub.data) {
                         results.set(pub.key, { data: pub.data, score: pub.score });
@@ -475,7 +483,12 @@
             const isActive = meta.status === 'active';
             const hasVoted = myVotes.has(meta.pollId);
             const myOptionId = myVotes.get(meta.pollId);
-            const totalVotes = [...results.values()].reduce((sum, r) => sum + r.score, 0);
+            // Filter by current poll's options to avoid showing stale results
+            // from a previous poll that wasn't fully cleaned up.
+            const validOptions = new Set(meta.options.map(opt => opt.id));
+            const totalVotes = [...results.entries()]
+                .filter(([key]) => validOptions.has(key))
+                .reduce((sum, [, r]) => sum + r.score, 0);
 
             // Determine option order: metadata order during active, score-sorted during closed.
             let optionOrder;
@@ -483,6 +496,7 @@
                 optionOrder = meta.options.map(opt => opt.id);
             } else {
                 optionOrder = [...results.entries()]
+                    .filter(([key]) => validOptions.has(key))
                     .sort((a, b) => b[1].score - a[1].score)
                     .map(([key]) => key);
             }
