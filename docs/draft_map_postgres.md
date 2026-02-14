@@ -7,30 +7,29 @@ The PostgreSQL MapBroker provides durable, transactional map state with real-tim
 1. **Outbox Mode (Default)** - Simple setup, works with any PostgreSQL
 2. **WAL Mode (Opt-in)** - Uses logical replication, requires PostgreSQL configuration
 
+Both modes read from the same `cf_map_stream` table. The difference is how workers detect new entries: outbox mode polls using cursors, WAL mode streams via logical replication.
+
 ## Delivery Modes
 
 ### Outbox Mode (Default)
 
-Outbox mode polls the `cf_map_outbox` table for new publications. This mode requires no special PostgreSQL setup.
+Outbox mode uses cursor-based polling of `cf_map_stream` for new publications. Per-shard delivery progress is tracked in `cf_map_outbox_cursor`. This mode requires no special PostgreSQL setup.
 
 **How it works:**
-1. `Publish`/`Remove` inserts into `cf_map_stream` and `cf_map_outbox` atomically
-2. Outbox workers poll their assigned shards using `FOR UPDATE SKIP LOCKED`
+1. `Publish`/`Remove` inserts into `cf_map_stream` atomically (single table)
+2. Outbox workers poll their assigned shards: `WHERE shard_id = $1 AND id > cursor`
 3. Workers deliver publications via broker (multi-node) or locally (single-node)
-4. Processed rows are deleted (or marked if `MarkProcessed` is enabled)
+4. Workers advance cursor in `cf_map_outbox_cursor` after processing each batch
 
 **Configuration:**
 ```go
 PostgresMapBrokerConfig{
     ConnString: "postgres://...",
-    PoolSize:   32,  // Must be > Outbox.NumShards
+    PoolSize:   32,  // Must be > NumShards
+    NumShards:  16,  // Parallel workers (default: 16)
     Outbox: OutboxConfig{
-        NumShards:       16,              // Parallel workers (default: 16)
-        PollInterval:    50*time.Millisecond,
-        BatchSize:       1000,
-        MarkProcessed:   false,           // If true, mark rows instead of delete
-        CleanupInterval: time.Hour,       // For mark-processed mode
-        CleanupAge:      time.Hour,
+        PollInterval: 50*time.Millisecond,
+        BatchSize:    1000,
     },
 }
 ```
@@ -48,17 +47,16 @@ WAL mode uses PostgreSQL logical replication to stream changes. This requires:
 ```go
 PostgresMapBrokerConfig{
     ConnString: "postgres://...",
+    NumShards:  16,  // Must match number of publications
     WAL: WALConfig{
         Enabled:           true,
-        NumShards:         16,
         HeartbeatInterval: 10*time.Second,
     },
 }
 ```
 
 When `WAL.Enabled = true`:
-- Outbox inserts are skipped (`p_skip_outbox = true`)
-- WAL readers stream changes from logical replication
+- WAL readers stream INSERTs from logical replication on `cf_map_stream`
 - Lower latency but requires PostgreSQL setup
 
 ## Database Schema
@@ -66,17 +64,17 @@ When `WAL.Enabled = true`:
 ### Core Tables
 
 ```sql
--- Stream: Change history for recovery
+-- Stream: Change history + delivery source (used by both outbox and WAL modes)
 cf_map_stream (id, channel, channel_offset, epoch, key, data, tags, removed, score, shard_id, ...)
+
+-- Outbox Cursor: Per-shard delivery progress (outbox mode)
+cf_map_outbox_cursor (shard_id, last_processed_id, updated_at)
 
 -- State: Current snapshot
 cf_map_state (channel, key, data, tags, score, key_offset, expires_at, ...)
 
 -- Meta: Channel metadata
 cf_map_meta (channel, top_offset, epoch, version, ...)
-
--- Outbox: Pending deliveries (outbox mode only)
-cf_map_outbox (id, shard_id, channel, channel_offset, epoch, key, data, removed, processed_at, ...)
 
 -- Idempotency: Deduplication
 cf_map_idempotency (channel, idempotency_key, result_offset, expires_at)
@@ -100,12 +98,13 @@ Main publishing function with parameters:
 - `p_tags`, `p_score` - Optional metadata
 - `p_key_mode` - `'if_new'` or `'if_exists'` for conditional publish
 - `p_expected_offset` - CAS (Compare-And-Swap) support
-- `p_skip_outbox` - Skip outbox insert (for WAL mode)
 - `p_num_shards` - Shard count for shard_id calculation
 
 ### cf_map_remove
 
 Removes a key from state and emits removal event to stream.
+- `p_expected_offset` - CAS support (optional)
+- Returns `current_data` and `current_offset` on position mismatch
 
 ## Advisory Lock Pattern
 
@@ -125,18 +124,40 @@ This ensures:
 - Automatic failover if a worker dies (lock released)
 - No duplicate processing across nodes
 
+## Cursor-Based Delivery
+
+Outbox workers use a cursor pattern instead of deleting/marking processed rows:
+
+1. **Initialize**: `INSERT INTO cf_map_outbox_cursor (shard_id, last_processed_id) VALUES ($1, 0) ON CONFLICT DO NOTHING`
+2. **Poll**: `SELECT ... FROM cf_map_stream WHERE shard_id = $1 AND id > $2 ORDER BY id LIMIT $3`
+3. **Advance**: `UPDATE cf_map_outbox_cursor SET last_processed_id = $1 WHERE shard_id = $2`
+
+Benefits:
+- No row deletion by workers — cursor advancement is the progress marker
+- Stream entries persist for history/recovery regardless of delivery status
+- Simpler error recovery — just re-read from cursor position
+
+### Cursor-Aware Cleanup
+
+All cleanup paths respect delivery cursors to prevent deleting undelivered entries:
+
+- **Stream size trimming** (in `cf_map_publish`): only trims entries below `MIN(last_processed_id)` from all cursors
+- **TTL-based cleanup**: only deletes expired entries below the minimum cursor
+- **Delivered entry cleanup**: removes old delivered entries with no retention need (streamless channels) after a grace period
+- **WAL mode**: when no cursor rows exist, all cleanup paths operate freely
+
 ## Message Delivery
 
 ### Single-Node (No Broker)
 
 ```
-Publish -> cf_map_outbox -> Outbox Worker -> eventHandler.HandlePublication
+Publish -> cf_map_stream -> Outbox Worker -> eventHandler.HandlePublication
 ```
 
 ### Multi-Node (With Broker)
 
 ```
-Publish -> cf_map_outbox -> Outbox Worker -> broker.Publish -> All Nodes
+Publish -> cf_map_stream -> Outbox Worker -> broker.Publish -> All Nodes
 ```
 
 The broker (e.g., Redis) fans out publications to all subscribed nodes.
@@ -146,10 +167,9 @@ The broker (e.g., Redis) fans out publications to all subscribed nodes.
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `PoolSize` | 32 | Max database connections |
-| `Outbox.NumShards` | 16 | Parallel outbox workers |
+| `NumShards` | 16 | Parallel workers (both modes) |
 | `Outbox.PollInterval` | 50ms | Polling frequency when idle |
 | `Outbox.BatchSize` | 1000 | Max rows per batch |
-| `WAL.NumShards` | 16 | Parallel WAL readers |
 | `WAL.HeartbeatInterval` | 10s | Replication heartbeat |
 
 ## Performance Characteristics
@@ -159,20 +179,6 @@ Typical latencies (measured on Apple M4):
 - **End-to-end delivery**: ~180 microseconds
 
 Throughput scales with `NumShards` but each shard requires a connection.
-
-## Mark-Processed Mode
-
-For high-volume systems, enable `MarkProcessed` to support table partitioning:
-
-```go
-Outbox: OutboxConfig{
-    MarkProcessed:   true,
-    CleanupInterval: time.Hour,
-    CleanupAge:      time.Hour,
-}
-```
-
-Instead of deleting processed rows, they're marked with `processed_at` timestamp. Old partitions can be dropped periodically for efficient cleanup.
 
 ## Error Handling
 
@@ -184,16 +190,15 @@ Instead of deleting processed rows, they're marked with `processed_at` timestamp
 
 If switching from WAL mode to outbox mode:
 1. Stop all nodes
-2. Ensure `cf_map_outbox` table exists
+2. Ensure `cf_map_outbox_cursor` table exists
 3. Update config to remove `WAL.Enabled = true`
 4. Restart nodes
 
-Pending stream entries won't be redelivered - only new publishes go through outbox.
+Pending stream entries will be picked up by outbox workers from cursor position 0.
 
 ## Best Practices
 
 1. **Set PoolSize appropriately**: `PoolSize > NumShards + expected concurrent queries`
 2. **Use fewer shards for low volume**: Reduces connection overhead
-3. **Enable MarkProcessed for high volume**: Allows efficient partition-based cleanup
-4. **Monitor outbox lag**: `SELECT COUNT(*) FROM cf_map_outbox WHERE processed_at IS NULL`
-5. **Use broker for multi-node**: Required for consistent delivery across nodes
+3. **Monitor delivery lag**: `SELECT shard_id, last_processed_id FROM cf_map_outbox_cursor` compared to `SELECT MAX(id) FROM cf_map_stream`
+4. **Use broker for multi-node**: Required for consistent delivery across nodes

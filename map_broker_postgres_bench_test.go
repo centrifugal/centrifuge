@@ -31,6 +31,7 @@ func setupPostgresMapBrokerBench(b *testing.B) (*PostgresMapBroker, func()) {
 	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'bench_%'")
 	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'bench_%'")
 	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "UPDATE cf_map_outbox_cursor SET last_processed_id = 0")
 
 	return broker, func() {
 		_ = broker.Close(context.Background())
@@ -63,6 +64,7 @@ func setupPostgresMapBrokerBenchOrdered(b *testing.B) (*PostgresMapBroker, func(
 	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'bench_%'")
 	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'bench_%'")
 	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "UPDATE cf_map_outbox_cursor SET last_processed_id = 0")
 
 	return broker, func() {
 		_ = broker.Close(context.Background())
@@ -520,8 +522,8 @@ func setupPostgresMapBrokerOutboxBench(b *testing.B) (*PostgresMapBroker, func()
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		PoolSize:   32,
+		NumShards:  8, // Must be less than PoolSize to leave room for Publish
 		Outbox: OutboxConfig{
-			NumShards:    8, // Must be less than PoolSize to leave room for Publish
 			PollInterval: 10 * time.Millisecond,
 			BatchSize:    1000,
 		},
@@ -537,7 +539,7 @@ func setupPostgresMapBrokerOutboxBench(b *testing.B) (*PostgresMapBroker, func()
 	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'bench_%'")
 	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'bench_%'")
 	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_outbox WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "UPDATE cf_map_outbox_cursor SET last_processed_id = 0")
 
 	return broker, func() {
 		_ = broker.Close(context.Background())
@@ -557,8 +559,8 @@ func setupPostgresMapBrokerOutboxBenchWithHandler(b *testing.B, handler BrokerEv
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		PoolSize:   32,
+		NumShards:  8, // Must be less than PoolSize to leave room for Publish
 		Outbox: OutboxConfig{
-			NumShards:    8, // Must be less than PoolSize to leave room for Publish
 			PollInterval: 5 * time.Millisecond,
 			BatchSize:    1000,
 		},
@@ -573,7 +575,7 @@ func setupPostgresMapBrokerOutboxBenchWithHandler(b *testing.B, handler BrokerEv
 	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'bench_%'")
 	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'bench_%'")
 	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_outbox WHERE channel LIKE 'bench_%'")
+	_, _ = broker.pool.Exec(ctx, "UPDATE cf_map_outbox_cursor SET last_processed_id = 0")
 
 	// Register handler which starts workers
 	_ = broker.RegisterEventHandler(handler)

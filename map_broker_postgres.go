@@ -56,17 +56,10 @@ type PostgresMapBroker struct {
 var _ MapBroker = (*PostgresMapBroker)(nil)
 
 // OutboxConfig configures the outbox-based delivery mode (default).
-// Outbox mode polls the cf_map_outbox table for new publications.
+// Outbox mode polls cf_map_stream using per-shard cursors tracked in cf_map_outbox_cursor.
 // This mode requires no special PostgreSQL setup (no logical replication).
 type OutboxConfig struct {
-	// NumShards is the total number of shards for parallel outbox workers.
-	// Channels are distributed across shards using hash(channel) % NumShards.
-	// IMPORTANT: Each worker holds a connection for its advisory lock, so
-	// NumShards must be less than PoolSize to leave connections for queries.
-	// Default: 16
-	NumShards int
-
-	// PollInterval is how often to poll the outbox table when idle.
+	// PollInterval is how often to poll for new stream entries when idle.
 	// Default: 50ms
 	PollInterval time.Duration
 
@@ -78,23 +71,6 @@ type OutboxConfig struct {
 	// Each shard uses AdvisoryLockBaseID + shardID as its lock ID.
 	// Default: 72616653 (derived from 'crf' in ASCII)
 	AdvisoryLockBaseID int64
-
-	// MarkProcessed enables mark-processed mode instead of delete mode.
-	// When true, processed rows are marked with processed_at timestamp instead
-	// of being deleted. This supports table partitioning where old partitions
-	// can be dropped periodically.
-	// Default: false (delete mode)
-	MarkProcessed bool
-
-	// CleanupInterval is how often to clean up old processed outbox rows.
-	// Only used when MarkProcessed is true.
-	// Default: 1h
-	CleanupInterval time.Duration
-
-	// CleanupAge is the minimum age of processed rows before cleanup.
-	// Only used when MarkProcessed is true.
-	// Default: 1h
-	CleanupAge time.Duration
 }
 
 // WALConfig configures the WAL-based delivery mode (opt-in).
@@ -105,11 +81,6 @@ type WALConfig struct {
 	// When true, the broker uses logical replication to stream changes.
 	// Default: false (use outbox mode)
 	Enabled bool
-
-	// NumShards is the total number of shards for parallel WAL readers.
-	// Must match the number of publications created in PostgreSQL.
-	// Default: 16
-	NumShards int
 
 	// ShardIDs specifies which shard(s) this node should try to claim.
 	// Each shard uses advisory locks for leader election - only one node
@@ -138,6 +109,15 @@ type PostgresMapBrokerConfig struct {
 	// PoolSize sets the maximum number of connections in the pool.
 	// Default: 32
 	PoolSize int
+
+	// NumShards is the total number of shards for parallel delivery workers
+	// (both outbox and WAL modes). Channels are distributed across shards
+	// using hash(channel) % NumShards.
+	// IMPORTANT: In outbox mode, each worker holds a connection for its advisory lock,
+	// so NumShards must be less than PoolSize to leave connections for queries.
+	// In WAL mode, NumShards must match the number of publications created in PostgreSQL.
+	// Default: 16
+	NumShards int
 
 	// TTLCheckInterval is how often to check for expired keys.
 	// Default: 1s
@@ -169,6 +149,9 @@ func (c *PostgresMapBrokerConfig) setDefaults() {
 	if c.PoolSize <= 0 {
 		c.PoolSize = 32
 	}
+	if c.NumShards <= 0 {
+		c.NumShards = 16
+	}
 	if c.TTLCheckInterval <= 0 {
 		c.TTLCheckInterval = time.Second
 	}
@@ -180,10 +163,6 @@ func (c *PostgresMapBrokerConfig) setDefaults() {
 	}
 
 	// Outbox config defaults
-	// NumShards must be less than PoolSize to leave connections for queries.
-	if c.Outbox.NumShards <= 0 {
-		c.Outbox.NumShards = 16 // Default: 16 shards, leaving 16 connections for queries with default pool size 32
-	}
 	if c.Outbox.PollInterval <= 0 {
 		c.Outbox.PollInterval = 50 * time.Millisecond
 	}
@@ -193,17 +172,8 @@ func (c *PostgresMapBrokerConfig) setDefaults() {
 	if c.Outbox.AdvisoryLockBaseID <= 0 {
 		c.Outbox.AdvisoryLockBaseID = 72616653 // 'crf' in ASCII
 	}
-	if c.Outbox.CleanupInterval <= 0 {
-		c.Outbox.CleanupInterval = time.Hour
-	}
-	if c.Outbox.CleanupAge <= 0 {
-		c.Outbox.CleanupAge = time.Hour
-	}
 
 	// WAL config defaults
-	if c.WAL.NumShards <= 0 {
-		c.WAL.NumShards = 16
-	}
 	if c.WAL.AdvisoryLockBaseID <= 0 {
 		c.WAL.AdvisoryLockBaseID = 72616654 // Different from outbox
 	}
@@ -222,9 +192,9 @@ func NewPostgresMapBroker(n *Node, conf PostgresMapBrokerConfig) (*PostgresMapBr
 
 	// Validate pool size is sufficient for outbox workers.
 	// Each outbox worker holds a connection for its advisory lock.
-	if !conf.WAL.Enabled && conf.PoolSize <= conf.Outbox.NumShards {
-		return nil, fmt.Errorf("postgres map broker: PoolSize (%d) must be greater than Outbox.NumShards (%d) to leave connections for queries",
-			conf.PoolSize, conf.Outbox.NumShards)
+	if !conf.WAL.Enabled && conf.PoolSize <= conf.NumShards {
+		return nil, fmt.Errorf("postgres map broker: PoolSize (%d) must be greater than NumShards (%d) to leave connections for queries",
+			conf.PoolSize, conf.NumShards)
 	}
 
 	ctx := context.Background()
@@ -325,26 +295,22 @@ func (e *PostgresMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 		shardIDs := e.conf.WAL.ShardIDs
 		if len(shardIDs) == 0 {
 			// Default: try to claim all shards
-			shardIDs = make([]int, e.conf.WAL.NumShards)
-			for i := 0; i < e.conf.WAL.NumShards; i++ {
+			shardIDs = make([]int, e.conf.NumShards)
+			for i := 0; i < e.conf.NumShards; i++ {
 				shardIDs[i] = i
 			}
 		}
 
 		for _, shardID := range shardIDs {
-			if shardID < 0 || shardID >= e.conf.WAL.NumShards {
+			if shardID < 0 || shardID >= e.conf.NumShards {
 				continue
 			}
 			go e.runWALReaderForShard(shardID)
 		}
 	} else {
 		// Outbox mode (default): start outbox workers
-		for shardID := 0; shardID < e.conf.Outbox.NumShards; shardID++ {
+		for shardID := 0; shardID < e.conf.NumShards; shardID++ {
 			go e.runOutboxWorkerForShard(shardID)
-		}
-		// Start outbox cleanup worker if mark-processed mode is enabled
-		if e.conf.Outbox.MarkProcessed && e.conf.Outbox.CleanupInterval > 0 {
-			go e.runOutboxCleanupWorker()
 		}
 	}
 
@@ -530,10 +496,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 	}
 
 	// Call cf_map_publish function
-	// p_skip_outbox = true when using WAL mode (outbox is skipped, WAL reader handles delivery)
-	// p_num_shards = Outbox.NumShards (for shard_id calculation)
-	skipOutbox := e.conf.WAL.Enabled
-	numShards := e.conf.Outbox.NumShards
+	numShards := e.conf.NumShards
 
 	var id *int64
 	var channelOffset int64
@@ -545,7 +508,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 
 	useDelta := opts.UseDelta && len(opts.StreamData) == 0
 
-	// StreamData is stored in stream/outbox; state always uses Data.
+	// StreamData is stored in stream; state always uses Data.
 	var streamData []byte
 	if len(opts.StreamData) > 0 {
 		streamData = opts.StreamData
@@ -553,7 +516,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 
 	err := e.pool.QueryRow(ctx, `
 		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset
-		FROM cf_map_publish($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::interval, $12::interval, $13, $14::interval, $15, $16, $17, $18, $19, $20, $21, $22::interval, $23, $24, $25, $26, $27)
+		FROM cf_map_publish($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::interval, $12::interval, $13, $14::interval, $15, $16, $17, $18, $19, $20, $21, $22::interval, $23, $24, $25, $26)
 	`,
 		ch, key, opts.Data, tagsJSON,
 		clientID, userID, connInfo, chanInfo, subscribedAt,
@@ -561,7 +524,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		expectedOffset, score, version, versionEpoch,
 		keyVersion, keyVersionEpoch,
 		idempotencyKey, idempotencyTTL, opts.RefreshTTLOnSuppress,
-		useDelta, skipOutbox, numShards, streamData,
+		useDelta, numShards, streamData,
 	).Scan(&id, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset)
 
 	if err != nil {
@@ -646,10 +609,7 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 	}
 
 	// Call cf_map_remove function
-	// p_skip_outbox = true when using WAL mode (outbox is skipped, WAL reader handles delivery)
-	// p_num_shards = Outbox.NumShards (for shard_id calculation)
-	skipOutbox := e.conf.WAL.Enabled
-	numShards := e.conf.Outbox.NumShards
+	numShards := e.conf.NumShards
 
 	var id *int64
 	var channelOffset int64
@@ -663,10 +623,10 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 	var clientID, userID *string
 	err := e.pool.QueryRow(ctx, `
 		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset
-		FROM cf_map_remove($1, $2, $3, $4, $5::interval, $6, $7::interval, $8::interval, $9, $10, $11)
+		FROM cf_map_remove($1, $2, $3, $4, $5::interval, $6, $7::interval, $8::interval, $9, $10)
 	`,
 		ch, key, clientID, userID, streamTTL, idempotencyKey, idempotencyTTL, metaTTL,
-		skipOutbox, numShards, expectedOffset,
+		numShards, expectedOffset,
 	).Scan(&id, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset)
 
 	if err != nil {
@@ -1056,10 +1016,6 @@ func (e *PostgresMapBroker) Clear(ctx context.Context, ch string, _ MapClearOpti
 		return err
 	}
 	_, err = tx.Exec(ctx, `DELETE FROM cf_map_idempotency WHERE channel = $1`, ch)
-	if err != nil {
-		return err
-	}
-	_, err = tx.Exec(ctx, `DELETE FROM cf_map_outbox WHERE channel = $1`, ch)
 	if err != nil {
 		return err
 	}
@@ -1531,8 +1487,7 @@ func (e *PostgresMapBroker) runTTLExpirationWorker() {
 }
 
 func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
-	skipOutbox := e.conf.WAL.Enabled
-	numShards := e.conf.Outbox.NumShards
+	numShards := e.conf.NumShards
 
 	// Find distinct channels with expired keys to resolve per-channel options.
 	channelRows, err := e.pool.Query(ctx, `
@@ -1569,8 +1524,8 @@ func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 
 		rows, err := e.pool.Query(ctx, `
 			SELECT out_channel, out_key, out_offset, out_epoch
-			FROM cf_map_expire_keys($1, $2, $3, $4::interval, $5::interval, $6)
-		`, 1000, skipOutbox, numShards, streamTTL, metaTTL, ch)
+			FROM cf_map_expire_keys($1, $2, $3::interval, $4::interval, $5)
+		`, 1000, numShards, streamTTL, metaTTL, ch)
 		if err != nil {
 			e.node.logger.log(newErrorLogEntry(err, "error in batch key expiration", map[string]any{"channel": ch}))
 			continue
@@ -1621,12 +1576,40 @@ func (e *PostgresMapBroker) runStreamCleanupWorker() {
 }
 
 func (e *PostgresMapBroker) cleanupExpiredEntries(ctx context.Context) {
-	// Remove expired stream entries
+	// Remove expired stream entries (cursor-aware: only delete after delivery).
+	// Per-shard comparison: each entry checked against its own shard's cursor.
 	if _, err := e.pool.Exec(ctx, `
 		DELETE FROM cf_map_stream
 		WHERE expires_at IS NOT NULL AND expires_at < NOW()
+		AND (
+			NOT EXISTS (SELECT 1 FROM cf_map_outbox_cursor)
+			OR cf_map_stream.id <= (
+				SELECT c.last_processed_id FROM cf_map_outbox_cursor c
+				WHERE c.shard_id = cf_map_stream.shard_id
+			)
+		)
 	`); err != nil {
 		e.node.logger.log(newErrorLogEntry(err, "error cleaning up expired stream entries", map[string]any{}))
+	}
+
+	// Clean up delivered stream entries from abandoned channels.
+	// Only delete entries where: (a) already delivered (below shard cursor),
+	// (b) no explicit TTL, and (c) the channel's meta no longer exists (expired/removed).
+	// If meta still exists, entries may be needed for stream_size recovery.
+	// Uses USING to let planner drive from the small cursor table (16 rows)
+	// via the (shard_id, id) index, avoiding a full table scan on expires_at IS NULL.
+	// In WAL mode (no cursor rows), USING produces no joins — nothing deleted (correct).
+	if _, err := e.pool.Exec(ctx, `
+		DELETE FROM cf_map_stream s
+		USING cf_map_outbox_cursor c
+		WHERE c.shard_id = s.shard_id
+		AND s.id <= c.last_processed_id
+		AND s.expires_at IS NULL
+		AND NOT EXISTS (
+			SELECT 1 FROM cf_map_meta m WHERE m.channel = s.channel
+		)
+	`); err != nil {
+		e.node.logger.log(newErrorLogEntry(err, "error cleaning up delivered stream entries", map[string]any{}))
 	}
 
 	// Remove expired stream metadata
@@ -1701,8 +1684,41 @@ func (e *PostgresMapBroker) runOutboxWorkerForShard(shardID int) {
 		e.logInfo("outbox worker: claimed shard", shardID)
 		backoff = time.Second
 
+		// Initialize cursor: UPSERT cursor row (idempotent)
+		_, err = e.pool.Exec(ctx,
+			`INSERT INTO cf_map_outbox_cursor (shard_id, last_processed_id) VALUES ($1, 0)
+			 ON CONFLICT (shard_id) DO NOTHING`, shardID)
+		if err != nil {
+			e.logError("outbox worker: init cursor", err, shardID)
+			e.outboxClaimedShardMu.Lock()
+			delete(e.outboxClaimedShards, shardID)
+			e.outboxClaimedShardMu.Unlock()
+			_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", lockID)
+			conn.Release()
+			time.Sleep(backoff)
+			backoff = min(backoff*2, maxBackoff)
+			continue
+		}
+
+		// Read initial cursor position
+		var lastProcessedID int64
+		err = e.pool.QueryRow(ctx,
+			`SELECT last_processed_id FROM cf_map_outbox_cursor WHERE shard_id = $1`,
+			shardID).Scan(&lastProcessedID)
+		if err != nil {
+			e.logError("outbox worker: read cursor", err, shardID)
+			e.outboxClaimedShardMu.Lock()
+			delete(e.outboxClaimedShards, shardID)
+			e.outboxClaimedShardMu.Unlock()
+			_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", lockID)
+			conn.Release()
+			time.Sleep(backoff)
+			backoff = min(backoff*2, maxBackoff)
+			continue
+		}
+
 		// Run the outbox processor until it fails or we're closed
-		err = e.processOutboxLoop(ctx, shardID, conn)
+		err = e.processOutboxLoop(ctx, shardID, conn, lastProcessedID)
 		if err != nil && ctx.Err() == nil {
 			e.logError("outbox worker: loop error", err, shardID)
 		}
@@ -1729,7 +1745,7 @@ func (e *PostgresMapBroker) runOutboxWorkerForShard(shardID int) {
 }
 
 // processOutboxLoop is the main processing loop for an outbox worker.
-func (e *PostgresMapBroker) processOutboxLoop(ctx context.Context, shardID int, conn *pgxpool.Conn) error {
+func (e *PostgresMapBroker) processOutboxLoop(ctx context.Context, shardID int, conn *pgxpool.Conn, cursor int64) error {
 	pollInterval := e.conf.Outbox.PollInterval
 
 	for {
@@ -1741,10 +1757,13 @@ func (e *PostgresMapBroker) processOutboxLoop(ctx context.Context, shardID int, 
 		default:
 		}
 
-		// Process a batch of outbox entries
-		processed, err := e.processOutboxBatch(ctx, shardID)
+		// Process a batch of stream entries
+		processed, newCursor, err := e.processOutboxBatch(ctx, shardID, cursor)
 		if err != nil {
 			return fmt.Errorf("process batch: %w", err)
+		}
+		if newCursor > cursor {
+			cursor = newCursor
 		}
 
 		// If we processed a full batch, immediately try again (more may be waiting)
@@ -1763,8 +1782,8 @@ func (e *PostgresMapBroker) processOutboxLoop(ctx context.Context, shardID int, 
 	}
 }
 
-// outboxRow represents a row from the cf_map_outbox table.
-type outboxRow struct {
+// streamRow represents a row from cf_map_stream used for outbox delivery.
+type streamRow struct {
 	id            int64
 	shardID       int
 	channel       string
@@ -1782,54 +1801,26 @@ type outboxRow struct {
 	previousData  []byte
 }
 
-// processOutboxBatch fetches and processes a batch of outbox entries.
-func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int) (int, error) {
+// processOutboxBatch fetches and processes a batch of stream entries using cursor-based delivery.
+func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int, cursor int64) (int, int64, error) {
 	batchSize := e.conf.Outbox.BatchSize
-	markProcessed := e.conf.Outbox.MarkProcessed
 
-	// Build query based on mode
-	var query string
-	if markProcessed {
-		// Mark-processed mode: only get unprocessed rows
-		query = `
-			SELECT id, shard_id, channel, channel_offset, epoch, key, data, tags, removed, score,
-				   client_id, user_id, conn_info, chan_info, previous_data
-			FROM cf_map_outbox
-			WHERE shard_id = $1 AND processed_at IS NULL
-			ORDER BY id
-			LIMIT $2
-			FOR UPDATE SKIP LOCKED
-		`
-	} else {
-		// Delete mode: get all rows for this shard
-		query = `
-			SELECT id, shard_id, channel, channel_offset, epoch, key, data, tags, removed, score,
-				   client_id, user_id, conn_info, chan_info, previous_data
-			FROM cf_map_outbox
-			WHERE shard_id = $1
-			ORDER BY id
-			LIMIT $2
-			FOR UPDATE SKIP LOCKED
-		`
-	}
-
-	// Start transaction
-	tx, err := e.pool.Begin(ctx)
+	rows, err := e.pool.Query(ctx, `
+		SELECT id, shard_id, channel, channel_offset, epoch, key, data, tags, removed, score,
+			   client_id, user_id, conn_info, chan_info, previous_data
+		FROM cf_map_stream
+		WHERE shard_id = $1 AND id > $2
+		ORDER BY id
+		LIMIT $3
+	`, shardID, cursor, batchSize)
 	if err != nil {
-		return 0, fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	// Fetch batch
-	rows, err := tx.Query(ctx, query, shardID, batchSize)
-	if err != nil {
-		return 0, fmt.Errorf("query outbox: %w", err)
+		return 0, cursor, fmt.Errorf("query stream: %w", err)
 	}
 
-	var entries []outboxRow
-	var ids []int64
+	var entries []streamRow
+	var maxID int64
 	for rows.Next() {
-		var row outboxRow
+		var row streamRow
 		var tagsJSON []byte
 		err := rows.Scan(
 			&row.id, &row.shardID, &row.channel, &row.channelOffset, &row.epoch,
@@ -1838,19 +1829,20 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int)
 		)
 		if err != nil {
 			rows.Close()
-			return 0, fmt.Errorf("scan row: %w", err)
+			return 0, cursor, fmt.Errorf("scan row: %w", err)
 		}
 		if len(tagsJSON) > 0 {
 			_ = json.Unmarshal(tagsJSON, &row.tags)
 		}
 		entries = append(entries, row)
-		ids = append(ids, row.id)
+		if row.id > maxID {
+			maxID = row.id
+		}
 	}
 	rows.Close()
 
 	if len(entries) == 0 {
-		_ = tx.Commit(ctx)
-		return 0, nil
+		return 0, cursor, nil
 	}
 
 	// Process each entry (publish to broker/locally)
@@ -1861,30 +1853,20 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int)
 		}
 	}
 
-	// Delete or mark processed
-	if markProcessed {
-		_, err = tx.Exec(ctx, `
-			UPDATE cf_map_outbox SET processed_at = NOW() WHERE id = ANY($1)
-		`, ids)
-	} else {
-		_, err = tx.Exec(ctx, `
-			DELETE FROM cf_map_outbox WHERE id = ANY($1)
-		`, ids)
-	}
+	// Advance cursor
+	_, err = e.pool.Exec(ctx,
+		`UPDATE cf_map_outbox_cursor SET last_processed_id = $1, updated_at = NOW()
+		 WHERE shard_id = $2`, maxID, shardID)
 	if err != nil {
-		return 0, fmt.Errorf("finalize entries: %w", err)
+		return 0, cursor, fmt.Errorf("advance cursor: %w", err)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("commit tx: %w", err)
-	}
-
-	return len(entries), nil
+	return len(entries), maxID, nil
 }
 
-// handleOutboxEntry processes a single outbox entry by publishing to broker/locally.
+// handleOutboxEntry processes a single stream entry by publishing to broker/locally.
 // This shares the same delivery logic as the WAL reader.
-func (e *PostgresMapBroker) handleOutboxEntry(_ context.Context, entry outboxRow) error {
+func (e *PostgresMapBroker) handleOutboxEntry(_ context.Context, entry streamRow) error {
 	// Handle nullable score
 	var score int64
 	if entry.score != nil {
@@ -1944,31 +1926,4 @@ func (e *PostgresMapBroker) handleOutboxEntry(_ context.Context, entry outboxRow
 	}
 
 	return nil
-}
-
-// runOutboxCleanupWorker periodically cleans up old processed outbox rows.
-// Only used when MarkProcessed mode is enabled.
-func (e *PostgresMapBroker) runOutboxCleanupWorker() {
-	ticker := time.NewTicker(e.conf.Outbox.CleanupInterval)
-	defer ticker.Stop()
-	ctx := e.cancelCtx
-
-	for {
-		select {
-		case <-e.closeCh:
-			return
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			e.cleanupProcessedOutboxEntries(ctx)
-		}
-	}
-}
-
-func (e *PostgresMapBroker) cleanupProcessedOutboxEntries(ctx context.Context) {
-	// Delete processed entries older than CleanupAge
-	_, _ = e.pool.Exec(ctx, `
-		DELETE FROM cf_map_outbox
-		WHERE processed_at IS NOT NULL AND processed_at < NOW() - $1::interval
-	`, e.conf.Outbox.CleanupAge.String())
 }

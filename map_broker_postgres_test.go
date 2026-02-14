@@ -32,8 +32,8 @@ func newTestPostgresMapBrokerWithOutbox(tb testing.TB, n *Node) *PostgresMapBrok
 
 	e, err := NewPostgresMapBroker(n, PostgresMapBrokerConfig{
 		ConnString: connString,
+		NumShards:  4, // Fewer shards for faster tests
 		Outbox: OutboxConfig{
-			NumShards:    4, // Fewer shards for faster tests
 			PollInterval: 10 * time.Millisecond,
 			BatchSize:    100,
 		},
@@ -62,7 +62,6 @@ func newTestPostgresMapBrokerWithWAL(tb testing.TB, n *Node) *PostgresMapBroker 
 		ConnString: connString,
 		WAL: WALConfig{
 			Enabled:           true,
-			NumShards:         16,
 			HeartbeatInterval: 5 * time.Second,
 		},
 	})
@@ -84,7 +83,7 @@ func cleanupTestTables(ctx context.Context, e *PostgresMapBroker) {
 	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'test_%'")
 	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'test_%'")
 	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'test_%'")
-	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_map_outbox WHERE channel LIKE 'test_%'")
+	_, _ = e.pool.Exec(ctx, "UPDATE cf_map_outbox_cursor SET last_processed_id = 0")
 }
 
 // stateToMapPostgres converts []Publication to map for easier testing.
@@ -763,7 +762,6 @@ func TestPostgresMapBroker_WALReader(t *testing.T) {
 		ConnString: connString,
 		WAL: WALConfig{
 			Enabled:           true,
-			NumShards:         16,
 			ShardIDs:          nil, // nil means try all shards
 			HeartbeatInterval: 5 * time.Second,
 		},
@@ -813,10 +811,9 @@ func TestPostgresMapBroker_WALReader(t *testing.T) {
 
 	// Publish via another connection (simulating external publish)
 	// This will go through the WAL reader -> broker -> event handler
-	// p_skip_outbox = true since we're testing WAL mode
 	directPool := broker.pool
 	_, err = directPool.Exec(ctx, `
-		SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, true, 16)
+		SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, 16)
 	`, channel, "key1", []byte("data1"))
 	require.NoError(t, err)
 
@@ -842,9 +839,8 @@ func TestPostgresMapBroker_WALReader(t *testing.T) {
 	require.True(t, found, "should receive publication with key1 via WAL reader")
 
 	// Test removal publication
-	// p_skip_outbox = true since we're testing WAL mode
 	_, err = directPool.Exec(ctx, `
-		SELECT * FROM cf_map_remove($1, $2, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, true, 16)
+		SELECT * FROM cf_map_remove($1, $2, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, 16)
 	`, channel, "key1")
 	require.NoError(t, err)
 
@@ -882,7 +878,6 @@ func TestPostgresMapBroker_WALReaderOrdering(t *testing.T) {
 		ConnString: connString,
 		WAL: WALConfig{
 			Enabled:           true,
-			NumShards:         16,
 			HeartbeatInterval: 5 * time.Second,
 		},
 	})
@@ -928,10 +923,10 @@ func TestPostgresMapBroker_WALReaderOrdering(t *testing.T) {
 		return len(broker.ClaimedShards()) > 0
 	}, 10*time.Second, 100*time.Millisecond)
 
-	// Publish multiple messages in sequence (p_skip_outbox = true for WAL mode)
+	// Publish multiple messages in sequence
 	for i := 0; i < numMessages; i++ {
 		_, err = broker.pool.Exec(ctx, `
-			SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, true, 16)
+			SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, 16)
 		`, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)))
 		require.NoError(t, err)
 	}
@@ -968,7 +963,6 @@ func TestPostgresMapBroker_WALReaderMetadata(t *testing.T) {
 		ConnString: connString,
 		WAL: WALConfig{
 			Enabled:           true,
-			NumShards:         16,
 			HeartbeatInterval: 5 * time.Second,
 		},
 	})
@@ -1009,7 +1003,7 @@ func TestPostgresMapBroker_WALReaderMetadata(t *testing.T) {
 		return len(broker.ClaimedShards()) > 0
 	}, 10*time.Second, 100*time.Millisecond)
 
-	// Publish with tags and score via SQL (p_skip_outbox = true for WAL mode)
+	// Publish with tags and score via SQL
 	// cf_map_publish params: channel, key, data, tags, client_id, user_id, conn_info, chan_info,
 	//   subscribed_at, key_mode, key_ttl, stream_ttl, stream_size, meta_ttl, expected_offset, score, ...
 	_, err = broker.pool.Exec(ctx, `
@@ -1019,7 +1013,7 @@ func TestPostgresMapBroker_WALReaderMetadata(t *testing.T) {
 			NULL, NULL, NULL, NULL, NULL,
 			NULL, NULL, '300 seconds'::interval, NULL, NULL,
 			NULL, $4,
-			NULL, NULL, NULL, NULL, NULL, NULL, false, false, true, 16
+			NULL, NULL, NULL, NULL, NULL, NULL, false, false, 16
 		)
 	`, channel, "metadata_key", []byte("metadata_data"), int64(42))
 	require.NoError(t, err)
@@ -1129,7 +1123,6 @@ func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 		Broker:     broker,
 		WAL: WALConfig{
 			Enabled:           true,
-			NumShards:         16,
 			HeartbeatInterval: 5 * time.Second,
 		},
 	})
@@ -1173,9 +1166,9 @@ func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 		return len(pgBroker.ClaimedShards()) > 0
 	}, 10*time.Second, 100*time.Millisecond, "WAL reader should claim at least one shard")
 
-	// Publish via SQL (simulating external publish, p_skip_outbox = true for WAL mode)
+	// Publish via SQL (simulating external publish)
 	_, err = pgBroker.pool.Exec(ctx, `
-		SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, $4, NULL, NULL, NULL, NULL, NULL, NULL, false, false, true, 16)
+		SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, $4, NULL, NULL, NULL, NULL, NULL, NULL, false, false, 16)
 	`, channel, "test_key", []byte("test_data"), int64(100))
 	require.NoError(t, err)
 
@@ -1217,8 +1210,8 @@ func TestPostgresMapBroker_OutboxOrdering(t *testing.T) {
 	// Create broker with outbox mode (default)
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
+		NumShards:  4,
 		Outbox: OutboxConfig{
-			NumShards:    4,
 			PollInterval: 10 * time.Millisecond,
 			BatchSize:    100,
 		},
@@ -1309,8 +1302,8 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 
 	broker1, err := NewPostgresMapBroker(node1, PostgresMapBrokerConfig{
 		ConnString: connString,
+		NumShards:  4,
 		Outbox: OutboxConfig{
-			NumShards:    4,
 			PollInterval: 10 * time.Millisecond,
 		},
 	})
@@ -1321,16 +1314,16 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 	// Publish messages directly via SQL (bypassing workers)
 	for i := 0; i < 5; i++ {
 		_, err = broker1.pool.Exec(ctx, `
-			SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, false, 4)
+			SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, 4)
 		`, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)))
 		require.NoError(t, err)
 	}
 
-	// Verify messages are in outbox
+	// Verify messages are in stream
 	var count int
-	err = broker1.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1", channel).Scan(&count)
+	err = broker1.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_stream WHERE channel = $1", channel).Scan(&count)
 	require.NoError(t, err)
-	require.Equal(t, 5, count, "5 messages should be in outbox")
+	require.Equal(t, 5, count, "5 messages should be in stream")
 
 	_ = broker1.Close(ctx)
 	_ = node1.Shutdown(ctx)
@@ -1342,8 +1335,8 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 
 	broker2, err := NewPostgresMapBroker(node2, PostgresMapBrokerConfig{
 		ConnString: connString,
+		NumShards:  4,
 		Outbox: OutboxConfig{
-			NumShards:    4,
 			PollInterval: 10 * time.Millisecond,
 		},
 	})
@@ -1392,99 +1385,12 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 	require.Len(t, received, 5)
 	receivedMu.Unlock()
 
-	// Verify outbox is empty (wait for outbox transaction to commit after handler callback).
+	// Verify cursor has advanced for the shard that received messages.
 	require.Eventually(t, func() bool {
-		var c int
-		_ = broker2.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1", channel).Scan(&c)
-		return c == 0
-	}, 5*time.Second, 50*time.Millisecond, "outbox should be empty after processing")
-}
-
-// TestPostgresMapBroker_OutboxMarkProcessed tests mark-processed mode.
-func TestPostgresMapBroker_OutboxMarkProcessed(t *testing.T) {
-	connString := getPostgresConnString(t)
-	ctx := context.Background()
-
-	node, err := New(Config{})
-	require.NoError(t, err)
-	require.NoError(t, node.Run())
-
-	// Create broker with mark-processed mode
-	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: connString,
-		Outbox: OutboxConfig{
-			NumShards:     4,
-			PollInterval:  10 * time.Millisecond,
-			BatchSize:     100,
-			MarkProcessed: true,
-		},
-	})
-	require.NoError(t, err)
-
-	channel := fmt.Sprintf("test_outbox_mark_%d", time.Now().UnixNano())
-	cleanupTestTables(ctx, broker)
-
-	t.Cleanup(func() {
-		_ = broker.Close(context.Background())
-		_ = node.Shutdown(context.Background())
-	})
-
-	var received []*Publication
-	var receivedMu sync.Mutex
-	doneCh := make(chan struct{})
-
-	err = broker.RegisterEventHandler(&testBrokerEventHandler{
-		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
-			if ch != channel {
-				return nil
-			}
-			receivedMu.Lock()
-			received = append(received, pub)
-			if len(received) >= 3 {
-				select {
-				case <-doneCh:
-				default:
-					close(doneCh)
-				}
-			}
-			receivedMu.Unlock()
-			return nil
-		},
-	})
-	require.NoError(t, err)
-
-	require.Eventually(t, func() bool {
-		return len(broker.OutboxClaimedShards()) > 0
-	}, 10*time.Second, 100*time.Millisecond)
-
-	// Publish messages
-	for i := 0; i < 3; i++ {
-		_, err = broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:      []byte(fmt.Sprintf("data%d", i)),
-			StreamTTL: 300 * time.Second,
-		})
-		require.NoError(t, err)
-	}
-
-	// Wait for delivery
-	select {
-	case <-doneCh:
-	case <-time.After(10 * time.Second):
-		t.Fatal("timeout waiting for publications")
-	}
-
-	// In mark-processed mode, rows should still exist but have processed_at set.
-	// Wait briefly for the outbox transaction to commit after handler callback.
-	require.Eventually(t, func() bool {
-		var processedCount int
-		_ = broker.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1 AND processed_at IS NOT NULL", channel).Scan(&processedCount)
-		return processedCount == 3
-	}, 5*time.Second, 50*time.Millisecond, "all rows should be marked as processed")
-
-	var totalCount int
-	err = broker.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_outbox WHERE channel = $1", channel).Scan(&totalCount)
-	require.NoError(t, err)
-	require.Equal(t, 3, totalCount, "rows should still exist")
+		var maxCursor int64
+		_ = broker2.pool.QueryRow(ctx, "SELECT COALESCE(MAX(last_processed_id), 0) FROM cf_map_outbox_cursor").Scan(&maxCursor)
+		return maxCursor > 0
+	}, 5*time.Second, 50*time.Millisecond, "cursor should have advanced after processing")
 }
 
 // TestPostgresMapBroker_OutboxConcurrentPublish tests concurrent publishes maintain ordering.
@@ -1498,8 +1404,8 @@ func TestPostgresMapBroker_OutboxConcurrentPublish(t *testing.T) {
 
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
+		NumShards:  4,
 		Outbox: OutboxConfig{
-			NumShards:    4,
 			PollInterval: 10 * time.Millisecond,
 		},
 	})
@@ -1623,8 +1529,8 @@ func TestPostgresMapBroker_OutboxWithBroker(t *testing.T) {
 	pgBroker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		Broker:     broker,
+		NumShards:  4,
 		Outbox: OutboxConfig{
-			NumShards:    4,
 			PollInterval: 10 * time.Millisecond,
 		},
 	})
@@ -1716,8 +1622,8 @@ func TestPostgresMapBroker_Delta_Outbox(t *testing.T) {
 
 	e, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
+		NumShards:  4,
 		Outbox: OutboxConfig{
-			NumShards:    4,
 			PollInterval: 10 * time.Millisecond,
 			BatchSize:    100,
 		},
@@ -1894,6 +1800,97 @@ func TestPostgresMapBroker_Clear(t *testing.T) {
 	stats, err = broker.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 0, stats.NumKeys)
+}
+
+// TestPostgresMapBroker_CursorBasedDelivery tests that cursor-based outbox delivery works correctly.
+func TestPostgresMapBroker_CursorBasedDelivery(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, err := New(Config{})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
+
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+		NumShards:  4,
+		Outbox: OutboxConfig{
+			PollInterval: 10 * time.Millisecond,
+			BatchSize:    100,
+		},
+	})
+	require.NoError(t, err)
+
+	channel := fmt.Sprintf("test_cursor_%d", time.Now().UnixNano())
+	cleanupTestTables(ctx, broker)
+
+	t.Cleanup(func() {
+		_ = broker.Close(context.Background())
+		_ = node.Shutdown(context.Background())
+	})
+
+	var received []*Publication
+	var receivedMu sync.Mutex
+	doneCh := make(chan struct{})
+
+	const numMessages = 5
+
+	err = broker.RegisterEventHandler(&testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			if ch != channel {
+				return nil
+			}
+			receivedMu.Lock()
+			received = append(received, pub)
+			if len(received) >= numMessages {
+				select {
+				case <-doneCh:
+				default:
+					close(doneCh)
+				}
+			}
+			receivedMu.Unlock()
+			return nil
+		},
+	})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return len(broker.OutboxClaimedShards()) > 0
+	}, 10*time.Second, 100*time.Millisecond)
+
+	// Publish messages
+	for i := 0; i < numMessages; i++ {
+		_, err = broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+			Data:      []byte(fmt.Sprintf("data%d", i)),
+			StreamTTL: 300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Wait for delivery
+	select {
+	case <-doneCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for publications")
+	}
+
+	receivedMu.Lock()
+	require.Len(t, received, numMessages)
+	receivedMu.Unlock()
+
+	// Verify cursor has advanced for the shard that received messages.
+	require.Eventually(t, func() bool {
+		var maxCursor int64
+		_ = broker.pool.QueryRow(ctx, "SELECT COALESCE(MAX(last_processed_id), 0) FROM cf_map_outbox_cursor").Scan(&maxCursor)
+		return maxCursor > 0
+	}, 5*time.Second, 50*time.Millisecond, "cursor should have advanced")
+
+	// Stream entries should still exist (not deleted by cursor advancement)
+	var streamCount int
+	err = broker.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_stream WHERE channel = $1", channel).Scan(&streamCount)
+	require.NoError(t, err)
+	require.Equal(t, numMessages, streamCount, "stream entries should persist after delivery")
 }
 
 func TestPostgresMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {

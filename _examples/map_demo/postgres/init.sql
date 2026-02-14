@@ -29,43 +29,23 @@ CREATE TABLE IF NOT EXISTS cf_map_stream (
 CREATE INDEX IF NOT EXISTS cf_map_stream_channel_offset_idx ON cf_map_stream (channel, channel_offset);
 CREATE INDEX IF NOT EXISTS cf_map_stream_channel_id_idx ON cf_map_stream (channel, id DESC);  -- For efficient stream trimming
 CREATE INDEX IF NOT EXISTS cf_map_stream_expires_idx ON cf_map_stream (expires_at) WHERE expires_at IS NOT NULL;
-CREATE INDEX IF NOT EXISTS cf_map_stream_shard_idx ON cf_map_stream (shard_id);
+-- Composite index for cursor-based outbox polling (shard_id, id)
+CREATE INDEX IF NOT EXISTS cf_map_stream_shard_cursor_idx ON cf_map_stream (shard_id, id);
 
 -- Set REPLICA IDENTITY to FULL for logical replication (needed to decode all columns)
 ALTER TABLE cf_map_stream REPLICA IDENTITY FULL;
 
 -- ============================================================================
--- Outbox Table (for outbox-based delivery mode - default)
+-- Outbox Cursor Table (tracks per-shard delivery progress)
 -- ============================================================================
--- The outbox table stores publications that need to be delivered to subscribers.
--- Outbox workers poll this table, publish to broker/locally, then delete/mark rows.
+-- Outbox workers read from cf_map_stream using cursors instead of a separate table.
+-- Each shard tracks its last processed stream id here.
 
-CREATE TABLE IF NOT EXISTS cf_map_outbox (
-    id              BIGSERIAL PRIMARY KEY,
-    shard_id        INTEGER NOT NULL,
-    channel         TEXT NOT NULL,
-    channel_offset  BIGINT NOT NULL,
-    epoch           TEXT NOT NULL,
-    key             TEXT NOT NULL,
-    data            BYTEA,
-    tags            JSONB,
-    removed         BOOLEAN NOT NULL DEFAULT FALSE,
-    score           BIGINT,
-    client_id       TEXT,
-    user_id         TEXT,
-    conn_info       BYTEA,
-    chan_info       BYTEA,
-    previous_data   BYTEA,          -- Previous key data for delta computation
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    processed_at    TIMESTAMPTZ  -- For mark-processed mode (partitioning support)
+CREATE TABLE IF NOT EXISTS cf_map_outbox_cursor (
+    shard_id          INTEGER PRIMARY KEY,
+    last_processed_id BIGINT NOT NULL DEFAULT 0,
+    updated_at        TIMESTAMPTZ DEFAULT NOW()
 );
-
--- Index for efficient shard-based polling
-CREATE INDEX IF NOT EXISTS cf_map_outbox_shard_id_idx ON cf_map_outbox (shard_id, id);
--- Index for cleanup of old rows
-CREATE INDEX IF NOT EXISTS cf_map_outbox_created_at_idx ON cf_map_outbox (created_at);
--- Index for mark-processed mode cleanup
-CREATE INDEX IF NOT EXISTS cf_map_outbox_processed_idx ON cf_map_outbox (processed_at) WHERE processed_at IS NOT NULL;
 
 -- ============================================================================
 -- Logical Replication Publications (for WAL-based change streaming - opt-in)
@@ -173,9 +153,8 @@ CREATE INDEX IF NOT EXISTS cf_map_idempotency_expires_idx ON cf_map_idempotency 
 -- ============================================================================
 
 -- cf_map_publish: Main publishing function
--- New parameters:
---   p_skip_outbox: When TRUE, skip inserting into outbox (used in WAL mode)
---   p_num_shards: Number of shards for shard_id calculation (default: 64 for outbox, 16 for WAL)
+-- Parameters:
+--   p_num_shards: Number of shards for shard_id calculation (default: 16)
 CREATE OR REPLACE FUNCTION cf_map_publish(
     p_channel TEXT,
     p_key TEXT,
@@ -201,7 +180,6 @@ CREATE OR REPLACE FUNCTION cf_map_publish(
     p_idempotency_ttl INTERVAL DEFAULT NULL,
     p_refresh_ttl_on_suppress BOOLEAN DEFAULT FALSE,
     p_use_delta BOOLEAN DEFAULT FALSE,
-    p_skip_outbox BOOLEAN DEFAULT FALSE,
     p_num_shards INTEGER DEFAULT 16,
     p_stream_data BYTEA DEFAULT NULL
 ) RETURNS TABLE(
@@ -329,22 +307,18 @@ BEGIN
         v_shard_id
     ) RETURNING cf_map_stream.id INTO v_id;
 
-    -- 9. Insert into outbox (unless skipped - e.g., in WAL mode)
-    IF NOT p_skip_outbox THEN
-        INSERT INTO cf_map_outbox (
-            shard_id, channel, channel_offset, epoch, key, data, tags, removed, score,
-            client_id, user_id, conn_info, chan_info, previous_data
-        ) VALUES (
-            v_shard_id, p_channel, v_offset, v_epoch, p_key, COALESCE(p_stream_data, p_data), p_tags, FALSE, p_score,
-            p_client_id, p_user_id, p_conn_info, p_chan_info, v_previous_data
-        );
-    END IF;
-
-    -- 10. Trim stream if needed
+    -- 9. Trim stream if needed (cursor-aware: never trim undelivered rows)
     IF p_stream_size IS NOT NULL AND p_stream_size > 0 THEN
         DELETE FROM cf_map_stream
         WHERE cf_map_stream.channel = p_channel AND cf_map_stream.id <= (
             SELECT s.id FROM cf_map_stream s WHERE s.channel = p_channel ORDER BY s.id DESC OFFSET p_stream_size LIMIT 1
+        )
+        AND (
+            NOT EXISTS (SELECT 1 FROM cf_map_outbox_cursor)
+            OR cf_map_stream.id <= (
+                SELECT c.last_processed_id FROM cf_map_outbox_cursor c
+                WHERE c.shard_id = cf_map_stream.shard_id
+            )
         );
     END IF;
 
@@ -385,7 +359,6 @@ CREATE OR REPLACE FUNCTION cf_map_publish_strict(
     p_idempotency_ttl INTERVAL DEFAULT NULL,
     p_refresh_ttl_on_suppress BOOLEAN DEFAULT FALSE,
     p_use_delta BOOLEAN DEFAULT FALSE,
-    p_skip_outbox BOOLEAN DEFAULT FALSE,
     p_num_shards INTEGER DEFAULT 16,
     p_stream_data BYTEA DEFAULT NULL
 ) RETURNS TABLE(
@@ -404,7 +377,7 @@ BEGIN
         p_expected_offset, p_score, p_version, p_version_epoch,
         p_key_version, p_key_version_epoch,
         p_idempotency_key, p_idempotency_ttl, p_refresh_ttl_on_suppress,
-        p_use_delta, p_skip_outbox, p_num_shards, p_stream_data
+        p_use_delta, p_num_shards, p_stream_data
     );
 
     IF v_result.suppressed THEN
@@ -436,9 +409,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- cf_map_remove: Remove a key
--- New parameters:
---   p_skip_outbox: When TRUE, skip inserting into outbox (used in WAL mode)
---   p_num_shards: Number of shards for shard_id calculation (default: 64 for outbox, 16 for WAL)
+-- Parameters:
+--   p_num_shards: Number of shards for shard_id calculation (default: 16)
 CREATE OR REPLACE FUNCTION cf_map_remove(
     p_channel TEXT,
     p_key TEXT,
@@ -448,14 +420,16 @@ CREATE OR REPLACE FUNCTION cf_map_remove(
     p_idempotency_key TEXT DEFAULT NULL,
     p_idempotency_ttl INTERVAL DEFAULT NULL,
     p_meta_ttl INTERVAL DEFAULT NULL,
-    p_skip_outbox BOOLEAN DEFAULT FALSE,
-    p_num_shards INTEGER DEFAULT 16
+    p_num_shards INTEGER DEFAULT 16,
+    p_expected_offset BIGINT DEFAULT NULL
 ) RETURNS TABLE(
     result_id BIGINT,
     channel_offset BIGINT,
     epoch TEXT,
     suppressed BOOLEAN,
-    suppress_reason TEXT
+    suppress_reason TEXT,
+    current_data BYTEA,
+    current_offset BIGINT
 ) AS $$
 DECLARE
     v_offset BIGINT;
@@ -463,6 +437,8 @@ DECLARE
     v_epoch TEXT;
     v_exists BOOLEAN;
     v_shard_id INTEGER;
+    v_current_offset BIGINT;
+    v_current_data BYTEA;
 BEGIN
     -- Calculate shard_id from channel hash
     v_shard_id := abs(hashtext(p_channel)) % p_num_shards;
@@ -472,7 +448,7 @@ BEGIN
     FROM cf_map_meta m WHERE m.channel = p_channel;
 
     IF NOT FOUND THEN
-        RETURN QUERY SELECT NULL::BIGINT, 0::BIGINT, ''::TEXT, TRUE, 'key_not_found'::TEXT;
+        RETURN QUERY SELECT NULL::BIGINT, 0::BIGINT, ''::TEXT, TRUE, 'key_not_found'::TEXT, NULL::BYTEA, NULL::BIGINT;
         RETURN;
     END IF;
 
@@ -483,19 +459,30 @@ BEGIN
         WHERE channel = p_channel AND idempotency_key = p_idempotency_key
           AND expires_at > NOW();
         IF FOUND THEN
-            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'idempotency'::TEXT;
+            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'idempotency'::TEXT, NULL::BYTEA, NULL::BIGINT;
             RETURN;
         END IF;
     END IF;
 
-    -- 3. Check if key exists
+    -- 3. CAS check (ExpectedPosition)
+    IF p_expected_offset IS NOT NULL THEN
+        SELECT key_offset, sn.data INTO v_current_offset, v_current_data
+        FROM cf_map_state sn WHERE sn.channel = p_channel AND sn.key = p_key;
+        IF NOT FOUND OR v_current_offset != p_expected_offset THEN
+            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE,
+                'position_mismatch'::TEXT, v_current_data, v_current_offset;
+            RETURN;
+        END IF;
+    END IF;
+
+    -- 4. Check if key exists
     SELECT EXISTS(SELECT 1 FROM cf_map_state WHERE channel = p_channel AND key = p_key) INTO v_exists;
     IF NOT v_exists THEN
-        RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'key_not_found'::TEXT;
+        RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'key_not_found'::TEXT, NULL::BYTEA, NULL::BIGINT;
         RETURN;
     END IF;
 
-    -- 4. Increment offset
+    -- 5. Increment offset
     UPDATE cf_map_meta SET
         top_offset = top_offset + 1,
         expires_at = COALESCE(CASE WHEN p_meta_ttl IS NOT NULL THEN NOW() + p_meta_ttl ELSE NULL END, expires_at),
@@ -503,25 +490,16 @@ BEGIN
     WHERE channel = p_channel
     RETURNING top_offset INTO v_offset;
 
-    -- 5. Delete from snapshot
+    -- 6. Delete from snapshot
     DELETE FROM cf_map_state WHERE channel = p_channel AND key = p_key;
 
-    -- 6. Insert removal into stream (include epoch and shard_id)
+    -- 7. Insert removal into stream (include epoch and shard_id)
     INSERT INTO cf_map_stream (channel, channel_offset, epoch, key, removed, client_id, user_id, expires_at, shard_id)
     VALUES (
         p_channel, v_offset, v_epoch, p_key, TRUE, p_client_id, p_user_id,
         CASE WHEN p_stream_ttl IS NOT NULL THEN NOW() + p_stream_ttl ELSE NULL END,
         v_shard_id
     ) RETURNING cf_map_stream.id INTO v_id;
-
-    -- 7. Insert into outbox (unless skipped - e.g., in WAL mode)
-    IF NOT p_skip_outbox THEN
-        INSERT INTO cf_map_outbox (
-            shard_id, channel, channel_offset, epoch, key, removed
-        ) VALUES (
-            v_shard_id, p_channel, v_offset, v_epoch, p_key, TRUE
-        );
-    END IF;
 
     -- 8. Save idempotency key
     IF p_idempotency_key IS NOT NULL THEN
@@ -530,7 +508,7 @@ BEGIN
         ON CONFLICT DO NOTHING;
     END IF;
 
-    RETURN QUERY SELECT v_id, v_offset, v_epoch, FALSE, NULL::TEXT;
+    RETURN QUERY SELECT v_id, v_offset, v_epoch, FALSE, NULL::TEXT, NULL::BYTEA, NULL::BIGINT;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -544,8 +522,8 @@ CREATE OR REPLACE FUNCTION cf_map_remove_strict(
     p_idempotency_key TEXT DEFAULT NULL,
     p_idempotency_ttl INTERVAL DEFAULT NULL,
     p_meta_ttl INTERVAL DEFAULT NULL,
-    p_skip_outbox BOOLEAN DEFAULT FALSE,
-    p_num_shards INTEGER DEFAULT 16
+    p_num_shards INTEGER DEFAULT 16,
+    p_expected_offset BIGINT DEFAULT NULL
 ) RETURNS TABLE(
     result_id BIGINT,
     channel_offset BIGINT,
@@ -557,7 +535,7 @@ BEGIN
     SELECT * INTO v_result FROM cf_map_remove(
         p_channel, p_key, p_client_id, p_user_id,
         p_stream_ttl, p_idempotency_key, p_idempotency_ttl, p_meta_ttl,
-        p_skip_outbox, p_num_shards
+        p_num_shards, p_expected_offset
     );
 
     IF v_result.suppressed THEN
@@ -577,7 +555,6 @@ $$ LANGUAGE plpgsql;
 -- When p_channel is not NULL, only expires keys for that specific channel (allows per-channel TTL options).
 CREATE OR REPLACE FUNCTION cf_map_expire_keys(
     p_batch_size INT DEFAULT 1000,
-    p_skip_outbox BOOLEAN DEFAULT FALSE,
     p_num_shards INTEGER DEFAULT 16,
     p_stream_ttl INTERVAL DEFAULT NULL,
     p_meta_ttl INTERVAL DEFAULT NULL,
@@ -638,15 +615,6 @@ BEGIN
             CASE WHEN p_stream_ttl IS NOT NULL THEN NOW() + p_stream_ttl ELSE NULL END,
             v_shard_id
         );
-
-        -- Insert into outbox (unless skipped).
-        IF NOT p_skip_outbox THEN
-            INSERT INTO cf_map_outbox (
-                shard_id, channel, channel_offset, epoch, key, removed
-            ) VALUES (
-                v_shard_id, rec.channel, v_offset, v_epoch, rec.key, TRUE
-            );
-        END IF;
 
         out_channel := rec.channel;
         out_key := rec.key;
