@@ -505,11 +505,13 @@
         const sub = centrifuge.newMapSubscription('board', { limit: 500 });
 
         sub.on('subscribed', (ctx) => {
-            if (ctx.state) {
+            if (!ctx.recovered) {
                 tasks.clear();
-                for (const pub of ctx.state) {
-                    if (pub.key && pub.data) {
-                        tasks.set(pub.key, { id: pub.key, score: pub.score || 0, ...pub.data });
+                if (ctx.state) {
+                    for (const pub of ctx.state) {
+                        if (pub.key && pub.data) {
+                            tasks.set(pub.key, { id: pub.key, score: pub.score || 0, ...pub.data });
+                        }
                     }
                 }
             }

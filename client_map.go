@@ -988,6 +988,9 @@ func (c *Client) handleMapStreamToLive(
 		Delta:       deltaEnabled,
 		Recoverable: true,
 	}
+	if req.Recover {
+		res.Recovered = true
+	}
 	if chanID > 0 {
 		res.Id = chanID
 	}
@@ -1600,6 +1603,9 @@ func (c *Client) handleMapRecoveryJoin(
 		Offset:      latestOffset,
 		Delta:       deltaEnabled,
 		Recoverable: true,
+	}
+	if req.Recover {
+		res.Recovered = true
 	}
 	if chanID > 0 {
 		res.Id = chanID
