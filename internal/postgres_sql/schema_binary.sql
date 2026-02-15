@@ -2,37 +2,37 @@
 -- PostgreSQL MapBroker Schema and Functions (template).
 -- Auto-created by EnsureSchema(). All statements are idempotent.
 -- Placeholders replaced by `make pg-schemas`:
---   __DATA_TYPE__ → JSONB or BYTEA
---   __PREFIX__    → cf_map_ or cf_binary_map_
+--   BYTEA → JSONB or BYTEA
+--   cf_binary_map_    → cf_map_ or cf_binary_map_
 -- Do NOT edit the generated files (schema_jsonb.sql, schema_binary.sql).
 -- ============================================================================
 
 -- Stream Table (Change History + Fan-out)
-CREATE TABLE IF NOT EXISTS __PREFIX__stream (
+CREATE TABLE IF NOT EXISTS cf_binary_map_stream (
     id              BIGSERIAL PRIMARY KEY,
     channel         TEXT NOT NULL,
     channel_offset  BIGINT NOT NULL,
     epoch           TEXT NOT NULL DEFAULT '',
     key             TEXT NOT NULL,
-    data            __DATA_TYPE__,
+    data            BYTEA,
     tags            JSONB,
     client_id       TEXT,
     user_id         TEXT,
-    conn_info       __DATA_TYPE__,
-    chan_info        __DATA_TYPE__,
+    conn_info       BYTEA,
+    chan_info        BYTEA,
     subscribed_at   TIMESTAMPTZ,
     removed         BOOLEAN DEFAULT FALSE,
     score           BIGINT,
-    previous_data   __DATA_TYPE__,
+    previous_data   BYTEA,
     expires_at      TIMESTAMPTZ,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     shard_id        SMALLINT NOT NULL DEFAULT 0
 );
 
-CREATE INDEX IF NOT EXISTS __PREFIX__stream_channel_offset_idx ON __PREFIX__stream (channel, channel_offset);
-CREATE INDEX IF NOT EXISTS __PREFIX__stream_channel_id_idx ON __PREFIX__stream (channel, id DESC);
-CREATE INDEX IF NOT EXISTS __PREFIX__stream_expires_idx ON __PREFIX__stream (expires_at) WHERE expires_at IS NOT NULL;
-CREATE INDEX IF NOT EXISTS __PREFIX__stream_shard_cursor_idx ON __PREFIX__stream (shard_id, id);
+CREATE INDEX IF NOT EXISTS cf_binary_map_stream_channel_offset_idx ON cf_binary_map_stream (channel, channel_offset);
+CREATE INDEX IF NOT EXISTS cf_binary_map_stream_channel_id_idx ON cf_binary_map_stream (channel, id DESC);
+CREATE INDEX IF NOT EXISTS cf_binary_map_stream_expires_idx ON cf_binary_map_stream (expires_at) WHERE expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS cf_binary_map_stream_shard_cursor_idx ON cf_binary_map_stream (shard_id, id);
 
 -- Note: REPLICA IDENTITY FULL is NOT needed. Publications use
 -- WITH (publish = 'insert') so DELETE/UPDATE old-row logging is skipped.
@@ -41,7 +41,7 @@ CREATE INDEX IF NOT EXISTS __PREFIX__stream_shard_cursor_idx ON __PREFIX__stream
 -- Outbox Cursor Table
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS __PREFIX__outbox_cursor (
+CREATE TABLE IF NOT EXISTS cf_binary_map_outbox_cursor (
     shard_id          INTEGER PRIMARY KEY,
     last_processed_id BIGINT NOT NULL DEFAULT 0,
     updated_at        TIMESTAMPTZ DEFAULT NOW()
@@ -51,15 +51,15 @@ CREATE TABLE IF NOT EXISTS __PREFIX__outbox_cursor (
 -- Snapshot Table (Current State)
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS __PREFIX__state (
+CREATE TABLE IF NOT EXISTS cf_binary_map_state (
     channel             TEXT NOT NULL,
     key                 TEXT NOT NULL,
-    data                __DATA_TYPE__,
+    data                BYTEA,
     tags                JSONB,
     client_id           TEXT,
     user_id             TEXT,
-    conn_info           __DATA_TYPE__,
-    chan_info            __DATA_TYPE__,
+    conn_info           BYTEA,
+    chan_info            BYTEA,
     subscribed_at       TIMESTAMPTZ,
     score               BIGINT,
     key_version         BIGINT DEFAULT 0,
@@ -71,18 +71,18 @@ CREATE TABLE IF NOT EXISTS __PREFIX__state (
     PRIMARY KEY (channel, key)
 );
 
-CREATE INDEX IF NOT EXISTS __PREFIX__state_ordered_idx
-    ON __PREFIX__state (channel, score DESC, key)
+CREATE INDEX IF NOT EXISTS cf_binary_map_state_ordered_idx
+    ON cf_binary_map_state (channel, score DESC, key)
     WHERE score IS NOT NULL;
-CREATE INDEX IF NOT EXISTS __PREFIX__state_expires_idx
-    ON __PREFIX__state (expires_at)
+CREATE INDEX IF NOT EXISTS cf_binary_map_state_expires_idx
+    ON cf_binary_map_state (expires_at)
     WHERE expires_at IS NOT NULL;
 
 -- ============================================================================
 -- Stream Metadata Table
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS __PREFIX__meta (
+CREATE TABLE IF NOT EXISTS cf_binary_map_meta (
     channel         TEXT PRIMARY KEY,
     top_offset      BIGINT NOT NULL DEFAULT 0,
     epoch           TEXT NOT NULL DEFAULT '',
@@ -93,15 +93,15 @@ CREATE TABLE IF NOT EXISTS __PREFIX__meta (
     expires_at      TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS __PREFIX__meta_expires_idx
-    ON __PREFIX__meta (expires_at)
+CREATE INDEX IF NOT EXISTS cf_binary_map_meta_expires_idx
+    ON cf_binary_map_meta (expires_at)
     WHERE expires_at IS NOT NULL;
 
 -- ============================================================================
 -- Idempotency Table
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS __PREFIX__idempotency (
+CREATE TABLE IF NOT EXISTS cf_binary_map_idempotency (
     channel         TEXT NOT NULL,
     idempotency_key TEXT NOT NULL,
     result_offset   BIGINT NOT NULL,
@@ -110,21 +110,21 @@ CREATE TABLE IF NOT EXISTS __PREFIX__idempotency (
     PRIMARY KEY (channel, idempotency_key)
 );
 
-CREATE INDEX IF NOT EXISTS __PREFIX__idempotency_expires_idx ON __PREFIX__idempotency (expires_at);
+CREATE INDEX IF NOT EXISTS cf_binary_map_idempotency_expires_idx ON cf_binary_map_idempotency (expires_at);
 
 -- ============================================================================
 -- Functions
 -- ============================================================================
 
-CREATE OR REPLACE FUNCTION __PREFIX__publish(
+CREATE OR REPLACE FUNCTION cf_binary_map_publish(
     p_channel TEXT,
     p_key TEXT,
-    p_data __DATA_TYPE__,
+    p_data BYTEA,
     p_tags JSONB DEFAULT NULL,
     p_client_id TEXT DEFAULT NULL,
     p_user_id TEXT DEFAULT NULL,
-    p_conn_info __DATA_TYPE__ DEFAULT NULL,
-    p_chan_info __DATA_TYPE__ DEFAULT NULL,
+    p_conn_info BYTEA DEFAULT NULL,
+    p_chan_info BYTEA DEFAULT NULL,
     p_subscribed_at TIMESTAMPTZ DEFAULT NULL,
     p_key_mode TEXT DEFAULT NULL,
     p_key_ttl INTERVAL DEFAULT NULL,
@@ -142,14 +142,14 @@ CREATE OR REPLACE FUNCTION __PREFIX__publish(
     p_refresh_ttl_on_suppress BOOLEAN DEFAULT FALSE,
     p_use_delta BOOLEAN DEFAULT FALSE,
     p_num_shards INTEGER DEFAULT 16,
-    p_stream_data __DATA_TYPE__ DEFAULT NULL
+    p_stream_data BYTEA DEFAULT NULL
 ) RETURNS TABLE(
     result_id BIGINT,
     channel_offset BIGINT,
     epoch TEXT,
     suppressed BOOLEAN,
     suppress_reason TEXT,
-    current_data __DATA_TYPE__,
+    current_data BYTEA,
     current_offset BIGINT
 ) AS $$
 DECLARE
@@ -158,8 +158,8 @@ DECLARE
     v_epoch TEXT;
     v_exists BOOLEAN;
     v_current_offset BIGINT;
-    v_current_data __DATA_TYPE__;
-    v_previous_data __DATA_TYPE__;
+    v_current_data BYTEA;
+    v_previous_data BYTEA;
     v_current_version BIGINT;
     v_stream_version BIGINT;
     v_stream_version_epoch TEXT;
@@ -169,23 +169,23 @@ BEGIN
     v_shard_id := abs(hashtext(p_channel)) % p_num_shards;
 
     -- 1. Get or create stream metadata
-    INSERT INTO __PREFIX__meta (channel, top_offset, epoch, updated_at)
+    INSERT INTO cf_binary_map_meta (channel, top_offset, epoch, updated_at)
     VALUES (p_channel, 0, substr(md5(random()::text || random()::text), 1, 8), NOW())
     ON CONFLICT (channel) DO NOTHING;
 
     SELECT top_offset, m.epoch, COALESCE(version, 0), version_epoch
     INTO v_offset, v_epoch, v_stream_version, v_stream_version_epoch
-    FROM __PREFIX__meta m WHERE m.channel = p_channel FOR UPDATE;
+    FROM cf_binary_map_meta m WHERE m.channel = p_channel FOR UPDATE;
 
     -- 2. Check idempotency
     IF p_idempotency_key IS NOT NULL THEN
         SELECT result_offset INTO v_current_offset
-        FROM __PREFIX__idempotency
+        FROM cf_binary_map_idempotency
         WHERE channel = p_channel AND idempotency_key = p_idempotency_key
           AND expires_at > NOW();
         IF FOUND THEN
             RETURN QUERY SELECT NULL::BIGINT, v_current_offset, v_epoch, TRUE,
-                'idempotency'::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
+                'idempotency'::TEXT, NULL::BYTEA, NULL::BIGINT;
             RETURN;
         END IF;
     END IF;
@@ -193,7 +193,7 @@ BEGIN
     -- 3. CAS check (ExpectedPosition)
     IF p_expected_offset IS NOT NULL THEN
         SELECT key_offset, sn.data INTO v_current_offset, v_current_data
-        FROM __PREFIX__state sn WHERE sn.channel = p_channel AND sn.key = p_key;
+        FROM cf_binary_map_state sn WHERE sn.channel = p_channel AND sn.key = p_key;
         IF NOT FOUND OR v_current_offset != p_expected_offset THEN
             RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE,
                 'position_mismatch'::TEXT, v_current_data, v_current_offset;
@@ -203,17 +203,17 @@ BEGIN
 
     -- 4. KeyMode check
     IF p_key_mode IS NOT NULL THEN
-        SELECT EXISTS(SELECT 1 FROM __PREFIX__state WHERE channel = p_channel AND key = p_key) INTO v_exists;
+        SELECT EXISTS(SELECT 1 FROM cf_binary_map_state WHERE channel = p_channel AND key = p_key) INTO v_exists;
         IF p_key_mode = 'if_new' AND v_exists THEN
             IF p_refresh_ttl_on_suppress AND p_key_ttl IS NOT NULL THEN
-                UPDATE __PREFIX__state SET expires_at = NOW() + p_key_ttl, updated_at = NOW()
+                UPDATE cf_binary_map_state SET expires_at = NOW() + p_key_ttl, updated_at = NOW()
                 WHERE channel = p_channel AND key = p_key;
             END IF;
-            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'key_exists'::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
+            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'key_exists'::TEXT, NULL::BYTEA, NULL::BIGINT;
             RETURN;
         END IF;
         IF p_key_mode = 'if_exists' AND NOT v_exists THEN
-            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'key_not_found'::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
+            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'key_not_found'::TEXT, NULL::BYTEA, NULL::BIGINT;
             RETURN;
         END IF;
     END IF;
@@ -222,13 +222,13 @@ BEGIN
     IF p_version IS NOT NULL THEN
         IF (p_version_epoch IS NULL OR p_version_epoch = v_stream_version_epoch)
            AND p_version <= v_stream_version THEN
-            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'version'::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
+            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'version'::TEXT, NULL::BYTEA, NULL::BIGINT;
             RETURN;
         END IF;
     END IF;
 
     -- 6. All checks passed - increment offset and update version
-    UPDATE __PREFIX__meta SET
+    UPDATE cf_binary_map_meta SET
         top_offset = top_offset + 1,
         version = GREATEST(COALESCE(version, 0), COALESCE(p_version, 0)),
         version_epoch = COALESCE(p_version_epoch, version_epoch),
@@ -240,11 +240,11 @@ BEGIN
     -- 6b. Fetch previous data for key-based delta (before UPSERT overwrites it)
     IF p_use_delta AND p_key IS NOT NULL AND p_key != '' THEN
         SELECT sn.data INTO v_previous_data
-        FROM __PREFIX__state sn WHERE sn.channel = p_channel AND sn.key = p_key;
+        FROM cf_binary_map_state sn WHERE sn.channel = p_channel AND sn.key = p_key;
     END IF;
 
     -- 7. Update snapshot
-    INSERT INTO __PREFIX__state (
+    INSERT INTO cf_binary_map_state (
         channel, key, data, tags, client_id, user_id, conn_info, chan_info, subscribed_at,
         score, key_version, key_version_epoch, key_offset, expires_at, updated_at
     ) VALUES (
@@ -260,50 +260,50 @@ BEGIN
         key_offset = EXCLUDED.key_offset, expires_at = EXCLUDED.expires_at, updated_at = NOW();
 
     -- 8. Insert into stream (include epoch, shard_id, and previous_data for delta)
-    INSERT INTO __PREFIX__stream (
+    INSERT INTO cf_binary_map_stream (
         channel, channel_offset, epoch, key, data, tags, client_id, user_id, conn_info, chan_info, subscribed_at, score, previous_data, expires_at, shard_id
     ) VALUES (
         p_channel, v_offset, v_epoch, p_key, COALESCE(p_stream_data, p_data), p_tags, p_client_id, p_user_id, p_conn_info, p_chan_info, p_subscribed_at, p_score, v_previous_data,
         CASE WHEN p_stream_ttl IS NOT NULL THEN NOW() + p_stream_ttl ELSE NULL END,
         v_shard_id
-    ) RETURNING __PREFIX__stream.id INTO v_id;
+    ) RETURNING cf_binary_map_stream.id INTO v_id;
 
     -- 9. Trim stream if needed (cursor-aware: never trim undelivered rows).
     -- Uses channel_offset arithmetic instead of OFFSET scan: O(1) vs O(stream_size).
     IF p_stream_size IS NOT NULL AND p_stream_size > 0 AND v_offset > p_stream_size THEN
-        DELETE FROM __PREFIX__stream
-        WHERE __PREFIX__stream.channel = p_channel
-          AND __PREFIX__stream.channel_offset <= v_offset - p_stream_size
+        DELETE FROM cf_binary_map_stream
+        WHERE cf_binary_map_stream.channel = p_channel
+          AND cf_binary_map_stream.channel_offset <= v_offset - p_stream_size
           AND (
-              NOT EXISTS (SELECT 1 FROM __PREFIX__outbox_cursor)
-              OR __PREFIX__stream.id <= (
-                  SELECT c.last_processed_id FROM __PREFIX__outbox_cursor c
-                  WHERE c.shard_id = __PREFIX__stream.shard_id
+              NOT EXISTS (SELECT 1 FROM cf_binary_map_outbox_cursor)
+              OR cf_binary_map_stream.id <= (
+                  SELECT c.last_processed_id FROM cf_binary_map_outbox_cursor c
+                  WHERE c.shard_id = cf_binary_map_stream.shard_id
               )
           );
     END IF;
 
     -- 10. Save idempotency key
     IF p_idempotency_key IS NOT NULL THEN
-        INSERT INTO __PREFIX__idempotency (channel, idempotency_key, result_offset, result_id, expires_at)
+        INSERT INTO cf_binary_map_idempotency (channel, idempotency_key, result_offset, result_id, expires_at)
         VALUES (p_channel, p_idempotency_key, v_offset, v_id, NOW() + COALESCE(p_idempotency_ttl, INTERVAL '5 minutes'))
         ON CONFLICT DO NOTHING;
     END IF;
 
-    RETURN QUERY SELECT v_id, v_offset, v_epoch, FALSE, NULL::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
+    RETURN QUERY SELECT v_id, v_offset, v_epoch, FALSE, NULL::TEXT, NULL::BYTEA, NULL::BIGINT;
 END;
 $$ LANGUAGE plpgsql;
 
--- __PREFIX__publish_strict: Auto-rollback on suppression
-CREATE OR REPLACE FUNCTION __PREFIX__publish_strict(
+-- cf_binary_map_publish_strict: Auto-rollback on suppression
+CREATE OR REPLACE FUNCTION cf_binary_map_publish_strict(
     p_channel TEXT,
     p_key TEXT,
-    p_data __DATA_TYPE__,
+    p_data BYTEA,
     p_tags JSONB DEFAULT NULL,
     p_client_id TEXT DEFAULT NULL,
     p_user_id TEXT DEFAULT NULL,
-    p_conn_info __DATA_TYPE__ DEFAULT NULL,
-    p_chan_info __DATA_TYPE__ DEFAULT NULL,
+    p_conn_info BYTEA DEFAULT NULL,
+    p_chan_info BYTEA DEFAULT NULL,
     p_subscribed_at TIMESTAMPTZ DEFAULT NULL,
     p_key_mode TEXT DEFAULT NULL,
     p_key_ttl INTERVAL DEFAULT NULL,
@@ -321,7 +321,7 @@ CREATE OR REPLACE FUNCTION __PREFIX__publish_strict(
     p_refresh_ttl_on_suppress BOOLEAN DEFAULT FALSE,
     p_use_delta BOOLEAN DEFAULT FALSE,
     p_num_shards INTEGER DEFAULT 16,
-    p_stream_data __DATA_TYPE__ DEFAULT NULL
+    p_stream_data BYTEA DEFAULT NULL
 ) RETURNS TABLE(
     result_id BIGINT,
     channel_offset BIGINT,
@@ -331,7 +331,7 @@ DECLARE
     v_result RECORD;
 BEGIN
     SELECT * INTO v_result
-    FROM __PREFIX__publish(
+    FROM cf_binary_map_publish(
         p_channel, p_key, p_data, p_tags,
         p_client_id, p_user_id, p_conn_info, p_chan_info, p_subscribed_at,
         p_key_mode, p_key_ttl, p_stream_ttl, p_stream_size, p_meta_ttl,
@@ -344,23 +344,23 @@ BEGIN
     IF v_result.suppressed THEN
         CASE v_result.suppress_reason
             WHEN 'key_exists' THEN
-                RAISE EXCEPTION '__PREFIX__publish: key already exists: %.%', p_channel, p_key
+                RAISE EXCEPTION 'cf_binary_map_publish: key already exists: %.%', p_channel, p_key
                     USING ERRCODE = 'unique_violation';
             WHEN 'key_not_found' THEN
-                RAISE EXCEPTION '__PREFIX__publish: key not found: %.%', p_channel, p_key
+                RAISE EXCEPTION 'cf_binary_map_publish: key not found: %.%', p_channel, p_key
                     USING ERRCODE = 'no_data_found';
             WHEN 'position_mismatch' THEN
-                RAISE EXCEPTION '__PREFIX__publish: CAS conflict on %.%', p_channel, p_key
+                RAISE EXCEPTION 'cf_binary_map_publish: CAS conflict on %.%', p_channel, p_key
                     USING ERRCODE = 'serialization_failure',
                           DETAIL = v_result.current_data::TEXT;
             WHEN 'version' THEN
-                RAISE EXCEPTION '__PREFIX__publish: version conflict on %.%', p_channel, p_key
+                RAISE EXCEPTION 'cf_binary_map_publish: version conflict on %.%', p_channel, p_key
                     USING ERRCODE = 'serialization_failure';
             WHEN 'idempotency' THEN
-                RAISE EXCEPTION '__PREFIX__publish: duplicate idempotency key: %.%', p_channel, p_key
+                RAISE EXCEPTION 'cf_binary_map_publish: duplicate idempotency key: %.%', p_channel, p_key
                     USING ERRCODE = 'unique_violation';
             ELSE
-                RAISE EXCEPTION '__PREFIX__publish: suppressed: %', v_result.suppress_reason
+                RAISE EXCEPTION 'cf_binary_map_publish: suppressed: %', v_result.suppress_reason
                     USING ERRCODE = 'raise_exception';
         END CASE;
     END IF;
@@ -369,8 +369,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- __PREFIX__remove: Remove a key
-CREATE OR REPLACE FUNCTION __PREFIX__remove(
+-- cf_binary_map_remove: Remove a key
+CREATE OR REPLACE FUNCTION cf_binary_map_remove(
     p_channel TEXT,
     p_key TEXT,
     p_client_id TEXT DEFAULT NULL,
@@ -387,7 +387,7 @@ CREATE OR REPLACE FUNCTION __PREFIX__remove(
     epoch TEXT,
     suppressed BOOLEAN,
     suppress_reason TEXT,
-    current_data __DATA_TYPE__,
+    current_data BYTEA,
     current_offset BIGINT
 ) AS $$
 DECLARE
@@ -397,28 +397,28 @@ DECLARE
     v_exists BOOLEAN;
     v_shard_id INTEGER;
     v_current_offset BIGINT;
-    v_current_data __DATA_TYPE__;
+    v_current_data BYTEA;
 BEGIN
     -- Calculate shard_id from channel hash
     v_shard_id := abs(hashtext(p_channel)) % p_num_shards;
 
     -- 1. Get stream metadata
     SELECT top_offset, m.epoch INTO v_offset, v_epoch
-    FROM __PREFIX__meta m WHERE m.channel = p_channel;
+    FROM cf_binary_map_meta m WHERE m.channel = p_channel;
 
     IF NOT FOUND THEN
-        RETURN QUERY SELECT NULL::BIGINT, 0::BIGINT, ''::TEXT, TRUE, 'key_not_found'::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
+        RETURN QUERY SELECT NULL::BIGINT, 0::BIGINT, ''::TEXT, TRUE, 'key_not_found'::TEXT, NULL::BYTEA, NULL::BIGINT;
         RETURN;
     END IF;
 
     -- 2. Check idempotency
     IF p_idempotency_key IS NOT NULL THEN
         SELECT result_offset INTO v_offset
-        FROM __PREFIX__idempotency
+        FROM cf_binary_map_idempotency
         WHERE channel = p_channel AND idempotency_key = p_idempotency_key
           AND expires_at > NOW();
         IF FOUND THEN
-            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'idempotency'::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
+            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'idempotency'::TEXT, NULL::BYTEA, NULL::BIGINT;
             RETURN;
         END IF;
     END IF;
@@ -426,7 +426,7 @@ BEGIN
     -- 3. CAS check (ExpectedPosition)
     IF p_expected_offset IS NOT NULL THEN
         SELECT key_offset, sn.data INTO v_current_offset, v_current_data
-        FROM __PREFIX__state sn WHERE sn.channel = p_channel AND sn.key = p_key;
+        FROM cf_binary_map_state sn WHERE sn.channel = p_channel AND sn.key = p_key;
         IF NOT FOUND OR v_current_offset != p_expected_offset THEN
             RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE,
                 'position_mismatch'::TEXT, v_current_data, v_current_offset;
@@ -435,14 +435,14 @@ BEGIN
     END IF;
 
     -- 4. Check if key exists
-    SELECT EXISTS(SELECT 1 FROM __PREFIX__state WHERE channel = p_channel AND key = p_key) INTO v_exists;
+    SELECT EXISTS(SELECT 1 FROM cf_binary_map_state WHERE channel = p_channel AND key = p_key) INTO v_exists;
     IF NOT v_exists THEN
-        RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'key_not_found'::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
+        RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'key_not_found'::TEXT, NULL::BYTEA, NULL::BIGINT;
         RETURN;
     END IF;
 
     -- 5. Increment offset
-    UPDATE __PREFIX__meta SET
+    UPDATE cf_binary_map_meta SET
         top_offset = top_offset + 1,
         expires_at = COALESCE(CASE WHEN p_meta_ttl IS NOT NULL THEN NOW() + p_meta_ttl ELSE NULL END, expires_at),
         updated_at = NOW()
@@ -450,29 +450,29 @@ BEGIN
     RETURNING top_offset INTO v_offset;
 
     -- 6. Delete from snapshot
-    DELETE FROM __PREFIX__state WHERE channel = p_channel AND key = p_key;
+    DELETE FROM cf_binary_map_state WHERE channel = p_channel AND key = p_key;
 
     -- 7. Insert removal into stream (include epoch and shard_id)
-    INSERT INTO __PREFIX__stream (channel, channel_offset, epoch, key, removed, client_id, user_id, expires_at, shard_id)
+    INSERT INTO cf_binary_map_stream (channel, channel_offset, epoch, key, removed, client_id, user_id, expires_at, shard_id)
     VALUES (
         p_channel, v_offset, v_epoch, p_key, TRUE, p_client_id, p_user_id,
         CASE WHEN p_stream_ttl IS NOT NULL THEN NOW() + p_stream_ttl ELSE NULL END,
         v_shard_id
-    ) RETURNING __PREFIX__stream.id INTO v_id;
+    ) RETURNING cf_binary_map_stream.id INTO v_id;
 
     -- 8. Save idempotency key
     IF p_idempotency_key IS NOT NULL THEN
-        INSERT INTO __PREFIX__idempotency (channel, idempotency_key, result_offset, result_id, expires_at)
+        INSERT INTO cf_binary_map_idempotency (channel, idempotency_key, result_offset, result_id, expires_at)
         VALUES (p_channel, p_idempotency_key, v_offset, v_id, NOW() + COALESCE(p_idempotency_ttl, INTERVAL '5 minutes'))
         ON CONFLICT DO NOTHING;
     END IF;
 
-    RETURN QUERY SELECT v_id, v_offset, v_epoch, FALSE, NULL::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
+    RETURN QUERY SELECT v_id, v_offset, v_epoch, FALSE, NULL::TEXT, NULL::BYTEA, NULL::BIGINT;
 END;
 $$ LANGUAGE plpgsql;
 
--- __PREFIX__remove_strict: Auto-rollback if key not found
-CREATE OR REPLACE FUNCTION __PREFIX__remove_strict(
+-- cf_binary_map_remove_strict: Auto-rollback if key not found
+CREATE OR REPLACE FUNCTION cf_binary_map_remove_strict(
     p_channel TEXT,
     p_key TEXT,
     p_client_id TEXT DEFAULT NULL,
@@ -491,14 +491,14 @@ CREATE OR REPLACE FUNCTION __PREFIX__remove_strict(
 DECLARE
     v_result RECORD;
 BEGIN
-    SELECT * INTO v_result FROM __PREFIX__remove(
+    SELECT * INTO v_result FROM cf_binary_map_remove(
         p_channel, p_key, p_client_id, p_user_id,
         p_stream_ttl, p_idempotency_key, p_idempotency_ttl, p_meta_ttl,
         p_num_shards, p_expected_offset
     );
 
     IF v_result.suppressed THEN
-        RAISE EXCEPTION '__PREFIX__remove: key not found: %.%', p_channel, p_key
+        RAISE EXCEPTION 'cf_binary_map_remove: key not found: %.%', p_channel, p_key
             USING ERRCODE = 'no_data_found';
     END IF;
 
@@ -506,8 +506,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- __PREFIX__expire_keys: Atomically expire keys that have passed their TTL.
-CREATE OR REPLACE FUNCTION __PREFIX__expire_keys(
+-- cf_binary_map_expire_keys: Atomically expire keys that have passed their TTL.
+CREATE OR REPLACE FUNCTION cf_binary_map_expire_keys(
     p_batch_size INT DEFAULT 1000,
     p_num_shards INTEGER DEFAULT 16,
     p_stream_ttl INTERVAL DEFAULT NULL,
@@ -526,14 +526,14 @@ DECLARE
     v_shard_id INTEGER;
 BEGIN
     FOR rec IN
-        SELECT channel, key FROM __PREFIX__state
+        SELECT channel, key FROM cf_binary_map_state
         WHERE expires_at IS NOT NULL AND expires_at <= NOW()
           AND (p_channel IS NULL OR channel = p_channel)
         LIMIT p_batch_size
         FOR UPDATE SKIP LOCKED
     LOOP
         -- Re-check expiration after lock (key may have been refreshed).
-        PERFORM 1 FROM __PREFIX__state
+        PERFORM 1 FROM cf_binary_map_state
         WHERE channel = rec.channel AND key = rec.key
           AND expires_at IS NOT NULL AND expires_at <= NOW();
         IF NOT FOUND THEN
@@ -542,17 +542,17 @@ BEGIN
 
         -- Get stream metadata.
         SELECT top_offset, m.epoch INTO v_offset, v_epoch
-        FROM __PREFIX__meta m WHERE m.channel = rec.channel FOR UPDATE;
+        FROM cf_binary_map_meta m WHERE m.channel = rec.channel FOR UPDATE;
 
         IF NOT FOUND THEN
-            DELETE FROM __PREFIX__state WHERE channel = rec.channel AND key = rec.key;
+            DELETE FROM cf_binary_map_state WHERE channel = rec.channel AND key = rec.key;
             CONTINUE;
         END IF;
 
         v_shard_id := abs(hashtext(rec.channel)) % p_num_shards;
 
         -- Increment offset.
-        UPDATE __PREFIX__meta SET
+        UPDATE cf_binary_map_meta SET
             top_offset = top_offset + 1,
             expires_at = COALESCE(CASE WHEN p_meta_ttl IS NOT NULL THEN NOW() + p_meta_ttl ELSE NULL END, expires_at),
             updated_at = NOW()
@@ -560,10 +560,10 @@ BEGIN
         RETURNING top_offset INTO v_offset;
 
         -- Delete from state.
-        DELETE FROM __PREFIX__state WHERE channel = rec.channel AND key = rec.key;
+        DELETE FROM cf_binary_map_state WHERE channel = rec.channel AND key = rec.key;
 
         -- Insert removal into stream.
-        INSERT INTO __PREFIX__stream (channel, channel_offset, epoch, key, removed, expires_at, shard_id)
+        INSERT INTO cf_binary_map_stream (channel, channel_offset, epoch, key, removed, expires_at, shard_id)
         VALUES (
             rec.channel, v_offset, v_epoch, rec.key, TRUE,
             CASE WHEN p_stream_ttl IS NOT NULL THEN NOW() + p_stream_ttl ELSE NULL END,

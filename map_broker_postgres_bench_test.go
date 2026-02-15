@@ -19,19 +19,20 @@ func setupPostgresMapBrokerBench(b *testing.B) (*PostgresMapBroker, func()) {
 	node, _ := New(Config{})
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
+		BinaryData: true,
 	})
 	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	if err := broker.EnsureSchema(ctx); err != nil {
 		b.Fatal(err)
 	}
 	_ = broker.RegisterEventHandler(nil)
 
 	// Clean up tables
-	ctx := context.Background()
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "UPDATE cf_map_outbox_cursor SET last_processed_id = 0")
+	cleanupTestTables(ctx, broker)
 
 	return broker, func() {
 		_ = broker.Close(context.Background())
@@ -52,19 +53,20 @@ func setupPostgresMapBrokerBenchOrdered(b *testing.B) (*PostgresMapBroker, func(
 	}
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
+		BinaryData: true,
 	})
 	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	if err := broker.EnsureSchema(ctx); err != nil {
 		b.Fatal(err)
 	}
 	_ = broker.RegisterEventHandler(nil)
 
 	// Clean up tables
-	ctx := context.Background()
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "UPDATE cf_map_outbox_cursor SET last_processed_id = 0")
+	cleanupTestTables(ctx, broker)
 
 	return broker, func() {
 		_ = broker.Close(context.Background())
@@ -521,6 +523,7 @@ func setupPostgresMapBrokerOutboxBench(b *testing.B) (*PostgresMapBroker, func()
 	// Each outbox worker holds a connection for its advisory lock.
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
+		BinaryData: true,
 		PoolSize:   32,
 		NumShards:  8, // Must be less than PoolSize to leave room for Publish
 		Outbox: OutboxConfig{
@@ -531,15 +534,15 @@ func setupPostgresMapBrokerOutboxBench(b *testing.B) (*PostgresMapBroker, func()
 	if err != nil {
 		b.Fatal(err)
 	}
+
+	ctx := context.Background()
+	if err := broker.EnsureSchema(ctx); err != nil {
+		b.Fatal(err)
+	}
 	_ = broker.RegisterEventHandler(nil)
 
 	// Clean up tables
-	ctx := context.Background()
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "UPDATE cf_map_outbox_cursor SET last_processed_id = 0")
+	cleanupTestTables(ctx, broker)
 
 	return broker, func() {
 		_ = broker.Close(context.Background())
@@ -558,6 +561,7 @@ func setupPostgresMapBrokerOutboxBenchWithHandler(b *testing.B, handler BrokerEv
 	// Each outbox worker holds a connection for its advisory lock.
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
+		BinaryData: true,
 		PoolSize:   32,
 		NumShards:  8, // Must be less than PoolSize to leave room for Publish
 		Outbox: OutboxConfig{
@@ -569,13 +573,13 @@ func setupPostgresMapBrokerOutboxBenchWithHandler(b *testing.B, handler BrokerEv
 		b.Fatal(err)
 	}
 
-	// Clean up tables before registering handler (which starts workers)
 	ctx := context.Background()
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'bench_%'")
-	_, _ = broker.pool.Exec(ctx, "UPDATE cf_map_outbox_cursor SET last_processed_id = 0")
+	if err := broker.EnsureSchema(ctx); err != nil {
+		b.Fatal(err)
+	}
+
+	// Clean up tables before registering handler (which starts workers)
+	cleanupTestTables(ctx, broker)
 
 	// Register handler which starts workers
 	_ = broker.RegisterEventHandler(handler)
@@ -679,6 +683,73 @@ func BenchmarkPostgresMapBroker_OutboxThroughput(b *testing.B) {
 	}
 
 	b.StopTimer()
+}
+
+// BenchmarkPostgresMapBroker_PublishWithStreamTrim benchmarks publish with stream_size trimming.
+// This measures the overhead of the DELETE subquery that trims old stream entries.
+// Runs sub-benchmarks with different stream sizes to show how OFFSET cost scales.
+func BenchmarkPostgresMapBroker_PublishWithStreamTrim(b *testing.B) {
+	broker, cleanup := setupPostgresMapBrokerBench(b)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	for _, streamSize := range []int{100, 1000, 10000} {
+		b.Run(fmt.Sprintf("StreamSize_%d", streamSize), func(b *testing.B) {
+			channel := fmt.Sprintf("bench_trim_%d_%d", streamSize, time.Now().UnixNano())
+
+			// Pre-fill stream to stream_size so trim runs on every publish.
+			for i := 0; i < streamSize; i++ {
+				_, err := broker.Publish(ctx, channel, fmt.Sprintf("prefill_%d", i), MapPublishOptions{
+					Data:       []byte(fmt.Sprintf("data_%d", i)),
+					StreamSize: streamSize,
+					StreamTTL:  300 * time.Second,
+				})
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				key := fmt.Sprintf("key_%d", i)
+				_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
+					Data:       []byte("x"),
+					StreamSize: streamSize,
+					StreamTTL:  300 * time.Second,
+				})
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkPostgresMapBroker_PublishNoTrim benchmarks publish without trimming for comparison.
+func BenchmarkPostgresMapBroker_PublishNoTrim(b *testing.B) {
+	broker, cleanup := setupPostgresMapBrokerBench(b)
+	defer cleanup()
+
+	ctx := context.Background()
+	channel := fmt.Sprintf("bench_notrim_%d", time.Now().UnixNano())
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		key := fmt.Sprintf("key_%d", i)
+		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
+			Data:       []byte("x"),
+			StreamSize: -1,
+			StreamTTL:  300 * time.Second,
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 // BenchmarkPostgresMapBroker_OutboxLatency measures publish-to-delivery latency.

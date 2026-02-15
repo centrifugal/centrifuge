@@ -91,7 +91,7 @@ func newTestPostgresMapBrokerWithWAL(tb testing.TB, n *Node) *PostgresMapBroker 
 // position, causing WAL reader tests to timeout replaying old WAL data.
 func dropStaleReplicationSlots(ctx context.Context, pool *pgxpool.Pool) {
 	rows, _ := pool.Query(ctx,
-		`SELECT slot_name FROM pg_replication_slots WHERE slot_name LIKE 'cf_map_%' AND NOT active`)
+		`SELECT slot_name FROM pg_replication_slots WHERE (slot_name LIKE 'cf_map_%' OR slot_name LIKE 'cf_binary_map_%') AND NOT active`)
 	if rows != nil {
 		var names []string
 		for rows.Next() {
@@ -107,11 +107,11 @@ func dropStaleReplicationSlots(ctx context.Context, pool *pgxpool.Pool) {
 }
 
 func cleanupTestTables(ctx context.Context, e *PostgresMapBroker) {
-	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'test_%'")
-	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'test_%'")
-	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'test_%'")
-	_, _ = e.pool.Exec(ctx, "DELETE FROM cf_map_idempotency WHERE channel LIKE 'test_%'")
-	_, _ = e.pool.Exec(ctx, "UPDATE cf_map_outbox_cursor SET last_processed_id = 0")
+	_, _ = e.pool.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE channel LIKE 'test_%%'", e.names.stream))
+	_, _ = e.pool.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE channel LIKE 'test_%%'", e.names.state))
+	_, _ = e.pool.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE channel LIKE 'test_%%'", e.names.meta))
+	_, _ = e.pool.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE channel LIKE 'test_%%'", e.names.idempotency))
+	_, _ = e.pool.Exec(ctx, fmt.Sprintf("UPDATE %s SET last_processed_id = 0", e.names.outboxCursor))
 }
 
 // stateToMapPostgres converts []Publication to map for easier testing.
@@ -800,9 +800,9 @@ func TestPostgresMapBroker_WALReader(t *testing.T) {
 	dropStaleReplicationSlots(ctx, broker.pool)
 
 	// Clean up tables before test
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'test_wal_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'test_wal_%'")
-	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'test_wal_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_binary_map_stream WHERE channel LIKE 'test_wal_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_binary_map_state WHERE channel LIKE 'test_wal_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_binary_map_meta WHERE channel LIKE 'test_wal_%'")
 
 	// Use unique channel name to avoid interference from other tests
 	channel := fmt.Sprintf("test_wal_channel_%d", time.Now().UnixNano())
@@ -844,7 +844,7 @@ func TestPostgresMapBroker_WALReader(t *testing.T) {
 	// This will go through the WAL reader -> broker -> event handler
 	directPool := broker.pool
 	_, err = directPool.Exec(ctx, `
-		SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, 16)
+		SELECT * FROM cf_binary_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, 16)
 	`, channel, "key1", []byte("data1"))
 	require.NoError(t, err)
 
@@ -871,7 +871,7 @@ func TestPostgresMapBroker_WALReader(t *testing.T) {
 
 	// Test removal publication
 	_, err = directPool.Exec(ctx, `
-		SELECT * FROM cf_map_remove($1, $2, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, 16)
+		SELECT * FROM cf_binary_map_remove($1, $2, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, 16)
 	`, channel, "key1")
 	require.NoError(t, err)
 
@@ -959,7 +959,7 @@ func TestPostgresMapBroker_WALReaderOrdering(t *testing.T) {
 	// Publish multiple messages in sequence
 	for i := 0; i < numMessages; i++ {
 		_, err = broker.pool.Exec(ctx, `
-			SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, 16)
+			SELECT * FROM cf_binary_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, 16)
 		`, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)))
 		require.NoError(t, err)
 	}
@@ -1039,10 +1039,10 @@ func TestPostgresMapBroker_WALReaderMetadata(t *testing.T) {
 	}, 10*time.Second, 100*time.Millisecond)
 
 	// Publish with tags and score via SQL
-	// cf_map_publish params: channel, key, data, tags, client_id, user_id, conn_info, chan_info,
+	// cf_binary_map_publish params: channel, key, data, tags, client_id, user_id, conn_info, chan_info,
 	//   subscribed_at, key_mode, key_ttl, stream_ttl, stream_size, meta_ttl, expected_offset, score, ...
 	_, err = broker.pool.Exec(ctx, `
-		SELECT * FROM cf_map_publish(
+		SELECT * FROM cf_binary_map_publish(
 			$1, $2, $3,
 			'{"env": "test", "type": "metadata"}'::jsonb,
 			NULL, NULL, NULL, NULL, NULL,
@@ -1167,9 +1167,9 @@ func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 	dropStaleReplicationSlots(ctx, pgBroker.pool)
 
 	// Clean up tables before test
-	_, _ = pgBroker.pool.Exec(ctx, "DELETE FROM cf_map_stream WHERE channel LIKE 'test_wal_broker_%'")
-	_, _ = pgBroker.pool.Exec(ctx, "DELETE FROM cf_map_state WHERE channel LIKE 'test_wal_broker_%'")
-	_, _ = pgBroker.pool.Exec(ctx, "DELETE FROM cf_map_meta WHERE channel LIKE 'test_wal_broker_%'")
+	_, _ = pgBroker.pool.Exec(ctx, "DELETE FROM cf_binary_map_stream WHERE channel LIKE 'test_wal_broker_%'")
+	_, _ = pgBroker.pool.Exec(ctx, "DELETE FROM cf_binary_map_state WHERE channel LIKE 'test_wal_broker_%'")
+	_, _ = pgBroker.pool.Exec(ctx, "DELETE FROM cf_binary_map_meta WHERE channel LIKE 'test_wal_broker_%'")
 
 	t.Cleanup(func() {
 		_ = pgBroker.Close(context.Background())
@@ -1206,7 +1206,7 @@ func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 
 	// Publish via SQL (simulating external publish)
 	_, err = pgBroker.pool.Exec(ctx, `
-		SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, $4, NULL, NULL, NULL, NULL, NULL, NULL, false, false, 16)
+		SELECT * FROM cf_binary_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, $4, NULL, NULL, NULL, NULL, NULL, NULL, false, false, 16)
 	`, channel, "test_key", []byte("test_data"), int64(100))
 	require.NoError(t, err)
 
@@ -1356,14 +1356,14 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 	// Publish messages directly via SQL (bypassing workers)
 	for i := 0; i < 5; i++ {
 		_, err = broker1.pool.Exec(ctx, `
-			SELECT * FROM cf_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, 4)
+			SELECT * FROM cf_binary_map_publish($1, $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, 4)
 		`, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)))
 		require.NoError(t, err)
 	}
 
 	// Verify messages are in stream
 	var count int
-	err = broker1.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_stream WHERE channel = $1", channel).Scan(&count)
+	err = broker1.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_binary_map_stream WHERE channel = $1", channel).Scan(&count)
 	require.NoError(t, err)
 	require.Equal(t, 5, count, "5 messages should be in stream")
 
@@ -1431,7 +1431,7 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 	// Verify cursor has advanced for the shard that received messages.
 	require.Eventually(t, func() bool {
 		var maxCursor int64
-		_ = broker2.pool.QueryRow(ctx, "SELECT COALESCE(MAX(last_processed_id), 0) FROM cf_map_outbox_cursor").Scan(&maxCursor)
+		_ = broker2.pool.QueryRow(ctx, "SELECT COALESCE(MAX(last_processed_id), 0) FROM cf_binary_map_outbox_cursor").Scan(&maxCursor)
 		return maxCursor > 0
 	}, 5*time.Second, 50*time.Millisecond, "cursor should have advanced after processing")
 }
@@ -1933,13 +1933,13 @@ func TestPostgresMapBroker_CursorBasedDelivery(t *testing.T) {
 	// Verify cursor has advanced for the shard that received messages.
 	require.Eventually(t, func() bool {
 		var maxCursor int64
-		_ = broker.pool.QueryRow(ctx, "SELECT COALESCE(MAX(last_processed_id), 0) FROM cf_map_outbox_cursor").Scan(&maxCursor)
+		_ = broker.pool.QueryRow(ctx, "SELECT COALESCE(MAX(last_processed_id), 0) FROM cf_binary_map_outbox_cursor").Scan(&maxCursor)
 		return maxCursor > 0
 	}, 5*time.Second, 50*time.Millisecond, "cursor should have advanced")
 
 	// Stream entries should still exist (not deleted by cursor advancement)
 	var streamCount int
-	err = broker.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_map_stream WHERE channel = $1", channel).Scan(&streamCount)
+	err = broker.pool.QueryRow(ctx, "SELECT COUNT(*) FROM cf_binary_map_stream WHERE channel = $1", channel).Scan(&streamCount)
 	require.NoError(t, err)
 	require.Equal(t, numMessages, streamCount, "stream entries should persist after delivery")
 }
@@ -1982,10 +1982,11 @@ func TestPostgresMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 // EnsureSchema Tests
 // ============================================================================
 
-// dropAllSchemaObjects drops all centrifuge map objects in reverse dependency order.
+// dropAllSchemaObjects drops all centrifuge map objects (both JSONB and binary variants)
+// in reverse dependency order.
 func dropAllSchemaObjects(ctx context.Context, pool *pgxpool.Pool) {
 	// Drop publications first (they depend on the table).
-	rows, _ := pool.Query(ctx, `SELECT pubname FROM pg_publication WHERE pubname LIKE 'cf_map_stream_%'`)
+	rows, _ := pool.Query(ctx, `SELECT pubname FROM pg_publication WHERE pubname LIKE 'cf_map_stream_%' OR pubname LIKE 'cf_binary_map_stream_%'`)
 	if rows != nil {
 		var names []string
 		for rows.Next() {
@@ -1999,27 +2000,31 @@ func dropAllSchemaObjects(ctx context.Context, pool *pgxpool.Pool) {
 		}
 	}
 
-	// Drop functions (they depend on tables).
-	_, _ = pool.Exec(ctx, "DROP FUNCTION IF EXISTS cf_map_publish CASCADE")
-	_, _ = pool.Exec(ctx, "DROP FUNCTION IF EXISTS cf_map_publish_strict CASCADE")
-	_, _ = pool.Exec(ctx, "DROP FUNCTION IF EXISTS cf_map_remove CASCADE")
-	_, _ = pool.Exec(ctx, "DROP FUNCTION IF EXISTS cf_map_remove_strict CASCADE")
-	_, _ = pool.Exec(ctx, "DROP FUNCTION IF EXISTS cf_map_expire_keys CASCADE")
+	for _, prefix := range []string{"cf_map_", "cf_binary_map_"} {
+		// Drop functions (they depend on tables).
+		_, _ = pool.Exec(ctx, fmt.Sprintf("DROP FUNCTION IF EXISTS %spublish CASCADE", prefix))
+		_, _ = pool.Exec(ctx, fmt.Sprintf("DROP FUNCTION IF EXISTS %spublish_strict CASCADE", prefix))
+		_, _ = pool.Exec(ctx, fmt.Sprintf("DROP FUNCTION IF EXISTS %sremove CASCADE", prefix))
+		_, _ = pool.Exec(ctx, fmt.Sprintf("DROP FUNCTION IF EXISTS %sremove_strict CASCADE", prefix))
+		_, _ = pool.Exec(ctx, fmt.Sprintf("DROP FUNCTION IF EXISTS %sexpire_keys CASCADE", prefix))
 
-	// Drop tables.
-	_, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS cf_map_idempotency CASCADE")
-	_, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS cf_map_outbox_cursor CASCADE")
-	_, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS cf_map_stream CASCADE")
-	_, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS cf_map_state CASCADE")
-	_, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS cf_map_meta CASCADE")
+		// Drop tables.
+		_, _ = pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %sidempotency CASCADE", prefix))
+		_, _ = pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %soutbox_cursor CASCADE", prefix))
+		_, _ = pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %sstream CASCADE", prefix))
+		_, _ = pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %sstate CASCADE", prefix))
+		_, _ = pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %smeta CASCADE", prefix))
+	}
 }
 
-// verifySchemaComplete checks that all expected tables, indexes, functions, and replica identity exist.
-func verifySchemaComplete(t *testing.T, ctx context.Context, pool *pgxpool.Pool, expectJSONB bool) {
+// verifySchemaComplete checks that all expected tables, indexes, functions, and column types exist.
+// prefix is "cf_map_" or "cf_binary_map_".
+func verifySchemaComplete(t *testing.T, ctx context.Context, pool *pgxpool.Pool, prefix string, expectJSONB bool) {
 	t.Helper()
 
 	// Check tables exist.
-	for _, table := range []string{"cf_map_stream", "cf_map_outbox_cursor", "cf_map_state", "cf_map_meta", "cf_map_idempotency"} {
+	for _, suffix := range []string{"stream", "outbox_cursor", "state", "meta", "idempotency"} {
+		table := prefix + suffix
 		var exists bool
 		err := pool.QueryRow(ctx,
 			`SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = $1)`, table).Scan(&exists)
@@ -2028,16 +2033,17 @@ func verifySchemaComplete(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	}
 
 	// Check indexes exist.
-	for _, idx := range []string{
-		"cf_map_stream_channel_offset_idx",
-		"cf_map_stream_channel_id_idx",
-		"cf_map_stream_expires_idx",
-		"cf_map_stream_shard_cursor_idx",
-		"cf_map_state_ordered_idx",
-		"cf_map_state_expires_idx",
-		"cf_map_meta_expires_idx",
-		"cf_map_idempotency_expires_idx",
+	for _, suffix := range []string{
+		"stream_channel_offset_idx",
+		"stream_channel_id_idx",
+		"stream_expires_idx",
+		"stream_shard_cursor_idx",
+		"state_ordered_idx",
+		"state_expires_idx",
+		"meta_expires_idx",
+		"idempotency_expires_idx",
 	} {
+		idx := prefix + suffix
 		var exists bool
 		err := pool.QueryRow(ctx,
 			`SELECT EXISTS(SELECT 1 FROM pg_indexes WHERE indexname = $1)`, idx).Scan(&exists)
@@ -2046,7 +2052,8 @@ func verifySchemaComplete(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	}
 
 	// Check functions exist.
-	for _, fn := range []string{"cf_map_publish", "cf_map_publish_strict", "cf_map_remove", "cf_map_remove_strict", "cf_map_expire_keys"} {
+	for _, suffix := range []string{"publish", "publish_strict", "remove", "remove_strict", "expire_keys"} {
+		fn := prefix + suffix
 		var exists bool
 		err := pool.QueryRow(ctx,
 			`SELECT EXISTS(SELECT 1 FROM pg_proc WHERE proname = $1)`, fn).Scan(&exists)
@@ -2064,13 +2071,13 @@ func verifySchemaComplete(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 		table  string
 		column string
 	}{
-		{"cf_map_stream", "data"},
-		{"cf_map_stream", "previous_data"},
-		{"cf_map_stream", "conn_info"},
-		{"cf_map_stream", "chan_info"},
-		{"cf_map_state", "data"},
-		{"cf_map_state", "conn_info"},
-		{"cf_map_state", "chan_info"},
+		{prefix + "stream", "data"},
+		{prefix + "stream", "previous_data"},
+		{prefix + "stream", "conn_info"},
+		{prefix + "stream", "chan_info"},
+		{prefix + "state", "data"},
+		{prefix + "state", "conn_info"},
+		{prefix + "state", "chan_info"},
 	}
 	for _, dc := range dataColumns {
 		var dataType string
@@ -2082,7 +2089,8 @@ func verifySchemaComplete(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	}
 
 	// tags should always be JSONB regardless of BinaryData setting.
-	for _, table := range []string{"cf_map_stream", "cf_map_state"} {
+	for _, suffix := range []string{"stream", "state"} {
+		table := prefix + suffix
 		var dataType string
 		err := pool.QueryRow(ctx,
 			`SELECT data_type FROM information_schema.columns WHERE table_name = $1 AND column_name = 'tags'`,
@@ -2116,7 +2124,7 @@ func TestPostgresMapBroker_EnsureSchema_Fresh(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify all objects exist with JSONB (default).
-	verifySchemaComplete(t, ctx, broker.pool, true)
+	verifySchemaComplete(t, ctx, broker.pool, "cf_map_", true)
 }
 
 // TestPostgresMapBroker_EnsureSchema_Idempotent tests calling EnsureSchema twice.
@@ -2145,7 +2153,7 @@ func TestPostgresMapBroker_EnsureSchema_Idempotent(t *testing.T) {
 	err = broker.EnsureSchema(ctx)
 	require.NoError(t, err)
 
-	verifySchemaComplete(t, ctx, broker.pool, true)
+	verifySchemaComplete(t, ctx, broker.pool, "cf_map_", true)
 }
 
 // TestPostgresMapBroker_EnsureSchema_PartialState tests that EnsureSchema handles partial schema.
@@ -2180,7 +2188,7 @@ func TestPostgresMapBroker_EnsureSchema_PartialState(t *testing.T) {
 	err = broker.EnsureSchema(ctx)
 	require.NoError(t, err)
 
-	verifySchemaComplete(t, ctx, broker.pool, true)
+	verifySchemaComplete(t, ctx, broker.pool, "cf_map_", true)
 }
 
 // TestPostgresMapBroker_EnsureSchema_WALPublications tests that publications are created in WAL mode.
@@ -2300,7 +2308,7 @@ func TestPostgresMapBroker_EnsureSchema_OutboxNoPublications(t *testing.T) {
 	require.Equal(t, 0, count, "outbox mode should not create publications")
 
 	// Tables/functions should still exist.
-	verifySchemaComplete(t, ctx, broker.pool, true)
+	verifySchemaComplete(t, ctx, broker.pool, "cf_map_", true)
 }
 
 // TestPostgresMapBroker_EnsureSchema_BinaryData tests BYTEA columns when BinaryData=true.
@@ -2326,7 +2334,7 @@ func TestPostgresMapBroker_EnsureSchema_BinaryData(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify data columns are BYTEA.
-	verifySchemaComplete(t, ctx, broker.pool, false)
+	verifySchemaComplete(t, ctx, broker.pool, "cf_binary_map_", false)
 }
 
 // TestPostgresMapBroker_EnsureSchema_FunctionalAfterSetup tests that the broker works after EnsureSchema.

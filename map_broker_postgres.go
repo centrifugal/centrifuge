@@ -20,8 +20,39 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-//go:embed internal/postgres_sql/schema.sql
-var postgresSchemaSQL string
+//go:embed internal/postgres_sql/schema_jsonb.sql
+var postgresSchemaJSONBSQL string
+
+//go:embed internal/postgres_sql/schema_binary.sql
+var postgresSchemaBinarySQL string
+
+// pgNames holds precomputed table/function/publication names based on BinaryData mode.
+// When BinaryData=false (default): prefix = "cf_map_"
+// When BinaryData=true:            prefix = "cf_binary_map_"
+type pgNames struct {
+	stream, state, meta, idempotency, outboxCursor string // table names
+	publish, remove, expireKeys                    string // function names
+	pubPrefix, slotPrefix                          string // for WAL publication/slot names
+}
+
+func newPgNames(binary bool) pgNames {
+	p := "cf_map_"
+	if binary {
+		p = "cf_binary_map_"
+	}
+	return pgNames{
+		stream:       p + "stream",
+		state:        p + "state",
+		meta:         p + "meta",
+		idempotency:  p + "idempotency",
+		outboxCursor: p + "outbox_cursor",
+		publish:      p + "publish",
+		remove:       p + "remove",
+		expireKeys:   p + "expire_keys",
+		pubPrefix:    p + "stream_",
+		slotPrefix:   p + "shard_",
+	}
+}
 
 // PostgresMapBroker is MapBroker implementation using PostgreSQL for persistent
 // map subscriptions. It provides durability, CAS operations, and transactional
@@ -38,6 +69,7 @@ var postgresSchemaSQL string
 type PostgresMapBroker struct {
 	node         *Node
 	conf         PostgresMapBrokerConfig
+	names        pgNames
 	pool *pgxpool.Pool // Primary pool for writes
 	eventHandler BrokerEventHandler
 	closeCh      chan struct{}
@@ -231,6 +263,7 @@ func NewPostgresMapBroker(n *Node, conf PostgresMapBrokerConfig) (*PostgresMapBr
 	e := &PostgresMapBroker{
 		node:                n,
 		conf:                conf,
+		names:               newPgNames(conf.BinaryData),
 		pool:                pool,
 		closeCh:             make(chan struct{}),
 		cancelCtx:           ctx,
@@ -260,18 +293,18 @@ func (e *PostgresMapBroker) ensureChannelMeta(ctx context.Context, ch string) (S
 
 	var topOffset int64
 	var actualEpoch string
-	err := e.pool.QueryRow(ctx, `
+	err := e.pool.QueryRow(ctx, fmt.Sprintf(`
 		WITH new_row AS (
-			INSERT INTO cf_map_meta (channel, top_offset, epoch)
+			INSERT INTO %s (channel, top_offset, epoch)
 			VALUES ($1, 0, $2)
 			ON CONFLICT (channel) DO NOTHING
 			RETURNING top_offset, epoch
 		)
 		SELECT top_offset, epoch FROM new_row
 		UNION ALL
-		SELECT top_offset, epoch FROM cf_map_meta
+		SELECT top_offset, epoch FROM %s
 		WHERE channel = $1 AND NOT EXISTS (SELECT 1 FROM new_row)
-	`, ch, epoch).Scan(&topOffset, &actualEpoch)
+	`, e.names.meta, e.names.meta), ch, epoch).Scan(&topOffset, &actualEpoch)
 	if err != nil {
 		return StreamPosition{}, err
 	}
@@ -367,30 +400,19 @@ func (e *SchemaError) Unwrap() error {
 // when WAL mode is enabled, creates publications for each shard.
 //
 // Data columns use JSONB by default (suitable for JSON payloads).
-// Set BinaryData=true in config to use BYTEA instead.
+// Set BinaryData=true in config to use BYTEA instead — this creates a
+// completely separate set of tables and functions with the cf_binary_map_ prefix.
+// Both schemas can coexist in the same database.
 //
 // This method is safe to call multiple times — all DDL uses
-// CREATE IF NOT EXISTS / CREATE OR REPLACE. If the schema already exists
-// with a different data type (e.g. BYTEA→JSONB), columns are altered and
-// functions are dropped/recreated automatically.
+// CREATE IF NOT EXISTS / CREATE OR REPLACE.
 func (e *PostgresMapBroker) EnsureSchema(ctx context.Context) error {
-	dataType := "JSONB"
+	schemaSQL := postgresSchemaJSONBSQL
 	if e.conf.BinaryData {
-		dataType = "BYTEA"
-	}
-	dataTypeLower := strings.ToLower(dataType)
-
-	// Check if schema exists with a different data type and migrate if needed.
-	// We probe cf_map_state.data — if the table exists but has a different type,
-	// we need to ALTER columns and DROP/recreate functions (CREATE OR REPLACE
-	// cannot change parameter/return types).
-	if err := e.migrateDataTypeIfNeeded(ctx, dataTypeLower); err != nil {
-		return err
+		schemaSQL = postgresSchemaBinarySQL
 	}
 
-	sql := strings.ReplaceAll(postgresSchemaSQL, "__DATA_TYPE__", dataType)
-
-	if _, err := e.pool.Exec(ctx, sql); err != nil {
+	if _, err := e.pool.Exec(ctx, schemaSQL); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
 			return &SchemaError{
@@ -416,89 +438,16 @@ func (e *PostgresMapBroker) EnsureSchema(ctx context.Context) error {
 	return nil
 }
 
-// migrateDataTypeIfNeeded checks if existing schema uses a different data type
-// and migrates columns + drops functions if needed.
-func (e *PostgresMapBroker) migrateDataTypeIfNeeded(ctx context.Context, wantType string) error {
-	var currentType string
-	err := e.pool.QueryRow(ctx,
-		`SELECT data_type FROM information_schema.columns
-		 WHERE table_name = 'cf_map_state' AND column_name = 'data'`,
-	).Scan(&currentType)
-	if err != nil {
-		// Table doesn't exist yet — nothing to migrate.
-		return nil
-	}
-
-	if currentType == wantType {
-		return nil // Already the right type.
-	}
-
-	// Data type mismatch — need to alter columns and drop functions.
-	// Functions must be dropped first because they reference the column types
-	// and CREATE OR REPLACE cannot change parameter/return types.
-	funcs := []string{
-		"cf_map_publish", "cf_map_publish_strict",
-		"cf_map_remove", "cf_map_remove_strict",
-		"cf_map_expire_keys",
-	}
-	for _, fn := range funcs {
-		if _, err := e.pool.Exec(ctx, fmt.Sprintf("DROP FUNCTION IF EXISTS %s CASCADE", fn)); err != nil {
-			return &SchemaError{
-				Object: SchemaObject{Type: "function", Name: fn},
-				Op:     "drop",
-				Err:    err,
-			}
-		}
-	}
-
-	// Alter columns in existing tables.
-	pgType := strings.ToUpper(wantType) // JSONB or BYTEA
-	columns := []struct {
-		table  string
-		column string
-	}{
-		{"cf_map_stream", "data"},
-		{"cf_map_stream", "conn_info"},
-		{"cf_map_stream", "chan_info"},
-		{"cf_map_stream", "previous_data"},
-		{"cf_map_state", "data"},
-		{"cf_map_state", "conn_info"},
-		{"cf_map_state", "chan_info"},
-	}
-	for _, col := range columns {
-		// PostgreSQL can't directly cast between JSONB and BYTEA.
-		// JSONB → BYTEA: go through TEXT (JSON text representation as bytes).
-		// BYTEA → JSONB: interpret bytes as UTF-8 and parse as JSON.
-		var usingExpr string
-		if pgType == "BYTEA" {
-			usingExpr = fmt.Sprintf("%s::text::bytea", col.column)
-		} else {
-			usingExpr = fmt.Sprintf("convert_from(%s, 'UTF8')::jsonb", col.column)
-		}
-		sql := fmt.Sprintf(
-			"ALTER TABLE %s ALTER COLUMN %s TYPE %s USING %s",
-			col.table, col.column, pgType, usingExpr,
-		)
-		if _, err := e.pool.Exec(ctx, sql); err != nil {
-			return &SchemaError{
-				Object: SchemaObject{Type: "table", Name: col.table},
-				Op:     "alter",
-				Err:    fmt.Errorf("alter column %s: %w", col.column, err),
-			}
-		}
-	}
-
-	return nil
-}
-
 // ensurePublications creates shard publications and the "all" publication for WAL mode.
 // It checks existing publications and only creates missing ones.
 func (e *PostgresMapBroker) ensurePublications(ctx context.Context) error {
 	numShards := e.conf.NumShards
+	shardPrefix := e.names.pubPrefix + "shard_" // e.g. "cf_map_stream_shard_" or "cf_binary_map_stream_shard_"
+	likePattern := e.names.pubPrefix + "%"      // e.g. "cf_map_stream_%"
 
-	// Query existing cf_map_stream publications.
+	// Query existing publications for this schema variant.
 	rows, err := e.pool.Query(ctx,
-		`SELECT pubname FROM pg_publication WHERE pubname LIKE 'cf_map_stream_%'`)
+		`SELECT pubname FROM pg_publication WHERE pubname LIKE $1`, likePattern)
 	if err != nil {
 		return &SchemaError{
 			Object: SchemaObject{Type: "publication", Name: ""},
@@ -525,14 +474,14 @@ func (e *PostgresMapBroker) ensurePublications(ctx context.Context) error {
 	// Count shard publications (exclude "all").
 	shardCount := 0
 	for name := range existing {
-		if strings.HasPrefix(name, "cf_map_stream_shard_") {
+		if strings.HasPrefix(name, shardPrefix) {
 			shardCount++
 		}
 	}
 
 	if shardCount > 0 && shardCount != numShards {
 		return &SchemaError{
-			Object: SchemaObject{Type: "publication", Name: "cf_map_stream_shard_*"},
+			Object: SchemaObject{Type: "publication", Name: shardPrefix + "*"},
 			Op:     "verify",
 			Err: fmt.Errorf(
 				"found %d shard publications but NumShards=%d; "+
@@ -543,12 +492,12 @@ func (e *PostgresMapBroker) ensurePublications(ctx context.Context) error {
 
 	// Create missing shard publications.
 	for i := 0; i < numShards; i++ {
-		name := fmt.Sprintf("cf_map_stream_shard_%d", i)
+		name := fmt.Sprintf("%sshard_%d", e.names.pubPrefix, i)
 		if existing[name] {
 			continue
 		}
 		sql := fmt.Sprintf(
-			"CREATE PUBLICATION %s FOR TABLE cf_map_stream WHERE (shard_id = %d) WITH (publish = 'insert')", name, i)
+			"CREATE PUBLICATION %s FOR TABLE %s WHERE (shard_id = %d) WITH (publish = 'insert')", name, e.names.stream, i)
 		if _, err := e.pool.Exec(ctx, sql); err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == "42710" {
@@ -564,15 +513,17 @@ func (e *PostgresMapBroker) ensurePublications(ctx context.Context) error {
 	}
 
 	// Create "all" publication if missing.
-	if !existing["cf_map_stream_all"] {
-		if _, err := e.pool.Exec(ctx,
-			"CREATE PUBLICATION cf_map_stream_all FOR TABLE cf_map_stream WITH (publish = 'insert')"); err != nil {
+	allPubName := e.names.pubPrefix + "all"
+	if !existing[allPubName] {
+		sql := fmt.Sprintf(
+			"CREATE PUBLICATION %s FOR TABLE %s WITH (publish = 'insert')", allPubName, e.names.stream)
+		if _, err := e.pool.Exec(ctx, sql); err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == "42710" {
 				// duplicate_object — concurrent creation, fine.
 			} else {
 				return &SchemaError{
-					Object: SchemaObject{Type: "publication", Name: "cf_map_stream_all"},
+					Object: SchemaObject{Type: "publication", Name: allPubName},
 					Op:     "create",
 					Err:    err,
 				}
@@ -765,10 +716,10 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		streamData = opts.StreamData
 	}
 
-	err := e.pool.QueryRow(ctx, `
+	err := e.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset
-		FROM cf_map_publish($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::interval, $12::interval, $13, $14::interval, $15, $16, $17, $18, $19, $20, $21, $22::interval, $23, $24, $25, $26)
-	`,
+		FROM %s($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::interval, $12::interval, $13, $14::interval, $15, $16, $17, $18, $19, $20, $21, $22::interval, $23, $24, $25, $26)
+	`, e.names.publish),
 		ch, key, opts.Data, tagsJSON,
 		clientID, userID, connInfo, chanInfo, subscribedAt,
 		keyMode, keyTTL, streamTTL, streamSize, metaTTL,
@@ -872,10 +823,10 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 
 	// Client info is not available in remove options
 	var clientID, userID *string
-	err := e.pool.QueryRow(ctx, `
+	err := e.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset
-		FROM cf_map_remove($1, $2, $3, $4, $5::interval, $6, $7::interval, $8::interval, $9, $10)
-	`,
+		FROM %s($1, $2, $3, $4, $5::interval, $6, $7::interval, $8::interval, $9, $10)
+	`, e.names.remove),
 		ch, key, clientID, userID, streamTTL, idempotencyKey, idempotencyTTL, metaTTL,
 		numShards, expectedOffset,
 	).Scan(&id, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset)
@@ -919,9 +870,9 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 	// Get current stream position.
 	var topOffset int64
 	var epoch string
-	err = tx.QueryRow(ctx, `
-		SELECT top_offset, epoch FROM cf_map_meta WHERE channel = $1
-	`, ch).Scan(&topOffset, &epoch)
+	err = tx.QueryRow(ctx, fmt.Sprintf(`
+		SELECT top_offset, epoch FROM %s WHERE channel = $1
+	`, e.names.meta), ch).Scan(&topOffset, &epoch)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Channel doesn't exist yet
 		if opts.Revision != nil && opts.Revision.Epoch != "" {
@@ -956,11 +907,11 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 		var tagsJSON []byte
 		var clientID, userID *string
 		var connInfo, chanInfo []byte
-		err := tx.QueryRow(ctx, `
+		err := tx.QueryRow(ctx, fmt.Sprintf(`
 			SELECT key, data, tags, key_offset, client_id, user_id, conn_info, chan_info
-			FROM cf_map_state
+			FROM %s
 			WHERE channel = $1 AND key = $2 AND (expires_at IS NULL OR expires_at > NOW())
-		`, ch, opts.Key).Scan(&p.Key, &p.Data, &tagsJSON, &p.Offset, &clientID, &userID, &connInfo, &chanInfo)
+		`, e.names.state), ch, opts.Key).Scan(&p.Key, &p.Data, &tagsJSON, &p.Offset, &clientID, &userID, &connInfo, &chanInfo)
 
 		if errors.Is(err, pgx.ErrNoRows) {
 			return MapStateResult{Position: streamPos}, nil
@@ -1001,66 +952,67 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 	}
 
 	var rows pgx.Rows
+	stateTable := e.names.state
 	if ordered {
 		if opts.Cursor == "" {
 			if asc {
-				rows, err = tx.Query(ctx, `
+				rows, err = tx.Query(ctx, fmt.Sprintf(`
 					SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
-					FROM cf_map_state
+					FROM %s
 					WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
 					ORDER BY score ASC, key ASC
 					LIMIT $2
-				`, ch, limit+1)
+				`, stateTable), ch, limit+1)
 			} else {
-				rows, err = tx.Query(ctx, `
+				rows, err = tx.Query(ctx, fmt.Sprintf(`
 					SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
-					FROM cf_map_state
+					FROM %s
 					WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
 					ORDER BY score DESC, key DESC
 					LIMIT $2
-				`, ch, limit+1)
+				`, stateTable), ch, limit+1)
 			}
 		} else {
 			cursorScore, cursorKey := parseOrderedCursor(opts.Cursor)
 			cursorScoreInt, _ := strconv.ParseInt(cursorScore, 10, 64)
 			if asc {
-				rows, err = tx.Query(ctx, `
+				rows, err = tx.Query(ctx, fmt.Sprintf(`
 					SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
-					FROM cf_map_state
+					FROM %s
 					WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
 					  AND (score > $3 OR (score = $3 AND key > $4))
 					ORDER BY score ASC, key ASC
 					LIMIT $2
-				`, ch, limit+1, cursorScoreInt, cursorKey)
+				`, stateTable), ch, limit+1, cursorScoreInt, cursorKey)
 			} else {
-				rows, err = tx.Query(ctx, `
+				rows, err = tx.Query(ctx, fmt.Sprintf(`
 					SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
-					FROM cf_map_state
+					FROM %s
 					WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
 					  AND (score < $3 OR (score = $3 AND key < $4))
 					ORDER BY score DESC, key DESC
 					LIMIT $2
-				`, ch, limit+1, cursorScoreInt, cursorKey)
+				`, stateTable), ch, limit+1, cursorScoreInt, cursorKey)
 			}
 		}
 	} else {
 		// Unordered: sort by key ASC.
 		if opts.Cursor == "" {
-			rows, err = tx.Query(ctx, `
+			rows, err = tx.Query(ctx, fmt.Sprintf(`
 				SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
-				FROM cf_map_state
+				FROM %s
 				WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
 				ORDER BY key
 				LIMIT $2
-			`, ch, limit+1)
+			`, stateTable), ch, limit+1)
 		} else {
-			rows, err = tx.Query(ctx, `
+			rows, err = tx.Query(ctx, fmt.Sprintf(`
 				SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
-				FROM cf_map_state
+				FROM %s
 				WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW()) AND key > $3
 				ORDER BY key
 				LIMIT $2
-			`, ch, limit+1, opts.Cursor)
+			`, stateTable), ch, limit+1, opts.Cursor)
 		}
 	}
 	if err != nil {
@@ -1125,9 +1077,9 @@ func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapR
 	// Get current meta.
 	var topOffset int64
 	var epoch string
-	err = tx.QueryRow(ctx, `
-		SELECT top_offset, epoch FROM cf_map_meta WHERE channel = $1
-	`, ch).Scan(&topOffset, &epoch)
+	err = tx.QueryRow(ctx, fmt.Sprintf(`
+		SELECT top_offset, epoch FROM %s WHERE channel = $1
+	`, e.names.meta), ch).Scan(&topOffset, &epoch)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Channel doesn't exist yet - create it with an epoch.
 		// This matches MemoryMapBroker behavior where empty channels have an epoch.
@@ -1161,43 +1113,44 @@ func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapR
 	unlimited := limit < 0
 
 	// Query by per-channel offset (not global id).
+	streamTable := e.names.stream
 	var query string
 	if opts.Filter.Reverse {
 		if opts.Filter.Since == nil {
 			sinceOffset = topOffset + 1
 		}
 		if unlimited {
-			query = `
+			query = fmt.Sprintf(`
 				SELECT key, data, tags, channel_offset, removed, score, client_id, user_id, conn_info, chan_info
-				FROM cf_map_stream
+				FROM %s
 				WHERE channel = $1 AND channel_offset < $2
 				ORDER BY channel_offset DESC
-			`
+			`, streamTable)
 		} else {
-			query = `
+			query = fmt.Sprintf(`
 				SELECT key, data, tags, channel_offset, removed, score, client_id, user_id, conn_info, chan_info
-				FROM cf_map_stream
+				FROM %s
 				WHERE channel = $1 AND channel_offset < $2
 				ORDER BY channel_offset DESC
 				LIMIT $3
-			`
+			`, streamTable)
 		}
 	} else {
 		if unlimited {
-			query = `
+			query = fmt.Sprintf(`
 				SELECT key, data, tags, channel_offset, removed, score, client_id, user_id, conn_info, chan_info
-				FROM cf_map_stream
+				FROM %s
 				WHERE channel = $1 AND channel_offset > $2
 				ORDER BY channel_offset ASC
-			`
+			`, streamTable)
 		} else {
-			query = `
+			query = fmt.Sprintf(`
 				SELECT key, data, tags, channel_offset, removed, score, client_id, user_id, conn_info, chan_info
-				FROM cf_map_stream
+				FROM %s
 				WHERE channel = $1 AND channel_offset > $2
 				ORDER BY channel_offset ASC
 				LIMIT $3
-			`
+			`, streamTable)
 		}
 	}
 
@@ -1256,10 +1209,10 @@ func (e *PostgresMapBroker) Stats(ctx context.Context, ch string) (MapStats, err
 	pool := e.getReadPool()
 
 	var count int
-	err := pool.QueryRow(ctx, `
-		SELECT COUNT(*) FROM cf_map_state
+	err := pool.QueryRow(ctx, fmt.Sprintf(`
+		SELECT COUNT(*) FROM %s
 		WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
-	`, ch).Scan(&count)
+	`, e.names.state), ch).Scan(&count)
 	if err != nil {
 		return MapStats{}, err
 	}
@@ -1274,19 +1227,19 @@ func (e *PostgresMapBroker) Clear(ctx context.Context, ch string, _ MapClearOpti
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	_, err = tx.Exec(ctx, `DELETE FROM cf_map_stream WHERE channel = $1`, ch)
+	_, err = tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s WHERE channel = $1`, e.names.stream), ch)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `DELETE FROM cf_map_state WHERE channel = $1`, ch)
+	_, err = tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s WHERE channel = $1`, e.names.state), ch)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `DELETE FROM cf_map_meta WHERE channel = $1`, ch)
+	_, err = tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s WHERE channel = $1`, e.names.meta), ch)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `DELETE FROM cf_map_idempotency WHERE channel = $1`, ch)
+	_, err = tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s WHERE channel = $1`, e.names.idempotency), ch)
 	if err != nil {
 		return err
 	}
@@ -1387,8 +1340,8 @@ func (e *PostgresMapBroker) runWALReaderForShard(shardID int) {
 
 // runWALReaderLoop runs the logical replication reader for a shard.
 func (e *PostgresMapBroker) runWALReaderLoop(ctx context.Context, shardID int, lockConn *pgxpool.Conn) error {
-	slotName := fmt.Sprintf("cf_map_shard_%d", shardID)
-	publication := fmt.Sprintf("cf_map_stream_shard_%d", shardID)
+	slotName := fmt.Sprintf("%s%d", e.names.slotPrefix, shardID)
+	publication := fmt.Sprintf("%sshard_%d", e.names.pubPrefix, shardID)
 
 	// Create replication connection (separate from regular pool)
 	replConnStr := e.conf.ConnString
@@ -1556,7 +1509,7 @@ func (e *PostgresMapBroker) processWALMessage(ctx context.Context, walData []byt
 		if !ok {
 			return nil // Unknown relation, skip
 		}
-		if rel.RelationName != "cf_map_stream" {
+		if rel.RelationName != e.names.stream {
 			return nil // Not our table
 		}
 
@@ -1761,11 +1714,11 @@ func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 	numShards := e.conf.NumShards
 
 	// Find distinct channels with expired keys to resolve per-channel options.
-	channelRows, err := e.pool.Query(ctx, `
-		SELECT DISTINCT channel FROM cf_map_state
+	channelRows, err := e.pool.Query(ctx, fmt.Sprintf(`
+		SELECT DISTINCT channel FROM %s
 		WHERE expires_at IS NOT NULL AND expires_at <= NOW()
 		LIMIT 100
-	`)
+	`, e.names.state))
 	if err != nil {
 		e.node.logger.log(newErrorLogEntry(err, "error querying channels for key expiration", nil))
 		return
@@ -1793,10 +1746,10 @@ func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 			metaTTL = &s
 		}
 
-		rows, err := e.pool.Query(ctx, `
+		rows, err := e.pool.Query(ctx, fmt.Sprintf(`
 			SELECT out_channel, out_key, out_offset, out_epoch
-			FROM cf_map_expire_keys($1, $2, $3::interval, $4::interval, $5)
-		`, 1000, numShards, streamTTL, metaTTL, ch)
+			FROM %s($1, $2, $3::interval, $4::interval, $5)
+		`, e.names.expireKeys), 1000, numShards, streamTTL, metaTTL, ch)
 		if err != nil {
 			e.node.logger.log(newErrorLogEntry(err, "error in batch key expiration", map[string]any{"channel": ch}))
 			continue
@@ -1849,17 +1802,17 @@ func (e *PostgresMapBroker) runStreamCleanupWorker() {
 func (e *PostgresMapBroker) cleanupExpiredEntries(ctx context.Context) {
 	// Remove expired stream entries (cursor-aware: only delete after delivery).
 	// Per-shard comparison: each entry checked against its own shard's cursor.
-	if _, err := e.pool.Exec(ctx, `
-		DELETE FROM cf_map_stream
+	if _, err := e.pool.Exec(ctx, fmt.Sprintf(`
+		DELETE FROM %s
 		WHERE expires_at IS NOT NULL AND expires_at < NOW()
 		AND (
-			NOT EXISTS (SELECT 1 FROM cf_map_outbox_cursor)
-			OR cf_map_stream.id <= (
-				SELECT c.last_processed_id FROM cf_map_outbox_cursor c
-				WHERE c.shard_id = cf_map_stream.shard_id
+			NOT EXISTS (SELECT 1 FROM %s)
+			OR %s.id <= (
+				SELECT c.last_processed_id FROM %s c
+				WHERE c.shard_id = %s.shard_id
 			)
 		)
-	`); err != nil {
+	`, e.names.stream, e.names.outboxCursor, e.names.stream, e.names.outboxCursor, e.names.stream)); err != nil {
 		e.node.logger.log(newErrorLogEntry(err, "error cleaning up expired stream entries", map[string]any{}))
 	}
 
@@ -1870,32 +1823,32 @@ func (e *PostgresMapBroker) cleanupExpiredEntries(ctx context.Context) {
 	// Uses USING to let planner drive from the small cursor table (16 rows)
 	// via the (shard_id, id) index, avoiding a full table scan on expires_at IS NULL.
 	// In WAL mode (no cursor rows), USING produces no joins — nothing deleted (correct).
-	if _, err := e.pool.Exec(ctx, `
-		DELETE FROM cf_map_stream s
-		USING cf_map_outbox_cursor c
+	if _, err := e.pool.Exec(ctx, fmt.Sprintf(`
+		DELETE FROM %s s
+		USING %s c
 		WHERE c.shard_id = s.shard_id
 		AND s.id <= c.last_processed_id
 		AND s.expires_at IS NULL
 		AND NOT EXISTS (
-			SELECT 1 FROM cf_map_meta m WHERE m.channel = s.channel
+			SELECT 1 FROM %s m WHERE m.channel = s.channel
 		)
-	`); err != nil {
+	`, e.names.stream, e.names.outboxCursor, e.names.meta)); err != nil {
 		e.node.logger.log(newErrorLogEntry(err, "error cleaning up delivered stream entries", map[string]any{}))
 	}
 
 	// Remove expired stream metadata
-	if _, err := e.pool.Exec(ctx, `
-		DELETE FROM cf_map_meta
+	if _, err := e.pool.Exec(ctx, fmt.Sprintf(`
+		DELETE FROM %s
 		WHERE expires_at IS NOT NULL AND expires_at < NOW()
-	`); err != nil {
+	`, e.names.meta)); err != nil {
 		e.node.logger.log(newErrorLogEntry(err, "error cleaning up expired stream metadata", map[string]any{}))
 	}
 
 	// Remove expired idempotency keys
-	if _, err := e.pool.Exec(ctx, `
-		DELETE FROM cf_map_idempotency
+	if _, err := e.pool.Exec(ctx, fmt.Sprintf(`
+		DELETE FROM %s
 		WHERE expires_at < NOW()
-	`); err != nil {
+	`, e.names.idempotency)); err != nil {
 		e.node.logger.log(newErrorLogEntry(err, "error cleaning up expired idempotency keys", map[string]any{}))
 	}
 }
@@ -1956,9 +1909,9 @@ func (e *PostgresMapBroker) runOutboxWorkerForShard(shardID int) {
 		backoff = time.Second
 
 		// Initialize cursor: UPSERT cursor row (idempotent)
-		_, err = e.pool.Exec(ctx,
-			`INSERT INTO cf_map_outbox_cursor (shard_id, last_processed_id) VALUES ($1, 0)
-			 ON CONFLICT (shard_id) DO NOTHING`, shardID)
+		_, err = e.pool.Exec(ctx, fmt.Sprintf(
+			`INSERT INTO %s (shard_id, last_processed_id) VALUES ($1, 0)
+			 ON CONFLICT (shard_id) DO NOTHING`, e.names.outboxCursor), shardID)
 		if err != nil {
 			e.logError("outbox worker: init cursor", err, shardID)
 			e.outboxClaimedShardMu.Lock()
@@ -1973,8 +1926,8 @@ func (e *PostgresMapBroker) runOutboxWorkerForShard(shardID int) {
 
 		// Read initial cursor position
 		var lastProcessedID int64
-		err = e.pool.QueryRow(ctx,
-			`SELECT last_processed_id FROM cf_map_outbox_cursor WHERE shard_id = $1`,
+		err = e.pool.QueryRow(ctx, fmt.Sprintf(
+			`SELECT last_processed_id FROM %s WHERE shard_id = $1`, e.names.outboxCursor),
 			shardID).Scan(&lastProcessedID)
 		if err != nil {
 			e.logError("outbox worker: read cursor", err, shardID)
@@ -2076,14 +2029,14 @@ type streamRow struct {
 func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int, cursor int64) (int, int64, error) {
 	batchSize := e.conf.Outbox.BatchSize
 
-	rows, err := e.pool.Query(ctx, `
+	rows, err := e.pool.Query(ctx, fmt.Sprintf(`
 		SELECT id, shard_id, channel, channel_offset, epoch, key, data, tags, removed, score,
 			   client_id, user_id, conn_info, chan_info, previous_data
-		FROM cf_map_stream
+		FROM %s
 		WHERE shard_id = $1 AND id > $2
 		ORDER BY id
 		LIMIT $3
-	`, shardID, cursor, batchSize)
+	`, e.names.stream), shardID, cursor, batchSize)
 	if err != nil {
 		return 0, cursor, fmt.Errorf("query stream: %w", err)
 	}
@@ -2125,9 +2078,9 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int,
 	}
 
 	// Advance cursor
-	_, err = e.pool.Exec(ctx,
-		`UPDATE cf_map_outbox_cursor SET last_processed_id = $1, updated_at = NOW()
-		 WHERE shard_id = $2`, maxID, shardID)
+	_, err = e.pool.Exec(ctx, fmt.Sprintf(
+		`UPDATE %s SET last_processed_id = $1, updated_at = NOW()
+		 WHERE shard_id = $2`, e.names.outboxCursor), maxID, shardID)
 	if err != nil {
 		return 0, cursor, fmt.Errorf("advance cursor: %w", err)
 	}
