@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"context"
 	_ "embed"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/epoch"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5"
@@ -1020,33 +1022,46 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 	}
 	defer rows.Close()
 
-	var pubs []*Publication
+	allocHint := limit + 1 // +1 for next-page detection row.
+	if allocHint > 1001 {
+		allocHint = 1001
+	}
+	arena := byteArena{buf: make([]byte, 0, allocHint*64)}
+	backing := make([]Publication, 0, allocHint)
+	pubs := make([]*Publication, 0, allocHint)
+	// Use RawValues + arena to avoid per-row allocations.
+	// Column order: key(0), data(1), tags(2), key_offset(3), score(4),
+	//               client_id(5), user_id(6), conn_info(7), chan_info(8).
 	for rows.Next() {
-		var p Publication
-		var score *int64
-		var tagsJSON []byte
-		var clientID, userID *string
-		var connInfo, chanInfo []byte
-		if err := rows.Scan(&p.Key, &p.Data, &tagsJSON, &p.Offset, &score, &clientID, &userID, &connInfo, &chanInfo); err != nil {
-			return MapStateResult{}, err
+		raw := rows.RawValues()
+		backing = append(backing, Publication{})
+		p := &backing[len(backing)-1]
+		p.Key = arena.copyString(raw[0])
+		if raw[1] != nil {
+			p.Data = arena.copyBytes(raw[1])
 		}
-		if len(tagsJSON) > 0 {
-			_ = json.Unmarshal(tagsJSON, &p.Tags)
+		if raw[2] != nil {
+			pgxParseJSONB(raw[2], &p.Tags)
 		}
-		if score != nil {
-			p.Score = *score
+		if raw[3] != nil {
+			p.Offset = binary.BigEndian.Uint64(raw[3])
 		}
-		if clientID != nil {
-			p.Info = &ClientInfo{
-				ClientID: *clientID,
-				ConnInfo: connInfo,
-				ChanInfo: chanInfo,
+		if raw[4] != nil {
+			p.Score = int64(binary.BigEndian.Uint64(raw[4]))
+		}
+		if raw[5] != nil {
+			p.Info = &ClientInfo{ClientID: arena.copyString(raw[5])}
+			if raw[6] != nil {
+				p.Info.UserID = arena.copyString(raw[6])
 			}
-			if userID != nil {
-				p.Info.UserID = *userID
+			if raw[7] != nil {
+				p.Info.ConnInfo = arena.copyBytes(raw[7])
+			}
+			if raw[8] != nil {
+				p.Info.ChanInfo = arena.copyBytes(raw[8])
 			}
 		}
-		pubs = append(pubs, &p)
+		pubs = append(pubs, p)
 	}
 
 	var nextCursor string
@@ -1170,35 +1185,45 @@ func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapR
 	if unlimited {
 		allocHint = 64
 	}
+	arena := byteArena{buf: make([]byte, 0, allocHint*64)}
+	backing := make([]Publication, 0, allocHint)
 	pubs := make([]*Publication, 0, allocHint)
+	// Use RawValues + arena to avoid per-row allocations.
+	// Column order: key(0), data(1), tags(2), channel_offset(3), removed(4),
+	//               score(5), client_id(6), user_id(7), conn_info(8), chan_info(9).
 	for rows.Next() {
-		var p Publication
-		var removed bool
-		var score *int64
-		var tagsJSON []byte
-		var clientID, userID *string
-		var connInfo, chanInfo []byte
-		if err := rows.Scan(&p.Key, &p.Data, &tagsJSON, &p.Offset, &removed, &score, &clientID, &userID, &connInfo, &chanInfo); err != nil {
-			return MapStreamResult{}, err
+		raw := rows.RawValues()
+		backing = append(backing, Publication{})
+		p := &backing[len(backing)-1]
+		p.Key = arena.copyString(raw[0])
+		if raw[1] != nil {
+			p.Data = arena.copyBytes(raw[1])
 		}
-		p.Removed = removed
-		if score != nil {
-			p.Score = *score
+		if raw[2] != nil {
+			pgxParseJSONB(raw[2], &p.Tags)
 		}
-		if len(tagsJSON) > 0 {
-			_ = json.Unmarshal(tagsJSON, &p.Tags)
+		if raw[3] != nil {
+			p.Offset = binary.BigEndian.Uint64(raw[3])
 		}
-		if clientID != nil {
-			p.Info = &ClientInfo{
-				ClientID: *clientID,
-				ConnInfo: connInfo,
-				ChanInfo: chanInfo,
+		if raw[4] != nil && raw[4][0] == 1 {
+			p.Removed = true
+		}
+		if raw[5] != nil {
+			p.Score = int64(binary.BigEndian.Uint64(raw[5]))
+		}
+		if raw[6] != nil {
+			p.Info = &ClientInfo{ClientID: arena.copyString(raw[6])}
+			if raw[7] != nil {
+				p.Info.UserID = arena.copyString(raw[7])
 			}
-			if userID != nil {
-				p.Info.UserID = *userID
+			if raw[8] != nil {
+				p.Info.ConnInfo = arena.copyBytes(raw[8])
+			}
+			if raw[9] != nil {
+				p.Info.ChanInfo = arena.copyBytes(raw[9])
 			}
 		}
-		pubs = append(pubs, &p)
+		pubs = append(pubs, p)
 	}
 
 	return MapStreamResult{Publications: pubs, Position: streamPos}, nil
@@ -2150,4 +2175,51 @@ func (e *PostgresMapBroker) handleOutboxEntry(_ context.Context, entry streamRow
 	}
 
 	return nil
+}
+
+// pgxParseJSONB parses JSONB binary wire format (1-byte version header + JSON)
+// into a map[string]string. Does nothing if b is nil or too short.
+func pgxParseJSONB(b []byte, dst *map[string]string) {
+	if len(b) > 1 {
+		_ = json.Unmarshal(b[1:], dst) // skip version byte
+	}
+}
+
+// byteArena is a chunked arena allocator for byte data. It copies incoming
+// slices into a contiguous buffer and hands back sub-slices (or strings via
+// unsafe conversion). When the current chunk is full a new one is allocated;
+// old chunks stay alive via the slices/strings already referencing them.
+type byteArena struct {
+	buf []byte
+}
+
+// copyBytes copies src into the arena and returns a sub-slice of the arena buffer.
+// The returned slice has cap==len (three-index slice) so that append on it
+// cannot silently overwrite adjacent arena data.
+func (a *byteArena) copyBytes(src []byte) []byte {
+	n := len(src)
+	if n == 0 {
+		return nil
+	}
+	if cap(a.buf)-len(a.buf) < n {
+		newCap := 2 * cap(a.buf)
+		if newCap < n {
+			newCap = n
+		}
+		if newCap < 4096 {
+			newCap = 4096
+		}
+		a.buf = make([]byte, 0, newCap)
+	}
+	start := len(a.buf)
+	a.buf = append(a.buf, src...)
+	return a.buf[start : start+n : start+n]
+}
+
+// copyString copies src into the arena and returns a string backed by arena memory.
+func (a *byteArena) copyString(src []byte) string {
+	if len(src) == 0 {
+		return ""
+	}
+	return convert.BytesToString(a.copyBytes(src))
 }

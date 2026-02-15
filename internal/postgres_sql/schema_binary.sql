@@ -507,6 +507,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- cf_binary_map_expire_keys: Atomically expire keys that have passed their TTL.
+-- Lock ordering: meta FOR UPDATE first, then state FOR UPDATE SKIP LOCKED.
+-- This matches publish's lock order (meta → state), preventing deadlocks.
 CREATE OR REPLACE FUNCTION cf_binary_map_expire_keys(
     p_batch_size INT DEFAULT 1000,
     p_num_shards INTEGER DEFAULT 16,
@@ -520,61 +522,77 @@ CREATE OR REPLACE FUNCTION cf_binary_map_expire_keys(
     out_epoch TEXT
 ) AS $$
 DECLARE
+    v_channel TEXT;
     rec RECORD;
     v_offset BIGINT;
     v_epoch TEXT;
     v_shard_id INTEGER;
+    v_processed INT := 0;
 BEGIN
-    FOR rec IN
-        SELECT channel, key FROM cf_binary_map_state
-        WHERE expires_at IS NOT NULL AND expires_at <= NOW()
-          AND (p_channel IS NULL OR channel = p_channel)
-        LIMIT p_batch_size
-        FOR UPDATE SKIP LOCKED
+    -- Process one channel at a time to maintain meta→state lock ordering.
+    FOR v_channel IN
+        SELECT DISTINCT s.channel FROM cf_binary_map_state s
+        WHERE s.expires_at IS NOT NULL AND s.expires_at <= NOW()
+          AND (p_channel IS NULL OR s.channel = p_channel)
     LOOP
-        -- Re-check expiration after lock (key may have been refreshed).
-        PERFORM 1 FROM cf_binary_map_state
-        WHERE channel = rec.channel AND key = rec.key
-          AND expires_at IS NOT NULL AND expires_at <= NOW();
-        IF NOT FOUND THEN
-            CONTINUE;
-        END IF;
-
-        -- Get stream metadata.
+        -- 1. Lock meta FIRST (same order as publish: meta → state).
         SELECT top_offset, m.epoch INTO v_offset, v_epoch
-        FROM cf_binary_map_meta m WHERE m.channel = rec.channel FOR UPDATE;
+        FROM cf_binary_map_meta m WHERE m.channel = v_channel FOR UPDATE;
 
         IF NOT FOUND THEN
-            DELETE FROM cf_binary_map_state WHERE channel = rec.channel AND key = rec.key;
+            DELETE FROM cf_binary_map_state WHERE channel = v_channel
+              AND expires_at IS NOT NULL AND expires_at <= NOW();
             CONTINUE;
         END IF;
 
-        v_shard_id := abs(hashtext(rec.channel)) % p_num_shards;
+        v_shard_id := abs(hashtext(v_channel)) % p_num_shards;
 
-        -- Increment offset.
-        UPDATE cf_binary_map_meta SET
-            top_offset = top_offset + 1,
-            expires_at = COALESCE(CASE WHEN p_meta_ttl IS NOT NULL THEN NOW() + p_meta_ttl ELSE NULL END, expires_at),
-            updated_at = NOW()
-        WHERE channel = rec.channel
-        RETURNING top_offset INTO v_offset;
+        -- 2. Now lock and process expired state rows (meta already locked).
+        FOR rec IN
+            SELECT key FROM cf_binary_map_state
+            WHERE channel = v_channel
+              AND expires_at IS NOT NULL AND expires_at <= NOW()
+            LIMIT p_batch_size - v_processed
+            FOR UPDATE SKIP LOCKED
+        LOOP
+            -- Re-check expiration after lock (key may have been refreshed).
+            PERFORM 1 FROM cf_binary_map_state
+            WHERE channel = v_channel AND key = rec.key
+              AND expires_at IS NOT NULL AND expires_at <= NOW();
+            IF NOT FOUND THEN
+                CONTINUE;
+            END IF;
 
-        -- Delete from state.
-        DELETE FROM cf_binary_map_state WHERE channel = rec.channel AND key = rec.key;
+            -- Increment offset.
+            UPDATE cf_binary_map_meta SET
+                top_offset = top_offset + 1,
+                expires_at = COALESCE(CASE WHEN p_meta_ttl IS NOT NULL THEN NOW() + p_meta_ttl ELSE NULL END, expires_at),
+                updated_at = NOW()
+            WHERE channel = v_channel
+            RETURNING top_offset INTO v_offset;
 
-        -- Insert removal into stream.
-        INSERT INTO cf_binary_map_stream (channel, channel_offset, epoch, key, removed, expires_at, shard_id)
-        VALUES (
-            rec.channel, v_offset, v_epoch, rec.key, TRUE,
-            CASE WHEN p_stream_ttl IS NOT NULL THEN NOW() + p_stream_ttl ELSE NULL END,
-            v_shard_id
-        );
+            -- Delete from state.
+            DELETE FROM cf_binary_map_state WHERE channel = v_channel AND key = rec.key;
 
-        out_channel := rec.channel;
-        out_key := rec.key;
-        out_offset := v_offset;
-        out_epoch := v_epoch;
-        RETURN NEXT;
+            -- Insert removal into stream.
+            INSERT INTO cf_binary_map_stream (channel, channel_offset, epoch, key, removed, expires_at, shard_id)
+            VALUES (
+                v_channel, v_offset, v_epoch, rec.key, TRUE,
+                CASE WHEN p_stream_ttl IS NOT NULL THEN NOW() + p_stream_ttl ELSE NULL END,
+                v_shard_id
+            );
+
+            out_channel := v_channel;
+            out_key := rec.key;
+            out_offset := v_offset;
+            out_epoch := v_epoch;
+            RETURN NEXT;
+
+            v_processed := v_processed + 1;
+            IF v_processed >= p_batch_size THEN
+                RETURN;
+            END IF;
+        END LOOP;
     END LOOP;
 END;
 $$ LANGUAGE plpgsql;

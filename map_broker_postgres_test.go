@@ -1698,12 +1698,17 @@ func TestPostgresMapBroker_Delta_Outbox(t *testing.T) {
 
 	waitEvent := func(t *testing.T) pubEvent {
 		t.Helper()
-		select {
-		case ev := <-eventCh:
-			return ev
-		case <-time.After(10 * time.Second):
-			t.Fatal("timeout waiting for publication event")
-			return pubEvent{}
+		for {
+			select {
+			case ev := <-eventCh:
+				if ev.ch == channel {
+					return ev
+				}
+				// Skip events from other channels (stale outbox entries).
+			case <-time.After(10 * time.Second):
+				t.Fatal("timeout waiting for publication event")
+				return pubEvent{}
+			}
 		}
 	}
 
