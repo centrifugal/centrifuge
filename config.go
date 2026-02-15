@@ -191,9 +191,10 @@ type Config struct {
 	MapRecoveryMaxPublicationLimit int
 	// MapStateToLiveEnabled controls whether server can transition directly from
 	// STATE to LIVE phase on the last state page, skipping STREAM phase entirely.
-	// When enabled, if stream hasn't advanced much during state pagination,
-	// server goes LIVE immediately, reducing round trips for slowly-updating channels.
-	// Default is true.
+	// Only applies to positioned mode — in streamless mode, STATE always transitions
+	// to LIVE on the last page regardless of this setting.
+	// When enabled for positioned mode, if stream hasn't advanced much during state
+	// pagination, server goes LIVE immediately, reducing round trips.
 	MapStateToLiveEnabled bool
 	// GetMapChannelOptions returns channel options for map channels.
 	// If nil, DefaultMapChannelOptions() is used for all channels.

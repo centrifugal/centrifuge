@@ -1,12 +1,4 @@
--- ============================================================================
--- PostgreSQL MapBroker Schema and Functions (template).
--- Auto-created by EnsureSchema(). All statements are idempotent.
--- Placeholders replaced by `make pg-schemas`:
---   JSONB → JSONB or BYTEA
---   cf_map_    → cf_map_ or cf_binary_map_
--- Do NOT edit the generated files (schema_jsonb.sql, schema_binary.sql).
--- ============================================================================
-
+-- Auto-generated from schema.sql — do not edit.
 -- Stream Table (Change History + Fan-out)
 CREATE TABLE IF NOT EXISTS cf_map_stream (
     id              BIGSERIAL PRIMARY KEY,

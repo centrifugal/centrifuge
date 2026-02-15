@@ -1821,6 +1821,250 @@ OUTER2:
 		"Delta messages should be different when compressChannel=true due to Id vs Channel field")
 }
 
+func TestGetDeltaPubPreservesMapFields(t *testing.T) {
+	fullPub := &protocol.Publication{
+		Offset:  10,
+		Data:    []byte(`{"name":"alice"}`),
+		Key:     "user:1",
+		Score:   42,
+		Removed: false,
+		Channel: "map_channel",
+		Tags:    map[string]string{"tag1": "val1"},
+	}
+
+	prevPubData := &Publication{
+		Data: []byte(`{"name":"bob"}`),
+	}
+
+	// Test 1: JSON+Fossil with prevPub (delta path).
+	key := preparedKey{
+		DeltaType:    DeltaTypeFossil,
+		ProtocolType: protocol.TypeJSON,
+	}
+	result := getDeltaPub(prevPubData, fullPub, key)
+	require.Equal(t, "user:1", result.Key)
+	require.Equal(t, int64(42), result.Score)
+	require.False(t, result.Removed)
+	require.Equal(t, "map_channel", result.Channel)
+	require.Equal(t, uint64(10), result.Offset)
+	require.Equal(t, map[string]string{"tag1": "val1"}, result.Tags)
+
+	// Test 2: JSON+Fossil without prevPub (full data with JSON escaping).
+	result = getDeltaPub(nil, fullPub, key)
+	require.Equal(t, "user:1", result.Key)
+	require.Equal(t, int64(42), result.Score)
+	require.False(t, result.Removed)
+	require.Equal(t, "map_channel", result.Channel)
+	require.False(t, result.Delta)
+	// Data should be JSON-escaped.
+	require.Equal(t, []byte(json.Escape(convert.BytesToString(fullPub.Data))), []byte(result.Data))
+
+	// Test 3: Protobuf+Fossil with prevPub — data is not JSON-escaped.
+	keyProto := preparedKey{
+		DeltaType:    DeltaTypeFossil,
+		ProtocolType: protocol.TypeProtobuf,
+	}
+	result = getDeltaPub(prevPubData, fullPub, keyProto)
+	require.Equal(t, "user:1", result.Key)
+	require.Equal(t, int64(42), result.Score)
+	// Protobuf delta data should NOT be JSON-escaped.
+	require.NotEqual(t, []byte(json.Escape(convert.BytesToString(fullPub.Data))), []byte(result.Data))
+
+	// Test 4: Removed publication preserves Removed flag.
+	removedPub := &protocol.Publication{
+		Offset:  11,
+		Data:    []byte(`{}`),
+		Key:     "user:2",
+		Removed: true,
+		Channel: "map_channel",
+	}
+	result = getDeltaPub(nil, removedPub, key)
+	require.True(t, result.Removed)
+	require.Equal(t, "user:2", result.Key)
+}
+
+func TestEscapeStateForDelta(t *testing.T) {
+	pubs := []*protocol.Publication{
+		{Offset: 1, Key: "a", Data: []byte(`{"x":1}`), Score: 10},
+		{Offset: 2, Key: "b", Data: []byte(`{"y":2}`), Score: 20, Removed: true},
+		{Offset: 3, Key: "c"}, // no data
+	}
+
+	// Not delta-enabled: returns unchanged.
+	result := escapeStateForDelta(pubs, false, true)
+	require.Equal(t, []byte(`{"x":1}`), []byte(result[0].Data))
+
+	// Delta-enabled + JSON: data is JSON-escaped, fields preserved.
+	pubs2 := []*protocol.Publication{
+		{Offset: 1, Key: "a", Data: []byte(`{"x":1}`), Score: 10},
+		{Offset: 2, Key: "b", Data: []byte(`{"y":2}`), Score: 20, Removed: true},
+		{Offset: 3, Key: "c"}, // no data
+	}
+	result = escapeStateForDelta(pubs2, true, true)
+	require.Equal(t, []byte(json.Escape(`{"x":1}`)), []byte(result[0].Data))
+	require.Equal(t, "a", result[0].Key)
+	require.Equal(t, int64(10), result[0].Score)
+	require.Equal(t, []byte(json.Escape(`{"y":2}`)), []byte(result[1].Data))
+	require.Equal(t, "b", result[1].Key)
+	require.True(t, result[1].Removed)
+	require.Equal(t, int64(20), result[1].Score)
+	// No data entry is unchanged.
+	require.Nil(t, result[2].Data)
+	require.Equal(t, "c", result[2].Key)
+
+	// Delta-enabled + Protobuf: returns unchanged (no escaping).
+	pubs3 := []*protocol.Publication{
+		{Offset: 1, Key: "a", Data: []byte(`{"x":1}`)},
+	}
+	result = escapeStateForDelta(pubs3, true, false)
+	require.Equal(t, []byte(`{"x":1}`), []byte(result[0].Data))
+}
+
+func TestBroadcastMapPublicationDelta(t *testing.T) {
+	tcs := []struct {
+		name            string
+		protocolType    ProtocolType
+		protocolVersion ProtocolVersion
+		uni             bool
+	}{
+		{name: "JSON", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
+		{name: "JSON-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
+		{name: "Protobuf", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
+		{name: "Protobuf-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			n := deltaTestNode()
+			defer func() { _ = n.Shutdown(context.Background()) }()
+
+			ctx, cancelFn := context.WithCancel(context.Background())
+			transport := newTestTransport(cancelFn)
+			transport.sink = make(chan []byte, 100)
+			transport.setProtocolType(tc.protocolType)
+			transport.setProtocolVersion(tc.protocolVersion)
+			transport.setUnidirectional(tc.uni)
+			newTestSubscribedClientWithTransportDelta(
+				t, ctx, n, transport, "42", "test_channel", DeltaTypeFossil)
+
+			res, err := n.History("test_channel")
+			require.NoError(t, err)
+
+			// Use larger data so fossil delta is actually smaller than full data.
+			data1 := []byte(`{"name":"alice","email":"alice@example.com","age":30,"city":"New York","country":"US","bio":"Software engineer with 10 years of experience"}`)
+			data2 := []byte(`{"name":"alice","email":"alice@example.com","age":31,"city":"New York","country":"US","bio":"Software engineer with 11 years of experience"}`)
+
+			// First broadcast — map publication with Key (no prevPub → full data).
+			pub1 := &Publication{
+				Data:   data1,
+				Key:    "user:1",
+				Offset: 1,
+			}
+			err = n.hub.broadcastPublication(
+				"test_channel",
+				StreamPosition{Offset: 1, Epoch: res.StreamPosition.Epoch},
+				pub1, nil, nil, ChannelBatchConfig{},
+			)
+			require.NoError(t, err)
+
+			var msg1 []byte
+		LOOP1:
+			for {
+				select {
+				case data := <-transport.sink:
+					if tc.protocolType == ProtocolTypeJSON {
+						if strings.Contains(string(data), "alice") {
+							msg1 = data
+							break LOOP1
+						}
+					} else {
+						msg1 = data
+						break LOOP1
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("no message received for first map pub")
+				}
+			}
+
+			if tc.protocolType == ProtocolTypeJSON {
+				// Verify Key is present in JSON output.
+				require.Contains(t, string(msg1), `"key":"user:1"`,
+					"JSON map publication must contain key field")
+			}
+
+			// Second broadcast — same key, with prevPub → should produce delta.
+			pub2 := &Publication{
+				Data:   data2,
+				Key:    "user:1",
+				Offset: 2,
+			}
+			err = n.hub.broadcastPublication(
+				"test_channel",
+				StreamPosition{Offset: 2, Epoch: res.StreamPosition.Epoch},
+				pub2, pub1, nil, ChannelBatchConfig{},
+			)
+			require.NoError(t, err)
+
+			var msg2 []byte
+		LOOP2:
+			for {
+				select {
+				case data := <-transport.sink:
+					msg2 = data
+					break LOOP2
+				case <-time.After(2 * time.Second):
+					t.Fatal("no message received for second map pub")
+				}
+			}
+
+			if tc.protocolType == ProtocolTypeJSON {
+				// Delta pub should still contain key field.
+				require.Contains(t, string(msg2), `"key":"user:1"`,
+					"JSON delta map publication must contain key field")
+				// Should contain delta flag.
+				require.Contains(t, string(msg2), `"delta":true`,
+					"JSON delta map publication must have delta flag")
+				// Should NOT contain the full data as readable string.
+				require.NotContains(t, string(msg2), `Software engineer`,
+					"Delta pub should not contain full data as readable string")
+			}
+
+			// Third broadcast — different key, no prevPub, removed → full data with key.
+			pub3 := &Publication{
+				Data:    []byte(`{"status":"offline"}`),
+				Key:     "user:2",
+				Removed: true,
+				Offset:  3,
+			}
+			err = n.hub.broadcastPublication(
+				"test_channel",
+				StreamPosition{Offset: 3, Epoch: res.StreamPosition.Epoch},
+				pub3, nil, nil, ChannelBatchConfig{},
+			)
+			require.NoError(t, err)
+
+			var msg3 []byte
+		LOOP3:
+			for {
+				select {
+				case data := <-transport.sink:
+					msg3 = data
+					break LOOP3
+				case <-time.After(2 * time.Second):
+					t.Fatal("no message received for removed map pub")
+				}
+			}
+
+			if tc.protocolType == ProtocolTypeJSON {
+				require.Contains(t, string(msg3), `"key":"user:2"`,
+					"Removed map pub must contain key field")
+				require.Contains(t, string(msg3), `"removed":true`,
+					"Removed map pub must have removed flag")
+			}
+		})
+	}
+}
+
 func TestCompressedJoinMessages(t *testing.T) {
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()

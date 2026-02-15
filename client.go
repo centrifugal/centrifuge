@@ -3610,6 +3610,66 @@ func (c *Client) makeRecoveredPubsDeltaFossil(recoveredPubs []*protocol.Publicat
 	return recoveredPubs
 }
 
+// makeRecoveredMapPubsDeltaFossil is a per-key variant of makeRecoveredPubsDeltaFossil
+// for map subscriptions. Live publications use per-key delta (delta from previous state
+// value for the same key), so recovery publications must use the same strategy. The
+// sequential delta used by makeRecoveredPubsDeltaFossil would produce wrong bases when
+// publications for different keys are interleaved.
+func (c *Client) makeRecoveredMapPubsDeltaFossil(recoveredPubs []*protocol.Publication) []*protocol.Publication {
+	if len(recoveredPubs) == 0 {
+		return nil
+	}
+	isJSON := c.transport.Protocol() == ProtocolTypeJSON
+	prevByKey := make(map[string]*protocol.Publication)
+	for i, pub := range recoveredPubs {
+		key := pub.Key
+		if pub.Removed {
+			// Removals are not delta-encoded (matches live behavior).
+			delete(prevByKey, key)
+			if isJSON && len(pub.Data) > 0 {
+				recoveredPubs[i] = copyMapPubWithData(pub, json.Escape(convert.BytesToString(pub.Data)), false)
+			}
+			continue
+		}
+		prev, hasPrev := prevByKey[key]
+		if !hasPrev {
+			// First occurrence of this key — send full data.
+			prevByKey[key] = pub
+			if isJSON {
+				recoveredPubs[i] = copyMapPubWithData(pub, json.Escape(convert.BytesToString(pub.Data)), false)
+			}
+			continue
+		}
+		// Subsequent occurrence — compute per-key delta.
+		patch := fdelta.Create(prev.Data, pub.Data)
+		delta := true
+		deltaData := patch
+		if len(patch) >= len(pub.Data) {
+			delta = false
+			deltaData = pub.Data
+		}
+		if isJSON {
+			deltaData = json.Escape(convert.BytesToString(deltaData))
+		}
+		prevByKey[key] = pub
+		recoveredPubs[i] = copyMapPubWithData(pub, deltaData, delta)
+	}
+	return recoveredPubs
+}
+
+func copyMapPubWithData(pub *protocol.Publication, data []byte, delta bool) *protocol.Publication {
+	return &protocol.Publication{
+		Offset:  pub.Offset,
+		Data:    data,
+		Info:    pub.Info,
+		Tags:    pub.Tags,
+		Delta:   delta,
+		Key:     pub.Key,
+		Removed: pub.Removed,
+		Score:   pub.Score,
+	}
+}
+
 func (c *Client) releaseSubscribeCommandReply(reply *protocol.Reply) {
 	protocol.ReplyPool.ReleaseSubscribeReply(reply)
 }

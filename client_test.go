@@ -1399,6 +1399,75 @@ func TestFossilRecoveredPubs(t *testing.T) {
 	require.Equal(t, []byte("This is a message to test Fossil: I just subscribed to channel"), data2)
 }
 
+func TestFossilRecoveredMapPubs(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClientV2Protocol(t, node, "42", ProtocolTypeProtobuf)
+
+	// Empty input returns nil.
+	pubs := client.makeRecoveredMapPubsDeltaFossil([]*protocol.Publication{})
+	require.Nil(t, pubs)
+
+	// Single publication — returned as full data.
+	pubs = client.makeRecoveredMapPubsDeltaFossil([]*protocol.Publication{
+		{Offset: 1, Key: "a", Data: []byte("hello")},
+	})
+	require.Len(t, pubs, 1)
+	require.False(t, pubs[0].Delta)
+	require.Equal(t, "a", pubs[0].Key)
+	require.Equal(t, []byte("hello"), []byte(pubs[0].Data))
+
+	// Interleaved keys: each key gets independent per-key delta.
+	pubs = client.makeRecoveredMapPubsDeltaFossil([]*protocol.Publication{
+		{Offset: 1, Key: "a", Data: []byte("This is a message for key A: first version")},
+		{Offset: 2, Key: "b", Data: []byte("This is a message for key B: first version")},
+		{Offset: 3, Key: "a", Data: []byte("This is a message for key A: second version")},
+		{Offset: 4, Key: "b", Data: []byte("This is a message for key B: second version")},
+	})
+	require.Len(t, pubs, 4)
+	require.False(t, pubs[0].Delta) // a: first occurrence, full
+	require.False(t, pubs[1].Delta) // b: first occurrence, full
+	require.True(t, pubs[2].Delta)  // a: delta from pubs[0]
+	require.True(t, pubs[3].Delta)  // b: delta from pubs[1]
+	require.Equal(t, "a", pubs[0].Key)
+	require.Equal(t, "b", pubs[1].Key)
+	require.Equal(t, "a", pubs[2].Key)
+	require.Equal(t, "b", pubs[3].Key)
+
+	// Verify delta for key "a" applies correctly against first "a" value.
+	dataA1, err := fdelta.Apply(pubs[0].Data, pubs[2].Data)
+	require.NoError(t, err)
+	require.Equal(t, []byte("This is a message for key A: second version"), dataA1)
+
+	// Verify delta for key "b" applies correctly against first "b" value.
+	dataB1, err := fdelta.Apply(pubs[1].Data, pubs[3].Data)
+	require.NoError(t, err)
+	require.Equal(t, []byte("This is a message for key B: second version"), dataB1)
+
+	// Removal resets per-key tracking: next set for same key is full.
+	pubs = client.makeRecoveredMapPubsDeltaFossil([]*protocol.Publication{
+		{Offset: 1, Key: "x", Data: []byte("This is a message for key X: initial")},
+		{Offset: 2, Key: "x", Removed: true},
+		{Offset: 3, Key: "x", Data: []byte("This is a message for key X: after removal")},
+	})
+	require.Len(t, pubs, 3)
+	require.False(t, pubs[0].Delta)   // first occurrence
+	require.False(t, pubs[1].Delta)   // removal — no delta
+	require.True(t, pubs[1].Removed)  // removed flag preserved
+	require.False(t, pubs[2].Delta)   // after removal — full, not delta
+	require.Equal(t, []byte("This is a message for key X: after removal"), []byte(pubs[2].Data))
+
+	// Score field is preserved.
+	pubs = client.makeRecoveredMapPubsDeltaFossil([]*protocol.Publication{
+		{Offset: 1, Key: "s", Score: 42, Data: []byte("This is a message for key S: first")},
+		{Offset: 2, Key: "s", Score: 99, Data: []byte("This is a message for key S: second")},
+	})
+	require.Len(t, pubs, 2)
+	require.Equal(t, int64(42), pubs[0].Score)
+	require.Equal(t, int64(99), pubs[1].Score)
+}
+
 func TestClientUnsubscribeClientSide(t *testing.T) {
 	t.Parallel()
 	node := defaultNodeNoHandlers()

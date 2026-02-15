@@ -694,19 +694,27 @@ func getDeltaPub(prevPub *Publication, fullPub *protocol.Publication, key prepar
 			deltaData = json.Escape(convert.BytesToString(deltaData))
 		}
 		deltaPub = &protocol.Publication{
-			Offset: fullPub.Offset,
-			Data:   deltaData,
-			Info:   fullPub.Info,
-			Tags:   fullPub.Tags,
-			Delta:  delta,
+			Offset:  fullPub.Offset,
+			Data:    deltaData,
+			Info:    fullPub.Info,
+			Tags:    fullPub.Tags,
+			Delta:   delta,
+			Key:     fullPub.Key,
+			Removed: fullPub.Removed,
+			Score:   fullPub.Score,
+			Channel: fullPub.Channel,
 		}
 	} else if prevPub == nil && key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
 		// In JSON and Fossil case we need to send full state in JSON string format.
 		deltaPub = &protocol.Publication{
-			Offset: fullPub.Offset,
-			Data:   json.Escape(convert.BytesToString(fullPub.Data)),
-			Info:   fullPub.Info,
-			Tags:   fullPub.Tags,
+			Offset:  fullPub.Offset,
+			Data:    json.Escape(convert.BytesToString(fullPub.Data)),
+			Info:    fullPub.Info,
+			Tags:    fullPub.Tags,
+			Key:     fullPub.Key,
+			Removed: fullPub.Removed,
+			Score:   fullPub.Score,
+			Channel: fullPub.Channel,
 		}
 	}
 	return deltaPub
@@ -880,6 +888,9 @@ func (s *subShard) broadcastPublication(
 							Info:    fullPub.Info,
 							Tags:    fullPub.Tags,
 							Channel: fullPub.Channel,
+							Key:     fullPub.Key,
+							Removed: fullPub.Removed,
+							Score:   fullPub.Score,
 						}
 					}
 					push := getPush()
@@ -904,6 +915,9 @@ func (s *subShard) broadcastPublication(
 							Info:    fullPub.Info,
 							Tags:    fullPub.Tags,
 							Channel: fullPub.Channel,
+							Key:     fullPub.Key,
+							Removed: fullPub.Removed,
+							Score:   fullPub.Score,
 						}
 					}
 					push := getPush()

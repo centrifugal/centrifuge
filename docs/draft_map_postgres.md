@@ -2,203 +2,254 @@
 
 ## Overview
 
-The PostgreSQL MapBroker provides durable, transactional map state with real-time delivery. It supports two delivery modes:
+`PostgresMapBroker` is a `MapBroker` implementation backed by PostgreSQL. All writes go through SQL functions (`cf_map_publish`, `cf_map_remove`) that atomically update state and append to a stream table within a single transaction. A background worker detects new stream entries and delivers them to subscribers — either locally (single-node) or via a broker like Redis (multi-node).
 
-1. **Outbox Mode (Default)** - Simple setup, works with any PostgreSQL
-2. **WAL Mode (Opt-in)** - Uses logical replication, requires PostgreSQL configuration
+Two delivery modes are supported:
 
-Both modes read from the same `cf_map_stream` table. The difference is how workers detect new entries: outbox mode polls using cursors, WAL mode streams via logical replication.
+1. **Outbox (default)** — cursor-based polling of `cf_map_stream`. No special PG setup.
+2. **WAL (opt-in)** — logical replication streaming. Requires `wal_level = logical`.
 
-## Delivery Modes
+Both modes use the same tables. The only difference is how workers discover new rows.
 
-### Outbox Mode (Default)
+## Tables
 
-Outbox mode uses cursor-based polling of `cf_map_stream` for new publications. Per-shard delivery progress is tracked in `cf_map_outbox_cursor`. This mode requires no special PostgreSQL setup.
+All tables use prefix `cf_map_` (JSONB mode) or `cf_binary_map_` (BYTEA mode). Schema is created by `EnsureSchema()` and is fully idempotent.
 
-**How it works:**
-1. `Publish`/`Remove` inserts into `cf_map_stream` atomically (single table)
-2. Outbox workers poll their assigned shards: `WHERE shard_id = $1 AND id > cursor`
-3. Workers deliver publications via broker (multi-node) or locally (single-node)
-4. Workers advance cursor in `cf_map_outbox_cursor` after processing each batch
+### cf_map_stream — Change log
 
-**Configuration:**
-```go
-PostgresMapBrokerConfig{
-    ConnString: "postgres://...",
-    PoolSize:   32,  // Must be > NumShards
-    NumShards:  16,  // Parallel workers (default: 16)
-    Outbox: OutboxConfig{
-        PollInterval: 50*time.Millisecond,
-        BatchSize:    1000,
-    },
-}
-```
+Append-only log. Every publish and remove appends a row. Workers read from here.
 
-**Important:** Each outbox worker holds a database connection for its advisory lock. `PoolSize` must be greater than `NumShards` to leave connections available for queries.
+| Column | Type | Purpose |
+|--------|------|---------|
+| `id` | BIGSERIAL PK | Global monotonic ID for cursor-based polling |
+| `channel` | TEXT | Channel name |
+| `channel_offset` | BIGINT | Per-channel sequence number (Centrifuge offset) |
+| `epoch` | TEXT | Channel epoch |
+| `key` | TEXT | Map key |
+| `data` | JSONB/BYTEA | Payload (NULL for removals) |
+| `tags` | JSONB | Optional key-value tags |
+| `removed` | BOOLEAN | TRUE for removal events |
+| `score` | BIGINT | Sort score (nullable) |
+| `previous_data` | JSONB/BYTEA | Previous value for delta compression |
+| `shard_id` | SMALLINT | `abs(hashtext(channel)) % num_shards` |
+| `client_id`, `user_id` | TEXT | Client metadata |
+| `conn_info`, `chan_info` | JSONB/BYTEA | Connection/channel info |
+| `subscribed_at` | TIMESTAMPTZ | Subscription timestamp |
+| `expires_at` | TIMESTAMPTZ | Row TTL (for stream cleanup) |
+| `created_at` | TIMESTAMPTZ | Insert time |
 
-### WAL Mode (Opt-in)
+Key indexes: `(channel, channel_offset)`, `(channel, id DESC)`, `(shard_id, id)` for cursor polling, `(expires_at)` for cleanup.
 
-WAL mode uses PostgreSQL logical replication to stream changes. This requires:
-- `wal_level = logical` in postgresql.conf
-- Publications created for each shard
-- Replication slots (created automatically)
+### cf_map_state — Current snapshot
 
-**Configuration:**
-```go
-PostgresMapBrokerConfig{
-    ConnString: "postgres://...",
-    NumShards:  16,  // Must match number of publications
-    WAL: WALConfig{
-        Enabled:           true,
-        HeartbeatInterval: 10*time.Second,
-    },
-}
-```
+One row per (channel, key). Updated on every publish, deleted on remove.
 
-When `WAL.Enabled = true`:
-- WAL readers stream INSERTs from logical replication on `cf_map_stream`
-- Lower latency but requires PostgreSQL setup
+| Column | Type | Purpose |
+|--------|------|---------|
+| `channel`, `key` | TEXT | Composite PK |
+| `data` | JSONB/BYTEA | Current value |
+| `tags` | JSONB | Current tags |
+| `score` | BIGINT | Sort score for ordered reads |
+| `key_offset` | BIGINT | Last channel_offset that touched this key |
+| `key_version`, `key_version_epoch` | BIGINT, TEXT | Key-level versioning |
+| `expires_at` | TIMESTAMPTZ | Key TTL |
+| `client_id`, `user_id`, `conn_info`, `chan_info`, `subscribed_at` | — | Client metadata |
+| `created_at`, `updated_at` | TIMESTAMPTZ | Timestamps |
 
-## Database Schema
+Indexes: `(channel, score DESC, key)` for ordered reads, `(expires_at)` for TTL worker.
 
-### Core Tables
+### cf_map_meta — Channel metadata
 
-```sql
--- Stream: Change history + delivery source (used by both outbox and WAL modes)
-cf_map_stream (id, channel, channel_offset, epoch, key, data, tags, removed, score, shard_id, ...)
+One row per channel. Holds the current top offset and epoch.
 
--- Outbox Cursor: Per-shard delivery progress (outbox mode)
-cf_map_outbox_cursor (shard_id, last_processed_id, updated_at)
+| Column | Type | Purpose |
+|--------|------|---------|
+| `channel` | TEXT PK | Channel name |
+| `top_offset` | BIGINT | Current max offset (incremented on each publish/remove) |
+| `epoch` | TEXT | Random epoch generated on first publish |
+| `version`, `version_epoch` | BIGINT, TEXT | Stream-level version for optimistic concurrency |
+| `expires_at` | TIMESTAMPTZ | Meta TTL (for channel cleanup) |
 
--- State: Current snapshot
-cf_map_state (channel, key, data, tags, score, key_offset, expires_at, ...)
+### cf_map_outbox_cursor — Delivery progress (outbox mode only)
 
--- Meta: Channel metadata
-cf_map_meta (channel, top_offset, epoch, version, ...)
+One row per shard. Tracks the last delivered `stream.id` for each shard.
 
--- Idempotency: Deduplication
-cf_map_idempotency (channel, idempotency_key, result_offset, expires_at)
-```
+| Column | Type |
+|--------|------|
+| `shard_id` | INTEGER PK |
+| `last_processed_id` | BIGINT |
 
-### Sharding
+### cf_map_idempotency — Deduplication
 
-Channels are distributed across shards using: `shard_id = abs(hashtext(channel)) % num_shards`
+Prevents duplicate publishes within a TTL window.
 
-This enables:
-- Parallel processing across workers
-- Ordering guarantees within a channel
-- Distributed lock coordination via advisory locks
+| Column | Type |
+|--------|------|
+| `channel`, `idempotency_key` | Composite PK |
+| `result_offset`, `result_id` | BIGINT |
+| `expires_at` | TIMESTAMPTZ |
 
 ## SQL Functions
 
 ### cf_map_publish
 
-Main publishing function with parameters:
-- `p_channel`, `p_key`, `p_data` - Core publication data
-- `p_tags`, `p_score` - Optional metadata
-- `p_key_mode` - `'if_new'` or `'if_exists'` for conditional publish
-- `p_expected_offset` - CAS (Compare-And-Swap) support
-- `p_num_shards` - Shard count for shard_id calculation
+Atomic publish within a single SQL call. Steps:
+
+1. **Get or create meta** — UPSERT into `cf_map_meta`, lock row `FOR UPDATE`
+2. **Idempotency check** — if `p_idempotency_key` provided, check `cf_map_idempotency`
+3. **CAS check** — if `p_expected_offset` set, verify `state.key_offset` matches
+4. **Key mode check** — `'if_new'` (suppress if key exists) or `'if_exists'` (suppress if key missing)
+5. **Version check** — stream-level optimistic concurrency via `p_version`/`p_version_epoch`
+6. **Increment offset** — `top_offset + 1` in meta
+7. **Fetch previous data** — for delta compression (if `p_use_delta`)
+8. **Upsert state** — INSERT ... ON CONFLICT DO UPDATE into `cf_map_state`
+9. **Append to stream** — INSERT into `cf_map_stream` with `shard_id`
+10. **Trim stream** — if `p_stream_size` set, delete old entries (cursor-aware: only rows already delivered)
+11. **Save idempotency** — if key provided
+
+Returns: `(result_id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset)`.
+
+Suppression reasons: `idempotency`, `key_exists`, `key_not_found`, `position_mismatch`, `version`.
+
+### cf_map_publish_strict
+
+Wrapper around `cf_map_publish` that raises PostgreSQL exceptions on suppression instead of returning suppress flags. Uses standard error codes (`unique_violation`, `no_data_found`, `serialization_failure`). This causes the transaction to roll back automatically.
 
 ### cf_map_remove
 
-Removes a key from state and emits removal event to stream.
-- `p_expected_offset` - CAS support (optional)
-- Returns `current_data` and `current_offset` on position mismatch
+Removes a key. Similar flow to publish but simpler:
+1. Get meta (error if channel doesn't exist)
+2. Idempotency check
+3. CAS check (`p_expected_offset`)
+4. Check key exists in state
+5. Increment offset, delete from state, append removal to stream
 
-## Advisory Lock Pattern
+### cf_map_expire_keys
 
-Both outbox and WAL workers use PostgreSQL advisory locks for shard coordination:
+Called by the TTL worker. Finds keys where `expires_at <= NOW()`, removes them, and emits removal events to the stream. Lock ordering matches publish (meta `FOR UPDATE` first, then state `FOR UPDATE SKIP LOCKED`) to prevent deadlocks.
+
+## Delivery
+
+### Sharding
+
+Every stream row gets `shard_id = abs(hashtext(channel)) % NumShards`. Workers claim individual shards, so all events for a channel are processed in order by a single worker.
+
+### Advisory Locks
+
+Both delivery modes use `pg_try_advisory_lock(baseID + shardID)` for leader election. Only one worker (across all nodes) processes each shard at a time. If a worker dies, the lock is released and another worker picks up the shard.
+
+Outbox and WAL use different `baseID` values (72616653 vs 72616654) to avoid conflicts when switching modes.
+
+### Outbox Mode
+
+Each worker:
+1. Acquires advisory lock for its shard (non-blocking, retries with backoff)
+2. UPSERTs a cursor row in `cf_map_outbox_cursor`
+3. Polls: `SELECT ... FROM cf_map_stream WHERE shard_id = $1 AND id > $2 ORDER BY id LIMIT $3`
+4. Delivers each entry (see below)
+5. Advances cursor: `UPDATE cf_map_outbox_cursor SET last_processed_id = $1`
+6. If no rows, sleeps for `PollInterval` (default 50ms)
+
+The worker holds its advisory lock connection for the entire lifetime. This is why `PoolSize` must exceed `NumShards`.
+
+### WAL Mode
+
+`EnsureSchema()` creates per-shard publications:
+```sql
+CREATE PUBLICATION cf_map_stream_shard_0
+  FOR TABLE cf_map_stream WHERE (shard_id = 0)
+  WITH (publish = 'insert')
+```
+
+Each WAL reader:
+1. Acquires advisory lock for its shard
+2. Opens a replication connection (`replication=database`)
+3. Creates or reuses a replication slot (`cf_map_shard_N`)
+4. Starts streaming: `START_REPLICATION SLOT ... PUBLICATION ...`
+5. Processes `InsertMessage` WAL events, parses column data
+6. Sends standby heartbeats every `HeartbeatInterval`
+
+### Single-Node vs Multi-Node
+
+- **Single-node (no Broker configured):** worker calls `eventHandler.HandlePublication()` directly
+- **Multi-node (Broker configured):** worker calls `broker.Publish()` which fans out to all nodes via pub/sub (e.g., Redis)
+
+```
+Publish → cf_map_stream → Worker → eventHandler.HandlePublication  (single-node)
+Publish → cf_map_stream → Worker → broker.Publish → All Nodes      (multi-node)
+```
+
+## Background Workers
+
+### TTL Expiration Worker
+
+Runs every `TTLCheckInterval` (default 1s). Queries for channels with expired keys, calls `cf_map_expire_keys()`, and delivers the resulting removal events.
+
+### Stream Cleanup Worker
+
+Runs every `CleanupInterval` (default 1m). Four cleanup paths:
+
+1. **Expired stream entries** — `DELETE ... WHERE expires_at < NOW()` but only rows already delivered (`id <= last_processed_id`)
+2. **Orphaned stream entries** — entries from channels with no meta row, already delivered, no explicit TTL
+3. **Expired meta** — `DELETE FROM cf_map_meta WHERE expires_at < NOW()`
+4. **Expired idempotency keys** — `DELETE FROM cf_map_idempotency WHERE expires_at < NOW()`
+
+All stream deletions are cursor-aware: in outbox mode, only rows below the shard's cursor are deleted. In WAL mode (no cursor rows), all expired entries are deleted freely.
+
+## Configuration
 
 ```go
-// Try to claim shard
-SELECT pg_try_advisory_lock(baseID + shardID)
+PostgresMapBrokerConfig{
+    ConnString:          "postgres://...",
+    PoolSize:            32,              // default; must be > NumShards in outbox mode
+    NumShards:           16,              // default
+    TTLCheckInterval:    time.Second,     // default
+    CleanupInterval:     time.Minute,     // default
+    IdempotentResultTTL: 5 * time.Minute, // default
+    BinaryData:          false,           // true → BYTEA columns, "cf_binary_map_" prefix
 
-// If acquired, hold connection and process
-// On exit, release lock
-SELECT pg_advisory_unlock(baseID + shardID)
+    Outbox: OutboxConfig{
+        PollInterval:       50 * time.Millisecond,
+        BatchSize:          1000,
+        AdvisoryLockBaseID: 72616653,     // default
+    },
+
+    // OR (mutually exclusive with Outbox usage):
+    WAL: WALConfig{
+        Enabled:            true,
+        HeartbeatInterval:  10 * time.Second,
+        AdvisoryLockBaseID: 72616654,     // default
+        ShardIDs:           nil,          // nil = claim all shards
+    },
+
+    Broker: redisBroker, // nil for single-node
+}
 ```
 
-This ensures:
-- Only one worker processes each shard at a time
-- Automatic failover if a worker dies (lock released)
-- No duplicate processing across nodes
+## Data Modes
 
-## Cursor-Based Delivery
+Two table sets can coexist in the same database:
 
-Outbox workers use a cursor pattern instead of deleting/marking processed rows:
+| Mode | Prefix | Data columns | Use case |
+|------|--------|-------------|----------|
+| JSONB (default) | `cf_map_` | `JSONB` | JSON payloads, enables PG JSON queries |
+| Binary | `cf_binary_map_` | `BYTEA` | Protobuf / binary payloads |
 
-1. **Initialize**: `INSERT INTO cf_map_outbox_cursor (shard_id, last_processed_id) VALUES ($1, 0) ON CONFLICT DO NOTHING`
-2. **Poll**: `SELECT ... FROM cf_map_stream WHERE shard_id = $1 AND id > $2 ORDER BY id LIMIT $3`
-3. **Advance**: `UPDATE cf_map_outbox_cursor SET last_processed_id = $1 WHERE shard_id = $2`
+Set `BinaryData: true` in config to use binary mode. Schema template generates both variants via `make pg-schemas`.
 
-Benefits:
-- No row deletion by workers — cursor advancement is the progress marker
-- Stream entries persist for history/recovery regardless of delivery status
-- Simpler error recovery — just re-read from cursor position
+## Read Path
 
-### Cursor-Aware Cleanup
+### ReadState
 
-All cleanup paths respect delivery cursors to prevent deleting undelivered entries:
+Reads current snapshot from `cf_map_state`. Uses `REPEATABLE READ` isolation. Supports:
+- Single key lookup
+- Paginated reads with keyset pagination (no OFFSET)
+- Ordered channels (by `score DESC, key`)
+- Filters expired keys (`expires_at IS NULL OR expires_at > NOW()`)
 
-- **Stream size trimming** (in `cf_map_publish`): only trims entries below `MIN(last_processed_id)` from all cursors
-- **TTL-based cleanup**: only deletes expired entries below the minimum cursor
-- **Delivered entry cleanup**: removes old delivered entries with no retention need (streamless channels) after a grace period
-- **WAL mode**: when no cursor rows exist, all cleanup paths operate freely
+### ReadStream
 
-## Message Delivery
-
-### Single-Node (No Broker)
-
-```
-Publish -> cf_map_stream -> Outbox Worker -> eventHandler.HandlePublication
-```
-
-### Multi-Node (With Broker)
-
-```
-Publish -> cf_map_stream -> Outbox Worker -> broker.Publish -> All Nodes
-```
-
-The broker (e.g., Redis) fans out publications to all subscribed nodes.
-
-## Configuration Defaults
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `PoolSize` | 32 | Max database connections |
-| `NumShards` | 16 | Parallel workers (both modes) |
-| `Outbox.PollInterval` | 50ms | Polling frequency when idle |
-| `Outbox.BatchSize` | 1000 | Max rows per batch |
-| `WAL.HeartbeatInterval` | 10s | Replication heartbeat |
-
-## Performance Characteristics
-
-Typical latencies (measured on Apple M4):
-- **Publish only**: ~140 microseconds
-- **End-to-end delivery**: ~180 microseconds
-
-Throughput scales with `NumShards` but each shard requires a connection.
-
-## Error Handling
-
-- **Transient errors**: Workers retry with exponential backoff
-- **Lock contention**: Workers sleep and retry acquiring locks
-- **Processing errors**: Logged but don't block other entries in batch
-
-## Migration from WAL to Outbox
-
-If switching from WAL mode to outbox mode:
-1. Stop all nodes
-2. Ensure `cf_map_outbox_cursor` table exists
-3. Update config to remove `WAL.Enabled = true`
-4. Restart nodes
-
-Pending stream entries will be picked up by outbox workers from cursor position 0.
-
-## Best Practices
-
-1. **Set PoolSize appropriately**: `PoolSize > NumShards + expected concurrent queries`
-2. **Use fewer shards for low volume**: Reduces connection overhead
-3. **Monitor delivery lag**: `SELECT shard_id, last_processed_id FROM cf_map_outbox_cursor` compared to `SELECT MAX(id) FROM cf_map_stream`
-4. **Use broker for multi-node**: Required for consistent delivery across nodes
+Reads change history from `cf_map_stream`. Uses `REPEATABLE READ` isolation. Supports:
+- Filter by `Since` position (channel_offset-based)
+- Forward and reverse order
+- Pagination with limit

@@ -1,511 +1,485 @@
 # Map Subscription Synchronization Protocol
 
-This document describes the synchronization protocol for map real-time subscriptions. Map subscriptions provide state with real-time updates for key-value like data structures.
+This document describes the synchronization protocol for map real-time subscriptions. Map subscriptions provide state with real-time updates for key-value data structures.
 
 ## Overview
 
 Map subscriptions operate in two consistency modes:
 
-- **Streamless Mode** (default): No stream history. Clients read state and go live. Reconnection requires full state re-sync. Best for presence, leaderboards, and ephemeral data.
-- **Positioned Mode** (opt-in via `EnablePositioning`/`EnableRecovery`): Full stream-based consistency with offset tracking, recovery, and CAS support. Best for inventory, auctions, and collaborative editing.
+- **Streamless** (default): No stream history. Clients read state and go live. Reconnection requires full state re-sync. Suitable for presence, leaderboards, ephemeral data.
+- **Positioned** (opt-in via `EnablePositioning`/`EnableRecovery`): Stream-based consistency with offset tracking, recovery, and CAS support. Requires `StreamSize > 0` in `MapChannelOptions`. Suitable for inventory, auctions, collaborative editing.
 
-Within positioned mode, two join strategies are supported:
+Within both modes, two join strategies are supported:
 
-1. **Paginated Join (Scenario A)**: Client fetches state in pages, then catches up from stream before going live. Best for large states.
-2. **Immediate Join (Scenario B)**: Client gets full state + stream in a single request. Best for small to moderate states.
-
-Both join strategies provide strict server-driven consistency guarantees.
+1. **Paginated join** — client fetches state in pages (phase 2), then goes live. In positioned mode, an intermediate stream catch-up phase (phase 1) may be needed. Works for any state size.
+2. **Immediate join** — client sends phase=0 directly; server returns full state + stream in one response. Only works when state fits within `MapMaxImmediateJoinStateSize`.
 
 ## Protocol Phases
 
-The client declares intent using a numeric phase value in the subscribe request:
+The client declares its current phase via a numeric field in the subscribe request:
 
-| Phase | Name   | Description                                    |
-|-------|--------|------------------------------------------------|
-| 2     | STATE  | Paginating over map state (key-value snapshot) |
-| 1     | STREAM | Paginating over stream (positioned mode only)  |
-| 0     | LIVE   | Join live pub/sub, or request immediate join   |
+| Phase | Name | Description |
+|-------|------|-------------|
+| 2 | STATE | Paginating over map state snapshot |
+| 1 | STREAM | Paginating over stream history (positioned mode only) |
+| 0 | LIVE | Go live (immediate join, recovery, or final transition) |
 
-> **Note**: Requesting `phase=1` (STREAM) in streamless mode returns `ErrorBadRequest`.
+Requesting phase=1 in streamless mode returns `ErrorBadRequest`.
 
-## Key Definitions
+## Protocol Messages
 
-- **offset**: Last stream offset known to the client (0 in streamless mode)
-- **limit**: Maximum number of entries per response
-- **STATE_start**: Server-captured stream top at the start of STATE pagination
-- **STREAM_start**: Server-captured stream top at the start of STREAM pagination
+### SubscribeRequest (map-relevant fields)
 
-## Core Invariant (Positioned Mode)
+```protobuf
+message SubscribeRequest {
+    string channel = 1;
+    bool recover = 3;        // Recovery mode flag
+    string epoch = 6;        // Stream epoch
+    uint64 offset = 7;       // Stream offset
+    int32 type = 15;         // 1=MAP, 2=MAP_CLIENTS, 3=MAP_USERS
+    int32 phase = 16;        // 0=LIVE, 1=STREAM, 2=STATE
+    string cursor = 17;      // Pagination cursor
+    int32 limit = 18;        // Page size
+    bool asc = 19;           // Ascending order (for ordered/scored channels)
+}
+```
 
-Stream catch-up is a finite, bounded process. The client may paginate stream entries only up to STREAM_start, then must go LIVE. If the client cannot catch up in time (entries evicted), the subscription fails with ErrorUnrecoverablePosition.
+### SubscribeResult (map-relevant fields)
 
-In streamless mode, no stream invariant exists — the client transitions directly from STATE to LIVE.
+```protobuf
+message SubscribeResult {
+    bool recoverable = 3;                    // True when positioned mode
+    string epoch = 6;                        // Stream epoch
+    repeated Publication publications = 7;   // Stream/buffered publications
+    bool recovered = 8;                      // True if recovery succeeded
+    uint64 offset = 9;                       // Current stream offset
+    int32 type = 15;                         // Echo of request type
+    int32 phase = 16;                        // Response phase
+    string cursor = 17;                      // Next page cursor (empty = last page)
+    repeated Publication state = 18;         // State entries
+}
+```
+
+### Publication (map-relevant fields)
+
+```protobuf
+message Publication {
+    bytes data = 4;
+    ClientInfo info = 5;
+    uint64 offset = 6;
+    map<string, string> tags = 7;
+    string key = 11;          // Map key
+    bool removed = 12;        // Removal indicator
+    sint64 score = 13;        // Sort score
+}
+```
+
+Response field usage by phase:
+
+| Phase | `state` | `publications` | `cursor` | `recoverable` |
+|-------|---------|----------------|----------|----------------|
+| STATE (2) | state entries | — | next cursor | — |
+| STREAM (1) | — | stream entries | — | — |
+| LIVE (0) | full state (immediate join, STATE→LIVE) | stream catch-up + buffered | — | yes/no |
 
 ---
 
-## Streamless Mode (Default)
+## Streamless Mode
 
-When `EnablePositioning` and `EnableRecovery` are both `false` (the default), the subscription flow is simplified:
+When neither `EnablePositioning` nor `EnableRecovery` is set.
 
 ### Paginated Join
 
 ```
-Client                                    Server
-   │                                         │
-   │──── phase=2, cursor="" ────────────────>│  STATE (page 1)
-   │<─── state entries, cursor="abc" ────────│
-   │                                         │
-   │──── phase=2, cursor="abc" ─────────────>│  STATE (last page)
-   │<─── state entries, phase=0 ─────────────│  Auto-transition to LIVE
-   │                                         │
-   │<════ real-time publications ════════════│  LIVE
+Client                                   Server
+  |                                        |
+  |── phase=2, cursor="" ────────────────>|  STATE page 1
+  |<── state entries, cursor="abc" ───────|  phase=2
+  |                                        |
+  |── phase=2, cursor="abc" ─────────────>|  STATE last page
+  |<── state entries, phase=0 ────────────|  → LIVE (always on last page)
+  |                                        |
+  |<══ real-time publications ════════════|  LIVE
 ```
 
-On the last state page, the server automatically:
-1. Starts buffering pub/sub messages
-2. Subscribes to pub/sub channel
-3. Reads buffered publications
-4. Returns state entries + buffered publications with `phase=0` (LIVE)
+In streamless mode, the server **always** transitions to LIVE on the last state page (when cursor would be empty). This happens regardless of the `MapStateToLiveEnabled` setting — that flag only governs positioned mode.
 
-No `MergePublications` or offset-based dedup is needed — keyed data provides natural dedup (last writer wins per key).
+On the last page the server:
+1. Starts buffering real-time publications
+2. Subscribes client to pub/sub
+3. Reads buffered publications
+4. Returns state entries + buffered publications with `phase=0`
+
+No offset-based dedup is needed — keyed data provides natural dedup (last writer wins per key).
+
+The response includes `recoverable: false`. The client sets `_recover = false`, meaning future reconnections will do fresh state re-sync rather than stream recovery.
 
 ### Immediate Join
 
 ```
-Client                                    Server
-   │                                         │
-   │──── phase=0, recover=false ────────────>│  Immediate join
-   │<─── state + buffered pubs, phase=0 ─────│  LIVE
-   │                                         │
-   │<════ real-time publications ════════════│  LIVE
+Client                                   Server
+  |                                        |
+  |── phase=0, recover=false ────────────>|
+  |<── state + buffered pubs, phase=0 ────|  LIVE (recoverable: false)
+  |                                        |
+  |<══ real-time publications ════════════|  LIVE
 ```
 
-Same as positioned immediate join, but no stream read or merge step.
+Server reads full state and returns it in the `state` field. If state exceeds `MapMaxImmediateJoinStateSize`, returns `ErrorStateTooLarge` (114).
 
 ### Reconnection
 
-On reconnect, the client always performs a fresh subscribe (full state re-sync):
+On reconnect, the JS client has `_recover = false` (set from the streamless LIVE response). It calls `_mapSubscribe()` which starts a fresh paginated join from STATE phase — a full state re-sync.
 
-```
-Client                                    Server
-   │                                         │
-   │──── phase=0, recover=false ────────────>│  Fresh subscribe
-   │<─── full state, phase=0 ────────────────│  LIVE
-   │                                         │
-   │<════ real-time publications ════════════│  LIVE
-```
-
-The subscribe response includes `recoverable: false`, which tells the client SDK to not set `recover=true` on reconnection. If a streamless client does send `recover=true` (e.g., old SDK), the server redirects to immediate join with full state re-sync.
+If a streamless client somehow sends `recover=true` (e.g., `since` option set manually), the server's `handleMapRecoveryJoin` detects streamless mode and redirects to immediate join with full state. The response has `recoverable: false` and `recovered: false`.
 
 ### Restrictions
 
-- `phase=1` (STREAM) requests return `ErrorBadRequest`
-- `ExpectedPosition` (CAS) is not available — returns error on publish
-- `Version`-based dedup is not available — returns error on publish
+- `phase=1` (STREAM) returns `ErrorBadRequest`
+- `ExpectedPosition` (CAS) is not available
+- `Version`-based concurrency control is not available
 
 ---
 
-## Positioned Mode (Opt-in)
+## Positioned Mode
 
-The following scenarios apply when `EnablePositioning: true` or `EnableRecovery: true` is set in subscribe options. The publish side must also be configured with `StreamSize > 0` in `MapChannelOptions`.
+Applies when `EnablePositioning: true` or `EnableRecovery: true`. The publish side must also set `StreamSize > 0` in `MapChannelOptions`.
 
 The subscribe response includes `recoverable: true`, enabling stream-based recovery on reconnect.
 
-## Scenario A: Paginated Join
+### Paginated Join (Scenario A)
 
-Used when the client wants full control over state/stream pagination, or when state is too large for immediate join.
+#### Phase 2: STATE Pagination
 
-### Phase 2: STATE Pagination
-
-**Client Request:**
+**Client sends:**
 ```
 phase = 2
-cursor = "" (empty on first page)
-limit = N
+cursor = ""       (empty on first page)
+limit = N         (default: 100)
 ```
 
-**Server Behavior:**
-1. On first request: capture current stream position as STATE_start, initialize subscription state
-2. Read state page
-3. On subsequent pages: filter entries where `offset > STATE_start` (consistency filtering)
-4. Return state publications, stream position, next cursor
+**Server behavior:**
+1. First request: create subscription state, capture current stream position
+2. Read state page, return entries in `state` field with stream position in `epoch`/`offset`
+3. Subsequent pages: client sends saved `offset`/`epoch`; server filters entries where `entry.offset > saved_offset` (prevents duplicates with stream catch-up)
+4. Return next cursor (empty on last page)
 
-**Client Behavior:**
-1. Save stream position from first response
-2. Continue pagination until cursor is empty
-3. Switch to phase 1 with saved position
+**Client behavior:**
+1. Save `epoch` and `offset` from first response
+2. Continue pagination until cursor is empty (or server responds with `phase=0`)
+3. If response has `phase=0`: handle as LIVE (server-triggered STATE→LIVE transition)
+4. Otherwise: switch to phase=1 with saved position
 
-### Phase 1: STREAM Pagination
+#### Phase 1: STREAM Pagination
 
-**Client Request:**
+**Client sends:**
 ```
 phase = 1
 offset = saved offset from STATE phase
 epoch = saved epoch from STATE phase
-limit = N
+limit = N         (default: 100)
 ```
 
-**Server Behavior:**
-1. On first STREAM request: capture current stream top as STREAM_start
-2. Check LIVE condition: `offset + limit >= STREAM_start`
-   - If true: transition to LIVE, return merged publications with `phase = 0`
-   - If false: return stream page with `phase = 1`
-3. Read stream page and return
+**Server behavior:**
+1. First STREAM request: capture current stream top as `streamStart`
+2. Check LIVE condition: `offset + limit >= streamStart`
+   - If true: transition to LIVE, return merged publications with `phase=0`
+   - If false: return stream page with `phase=1`
+3. Subsequent pages: same condition check with updated offset
 
-**Client Behavior:**
-1. If response has `phase = 0`: handle as LIVE response (server-controlled transition)
-2. Otherwise: append publications to stream buffer, continue pagination
-3. Update offset from publications
+**Client behavior:**
+1. If response has `phase=0`: handle as LIVE (server-controlled transition)
+2. If epoch changed: restart from STATE phase (fresh snapshot)
+3. Otherwise: buffer publications, update offset, continue pagination
 
-### Phase 0: LIVE
+#### Phase 0: LIVE Transition
 
-After pagination, server automatically transitions client to LIVE when close enough to catch up.
+When the LIVE condition is met, the server:
+1. Starts buffering real-time publications
+2. Subscribes client to pub/sub
+3. Reads remaining stream entries (bounded by `MapRecoveryMaxPublicationLimit`)
+4. Calls `MergePublications()` — concatenates stream + buffered pubs, sorts by offset, deduplicates, validates no gaps
+5. Returns merged publications with `phase=0`, `recoverable=true`
 
-**Server Behavior (LIVE transition):**
-1. Start buffering real-time publications
-2. Add client to pub/sub
-3. Read remaining stream (with RecoveryMaxPublicationLimit)
-4. Merge stream with buffered publications
-5. Return merged publications
+If the stream read exceeds `MapRecoveryMaxPublicationLimit`, returns `ErrorUnrecoverablePosition` (112).
+
+If merge validation fails (gaps in offsets), returns `DisconnectInsufficientState` (3010) — this disconnects the entire transport connection (see [Merge Failure](#merge-failure)).
+
+### Immediate Join (Scenario B)
+
+**Client sends:**
+```
+phase = 0
+recover = false
+```
+
+**Server behavior:**
+1. Start buffering, subscribe to pub/sub
+2. Read full state (enforce `MapMaxImmediateJoinStateSize` limit)
+3. If state too large (cursor returned): return `ErrorStateTooLarge` (114)
+4. In positioned mode: read stream from state position, merge with buffered publications
+5. Return `state` (full state) + `publications` (stream catch-up), `recoverable=true`
 
 ---
 
-## Scenario B: Immediate Join
+## Recovery (Reconnection)
 
-Used when client prefers simplicity and state is small enough. Client goes directly to LIVE without pagination.
+When the client reconnects after a transport disconnect, it has `_recover = true` (set from the previous `recoverable: true` response) and saved `offset`/`epoch`.
 
-**Client Request:**
+### Client Recovery Decision
+
+The JS client's `_mapSubscribe()` checks `_recover` and saved position:
+
 ```
-phase = 0
-recover = false  // Fresh subscription
-```
-
-**Server Behavior:**
-1. Read full state (enforce MapMaxImmediateJoinStateSize limit)
-2. If state too large: return ErrorStateTooLarge (114)
-3. Start buffering, add to pub/sub
-4. Read stream from state position
-5. Merge stream with buffered
-6. Return both `state` (full state) and `publications` (stream)
-
-**Client Behavior:**
-1. Handle `state` field as initial state entries
-2. Handle `publications` as stream catch-up
-3. Emit subscribed event with state
-
----
-
-## Recovery (Reconnection, Positioned Mode)
-
-When a client reconnects with a known position in positioned mode, two approaches are supported:
-
-### Option 1: Direct to LIVE (Recommended)
-
-**Client Request:**
-```
-phase = 0
-recover = true   // Reconnection
-offset = last known offset
-epoch = last known epoch
+if (_recover && _offset !== null && _epoch !== null) {
+    // Skip STATE, go directly to STREAM phase
+    _mapPhase = Stream
+    _fetchStream()
+} else {
+    // Fresh subscription from STATE phase
+    _mapPhase = State
+    _fetchSnapshot()
+}
 ```
 
-**Server Behavior:**
-1. Skip state read (client already has state)
-2. Read stream from client's position
-3. Merge with buffered, return only `publications`
+So by default, a recovering positioned client enters at **STREAM phase** (not LIVE), which gives the server the opportunity to paginate the catch-up if the gap is large.
 
-### Option 2: Stream Phase Recovery
+### Server Recovery Handling
 
-For clients that prefer explicit stream pagination before going live:
+#### Via STREAM Phase (default client behavior)
 
-**Client Request:**
+**Client sends:**
 ```
 phase = 1
-recover = true   // Reconnection mode
+recover = true
 offset = last known offset
 epoch = last known epoch
 limit = N
 ```
 
-**Server Behavior:**
-1. Create subscription state on the fly (skip STATE phase authorization)
-2. Capture stream top as STREAM_start
-3. Check LIVE condition: `offset + limit >= STREAM_start`
-   - If true: transition to LIVE, return merged publications
+**Server behavior:**
+1. Detects `recover=true` without prior STATE phase — creates subscription state on the fly (skips STATE phase authorization)
+2. Validates epoch (mismatch → `ErrorUnrecoverablePosition`)
+3. Captures `streamStart`, checks LIVE condition: `offset + limit >= streamStart`
+   - If true: transition to LIVE with merged publications, `recovered=true`
    - If false: return stream page, client continues pagination
 4. Same flow as normal STREAM phase from here
 
-This option is useful when client needs to paginate through a large stream gap before going live.
+#### Via LIVE Phase (direct recovery)
+
+If the client sends `phase=0, recover=true` directly:
+
+**Server behavior:**
+1. Skip state read (client already has state)
+2. Start buffering, subscribe to pub/sub
+3. Read stream from client's position
+4. Merge stream + buffered publications
+5. Return `publications` only, `recovered=true`, `recoverable=true`
+
+If stream exceeds `MapRecoveryMaxPublicationLimit`, returns `ErrorUnrecoverablePosition` (112).
+
+### Recovery Failure Scenarios
+
+#### ErrorUnrecoverablePosition (code 112)
+
+Triggered when:
+- Stream epoch mismatch (server restarted, stream reset)
+- Client position too old (stream entries already expired)
+- Stream read exceeds `MapRecoveryMaxPublicationLimit`
+
+**Client behavior** depends on `unrecoverableStrategy` option:
+
+- **`'from_scratch'`** (default): Client clears saved position (`_offset = null`, `_epoch = null`, `_recover = false`), then schedules a resubscribe from scratch. This starts a fresh paginated join from STATE phase with exponential backoff.
+- **`'fatal'`**: Subscription moves to `Unsubscribed` state. Application must handle the error and decide next action.
+
+#### DisconnectInsufficientState (code 3010)
+
+Triggered when `MergePublications()` detects gaps in the publication offset sequence. This indicates a server-side issue (publication missed during buffering transition).
+
+**Server behavior:** Disconnects the entire transport connection (not just the subscription).
+
+**Client behavior:** The transport reconnects automatically. On reconnect, the client will attempt recovery again. If recovery keeps failing:
+- The stream advances, eventually exceeding `MapRecoveryMaxPublicationLimit` → `ErrorUnrecoverablePosition` → `from_scratch` strategy kicks in.
+- Or the merge succeeds on retry (the transient condition resolved).
+
+#### ErrorStateTooLarge (code 114)
+
+Only applies to immediate join mode (`immediateJoin: true`). State has more entries than `MapMaxImmediateJoinStateSize`.
+
+**Client behavior** depends on `stateTooLargeFallback` option:
+
+- **`'paginate'`**: Client disables immediate join, switches to STATE phase, and schedules a resubscribe with pagination.
+- **`'fatal'`** (default): Subscription moves to `Unsubscribed` state.
 
 ---
 
-## State Filtering During Pagination
+## STATE-to-LIVE Direct Transition
 
-During STATE pagination (Scenario A), entries may be modified after the first page was read. To ensure consistency:
+In **streamless mode**, the server **always** transitions to LIVE on the last state page. The `MapStateToLiveEnabled` setting has no effect on streamless mode.
 
-1. First STATE page: server returns current position
-2. Subsequent STATE pages: server filters entries where `entry.offset > saved_position`
-
-This prevents duplicates when client catches up from stream.
-
----
-
-## Direct STATE→LIVE Transition
-
-When `MapStateToLiveEnabled` is true (configurable), the server can skip the STREAM phase entirely on the last STATE page if the stream hasn't advanced much.
-
-> **Note**: In streamless mode, the server **always** transitions directly to LIVE on the last state page, regardless of `MapStateToLiveEnabled`. This setting only affects positioned mode.
-
-### Trigger Condition (Positioned Mode)
-
-On the last STATE page (cursor would be empty):
+In **positioned mode**, when `MapStateToLiveEnabled` is set, the server can skip the STREAM phase on the last state page. The transition triggers when:
 ```
 state_position + limit >= current_stream_top
 ```
 
-### Server Behavior
+The server:
+1. Starts buffering
+2. Subscribes to pub/sub
+3. Reads stream from state position
+4. Merges with buffered publications
+5. Returns `phase=0` with last-page state entries in `state` and stream catch-up in `publications`
 
-When condition is met:
-1. Start buffering real-time publications
-2. Add client to pub/sub
-3. Read stream from state position to current
-4. Merge stream with buffered publications
-5. Return response with:
-   - `phase = 0` (LIVE)
-   - `state` field: remaining state entries from last page
-   - `publications` field: stream catch-up publications
+If the condition is not met (stream advanced too far during pagination), the server returns a normal STATE response (`phase=2`) and the client proceeds to STREAM phase.
 
-### Client Behavior
+The client handles `phase=0` during STATE pagination by treating it as a LIVE response (server-controlled transition).
 
-Client handles `phase != 2` response during STATE pagination:
-1. Add any state entries from response to state buffer
-2. Handle as LIVE response (same as STREAM→LIVE transition)
+---
 
-### Benefits
+## Buffering Mechanism
 
-- Reduces round trips for slowly-updating channels
-- Faster subscription when state fits in one page and stream activity is low
-- Seamless - client handles automatically
+The buffering system (`pubSubSync`) ensures no publications are lost during the transition to LIVE:
 
-### Configuration
+1. **StartBuffering** — creates buffer, sets `inSubscribe` flag; incoming pub/sub messages are accumulated
+2. **addSubscription** — subscribes client to broker; real-time publications now buffered
+3. **LockBufferAndReadBuffered** — locks buffer, returns accumulated publications
+4. **Final stream read + merge** — while buffer is locked, no new publications added
+5. **StopBuffering** — clears flag, unlocks buffer; publications now delivered directly to client
+
+Between `addSubscription` and `LockBufferAndReadBuffered`, all real-time publications are captured. Between lock and response write, the buffer is frozen. After response, live delivery bypasses the buffer.
+
+### MergePublications
+
+Used in all positioned mode LIVE transitions. Algorithm:
+1. Concatenate recovered (stream) + buffered publications
+2. Sort by offset ascending
+3. Deduplicate by offset
+4. Validate no gaps (or all gaps are filtered publications)
+5. Return `ok=false` if validation fails
+
+In streamless mode, merge is not used — buffered publications are returned directly (no offset validation needed, keyed data provides natural dedup).
+
+---
+
+## Recovery Limit Boundary
+
+The `MapRecoveryMaxPublicationLimit` controls how many stream publications the server reads during LIVE transitions. The server uses a **read limit+1** pattern to distinguish "exactly at limit" from "too far behind":
 
 ```go
-type Config struct {
-    // MapStateToLiveEnabled: Allow direct STATE→LIVE transition
-    // When true, server may skip STREAM phase on last state page
-    // Default: false (only applies to positioned mode)
-    MapStateToLiveEnabled bool
+readLimit := streamLimit
+if readLimit > 0 {
+    readLimit = streamLimit + 1  // Read one extra
+}
+// ... read with readLimit ...
+if streamLimit > 0 && len(pubs) > streamLimit {
+    return ErrorUnrecoverablePosition  // More than limit → too far behind
 }
 ```
+
+- If configured limit is 100, server reads with limit=101
+- If result has ≤100 publications → recovery succeeds
+- If result has 101 publications → client is too far behind → `ErrorUnrecoverablePosition`
+
+This pattern is used in all four LIVE transition paths: STATE→LIVE, STREAM→LIVE, immediate join, and recovery join.
+
+---
+
+## Client-Side Epoch Validation
+
+The JS client validates epoch consistency between phases. If the epoch changes between responses, the client restarts from STATE phase:
+
+- **During STREAM phase:** If `result.epoch !== saved_epoch`, clears buffers and restarts `_fetchSnapshot()`
+- **During LIVE transition:** Same check — if epoch changed, restarts from STATE (or retries immediate join)
+
+This handles the case where the server's stream was reset (e.g., server restart) during multi-phase subscription. The client detects the inconsistency and starts over rather than merging data from different epochs.
 
 ---
 
 ## Error Conditions
 
-| Error | Code | Description |
-|-------|------|-------------|
-| ErrorUnrecoverablePosition | 112 | Stream entries evicted, epoch changed, or position invalid (positioned mode) |
-| ErrorStateTooLarge | 114 | State exceeds MapMaxImmediateJoinStateSize (immediate join only) |
-| ErrorBadRequest | — | STREAM phase requested in streamless mode |
-
-When ErrorStateTooLarge is returned, client should fall back to paginated join.
+| Error | Code | Description | Client default behavior |
+|-------|------|-------------|------------------------|
+| `ErrorBadRequest` | 107 | Invalid request (STREAM in streamless, invalid filter) | Unsubscribed |
+| `ErrorUnrecoverablePosition` | 112 | Epoch mismatch, position too old, or recovery limit exceeded | Resubscribe from scratch |
+| `ErrorConcurrentPagination` | 113 | Pagination request while another is in progress | Unsubscribed |
+| `ErrorStateTooLarge` | 114 | State exceeds `MapMaxImmediateJoinStateSize` | Depends on `stateTooLargeFallback` |
+| `DisconnectInsufficientState` | 3010 | Merge gap detected (transport disconnect) | Auto-reconnect, retry recovery |
 
 ---
 
-## Configuration Options
-
-### Server Configuration (Go)
+## Server Configuration
 
 ```go
 type Config struct {
-    // MapMaxPaginationLimit: Max entries per page (0 = no limit)
+    // MapMaxPaginationLimit: max entries per page (0 = no limit).
     MapMaxPaginationLimit int
 
-    // MapMinStreamPaginationLimit: Minimum stream pagination limit
-    // Prevents excessive round trips from tiny limits
+    // MapMinStreamPaginationLimit: minimum stream page size.
+    // Prevents excessive round trips from tiny limits. 0 = no minimum.
     MapMinStreamPaginationLimit int
 
-    // MapMaxImmediateJoinStateSize: Max state entries for immediate join
-    // If state exceeds this, ErrorStateTooLarge is returned
+    // MapMaxImmediateJoinStateSize: max state entries for immediate join.
+    // Exceeding triggers ErrorStateTooLarge (114). 0 = no limit.
     MapMaxImmediateJoinStateSize int
 
-    // MapRecoveryMaxPublicationLimit: Max publications for stream catch-up
-    // If limit reached, ErrorUnrecoverablePosition is returned
+    // MapRecoveryMaxPublicationLimit: max stream publications during LIVE transition.
+    // Exceeding limit triggers ErrorUnrecoverablePosition (112). 0 = no limit.
     MapRecoveryMaxPublicationLimit int
 
-    // MapStateToLiveEnabled: Allow direct STATE→LIVE transition
-    // When true, server may skip STREAM phase on last state page
-    // if stream is close enough to go LIVE directly
-    // Default: false
+    // MapStateToLiveEnabled: allow STATE→LIVE direct transition on last state page
+    // in positioned mode. Skips STREAM phase when stream hasn't advanced much.
+    // Only applies to positioned mode — streamless always transitions to LIVE
+    // on last page regardless of this setting.
     MapStateToLiveEnabled bool
 }
 ```
 
-### Client Options (JS SDK)
+## Client Configuration (JS SDK)
 
 ```typescript
-interface MapSubscriptionOptions {
-    // Page size for state/stream pagination
-    limit: number;
-
-    // Enable immediate join mode (Scenario B)
-    immediateJoin: boolean;
-
-    // Strategy for handling ErrorStateTooLarge (code 114)
-    // 'fatal': (default) go to error state
-    // 'paginate': automatically fall back to paginated join
-    stateTooLargeFallback: 'fatal' | 'paginate';
-
-    // Strategy for handling unrecoverable position
-    // 'from_scratch': auto-recover by resubscribing from snapshot
-    // 'fatal': go to unsubscribed state
-    unrecoverableStrategy: 'from_scratch' | 'fatal';
-}
-```
-
----
-
-## Examples
-
-### Paginated Join (Large State)
-
-```typescript
-const sub = centrifuge.newMapSubscription('large-channel', {
-    limit: 100  // Page size
+const sub = centrifuge.newMapSubscription('channel', {
+    limit: 100,                              // Page size (default: 100)
+    immediateJoin: false,                     // true = Scenario B (default: false)
+    stateTooLargeFallback: 'fatal',           // 'fatal' | 'paginate' (default: 'fatal')
+    unrecoverableStrategy: 'from_scratch',    // 'from_scratch' | 'fatal' (default: 'from_scratch')
 });
 
 sub.on('subscribed', (ctx) => {
-    // ctx.state contains initial state entries (from pagination)
+    // ctx.state: MapPublicationContext[] — initial state entries
     for (const entry of ctx.state || []) {
-        processStateEntry(entry.key, entry.data);
+        processEntry(entry.key, entry.data, entry.score);
     }
 });
 
 sub.on('publication', (ctx) => {
-    // Real-time updates (stream publications)
+    // ctx: MapPublicationContext — real-time update
     if (ctx.removed) {
         removeEntry(ctx.key);
     } else {
-        updateEntry(ctx.key, ctx.data);
+        updateEntry(ctx.key, ctx.data, ctx.score);
     }
 });
 
 sub.subscribe();
 ```
 
-### Immediate Join (Small State)
+Three factory methods on the client:
+- `newMapSubscription(channel, opts)` — generic keyed state (type=1)
+- `newMapClientsSubscription(channel, opts)` — per-client presence (type=2, key=clientId)
+- `newMapUsersSubscription(channel, opts)` — per-user presence (type=3, key=userId)
+
+All three types support both streamless and positioned modes — the mode is determined by the server's `SubscribeOptions` (e.g., presence subscriptions can be positioned if the server sets `EnablePositioning: true`).
+
+### Error Handling
 
 ```typescript
-const sub = centrifuge.newMapSubscription('small-channel', {
-    immediateJoin: true  // Single request for state + live
-});
-
-sub.on('subscribed', (ctx) => {
-    // ctx.state contains full state
-    for (const entry of ctx.state || []) {
-        processStateEntry(entry.key, entry.data);
-    }
-});
-
-sub.on('publication', (ctx) => {
-    // Real-time updates (stream publications)
-    updateEntry(ctx.key, ctx.data);
-});
-
-sub.subscribe();
-```
-
-### Handling ErrorStateTooLarge
-
-Option 1: Automatic fallback to paginated join:
-
-```typescript
+// Automatic fallback from immediate join to pagination:
 const sub = centrifuge.newMapSubscription('channel', {
     immediateJoin: true,
-    stateTooLargeFallback: 'paginate'  // Automatic fallback
+    stateTooLargeFallback: 'paginate',  // Auto-retry with pagination on code 114
 });
 
-sub.on('subscribed', (ctx) => {
-    // Works for both immediate join and fallback to pagination
-    for (const entry of ctx.state || []) {
-        processStateEntry(entry.key, entry.data);
-    }
-});
-
-sub.subscribe();
-```
-
-Option 2: Manual handling (default 'fatal' behavior):
-
-```typescript
+// Automatic recovery on unrecoverable position (default):
 const sub = centrifuge.newMapSubscription('channel', {
-    immediateJoin: true
-    // stateTooLargeFallback: 'fatal'  // Default - error goes to error event
+    unrecoverableStrategy: 'from_scratch',  // Re-subscribe from scratch on code 112
 });
-
-sub.on('error', (ctx) => {
-    if (ctx.error.code === 114) {
-        // State too large - manually fall back to paginated join
-        sub.unsubscribe();
-        centrifuge.removeSubscription(sub);
-
-        const paginatedSub = centrifuge.newMapSubscription('channel', {
-            limit: 100  // Use pagination
-        });
-        paginatedSub.subscribe();
-    }
-});
-
-sub.subscribe();
 ```
-
----
-
-## Protocol Messages
-
-### SubscribeRequest
-
-```protobuf
-message SubscribeRequest {
-    string channel = 1;
-    int32 type = 2;      // 1=MAP, 2=MAP_CLIENTS, 3=MAP_USERS
-    int32 phase = 3;     // 0=LIVE, 1=STREAM, 2=STATE
-    string cursor = 4;   // Pagination cursor
-    int32 limit = 5;     // Page size
-    int64 offset = 6;    // Stream offset
-    string epoch = 7;    // Stream epoch
-    bool recover = 8;    // Recovery mode flag
-    bool ordered = 9;    // Request ordered state
-    // ... other fields
-}
-```
-
-### SubscribeResult
-
-```protobuf
-message SubscribeResult {
-    int32 type = 1;                     // 1=MAP
-    int32 phase = 2;                    // Current phase
-    string cursor = 3;                  // Next page cursor
-    int64 offset = 4;                   // Stream offset (0 in streamless mode)
-    string epoch = 5;                   // Stream epoch ("" in streamless mode)
-    repeated Publication publications = 6;  // Stream/buffered publications
-    repeated Publication state = 7;     // State publications (immediate join)
-    bool recoverable = 8;              // True when positioned mode is enabled
-    // ... other fields
-}
-```
-
-The `recoverable` field tells the client SDK whether stream-based recovery is available. When `false` (streamless), the client performs a fresh subscribe on reconnect instead of sending `recover=true`.
-
----
-
-## Design Properties
-
-1. **Server-controlled LIVE transition**: Server decides when client is close enough to go live
-2. **Bounded stream recovery**: Stream catch-up is deterministic and finite (positioned mode)
-3. **One-RTT fast path**: Immediate join provides single round-trip for small states
-4. **Slow client detection**: Clients too far behind fail fast with clear error (positioned mode)
-5. **Consistency during pagination**: State filtering prevents duplicates (positioned mode)
-6. **Streamless default**: Minimal overhead for common use cases (presence, leaderboards)
-7. **Keyed natural dedup**: Map publications are key-value updates where last writer wins, making offset-based dedup unnecessary in streamless mode

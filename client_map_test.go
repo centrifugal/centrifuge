@@ -112,10 +112,12 @@ func TestMapSubscribe_StatePhase(t *testing.T) {
 	result := rwWrapper.replies[0].Subscribe
 	require.Nil(t, rwWrapper.replies[0].Error)
 	require.True(t, result.Type == 1)
-	require.Equal(t, MapPhaseState, result.Phase)
+	// Streamless: single page → server transitions directly to LIVE.
+	require.Equal(t, MapPhaseLive, result.Phase)
 	require.Len(t, result.State, 2) // State entries in State field, not Publications
 	require.NotEmpty(t, result.Epoch)
-	require.Greater(t, result.Offset, uint64(0))
+	// Client should now be subscribed.
+	require.Contains(t, client.channels, channel)
 }
 
 func TestMapSubscribe_StatePagination(t *testing.T) {
@@ -162,7 +164,7 @@ func TestMapSubscribe_StatePagination(t *testing.T) {
 
 	epoch := result.Epoch
 
-	// Second page using cursor.
+	// Second page using cursor — streamless last page transitions to LIVE.
 	result2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
 		Type:    1,
@@ -172,10 +174,12 @@ func TestMapSubscribe_StatePagination(t *testing.T) {
 	})
 
 	require.True(t, result2.Type == 1)
-	require.Equal(t, MapPhaseState, result2.Phase)
-	require.Len(t, result2.State, 5) // State entries in State field
-	require.Empty(t, result2.Cursor) // Last page.
+	require.Equal(t, MapPhaseLive, result2.Phase) // Streamless: last page → LIVE.
+	require.Len(t, result2.State, 5)              // State entries in State field
+	require.Empty(t, result2.Cursor)
 	require.Equal(t, epoch, result2.Epoch)
+	// Client should now be subscribed.
+	require.Contains(t, client.channels, channel)
 }
 
 func TestMapSubscribe_StreamPhase(t *testing.T) {
@@ -258,7 +262,8 @@ func TestMapSubscribe_LivePhase(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type: SubscriptionTypeMap,
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true, // Positioned mode: STATE doesn't auto-subscribe.
 				},
 			}, nil)
 		})
@@ -266,7 +271,7 @@ func TestMapSubscribe_LivePhase(t *testing.T) {
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// First do state to authorize.
+	// First do state to authorize (positioned mode: returns phase=2, not LIVE).
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
 		Type:    1,
@@ -355,7 +360,8 @@ func TestMapSubscribe_FullTwoPhase(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type: SubscriptionTypeMap,
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true, // Positioned mode for explicit two-phase flow.
 				},
 			}, nil)
 		})
@@ -363,7 +369,7 @@ func TestMapSubscribe_FullTwoPhase(t *testing.T) {
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// Phase 1: State.
+	// Phase 1: State (positioned mode: returns phase=2).
 	stateResult := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
 		Type:    1,
@@ -745,7 +751,7 @@ func TestPresenceSubscribe_State(t *testing.T) {
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// Subscribe to presence state.
+	// Streamless presence: single page → LIVE.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: presenceChannel,
 		Type:    2,
@@ -754,8 +760,8 @@ func TestPresenceSubscribe_State(t *testing.T) {
 	})
 
 	require.True(t, result.Type == 1)
-	require.Equal(t, MapPhaseState, result.Phase)
-	require.Len(t, result.State, 2) // State entries in State field
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.Len(t, result.State, 2)
 }
 
 func TestPresenceSubscribe_Live(t *testing.T) {
@@ -779,25 +785,77 @@ func TestPresenceSubscribe_Live(t *testing.T) {
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// First do state.
-	subscribeMapClient(t, client, &protocol.SubscribeRequest{
+	// Streamless presence: single page → LIVE directly.
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: presenceChannel,
 		Type:    2,
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
 
-	// Then go live.
-	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel: presenceChannel,
-		Type:    2,
-		Phase:   MapPhaseLive,
-	})
-
 	require.True(t, result.Type == 1)
 	require.Equal(t, MapPhaseLive, result.Phase)
 
 	// Verify presence subscription is tracked in unified channels map with flagMapPresence.
+	client.mu.RLock()
+	ctx2, ok := client.channels[presenceChannel]
+	client.mu.RUnlock()
+	require.True(t, ok)
+	require.True(t, channelHasFlag(ctx2.flags, flagMapPresence))
+}
+
+func TestPresenceSubscribe_Positioned_TwoPhase(t *testing.T) {
+	// Presence subscriptions can also be positioned (EnablePositioning: true).
+	// In that case, the two-phase STATE→LIVE flow works like regular map subscriptions.
+	node, broker := newTestNodeWithMapBroker(t)
+
+	ctx := context.Background()
+
+	presenceChannel := "clients:test_presence_positioned"
+	_, err := broker.Publish(ctx, presenceChannel, "client1", MapPublishOptions{
+		ClientInfo: &ClientInfo{ClientID: "client1", UserID: "user1"},
+		KeyTTL:     300 * time.Second,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{
+				Type:              e.Type,
+				EnablePositioning: true,
+			}}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Positioned presence: STATE returns phase=2 (not LIVE).
+	stateResult := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: presenceChannel,
+		Type:    2,
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+
+	require.True(t, stateResult.Type == 1)
+	require.Equal(t, MapPhaseState, stateResult.Phase)
+	require.Len(t, stateResult.State, 1)
+
+	// Then go LIVE explicitly.
+	liveResult := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: presenceChannel,
+		Type:    2,
+		Phase:   MapPhaseLive,
+		Offset:  stateResult.Offset,
+		Epoch:   stateResult.Epoch,
+	})
+
+	require.True(t, liveResult.Type == 1)
+	require.Equal(t, MapPhaseLive, liveResult.Phase)
+
+	// Verify flagMapPresence is set.
 	client.mu.RLock()
 	ctx2, ok := client.channels[presenceChannel]
 	client.mu.RUnlock()
@@ -865,19 +923,15 @@ func TestPresenceSubscribe_AlreadySubscribed(t *testing.T) {
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// First subscribe to presence.
+	// First subscribe (streamless, so STATE goes directly to LIVE).
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: presenceChannel,
 		Type:    2,
 		Phase:   MapPhaseState,
-	})
-	subscribeMapClient(t, client, &protocol.SubscribeRequest{
-		Channel: presenceChannel,
-		Type:    2,
-		Phase:   MapPhaseLive,
+		Limit:   100,
 	})
 
-	// Third subscribe should fail with AlreadySubscribed.
+	// Second subscribe should fail with AlreadySubscribed.
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: presenceChannel,
@@ -1916,12 +1970,14 @@ func TestMapSubscribe_LivePhaseRecovery(t *testing.T) {
 }
 
 func TestMapSubscribe_StateToLive_Disabled(t *testing.T) {
-	// Test that when MapStateToLiveEnabled is false, STATE phase never
-	// transitions directly to LIVE (always returns phase=2).
+	// Test that when MapStateToLiveEnabled is false in positioned mode,
+	// STATE phase never transitions directly to LIVE (always returns phase=2).
+	// Note: in streamless mode, STATE always transitions to LIVE on last page
+	// regardless of this setting.
 	node, err := New(Config{
 		LogLevel:              LogLevelTrace,
 		LogHandler:            func(entry LogEntry) {},
-		MapStateToLiveEnabled: false, // Disable the optimization (default)
+		MapStateToLiveEnabled: false, // Disable the optimization
 	})
 	require.NoError(t, err)
 
@@ -1953,7 +2009,8 @@ func TestMapSubscribe_StateToLive_Disabled(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type: SubscriptionTypeMap,
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true, // Positioned mode: flag controls STATE→LIVE.
 				},
 			}, nil)
 		})
@@ -1976,8 +2033,850 @@ func TestMapSubscribe_StateToLive_Disabled(t *testing.T) {
 	result := rwWrapper.replies[0].Subscribe
 	require.Nil(t, rwWrapper.replies[0].Error)
 	require.True(t, result.Type == 1)
-	// Should return STATE (phase=2), not LIVE.
+	// Positioned mode with flag disabled: should return STATE (phase=2), not LIVE.
 	require.Equal(t, MapPhaseState, result.Phase)
 	require.Len(t, result.State, 1)
 	require.Empty(t, result.Cursor) // Last page but NOT live
+}
+
+// Streamless mode: phase=1 (STREAM) should be rejected with ErrorBadRequest.
+func TestMapSubscribe_Streamless_StreamPhaseRejected(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+
+	channel := "test_streamless_stream_rejected"
+	ctx := context.Background()
+
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:   []byte(`{"v":"data"}`),
+		KeyTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap, // Streamless: no EnablePositioning.
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Phase=1 (STREAM) is not valid in streamless mode.
+	rwWrapper := testReplyWriterWrapper()
+	err = client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseStream,
+		Offset:  1,
+		Epoch:   "test",
+		Limit:   100,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.NotNil(t, rwWrapper.replies[0].Error)
+	require.Equal(t, ErrorBadRequest.Code, rwWrapper.replies[0].Error.Code)
+}
+
+// Streamless mode: reconnection with recover=true should redirect to immediate join
+// and return full state (not just stream catch-up).
+func TestMapSubscribe_Streamless_RecoveryRedirectsToImmediateJoin(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+
+	channel := "test_streamless_recovery_redirect"
+	ctx := context.Background()
+
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:   []byte(`{"v":"data1"}`),
+		KeyTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{
+		Data:   []byte(`{"v":"data2"}`),
+		KeyTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap, // Streamless.
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Streamless reconnection: phase=0, recover=true.
+	// Should redirect to immediate join with full state.
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+		Recover: true, // Reconnecting.
+		Offset:  42,   // Stale offset (ignored in streamless).
+		Epoch:   "old",
+	})
+
+	require.Equal(t, MapPhaseLive, result.Phase)
+	// Full state should be returned (not just stream catch-up).
+	require.Len(t, result.State, 2)
+	require.NotEmpty(t, result.Epoch)
+	// Client should be subscribed.
+	require.Contains(t, client.channels, channel)
+}
+
+// Positioned mode: epoch mismatch during STREAM phase should return ErrorUnrecoverablePosition.
+func TestMapSubscribe_Positioned_StreamEpochMismatch(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+
+	channel := "test_stream_epoch_mismatch"
+	ctx := context.Background()
+
+	var epoch string
+	for i := 0; i < 5; i++ {
+		res, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+			Data:       []byte(`{"v":"data"}`),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+		epoch = res.Position.Epoch
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// First do STATE to authorize and capture epoch.
+	stateResult := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+	require.Equal(t, epoch, stateResult.Epoch)
+
+	// Now send STREAM with wrong epoch — should get ErrorUnrecoverablePosition.
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseStream,
+		Offset:  2,
+		Epoch:   "wrong-epoch",
+		Limit:   100,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.NotNil(t, rwWrapper.replies[0].Error)
+	require.Equal(t, ErrorUnrecoverablePosition.Code, rwWrapper.replies[0].Error.Code)
+}
+
+// Positioned mode: concurrent pagination requests on the same channel should return ErrorConcurrentPagination.
+func TestMapSubscribe_ConcurrentPagination(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+
+	channel := "test_concurrent_pagination"
+	ctx := context.Background()
+
+	for i := 0; i < 20; i++ {
+		_, err := broker.Publish(ctx, channel, string(rune('a'+(i%26))), MapPublishOptions{
+			Data:       []byte(`{"v":"data"}`),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Manually acquire pagination lock to simulate concurrent request.
+	client.mu.Lock()
+	if client.mapPaginationLocks == nil {
+		client.mapPaginationLocks = make(map[string]struct{})
+	}
+	client.mapPaginationLocks[channel] = struct{}{}
+	client.mu.Unlock()
+
+	// Now try STATE request — should fail with ErrorConcurrentPagination.
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   5,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.NotNil(t, rwWrapper.replies[0].Error)
+	require.Equal(t, ErrorConcurrentPagination.Code, rwWrapper.replies[0].Error.Code)
+
+	// Release lock.
+	client.mu.Lock()
+	delete(client.mapPaginationLocks, channel)
+	client.mu.Unlock()
+}
+
+// Positioned mode: MapRecoveryMaxPublicationLimit boundary test.
+// When client is exactly at the limit, recovery should succeed.
+// When client is beyond the limit, should get ErrorUnrecoverablePosition.
+func TestMapSubscribe_RecoveryMaxPublicationLimit(t *testing.T) {
+	node, err := New(Config{
+		LogLevel:                       LogLevelTrace,
+		LogHandler:                     func(entry LogEntry) {},
+		MapRecoveryMaxPublicationLimit: 5, // Max 5 publications during recovery.
+	})
+	require.NoError(t, err)
+
+	broker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	err = broker.RegisterEventHandler(nil)
+	require.NoError(t, err)
+	node.SetMapBroker(broker)
+
+	err = node.Run()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+	})
+
+	channel := "test_recovery_limit"
+	ctx := context.Background()
+
+	var epoch string
+	for i := 0; i < 10; i++ {
+		res, pubErr := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+			Data:       []byte(`{"v":"data"}`),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, pubErr)
+		epoch = res.Position.Epoch
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
+				},
+			}, nil)
+		})
+	})
+
+	// Test 1: Client at offset 5 needs 5 publications (exactly at limit) — should succeed.
+	client1 := newTestConnectedClientV2(t, node, "user1")
+	result := subscribeMapClient(t, client1, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+		Offset:  5,
+		Epoch:   epoch,
+		Recover: true,
+	})
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.Len(t, result.Publications, 5) // Exactly at limit — OK.
+
+	// Test 2: Client at offset 4 needs 6 publications (exceeds limit) — should fail.
+	client2 := newTestConnectedClientV2(t, node, "user2")
+	rwWrapper := testReplyWriterWrapper()
+	err = client2.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+		Offset:  4,
+		Epoch:   epoch,
+		Recover: true,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.NotNil(t, rwWrapper.replies[0].Error)
+	require.Equal(t, ErrorUnrecoverablePosition.Code, rwWrapper.replies[0].Error.Code)
+}
+
+// Positioned mode: ErrorStateTooLarge on immediate join when state exceeds MapMaxImmediateJoinStateSize.
+func TestMapSubscribe_ImmediateJoin_StateTooLarge(t *testing.T) {
+	node, err := New(Config{
+		LogLevel:                    LogLevelTrace,
+		LogHandler:                  func(entry LogEntry) {},
+		MapMaxImmediateJoinStateSize: 3, // Max 3 entries for immediate join.
+	})
+	require.NoError(t, err)
+
+	broker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	err = broker.RegisterEventHandler(nil)
+	require.NoError(t, err)
+	node.SetMapBroker(broker)
+
+	err = node.Run()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+	})
+
+	channel := "test_immediate_join_too_large"
+	ctx := context.Background()
+
+	// Publish 5 entries (exceeds limit of 3).
+	for i := 0; i < 5; i++ {
+		_, pubErr := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+			Data:       []byte(`{"v":"data"}`),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, pubErr)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Immediate join (phase=0, recover=false, no prior state) should fail with ErrorStateTooLarge.
+	rwWrapper := testReplyWriterWrapper()
+	err = client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.NotNil(t, rwWrapper.replies[0].Error)
+	require.Equal(t, ErrorStateTooLarge.Code, rwWrapper.replies[0].Error.Code)
+}
+
+// Positioned mode: State consistency filtering. Entries modified after the saved position
+// during pagination should be filtered out from later pages to prevent duplicates.
+func TestMapSubscribe_Positioned_StateConsistencyFiltering(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+
+	channel := "test_state_consistency"
+	ctx := context.Background()
+
+	// Pre-populate 10 entries.
+	for i := 0; i < 10; i++ {
+		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+			Data:       []byte(`{"v":"data"}`),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// First page: get 5 entries. Server captures stream position (offset=10).
+	result1 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   5,
+	})
+	require.Equal(t, MapPhaseState, result1.Phase)
+	require.Len(t, result1.State, 5)
+	require.NotEmpty(t, result1.Cursor)
+
+	savedOffset := result1.Offset
+	savedEpoch := result1.Epoch
+
+	// Now update a key that's on the second page — this bumps its offset past savedOffset.
+	_, err := broker.Publish(ctx, channel, "f", MapPublishOptions{
+		Data:       []byte(`{"v":"updated"}`),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Second page with saved position — the updated entry should be filtered out
+	// because its new offset > savedOffset. Client will get it from stream catch-up.
+	result2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   100,
+		Cursor:  result1.Cursor,
+		Offset:  savedOffset,
+		Epoch:   savedEpoch,
+	})
+
+	// The second page should have entries from the remaining keys,
+	// but the updated "f" should be filtered out (its offset > savedOffset).
+	for _, entry := range result2.State {
+		require.LessOrEqual(t, entry.Offset, savedOffset,
+			"entry %s with offset %d should have been filtered (savedOffset=%d)",
+			entry.Key, entry.Offset, savedOffset)
+	}
+}
+
+// Positioned mode: multi-page state pagination followed by STREAM and LIVE phases.
+func TestMapSubscribe_Positioned_FullThreePhaseFlow(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+
+	channel := "test_three_phase"
+	ctx := context.Background()
+
+	// Pre-populate 10 entries.
+	var lastOffset uint64
+	var epoch string
+	for i := 0; i < 10; i++ {
+		res, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+			Data:       []byte(`{"v":"data"}`),
+			StreamSize: 1000,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+		lastOffset = res.Position.Offset
+		epoch = res.Position.Epoch
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Phase 2 (STATE): first page.
+	result1 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   5,
+	})
+	require.Equal(t, MapPhaseState, result1.Phase)
+	require.Len(t, result1.State, 5)
+	require.NotEmpty(t, result1.Cursor)
+	require.Equal(t, epoch, result1.Epoch)
+
+	// Phase 2 (STATE): second (last) page.
+	result2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   5,
+		Cursor:  result1.Cursor,
+	})
+	require.Equal(t, MapPhaseState, result2.Phase)
+	require.Len(t, result2.State, 5)
+	require.Empty(t, result2.Cursor) // Last page.
+
+	// Add more entries between STATE and STREAM phase to create a gap.
+	for i := 0; i < 50; i++ {
+		res, err := broker.Publish(ctx, channel, "extra"+string(rune('a'+i%26)), MapPublishOptions{
+			Data:       []byte(`{"v":"extra"}`),
+			StreamSize: 1000,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+		lastOffset = res.Position.Offset
+	}
+
+	// Phase 1 (STREAM): small limit to paginate.
+	result3 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseStream,
+		Offset:  result1.Offset, // Saved from first STATE page.
+		Epoch:   epoch,
+		Limit:   10,
+	})
+	require.True(t, result3.Phase == MapPhaseStream || result3.Phase == MapPhaseLive)
+	require.NotEmpty(t, result3.Publications)
+
+	// Continue STREAM until LIVE.
+	currentPhase := result3.Phase
+	currentOffset := result3.Publications[len(result3.Publications)-1].Offset
+	for currentPhase == MapPhaseStream {
+		res := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+			Channel: channel,
+			Type:    1,
+			Phase:   MapPhaseStream,
+			Offset:  currentOffset,
+			Epoch:   epoch,
+			Limit:   20,
+		})
+		currentPhase = res.Phase
+		if len(res.Publications) > 0 {
+			currentOffset = res.Publications[len(res.Publications)-1].Offset
+		}
+	}
+
+	// Should be LIVE now.
+	require.Equal(t, MapPhaseLive, currentPhase)
+	require.Equal(t, lastOffset, currentOffset)
+	require.Contains(t, client.channels, channel)
+}
+
+// Positioned mode: LIVE recovery with epoch mismatch should return ErrorUnrecoverablePosition.
+func TestMapSubscribe_Positioned_LiveRecoveryEpochMismatch(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+
+	channel := "test_live_recovery_epoch_mismatch"
+	ctx := context.Background()
+
+	for i := 0; i < 5; i++ {
+		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+			Data:       []byte(`{"v":"data"}`),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Try to recover with wrong epoch — should get ErrorUnrecoverablePosition.
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+		Offset:  2,
+		Epoch:   "wrong-epoch",
+		Recover: true,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.NotNil(t, rwWrapper.replies[0].Error)
+	require.Equal(t, ErrorUnrecoverablePosition.Code, rwWrapper.replies[0].Error.Code)
+}
+
+// Streamless mode: immediate join (phase=0, recover=false) returns full state.
+func TestMapSubscribe_Streamless_ImmediateJoin(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+
+	channel := "test_streamless_immediate"
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+			Data:   []byte(`{"v":"data"}`),
+			KeyTTL: 300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Immediate join: phase=0, no recover.
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+	})
+
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.Len(t, result.State, 3)       // Full state returned.
+	require.False(t, result.Recoverable)   // Streamless: not recoverable.
+	require.Contains(t, client.channels, channel)
+}
+
+// Positioned mode: immediate join returns full state and stream with recoverable=true.
+func TestMapSubscribe_Positioned_ImmediateJoin(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+
+	channel := "test_positioned_immediate"
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+			Data:       []byte(`{"v":"data"}`),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+	})
+
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.Len(t, result.State, 3)      // Full state returned.
+	require.True(t, result.Recoverable)  // Positioned: recoverable.
+	require.Greater(t, result.Offset, uint64(0))
+	require.NotEmpty(t, result.Epoch)
+	require.Contains(t, client.channels, channel)
+}
+
+// TestMapSubscribe_StreamPhaseOffset verifies that the STREAM phase returns
+// the last publication's offset (not stream.Top()), preventing the client
+// from jumping ahead and skipping publications in multi-page STREAM scenarios.
+func TestMapSubscribe_StreamPhaseOffset(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	channel := "test_stream_offset"
+	ctx := context.Background()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
+				},
+			}, nil)
+		})
+	})
+
+	// Publish 10 entries to create a stream.
+	for i := 0; i < 10; i++ {
+		_, err := broker.Publish(ctx, channel, "key"+string(rune('A'+i)), MapPublishOptions{
+			Data:       []byte(`{"v":"data"}`),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// STATE phase (first page) — capture the offset.
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   3,
+	})
+	require.Equal(t, MapPhaseState, result.Phase)
+	firstPageOffset := result.Offset
+	firstPageEpoch := result.Epoch
+
+	// Publish 5 MORE entries while paginating state — stream advances.
+	for i := 0; i < 5; i++ {
+		_, err := broker.Publish(ctx, channel, "extra"+string(rune('0'+i)), MapPublishOptions{
+			Data:       []byte(`{"v":"new"}`),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// STATE phase (subsequent page) — offset should be frozen at first page value.
+	result = subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Cursor:  result.Cursor,
+		Limit:   3,
+		Offset:  firstPageOffset,
+		Epoch:   firstPageEpoch,
+	})
+	require.Equal(t, MapPhaseState, result.Phase)
+	// Key check: subsequent page returns the SAME offset as first page,
+	// not the advanced stream.Top().
+	require.Equal(t, firstPageOffset, result.Offset,
+		"STATE page offset should be frozen at first page value, not stream.Top()")
+
+	// Finish state pagination to get to STREAM phase.
+	for result.Cursor != "" {
+		result = subscribeMapClient(t, client, &protocol.SubscribeRequest{
+			Channel: channel,
+			Type:    1,
+			Phase:   MapPhaseState,
+			Cursor:  result.Cursor,
+			Limit:   100,
+			Offset:  firstPageOffset,
+			Epoch:   firstPageEpoch,
+		})
+	}
+	// With MapStateToLiveEnabled=false (default), positioned mode returns phase=2
+	// on the last page. The client then transitions to STREAM.
+	// However, the server may go STATE→LIVE if close enough — check the phase.
+	if result.Phase == MapPhaseLive {
+		// Server went STATE→LIVE directly (stream was close enough).
+		// Test passed — offset was frozen correctly on intermediate pages.
+		return
+	}
+
+	// STREAM phase with small limit to force multi-page.
+	result = subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseStream,
+		Limit:   2,
+		Offset:  firstPageOffset,
+		Epoch:   firstPageEpoch,
+	})
+
+	// If STREAM returned phase=1 (intermediate page), verify offset is
+	// the last publication's offset, not stream.Top().
+	if result.Phase == MapPhaseStream {
+		require.Greater(t, result.Offset, firstPageOffset,
+			"STREAM offset should advance beyond STATE offset")
+		// The offset should be at most firstPageOffset + limit (2 publications read).
+		require.LessOrEqual(t, result.Offset, firstPageOffset+2,
+			"STREAM offset should be last pub's offset, not stream.Top()")
+	}
+}
+
+// TestMapSubscribe_WasRecovering verifies that WasRecovering flag is set
+// correctly on recovery join responses.
+func TestMapSubscribe_WasRecovering(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	channel := "test_was_recovering"
+	ctx := context.Background()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
+				},
+			}, nil)
+		})
+	})
+
+	// Publish entries to create stream position.
+	for i := 0; i < 3; i++ {
+		_, err := broker.Publish(ctx, channel, "key"+string(rune('A'+i)), MapPublishOptions{
+			Data:       []byte(`{"v":"data"}`),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Fresh immediate join — should NOT have WasRecovering.
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+	})
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.True(t, result.Recoverable)
+	require.False(t, result.WasRecovering, "fresh subscription should not have WasRecovering")
+	require.False(t, result.Recovered, "fresh subscription should not have Recovered")
+	savedOffset := result.Offset
+	savedEpoch := result.Epoch
+
+	// Unsubscribe.
+	client.Unsubscribe(channel)
+
+	// Publish more entries while disconnected.
+	_, err := broker.Publish(ctx, channel, "keyD", MapPublishOptions{
+		Data:       []byte(`{"v":"new"}`),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Recovery join — should have WasRecovering and Recovered.
+	result = subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+		Recover: true,
+		Offset:  savedOffset,
+		Epoch:   savedEpoch,
+	})
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.True(t, result.Recoverable)
+	require.True(t, result.WasRecovering, "recovery should have WasRecovering")
+	require.True(t, result.Recovered, "successful recovery should have Recovered")
+	require.Len(t, result.Publications, 1, "should recover 1 missed publication")
 }

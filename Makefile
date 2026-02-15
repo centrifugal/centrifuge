@@ -8,7 +8,9 @@ pg-schemas: $(SCHEMA_JSONB) $(SCHEMA_BINARY)
 	@echo "Generated $(SCHEMA_JSONB) and $(SCHEMA_BINARY)"
 
 $(SCHEMA_JSONB): $(SCHEMA_TEMPLATE)
-	@sed -e 's/__DATA_TYPE__/JSONB/g' -e 's/__PREFIX__/cf_map_/g' $< > $@
+	@echo '-- Auto-generated from schema.sql — do not edit.' > $@
+	@sed -n '/^-- Stream Table/,$$p' $< | sed -e 's/__DATA_TYPE__/JSONB/g' -e 's/__PREFIX__/cf_map_/g' >> $@
 
 $(SCHEMA_BINARY): $(SCHEMA_TEMPLATE)
-	@sed -e 's/__DATA_TYPE__/BYTEA/g' -e 's/__PREFIX__/cf_binary_map_/g' $< > $@
+	@echo '-- Auto-generated from schema.sql — do not edit.' > $@
+	@sed -n '/^-- Stream Table/,$$p' $< | sed -e 's/__DATA_TYPE__/BYTEA/g' -e 's/__PREFIX__/cf_binary_map_/g' >> $@
