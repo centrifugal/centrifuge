@@ -2667,3 +2667,220 @@ func TestRedisMapBroker_RemoveEmptyKey(t *testing.T) {
 		return newTestRedisMapBroker(t, node)
 	})
 }
+
+// TestRedisMapBroker_OrderedStateAsc tests that ASC ordering returns entries
+// in ascending score order (lowest score first).
+func TestRedisMapBroker_OrderedStateAsc(t *testing.T) {
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		},
+	})
+	broker := newTestRedisMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_ordered_asc")
+
+	testCases := []struct {
+		key   string
+		score int64
+		data  string
+	}{
+		{"key_c", 30, "data_c"},
+		{"key_a", 10, "data_a"},
+		{"key_e", 50, "data_e"},
+		{"key_b", 20, "data_b"},
+		{"key_d", 40, "data_d"},
+	}
+
+	for _, tc := range testCases {
+		_, err := broker.Publish(ctx, channel, tc.key, MapPublishOptions{
+			Data:       []byte(tc.data),
+			Score:      tc.score,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// ASC: lowest score first.
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
+		Asc:     true,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 5)
+
+	expectedAsc := []string{"key_a", "key_b", "key_c", "key_d", "key_e"}
+	for i, entry := range stateRes.Publications {
+		require.Equal(t, expectedAsc[i], entry.Key, "ASC entry %d", i)
+	}
+
+	// DESC (default): highest score first.
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 5)
+
+	expectedDesc := []string{"key_e", "key_d", "key_c", "key_b", "key_a"}
+	for i, entry := range stateRes.Publications {
+		require.Equal(t, expectedDesc[i], entry.Key, "DESC entry %d", i)
+	}
+}
+
+// TestRedisMapBroker_OrderedStatePaginationAsc tests cursor-based pagination
+// with ASC ordering across multiple pages.
+func TestRedisMapBroker_OrderedStatePaginationAsc(t *testing.T) {
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		},
+	})
+	broker := newTestRedisMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_ordered_pagination_asc")
+
+	// Publish 10 entries with scores 100..1000.
+	for i := 1; i <= 10; i++ {
+		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key_%02d", i), MapPublishOptions{
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Score:      int64(i * 100),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Page 1.
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit: 3, MetaTTL: 300 * time.Second, Asc: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 3)
+	require.NotEmpty(t, stateRes.Cursor)
+	require.Equal(t, "key_01", stateRes.Publications[0].Key)
+	require.Equal(t, "key_02", stateRes.Publications[1].Key)
+	require.Equal(t, "key_03", stateRes.Publications[2].Key)
+
+	// Page 2.
+	stateRes2, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Cursor: stateRes.Cursor, Limit: 3, MetaTTL: 300 * time.Second, Asc: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes2.Publications, 3)
+	require.NotEmpty(t, stateRes2.Cursor)
+	require.Equal(t, "key_04", stateRes2.Publications[0].Key)
+	require.Equal(t, "key_05", stateRes2.Publications[1].Key)
+	require.Equal(t, "key_06", stateRes2.Publications[2].Key)
+
+	// Page 3.
+	stateRes3, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Cursor: stateRes2.Cursor, Limit: 3, MetaTTL: 300 * time.Second, Asc: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes3.Publications, 3)
+	require.NotEmpty(t, stateRes3.Cursor)
+	require.Equal(t, "key_07", stateRes3.Publications[0].Key)
+	require.Equal(t, "key_08", stateRes3.Publications[1].Key)
+	require.Equal(t, "key_09", stateRes3.Publications[2].Key)
+
+	// Page 4: last entry.
+	stateRes4, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Cursor: stateRes3.Cursor, Limit: 3, MetaTTL: 300 * time.Second, Asc: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes4.Publications, 1)
+	require.Empty(t, stateRes4.Cursor, "No more pages")
+	require.Equal(t, "key_10", stateRes4.Publications[0].Key)
+}
+
+// TestRedisMapBroker_OrderedStateAscSameScores tests ASC ordering with
+// same-score entries — secondary sort by key ascending.
+func TestRedisMapBroker_OrderedStateAscSameScores(t *testing.T) {
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				MetaTTL:    time.Hour,
+				KeyTTL:     time.Minute,
+			}
+		},
+	})
+	broker := newTestRedisMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_ordered_asc_same_scores")
+
+	// All entries have score=100.
+	for _, key := range []string{"zebra", "apple", "mango", "banana"} {
+		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
+			Data:       []byte("data"),
+			Score:      100,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// ASC with same scores → key ASC.
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit: 100, MetaTTL: 300 * time.Second, Asc: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 4)
+	require.Equal(t, "apple", stateRes.Publications[0].Key)
+	require.Equal(t, "banana", stateRes.Publications[1].Key)
+	require.Equal(t, "mango", stateRes.Publications[2].Key)
+	require.Equal(t, "zebra", stateRes.Publications[3].Key)
+
+	// DESC with same scores → key DESC.
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit: 100, MetaTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 4)
+	require.Equal(t, "zebra", stateRes.Publications[0].Key)
+	require.Equal(t, "mango", stateRes.Publications[1].Key)
+	require.Equal(t, "banana", stateRes.Publications[2].Key)
+	require.Equal(t, "apple", stateRes.Publications[3].Key)
+
+	// Paginate ASC with limit=2.
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit: 2, MetaTTL: 300 * time.Second, Asc: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 2)
+	require.NotEmpty(t, stateRes.Cursor)
+	require.Equal(t, "apple", stateRes.Publications[0].Key)
+	require.Equal(t, "banana", stateRes.Publications[1].Key)
+
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
+		Cursor: stateRes.Cursor, Limit: 2, MetaTTL: 300 * time.Second, Asc: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 2)
+	require.Empty(t, stateRes.Cursor)
+	require.Equal(t, "mango", stateRes.Publications[0].Key)
+	require.Equal(t, "zebra", stateRes.Publications[1].Key)
+}

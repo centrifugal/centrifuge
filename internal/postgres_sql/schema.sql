@@ -31,7 +31,8 @@ CREATE INDEX IF NOT EXISTS cf_map_stream_channel_id_idx ON cf_map_stream (channe
 CREATE INDEX IF NOT EXISTS cf_map_stream_expires_idx ON cf_map_stream (expires_at) WHERE expires_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS cf_map_stream_shard_cursor_idx ON cf_map_stream (shard_id, id);
 
-ALTER TABLE cf_map_stream REPLICA IDENTITY FULL;
+-- Note: REPLICA IDENTITY FULL is NOT needed. Publications use
+-- WITH (publish = 'insert') so DELETE/UPDATE old-row logging is skipped.
 
 -- ============================================================================
 -- Outbox Cursor Table

@@ -57,19 +57,7 @@ sudo systemctl restart postgresql
 
 ### Schema Setup
 
-Initialize the database schema by running `postgres/init.sql`:
-
-```bash
-psql -U centrifuge -d centrifuge -f postgres/init.sql
-```
-
-This creates:
-- `cf_keyed_stream` - Change history table with sharded logical replication
-- `cf_keyed_snapshot` - Current state table
-- `cf_keyed_meta` - Stream metadata (offsets, epochs)
-- `cf_keyed_idempotency` - Idempotency keys for deduplication
-- `cf_keyed_publish()` / `cf_keyed_unpublish()` - SQL functions for publishing
-- 16 sharded publications for parallel WAL readers
+The schema is created automatically via `EnsureSchema()` on application startup — no manual SQL scripts needed.
 
 ### Verify Setup
 

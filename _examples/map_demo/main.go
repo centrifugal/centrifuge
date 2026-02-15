@@ -51,6 +51,12 @@ func main() {
 					MetaTTL:    24 * time.Hour,
 				}
 			}
+			if channel == "board" {
+				return centrifuge.MapChannelOptions{
+					StreamSize: 1000,
+					Ordered:    true,
+				}
+			}
 			// Poll channels need streams for proper state recovery after reconnect.
 			if strings.HasPrefix(channel, "poll:") {
 				return centrifuge.MapChannelOptions{
@@ -124,7 +130,7 @@ func main() {
 			}
 
 			// Inventory, leaderboard, and poll channels use streams — enable positioned mode with recovery.
-			if e.Channel == "inventory" || e.Channel == "leaderboard" || strings.HasPrefix(e.Channel, "poll:") {
+			if e.Channel == "inventory" || e.Channel == "leaderboard" || e.Channel == "board" || strings.HasPrefix(e.Channel, "poll:") {
 				opts.EnablePositioning = true
 				opts.EnableRecovery = true
 			}
@@ -215,6 +221,9 @@ func main() {
 	http.HandleFunc("/api/leaderboard/click", handleLeaderboardClickHTTP)
 	http.HandleFunc("/api/leaderboard/leave", handleLeaderboardLeaveHTTP)
 	http.HandleFunc("/api/poll/vote", handlePollVoteHTTP)
+	http.HandleFunc("/api/board/create", handleBoardCreateHTTP)
+	http.HandleFunc("/api/board/update", handleBoardUpdateHTTP)
+	http.HandleFunc("/api/board/delete", handleBoardDeleteHTTP)
 
 	server := &http.Server{Addr: ":" + *port}
 
@@ -226,6 +235,7 @@ func main() {
 		log.Printf("  - Inventory demo:  http://localhost:%s/inventory.html", *port)
 		log.Printf("  - Tickers demo:    http://localhost:%s/tickers.html", *port)
 		log.Printf("  - Live Polls demo: http://localhost:%s/polls.html", *port)
+		log.Printf("  - Sprint Board:    http://localhost:%s/board.html", *port)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)
 		}

@@ -388,7 +388,7 @@
 
         // Two subscriptions: metadata and results (with scores).
         const metaSub = centrifuge.newMapSubscription('poll:meta', { limit: 10 });
-        const resultsSub = centrifuge.newMapSubscription('poll:results', { limit: 50, ordered: true });
+        const resultsSub = centrifuge.newMapSubscription('poll:results', { limit: 50 });
 
         metaSub.on('subscribed', (ctx) => {
             // Only rebuild state when the server provides a state snapshot.

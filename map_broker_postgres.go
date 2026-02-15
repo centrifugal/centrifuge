@@ -548,7 +548,7 @@ func (e *PostgresMapBroker) ensurePublications(ctx context.Context) error {
 			continue
 		}
 		sql := fmt.Sprintf(
-			"CREATE PUBLICATION %s FOR TABLE cf_map_stream WHERE (shard_id = %d)", name, i)
+			"CREATE PUBLICATION %s FOR TABLE cf_map_stream WHERE (shard_id = %d) WITH (publish = 'insert')", name, i)
 		if _, err := e.pool.Exec(ctx, sql); err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == "42710" {
@@ -566,7 +566,7 @@ func (e *PostgresMapBroker) ensurePublications(ctx context.Context) error {
 	// Create "all" publication if missing.
 	if !existing["cf_map_stream_all"] {
 		if _, err := e.pool.Exec(ctx,
-			"CREATE PUBLICATION cf_map_stream_all FOR TABLE cf_map_stream"); err != nil {
+			"CREATE PUBLICATION cf_map_stream_all FOR TABLE cf_map_stream WITH (publish = 'insert')"); err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == "42710" {
 				// duplicate_object — concurrent creation, fine.
@@ -991,6 +991,7 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 
 	// Paginated state read using keyset pagination (no OFFSET).
 	ordered := e.node.ResolveMapChannelOptions(ch).Ordered
+	asc := opts.Asc
 
 	limit := opts.Limit
 	if limit < 0 {
@@ -1001,27 +1002,46 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 
 	var rows pgx.Rows
 	if ordered {
-		// Ordered: sort by (score DESC, key DESC) to match memory/redis.
 		if opts.Cursor == "" {
-			rows, err = tx.Query(ctx, `
-				SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
-				FROM cf_map_state
-				WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
-				ORDER BY score DESC, key DESC
-				LIMIT $2
-			`, ch, limit+1)
+			if asc {
+				rows, err = tx.Query(ctx, `
+					SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
+					FROM cf_map_state
+					WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
+					ORDER BY score ASC, key ASC
+					LIMIT $2
+				`, ch, limit+1)
+			} else {
+				rows, err = tx.Query(ctx, `
+					SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
+					FROM cf_map_state
+					WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
+					ORDER BY score DESC, key DESC
+					LIMIT $2
+				`, ch, limit+1)
+			}
 		} else {
-			// Parse cursor: "score\x00key"
 			cursorScore, cursorKey := parseOrderedCursor(opts.Cursor)
 			cursorScoreInt, _ := strconv.ParseInt(cursorScore, 10, 64)
-			rows, err = tx.Query(ctx, `
-				SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
-				FROM cf_map_state
-				WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
-				  AND (score < $3 OR (score = $3 AND key < $4))
-				ORDER BY score DESC, key DESC
-				LIMIT $2
-			`, ch, limit+1, cursorScoreInt, cursorKey)
+			if asc {
+				rows, err = tx.Query(ctx, `
+					SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
+					FROM cf_map_state
+					WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
+					  AND (score > $3 OR (score = $3 AND key > $4))
+					ORDER BY score ASC, key ASC
+					LIMIT $2
+				`, ch, limit+1, cursorScoreInt, cursorKey)
+			} else {
+				rows, err = tx.Query(ctx, `
+					SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
+					FROM cf_map_state
+					WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
+					  AND (score < $3 OR (score = $3 AND key < $4))
+					ORDER BY score DESC, key DESC
+					LIMIT $2
+				`, ch, limit+1, cursorScoreInt, cursorKey)
+			}
 		}
 	} else {
 		// Unordered: sort by key ASC.

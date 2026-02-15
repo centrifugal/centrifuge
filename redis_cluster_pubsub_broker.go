@@ -207,7 +207,7 @@ func (b *RedisBroker) refreshBrokerTopology(s *shardWrapper) bool {
 
 	partitionToNodeIdx, err := buildPartitionMapping(slotRanges, nm.addrToIdx, b.config.NumShardedPubSubPartitions)
 	if err != nil {
-		pokeSlotOwners(s.shard.client, slotRanges, nm.addrToIdx)
+		pokeSlotOwners(s.shard.client, slotRanges, nm.addrToIdx, b.config.Prefix)
 		return false
 	}
 

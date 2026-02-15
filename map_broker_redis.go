@@ -1335,6 +1335,11 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 		luaLimit = 0
 	}
 
+	ascFlag := "0"
+	if opts.Asc {
+		ascFlag = "1"
+	}
+
 	replies, err := e.readOrderedScript.Exec(ctx, shardClient,
 		[]string{
 			e.stateHashKey(s.shard, ch),
@@ -1351,6 +1356,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10), // ARGV[5] = meta_ttl
 			stateTTL,       // ARGV[6] = state_ttl
 			streamlessFlag, // ARGV[7] = streamless
+			ascFlag,        // ARGV[8] = asc ("1" = ascending, "0" = descending)
 		},
 	).ToArray()
 	if err != nil {

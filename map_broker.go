@@ -298,6 +298,12 @@ type MapReadStateOptions struct {
 	// from the backend (safe for CAS operations, always consistent).
 	// Only affects CachedMapBroker; other brokers ignore this option.
 	Cached bool
+
+	// Asc requests ascending sort direction for ordered channels.
+	// When false (default), ordered state is sorted by (score DESC, key DESC).
+	// When true, ordered state is sorted by (score ASC, key ASC).
+	// Ignored for unordered channels.
+	Asc bool
 }
 
 // MapStats provides statistics about a channel's state.
@@ -451,10 +457,12 @@ func findUnorderedCursorPosition(sortedKeys []string, cursor string) int {
 }
 
 // findOrderedCursorPosition finds the position after the cursor (score, key) in ordered state.
-// For ordered state sorted by (score DESC, key DESC), finds first entry where:
-// - score < cursorScore, OR
-// - score == cursorScore AND key < cursorKey
-func findOrderedCursorPosition(sortedKeys []string, scores map[string]int64, cursor string) int {
+// For DESC (asc=false), sorted by (score DESC, key DESC), finds first entry where:
+//   - score < cursorScore, OR score == cursorScore AND key < cursorKey
+//
+// For ASC (asc=true), sorted by (score ASC, key ASC), finds first entry where:
+//   - score > cursorScore, OR score == cursorScore AND key > cursorKey
+func findOrderedCursorPosition(sortedKeys []string, scores map[string]int64, cursor string, asc bool) int {
 	cursorScoreStr, cursorKey := parseOrderedCursor(cursor)
 	cursorScore, _ := strconv.ParseInt(cursorScoreStr, 10, 64)
 
@@ -462,8 +470,14 @@ func findOrderedCursorPosition(sortedKeys []string, scores map[string]int64, cur
 		key := sortedKeys[i]
 		score := scores[key]
 		if score != cursorScore {
-			return score < cursorScore // Score descending: looking for score < cursorScore
+			if asc {
+				return score > cursorScore
+			}
+			return score < cursorScore
 		}
-		return key < cursorKey // Same score, key descending: looking for key < cursorKey
+		if asc {
+			return key > cursorKey
+		}
+		return key < cursorKey
 	})
 }

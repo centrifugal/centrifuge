@@ -134,6 +134,7 @@ type cachedChannel struct {
 	scores          map[string]int64
 	sortedKeys      []string
 	sortedKeysDirty bool
+	lastSortAsc     bool // tracks last sort direction for ordered state
 	position        StreamPosition
 	options         MapChannelOptions // Per-channel options for TTL/size
 }
@@ -398,8 +399,10 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) (MapStateRe
 		return MapStateResult{Position: channel.position}, nil
 	}
 
-	// Rebuild sorted keys if dirty
-	if channel.sortedKeysDirty || len(channel.sortedKeys) != len(channel.state) {
+	// Rebuild sorted keys if dirty or sort direction changed.
+	wantAsc := opts.Asc
+	if channel.sortedKeysDirty || len(channel.sortedKeys) != len(channel.state) ||
+		(channel.ordered && channel.lastSortAsc != wantAsc) {
 		channel.sortedKeys = make([]string, 0, len(channel.state))
 		for key := range channel.state {
 			channel.sortedKeys = append(channel.sortedKeys, key)
@@ -410,7 +413,13 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) (MapStateRe
 				si := channel.scores[channel.sortedKeys[i]]
 				sj := channel.scores[channel.sortedKeys[j]]
 				if si != sj {
+					if wantAsc {
+						return si < sj
+					}
 					return si > sj
+				}
+				if wantAsc {
+					return channel.sortedKeys[i] < channel.sortedKeys[j]
 				}
 				return channel.sortedKeys[i] > channel.sortedKeys[j]
 			})
@@ -418,6 +427,7 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) (MapStateRe
 			sort.Strings(channel.sortedKeys)
 		}
 		channel.sortedKeysDirty = false
+		channel.lastSortAsc = wantAsc
 	}
 
 	totalKeys := len(channel.sortedKeys)
@@ -429,7 +439,7 @@ func (c *mapCacheImpl) GetState(ch string, opts MapReadStateOptions) (MapStateRe
 	var startIdx int
 	if opts.Cursor != "" {
 		if channel.ordered {
-			startIdx = findOrderedCursorPosition(channel.sortedKeys, channel.scores, opts.Cursor)
+			startIdx = findOrderedCursorPosition(channel.sortedKeys, channel.scores, opts.Cursor, opts.Asc)
 		} else {
 			startIdx = findUnorderedCursorPosition(channel.sortedKeys, opts.Cursor)
 		}

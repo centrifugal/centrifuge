@@ -202,7 +202,7 @@ func (e *RedisMapBroker) runTopologyRefreshLoop(s *brokerShardWrapper) {
 // by addresses unknown to the rueidis client. This triggers MOVED redirects, which
 // cause rueidis to call lazyRefresh() and discover new cluster nodes. Without this,
 // an idle cluster would never update the Nodes() map when nodes are added or removed.
-func pokeSlotOwners(client rueidis.Client, slotRanges []slotRange, knownAddrs map[string]int) {
+func pokeSlotOwners(client rueidis.Client, slotRanges []slotRange, knownAddrs map[string]int, prefix string) {
 	poked := make(map[string]bool)
 	for _, r := range slotRanges {
 		if _, ok := knownAddrs[r.addr]; ok {
@@ -214,7 +214,7 @@ func pokeSlotOwners(client rueidis.Client, slotRanges []slotRange, knownAddrs ma
 		poked[r.addr] = true
 		// Issue a GET for a key in this slot range to trigger a MOVED redirect.
 		slot := r.start
-		key := "__centrifuge_topology_probe__{" + strconv.Itoa(int(slot)) + "}"
+		key := prefix + ".topology_probe.{" + strconv.Itoa(int(slot)) + "}"
 		_ = client.Do(context.Background(), client.B().Get().Key(key).Build()).Error()
 	}
 }
@@ -244,7 +244,7 @@ func (e *RedisMapBroker) refreshTopology(s *brokerShardWrapper) bool {
 
 	partitionToNodeIdx, err := buildPartitionMapping(slotRanges, nm.addrToIdx, e.conf.NumShardedPubSubPartitions)
 	if err != nil {
-		pokeSlotOwners(s.shard.client, slotRanges, nm.addrToIdx)
+		pokeSlotOwners(s.shard.client, slotRanges, nm.addrToIdx, e.conf.Prefix)
 		return false
 	}
 

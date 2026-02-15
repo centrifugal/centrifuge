@@ -368,14 +368,15 @@ type mapHub struct {
 
 // mapChannel represents keyed state for a single channel.
 type mapChannel struct {
-	mu                sync.Mutex       // protects sortedKeys rebuild in getState
-	stream            *memstream.Stream
-	state             map[string]*stateEntry // key -> entry
-	ordered           bool
-	scores            map[string]int64 // key -> score (for ordered state)
-	sortedKeys        []string         // cached sorted keys by score (descending) for ordered state
-	sortedKeysDirty   bool             // true if sortedKeys needs rebuilding
-	lastSortedOrdered bool             // tracks whether last sort used ordered (score) or unordered (lexicographic)
+	mu              sync.Mutex       // protects sortedKeys rebuild in getState
+	stream          *memstream.Stream
+	state           map[string]*stateEntry // key -> entry
+	ordered         bool
+	scores          map[string]int64 // key -> score (for ordered state)
+	sortedKeys      []string         // cached sorted keys
+	sortedKeysDirty bool             // true if sortedKeys needs rebuilding
+	lastSortOrdered bool             // tracks whether last sort used ordered or unordered
+	lastSortAsc     bool             // tracks last sort direction for ordered state
 }
 
 type stateEntry struct {
@@ -1152,30 +1153,37 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) (MapStateResult, 
 
 	var pubs []*Publication
 
-	// Rebuild sorted keys if dirty or sort order changed since last call.
+	// Rebuild sorted keys if dirty or sort order/direction changed since last call.
 	wantOrdered := channel.ordered
-	if channel.sortedKeysDirty || len(channel.sortedKeys) != len(channel.state) || channel.lastSortedOrdered != wantOrdered {
+	wantAsc := opts.Asc
+	if channel.sortedKeysDirty || len(channel.sortedKeys) != len(channel.state) ||
+		channel.lastSortOrdered != wantOrdered || (wantOrdered && channel.lastSortAsc != wantAsc) {
 		channel.sortedKeys = make([]string, 0, len(channel.state))
 		for key := range channel.state {
 			channel.sortedKeys = append(channel.sortedKeys, key)
 		}
 
-		// Sort by score (descending) for ordered state, lexicographically for non-ordered
-		// For ordered: use (score DESC, key DESC) to match Redis native ZREVRANGE ordering
 		if wantOrdered {
 			sort.Slice(channel.sortedKeys, func(i, j int) bool {
 				si := channel.scores[channel.sortedKeys[i]]
 				sj := channel.scores[channel.sortedKeys[j]]
 				if si != sj {
-					return si > sj // Primary: score descending
+					if wantAsc {
+						return si < sj
+					}
+					return si > sj
 				}
-				return channel.sortedKeys[i] > channel.sortedKeys[j] // Secondary: key descending
+				if wantAsc {
+					return channel.sortedKeys[i] < channel.sortedKeys[j]
+				}
+				return channel.sortedKeys[i] > channel.sortedKeys[j]
 			})
 		} else {
-			sort.Strings(channel.sortedKeys) // Lexicographic sort for consistency
+			sort.Strings(channel.sortedKeys)
 		}
 		channel.sortedKeysDirty = false
-		channel.lastSortedOrdered = wantOrdered
+		channel.lastSortOrdered = wantOrdered
+		channel.lastSortAsc = wantAsc
 	}
 
 	totalKeys := len(channel.sortedKeys)
@@ -1193,8 +1201,7 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) (MapStateResult, 
 	var startIdx int
 	if opts.Cursor != "" {
 		if channel.ordered {
-			// Ordered cursor format: "score\x00key"
-			startIdx = findOrderedCursorPosition(channel.sortedKeys, channel.scores, opts.Cursor)
+			startIdx = findOrderedCursorPosition(channel.sortedKeys, channel.scores, opts.Cursor, opts.Asc)
 		} else {
 			// Unordered cursor: just the key (lexicographic)
 			startIdx = findUnorderedCursorPosition(channel.sortedKeys, opts.Cursor)

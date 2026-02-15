@@ -2,8 +2,9 @@
 -- Uses (score, key) cursor instead of integer offset to ensure no entries are
 -- skipped when the state changes during pagination.
 --
--- Ordering: (score DESC, key DESC) - matches Redis native ZREVRANGE ordering.
--- This allows direct use of Redis commands without Lua filtering.
+-- Supports both DESC (default) and ASC ordering via the asc parameter.
+-- DESC: (score DESC, key DESC) — ZREVRANGE, higher scores first.
+-- ASC:  (score ASC, key ASC)   — ZRANGE, lower scores first.
 --
 -- KEYS[1] = state hash key
 -- KEYS[2] = state order zset key
@@ -17,6 +18,7 @@
 -- ARGV[5] = meta_ttl (seconds, 0 to disable)
 -- ARGV[6] = state_ttl (seconds, 0 to disable - refreshes TTL on read)
 -- ARGV[7] = streamless ("1" = skip meta/epoch logic, "0" = normal streamed mode)
+-- ARGV[8] = asc ("1" = ascending order, "0" or absent = descending order)
 
 local hash_key = KEYS[1]
 local order_key = KEYS[2]
@@ -31,6 +33,7 @@ local now_str = ARGV[4]
 local meta_ttl = tonumber(ARGV[5])
 local state_ttl = tonumber(ARGV[6])
 local streamless = ARGV[7] == "1"
+local asc = ARGV[8] == "1"
 
 local epoch = ""
 local stream_offset = "0"
@@ -83,15 +86,6 @@ end
 -- which generates LEAVE events for the stream and publishes removal notifications.
 -- Silently removing entries here would cause clients to miss removal events.
 
--- Key-based cursor pagination using native Redis ordering (score DESC, key DESC).
--- For cursor (cursor_score, cursor_key), we need entries "after" it:
---   score < cursor_score, OR (score == cursor_score AND key < cursor_key)
---
--- Strategy:
--- 1. Get entries with score < cursor_score (use exclusive bound)
--- 2. Get entries with score == cursor_score AND key < cursor_key (filter in Lua, but only same-score bucket)
--- This minimizes Lua filtering to just the cursor's score bucket.
-
 local fetch_limit = limit
 if limit > 0 then
     fetch_limit = limit + 1  -- Fetch one extra to detect if there's more
@@ -101,12 +95,20 @@ local keys_to_fetch = {}
 local last_score = nil
 
 if cursor_score_str == "" then
-    -- First page: simple ZREVRANGE
+    -- First page.
     local all_keys
-    if fetch_limit > 0 then
-        all_keys = redis.call("zrevrange", order_key, 0, fetch_limit - 1, "WITHSCORES")
+    if asc then
+        if fetch_limit > 0 then
+            all_keys = redis.call("zrange", order_key, 0, fetch_limit - 1, "WITHSCORES")
+        else
+            all_keys = redis.call("zrange", order_key, 0, -1, "WITHSCORES")
+        end
     else
-        all_keys = redis.call("zrevrange", order_key, 0, -1, "WITHSCORES")
+        if fetch_limit > 0 then
+            all_keys = redis.call("zrevrange", order_key, 0, fetch_limit - 1, "WITHSCORES")
+        else
+            all_keys = redis.call("zrevrange", order_key, 0, -1, "WITHSCORES")
+        end
     end
 
     -- Parse result (key, score, key, score, ...)
@@ -115,46 +117,63 @@ if cursor_score_str == "" then
         last_score = tonumber(all_keys[i + 1])
     end
 else
-    -- Subsequent page: need entries after cursor (score DESC, key DESC)
+    -- Subsequent page: need entries after cursor in the requested direction.
     local cursor_score = tonumber(cursor_score_str)
 
-    -- Step 1: Get entries from cursor's score bucket with key < cursor_key
-    -- ZREVRANGEBYLEX only works when all scores are same, so we use ZRANGEBYLEX on same-score subset
-    -- Actually, we need to filter manually for same-score entries
-
-    -- First, get entries with score == cursor_score
+    -- Step 1: Get entries from cursor's score bucket with key past cursor_key.
     local same_score = redis.call("zrangebyscore", order_key, cursor_score, cursor_score)
 
-    -- Filter: keep entries with key < cursor_key (for DESC order, smaller keys come later)
-    for i = 1, #same_score do
-        local k = same_score[i]
-        if k < cursor_key then
-            keys_to_fetch[#keys_to_fetch + 1] = k
+    if asc then
+        -- ASC: keep entries with key > cursor_key
+        for i = 1, #same_score do
+            local k = same_score[i]
+            if k > cursor_key then
+                keys_to_fetch[#keys_to_fetch + 1] = k
+            end
         end
+        -- Sort by key ASC
+        table.sort(keys_to_fetch, function(a, b) return a < b end)
+    else
+        -- DESC: keep entries with key < cursor_key
+        for i = 1, #same_score do
+            local k = same_score[i]
+            if k < cursor_key then
+                keys_to_fetch[#keys_to_fetch + 1] = k
+            end
+        end
+        -- Sort by key DESC
+        table.sort(keys_to_fetch, function(a, b) return a > b end)
     end
-
-    -- Sort by key DESC (to match ZREVRANGE ordering within same score)
-    table.sort(keys_to_fetch, function(a, b) return a > b end)
 
     last_score = cursor_score
 
-    -- Step 2: Get entries with score < cursor_score
+    -- Step 2: Get entries past cursor_score in the requested direction.
     local remaining_needed = 0
     if limit > 0 then
         remaining_needed = fetch_limit - #keys_to_fetch
     end
 
     if limit == 0 or remaining_needed > 0 then
-        local lower_entries
-        if remaining_needed > 0 then
-            lower_entries = redis.call("zrevrangebyscore", order_key, "(" .. cursor_score_str, "-inf", "WITHSCORES", "LIMIT", 0, remaining_needed)
+        local other_entries
+        if asc then
+            -- ASC: entries with score > cursor_score
+            if remaining_needed > 0 then
+                other_entries = redis.call("zrangebyscore", order_key, "(" .. cursor_score_str, "+inf", "WITHSCORES", "LIMIT", 0, remaining_needed)
+            else
+                other_entries = redis.call("zrangebyscore", order_key, "(" .. cursor_score_str, "+inf", "WITHSCORES")
+            end
         else
-            lower_entries = redis.call("zrevrangebyscore", order_key, "(" .. cursor_score_str, "-inf", "WITHSCORES")
+            -- DESC: entries with score < cursor_score
+            if remaining_needed > 0 then
+                other_entries = redis.call("zrevrangebyscore", order_key, "(" .. cursor_score_str, "-inf", "WITHSCORES", "LIMIT", 0, remaining_needed)
+            else
+                other_entries = redis.call("zrevrangebyscore", order_key, "(" .. cursor_score_str, "-inf", "WITHSCORES")
+            end
         end
 
-        for i = 1, #lower_entries, 2 do
-            keys_to_fetch[#keys_to_fetch + 1] = lower_entries[i]
-            last_score = tonumber(lower_entries[i + 1])
+        for i = 1, #other_entries, 2 do
+            keys_to_fetch[#keys_to_fetch + 1] = other_entries[i]
+            last_score = tonumber(other_entries[i + 1])
         end
     end
 end

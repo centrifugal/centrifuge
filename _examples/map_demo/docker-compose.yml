@@ -22,7 +22,6 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
       - map_broker_data:/var/lib/postgresql/data
     command:
       - "postgres"

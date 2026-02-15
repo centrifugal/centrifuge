@@ -453,7 +453,6 @@
         // Subscribe to leaderboard channel with map mode and ordering.
         const sub = centrifuge.newMapSubscription('leaderboard', {
             limit: 100,
-            ordered: true
         });
 
         sub.on('subscribed', (ctx) => {

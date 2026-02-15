@@ -286,6 +286,7 @@ func (c *Client) handleMapStatePhase(
 		Cached: true, // Use cache for subscription state delivery
 		Cursor: req.Cursor,
 		Limit:  limit,
+		Asc:    req.Asc,
 	}
 
 	// If client provided position, validate epoch.
@@ -1210,6 +1211,7 @@ func (c *Client) handleMapImmediateJoin(
 	stateResult, err := c.node.MapStateRead(c.ctx, channel, MapReadStateOptions{
 		Cached: true, // Use cache for subscription state delivery
 		Limit:  stateLimit,
+		Asc:    req.Asc,
 	})
 	if err != nil {
 		c.pubSubSync.StopBuffering(channel)

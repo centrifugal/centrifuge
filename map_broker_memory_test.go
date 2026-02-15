@@ -1944,3 +1944,222 @@ func TestMemoryMapBroker_RemoveEmptyKey(t *testing.T) {
 		return newTestMemoryMapBroker(t, node)
 	})
 }
+
+// TestMemoryMapBroker_OrderedStateAsc tests ascending sort direction.
+func TestMemoryMapBroker_OrderedStateAsc(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := "test_ordered_asc"
+
+	testCases := []struct {
+		key   string
+		score int64
+	}{
+		{"key_c", 30},
+		{"key_a", 10},
+		{"key_e", 50},
+		{"key_b", 20},
+		{"key_d", 40},
+	}
+
+	for _, tc := range testCases {
+		_, err := broker.Publish(ctx, channel, tc.key, MapPublishOptions{
+			Data:       []byte("data"),
+			Score:      tc.score,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Read with Asc=true — should be sorted by score ascending.
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
+		Asc:     true,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 5)
+
+	expectedOrder := []string{"key_a", "key_b", "key_c", "key_d", "key_e"}
+	for i, entry := range stateRes.Publications {
+		require.Equal(t, expectedOrder[i], entry.Key, "ASC entry %d", i)
+	}
+
+	// Read with Asc=false (default) — should be descending.
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 5)
+
+	expectedDesc := []string{"key_e", "key_d", "key_c", "key_b", "key_a"}
+	for i, entry := range stateRes.Publications {
+		require.Equal(t, expectedDesc[i], entry.Key, "DESC entry %d", i)
+	}
+}
+
+// TestMemoryMapBroker_OrderedStatePaginationAsc tests pagination with ascending sort.
+func TestMemoryMapBroker_OrderedStatePaginationAsc(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := "test_ordered_pagination_asc"
+
+	// Publish 10 entries with scores 100, 200, ..., 1000.
+	for i := 1; i <= 10; i++ {
+		key := fmt.Sprintf("key_%02d", i)
+		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Score:      int64(i * 100),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Page 1: limit=3, asc.
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit: 3, MetaTTL: 300 * time.Second, Asc: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 3)
+	require.NotEmpty(t, stateRes.Cursor)
+
+	// ASC page 1: keys with scores 100, 200, 300 → key_01, key_02, key_03.
+	require.Equal(t, "key_01", stateRes.Publications[0].Key)
+	require.Equal(t, "key_02", stateRes.Publications[1].Key)
+	require.Equal(t, "key_03", stateRes.Publications[2].Key)
+
+	// Page 2: using cursor.
+	stateRes2, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Cursor: stateRes.Cursor, Limit: 3, MetaTTL: 300 * time.Second, Asc: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes2.Publications, 3)
+	require.NotEmpty(t, stateRes2.Cursor)
+
+	// ASC page 2: key_04, key_05, key_06.
+	require.Equal(t, "key_04", stateRes2.Publications[0].Key)
+	require.Equal(t, "key_05", stateRes2.Publications[1].Key)
+	require.Equal(t, "key_06", stateRes2.Publications[2].Key)
+
+	// Page 3.
+	stateRes3, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Cursor: stateRes2.Cursor, Limit: 3, MetaTTL: 300 * time.Second, Asc: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes3.Publications, 3)
+	require.NotEmpty(t, stateRes3.Cursor)
+
+	require.Equal(t, "key_07", stateRes3.Publications[0].Key)
+	require.Equal(t, "key_08", stateRes3.Publications[1].Key)
+	require.Equal(t, "key_09", stateRes3.Publications[2].Key)
+
+	// Page 4: last entry.
+	stateRes4, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Cursor: stateRes3.Cursor, Limit: 3, MetaTTL: 300 * time.Second, Asc: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes4.Publications, 1)
+	require.Empty(t, stateRes4.Cursor, "No more pages")
+
+	require.Equal(t, "key_10", stateRes4.Publications[0].Key)
+}
+
+// TestMemoryMapBroker_OrderedStateAscSameScores tests ASC ordering with
+// same-score entries — secondary sort by key ascending.
+func TestMemoryMapBroker_OrderedStateAscSameScores(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := "test_ordered_asc_same_scores"
+
+	// All entries have score=100, ordering should be by key ASC.
+	for _, key := range []string{"zebra", "apple", "mango", "banana"} {
+		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
+			Data:       []byte("data"),
+			Score:      100,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// ASC with same scores → key ASC.
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit: 100, MetaTTL: 300 * time.Second, Asc: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 4)
+
+	require.Equal(t, "apple", stateRes.Publications[0].Key)
+	require.Equal(t, "banana", stateRes.Publications[1].Key)
+	require.Equal(t, "mango", stateRes.Publications[2].Key)
+	require.Equal(t, "zebra", stateRes.Publications[3].Key)
+
+	// DESC with same scores → key DESC.
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit: 100, MetaTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 4)
+
+	require.Equal(t, "zebra", stateRes.Publications[0].Key)
+	require.Equal(t, "mango", stateRes.Publications[1].Key)
+	require.Equal(t, "banana", stateRes.Publications[2].Key)
+	require.Equal(t, "apple", stateRes.Publications[3].Key)
+
+	// Paginate ASC with limit=2.
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit: 2, MetaTTL: 300 * time.Second, Asc: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 2)
+	require.NotEmpty(t, stateRes.Cursor)
+
+	require.Equal(t, "apple", stateRes.Publications[0].Key)
+	require.Equal(t, "banana", stateRes.Publications[1].Key)
+
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
+		Cursor: stateRes.Cursor, Limit: 2, MetaTTL: 300 * time.Second, Asc: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 2)
+	require.Empty(t, stateRes.Cursor)
+
+	require.Equal(t, "mango", stateRes.Publications[0].Key)
+	require.Equal(t, "zebra", stateRes.Publications[1].Key)
+}

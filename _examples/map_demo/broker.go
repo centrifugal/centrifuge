@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"time"
@@ -45,6 +46,9 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enabl
 		broker, err := centrifuge.NewPostgresMapBroker(node, pgConfig)
 		if err != nil {
 			return nil, fmt.Errorf("error creating PostgreSQL map broker: %w", err)
+		}
+		if err := broker.EnsureSchema(context.Background()); err != nil {
+			return nil, fmt.Errorf("error ensuring PostgreSQL schema: %w", err)
 		}
 		backend = broker
 	} else if redisAddr != "" {
