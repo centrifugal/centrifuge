@@ -728,6 +728,13 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		}
 	}
 
+	// Pre-compute per-key version field names for Lua.
+	versionField, versionEpochField := "", ""
+	if opts.Version > 0 && key != "" {
+		versionField = "v:" + key
+		versionEpochField = "ve:" + key
+	}
+
 	replies, err := e.addScript.Exec(ctx, shardClient,
 		[]string{
 			streamKey, metaKey, resultKey, stateHashKey, stateOrderKey, stateExpireKey,
@@ -757,6 +764,8 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 			expectedEpoch,                        // expected_epoch (for CAS)
 			convert.BytesToString(stateBytes),    // state_payload (for state storage, empty to use message_payload)
 			nilKey,                               // nil_key (slot-aligned placeholder for unused KEYS)
+			versionField,                         // version_field (pre-computed "v:KEY" or "")
+			versionEpochField,                    // version_epoch_field (pre-computed "ve:KEY" or "")
 		},
 	).ToArray()
 	if err != nil {
@@ -869,6 +878,13 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 		}
 	}
 
+	// Pre-compute per-key version field names for cleanup on remove.
+	versionField, versionEpochField := "", ""
+	if key != "" {
+		versionField = "v:" + key
+		versionEpochField = "ve:" + key
+	}
+
 	replies, err := e.addScript.Exec(ctx, shardClient,
 		[]string{
 			streamKey, metaKey, resultKey,
@@ -889,17 +905,19 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 			publishCommand,
 			resultExpire, // result_key_expire
 			"0", "0", "", // use_delta, version, version_epoch
-			"1",    // is_leave (this triggers removal)
-			"0",    // score
-			"0",    // map_member_ttl
-			"0",    // use_hexpire
-			"",     // channel_for_cleanup (not used for unpublish)
-			"",     // key_mode (not used for unpublish)
+			"1",              // is_leave (this triggers removal)
+			"0",              // score
+			"0",              // map_member_ttl
+			"0",              // use_hexpire
+			"",               // channel_for_cleanup (not used for unpublish)
+			"",               // key_mode (not used for unpublish)
 			"0",              // refresh_ttl_on_suppress (not used for unpublish)
 			expectedOffset,   // expected_offset (for CAS)
 			expectedEpoch,    // expected_epoch (for CAS)
 			"",               // state_payload (not used for unpublish)
-			nilKey, // nil_key (slot-aligned placeholder for unused KEYS)
+			nilKey,           // nil_key (slot-aligned placeholder for unused KEYS)
+			versionField,     // version_field (pre-computed "v:KEY" or "")
+			versionEpochField, // version_epoch_field (pre-computed "ve:KEY" or "")
 		},
 	).ToArray()
 	if err != nil {
@@ -2519,6 +2537,7 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 			e.metaKey(shard, ch),        // KEYS[4]: stream meta key
 			cleanupKey,                  // KEYS[5]: cleanup registration zset key
 			e.stateOrderKey(shard, ch),  // KEYS[6]: state order zset key
+			e.stateMetaKey(shard, ch),   // KEYS[7]: state meta key (for per-key version cleanup)
 		},
 		[]string{
 			strconv.FormatInt(now, 10),            // ARGV[1]: now

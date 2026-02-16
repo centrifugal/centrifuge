@@ -422,6 +422,77 @@ func TestMemoryMapBroker_VersionedPublishing(t *testing.T) {
 	require.Equal(t, []byte("data_v3"), state["key1"])
 }
 
+// TestMemoryMapBroker_PerKeyVersion tests that version tracking is per-key independent.
+func TestMemoryMapBroker_PerKeyVersion(t *testing.T) {
+	node, _ := New(Config{})
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := "test_per_key_version"
+
+	// key1 with version=10 → accepted
+	res1, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("key1_v10"),
+		Version:    10,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.False(t, res1.Suppressed)
+
+	// key2 with version=5 → accepted (independent, was broken before per-key version)
+	res2, err := broker.Publish(ctx, channel, "key2", MapPublishOptions{
+		Data:       []byte("key2_v5"),
+		Version:    5,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.False(t, res2.Suppressed, "key2 should not be suppressed by key1's version")
+
+	// key1 with version=5 → suppressed (same key, lower version)
+	res3, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("key1_v5"),
+		Version:    5,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.True(t, res3.Suppressed)
+	require.Equal(t, SuppressReasonVersion, res3.SuppressReason)
+
+	// Remove key1
+	_, err = broker.Remove(ctx, channel, "key1", MapRemoveOptions{
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Publish key1 with version=1 → accepted (version cleared by remove)
+	res4, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("key1_v1"),
+		Version:    1,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.False(t, res4.Suppressed, "key1 version should be cleared after remove")
+
+	// Verify final state
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit:   100,
+		MetaTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	state := stateToMapMemory(stateRes.Publications)
+	require.Equal(t, []byte("key1_v1"), state["key1"])
+	require.Equal(t, []byte("key2_v5"), state["key2"])
+}
+
 // TestMemoryMapBroker_MultipleChannels tests multiple channels independently.
 func TestMemoryMapBroker_MultipleChannels(t *testing.T) {
 	node, _ := New(Config{})

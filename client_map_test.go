@@ -1701,6 +1701,252 @@ func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
 	require.Empty(t, result2.Cursor)              // No more cursor (it's LIVE now)
 }
 
+func TestMapSubscribe_StateToLive_PublishDuringPagination(t *testing.T) {
+	// Regression test: publications made between STATE pages must not be lost
+	// when server transitions directly from STATE to LIVE.
+	//
+	// Scenario:
+	//   1. Client starts STATE pagination (page 1): offset frozen at N
+	//   2. External publishes happen → stream offset becomes N+2
+	//   3. Client paginates through remaining state pages until last one
+	//   4. On last page, server goes LIVE directly (stream catch-up since frozen N)
+	//   5. Result: 2 publications recovered in the LIVE response
+	node, err := New(Config{
+		LogLevel:              LogLevelTrace,
+		LogHandler:            func(entry LogEntry) {},
+		MapStateToLiveEnabled: true,
+	})
+	require.NoError(t, err)
+
+	broker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	err = broker.RegisterEventHandler(nil)
+	require.NoError(t, err)
+	node.SetMapBroker(broker)
+
+	err = node.Run()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+	})
+
+	channel := "test_publish_during_pagination"
+	ctx := context.Background()
+
+	// Pre-populate 10 entries.
+	for i := 0; i < 10; i++ {
+		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+			Data:       []byte(`{"v":"initial"}`),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// First page: captures frozen offset.
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   5,
+	})
+	require.Equal(t, MapPhaseState, result.Phase)
+	require.NotEmpty(t, result.Cursor)
+
+	frozenOffset := result.Offset
+	epoch := result.Epoch
+
+	// Publish 2 entries DURING pagination — after first page was read.
+	// These won't appear in state pages (filtered by offset > frozenOffset).
+	// They MUST be caught up via stream read when going LIVE.
+	_, err = broker.Publish(ctx, channel, "new_x", MapPublishOptions{
+		Data:       []byte(`{"v":"during_sync_1"}`),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+	_, err = broker.Publish(ctx, channel, "new_y", MapPublishOptions{
+		Data:       []byte(`{"v":"during_sync_2"}`),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Paginate through remaining state pages until LIVE.
+	cursor := result.Cursor
+	var liveResult *protocol.SubscribeResult
+	for i := 0; i < 20; i++ { // Safety limit to prevent infinite loop.
+		r := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+			Channel: channel,
+			Type:    1,
+			Phase:   MapPhaseState,
+			Limit:   5,
+			Cursor:  cursor,
+			Offset:  frozenOffset,
+			Epoch:   epoch,
+		})
+		// Frozen offset must be preserved on all intermediate pages.
+		if r.Phase == MapPhaseState {
+			require.Equal(t, frozenOffset, r.Offset, "frozen offset must be consistent across pages")
+			cursor = r.Cursor
+			require.NotEmpty(t, cursor, "intermediate STATE page must have cursor")
+			continue
+		}
+		require.Equal(t, MapPhaseLive, r.Phase)
+		liveResult = r
+		break
+	}
+	require.NotNil(t, liveResult, "subscription must eventually transition to LIVE")
+	// The 2 publications made during pagination must appear in stream catch-up.
+	require.Len(t, liveResult.Publications, 2,
+		"publications made during STATE pagination must be recovered via stream catch-up")
+	require.Equal(t, frozenOffset+2, liveResult.Offset)
+}
+
+func TestMapSubscribe_StateToLive_PublishDuringPagination_ManyPublishes(t *testing.T) {
+	// Regression test with publications happening at multiple points during
+	// multi-page pagination. Verifies the frozen offset stays consistent and
+	// ALL publications during the entire pagination are recovered.
+	node, err := New(Config{
+		LogLevel:              LogLevelTrace,
+		LogHandler:            func(entry LogEntry) {},
+		MapStateToLiveEnabled: true,
+	})
+	require.NoError(t, err)
+
+	broker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	err = broker.RegisterEventHandler(nil)
+	require.NoError(t, err)
+	node.SetMapBroker(broker)
+
+	err = node.Run()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+	})
+
+	channel := "test_publish_during_multi_page"
+	ctx := context.Background()
+
+	publishOpts := MapPublishOptions{
+		Data:       []byte(`{"v":"initial"}`),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	}
+
+	// Pre-populate 15 entries.
+	for i := 0; i < 15; i++ {
+		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), publishOpts)
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Page 1: captures frozen offset.
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   5,
+	})
+	require.Equal(t, MapPhaseState, result.Phase)
+	require.NotEmpty(t, result.Cursor)
+
+	frozenOffset := result.Offset
+	epoch := result.Epoch
+
+	// Publish 1 entry after page 1.
+	publishOpts.Data = []byte(`{"v":"mid_1"}`)
+	_, err = broker.Publish(ctx, channel, "mid_1", publishOpts)
+	require.NoError(t, err)
+
+	// Read page 2.
+	result2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   5,
+		Cursor:  result.Cursor,
+		Offset:  frozenOffset,
+		Epoch:   epoch,
+	})
+	require.Equal(t, frozenOffset, result2.Offset, "frozen offset must be preserved")
+
+	// Publish 2 more entries after page 2.
+	publishOpts.Data = []byte(`{"v":"mid_2"}`)
+	_, err = broker.Publish(ctx, channel, "mid_2", publishOpts)
+	require.NoError(t, err)
+	publishOpts.Data = []byte(`{"v":"mid_3"}`)
+	_, err = broker.Publish(ctx, channel, "mid_3", publishOpts)
+	require.NoError(t, err)
+
+	// Paginate remaining pages until LIVE.
+	cursor := result2.Cursor
+	if cursor == "" {
+		// Page 2 was the last page and went LIVE — verify stream catch-up.
+		require.Equal(t, MapPhaseLive, result2.Phase)
+		require.GreaterOrEqual(t, len(result2.Publications), 1,
+			"at least the publication from after page 1 must be recovered")
+		return
+	}
+
+	var liveResult *protocol.SubscribeResult
+	for i := 0; i < 20; i++ {
+		r := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+			Channel: channel,
+			Type:    1,
+			Phase:   MapPhaseState,
+			Limit:   5,
+			Cursor:  cursor,
+			Offset:  frozenOffset,
+			Epoch:   epoch,
+		})
+		if r.Phase == MapPhaseState {
+			require.Equal(t, frozenOffset, r.Offset)
+			cursor = r.Cursor
+			require.NotEmpty(t, cursor)
+			continue
+		}
+		require.Equal(t, MapPhaseLive, r.Phase)
+		liveResult = r
+		break
+	}
+	require.NotNil(t, liveResult, "subscription must eventually transition to LIVE")
+	// All 3 publications must be recovered via stream catch-up.
+	require.Len(t, liveResult.Publications, 3,
+		"all publications made during multi-page pagination must be recovered")
+	require.Equal(t, frozenOffset+3, liveResult.Offset)
+}
+
 func TestMapSubscribe_StreamPhaseRecovery(t *testing.T) {
 	// Test that a reconnecting client can use phase=1 (STREAM) with recover=true
 	// to catch up from its last known position without going through STATE phase.

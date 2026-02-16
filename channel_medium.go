@@ -69,11 +69,7 @@ type channelMedium struct {
 	// Only used when queue is disabled.
 	broadcastMu sync.Mutex
 	// latestPublication is a publication last sent to connections on this Node.
-	// Used for non-map channels (regular subscriptions).
 	latestPublication *Publication
-	// latestPublicationByKey tracks per-key latest publications for map subscriptions.
-	// For map channels, delta must be computed per-key, not from the last publication of any key.
-	latestPublicationByKey map[string]*Publication
 	// positionCheckTime is a time (Unix Nanoseconds) when last position check was performed.
 	positionCheckTime int64
 }
@@ -160,15 +156,12 @@ func (c *channelMedium) broadcast(qp queuedPub) {
 	prevPub := qp.prevPub
 	var localPrevPub *Publication
 	useLocalLatestPub := c.options.KeepLatestPublication && !qp.isInsufficientState
-	if useLocalLatestPub && qp.delta {
-		if qp.pub.Key != "" {
-			// Map subscription: use per-key tracking for correct delta computation.
-			if c.latestPublicationByKey != nil {
-				localPrevPub = c.latestPublicationByKey[qp.pub.Key]
-			}
-		} else {
-			localPrevPub = c.latestPublication
-		}
+	if useLocalLatestPub && qp.delta && qp.pub.Key == "" {
+		// Only provide localPrevPub for non-map publications. For map subs,
+		// keys are independent streams — a single latestPublication can't serve
+		// as a correct delta base across different keys. Map subs rely on the
+		// broker-level prevPub (positioned path) for delta instead.
+		localPrevPub = c.latestPublication
 	}
 	if c.options.broadcastDelay > 0 && !c.options.KeepLatestPublication {
 		prevPub = nil
@@ -177,20 +170,8 @@ func (c *channelMedium) broadcast(qp queuedPub) {
 		prevPub = nil
 	}
 	_ = c.node.handlePublication(c.channel, spToBroadcast, pubToBroadcast, prevPub, localPrevPub)
-	if useLocalLatestPub {
-		if qp.pub.Key != "" {
-			// Map subscription: track per-key.
-			if qp.pub.Removed {
-				delete(c.latestPublicationByKey, qp.pub.Key)
-			} else {
-				if c.latestPublicationByKey == nil {
-					c.latestPublicationByKey = make(map[string]*Publication)
-				}
-				c.latestPublicationByKey[qp.pub.Key] = qp.pub
-			}
-		} else {
-			c.latestPublication = qp.pub
-		}
+	if useLocalLatestPub && qp.pub.Key == "" {
+		c.latestPublication = qp.pub
 	}
 }
 

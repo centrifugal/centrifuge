@@ -153,8 +153,7 @@ DECLARE
     v_current_data JSONB;
     v_previous_data JSONB;
     v_current_version BIGINT;
-    v_stream_version BIGINT;
-    v_stream_version_epoch TEXT;
+    v_current_version_epoch TEXT;
     v_shard_id INTEGER;
 BEGIN
     -- Calculate shard_id from channel hash
@@ -165,8 +164,8 @@ BEGIN
     VALUES (p_channel, 0, substr(md5(random()::text || random()::text), 1, 8), NOW())
     ON CONFLICT (channel) DO NOTHING;
 
-    SELECT top_offset, m.epoch, COALESCE(version, 0), version_epoch
-    INTO v_offset, v_epoch, v_stream_version, v_stream_version_epoch
+    SELECT top_offset, m.epoch
+    INTO v_offset, v_epoch
     FROM cf_map_meta m WHERE m.channel = p_channel FOR UPDATE;
 
     -- 2. Check idempotency
@@ -210,20 +209,23 @@ BEGIN
         END IF;
     END IF;
 
-    -- 5. Stream-level version check
-    IF p_version IS NOT NULL THEN
-        IF (p_version_epoch IS NULL OR p_version_epoch = v_stream_version_epoch)
-           AND p_version <= v_stream_version THEN
-            RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'version'::TEXT, NULL::JSONB, NULL::BIGINT;
-            RETURN;
+    -- 5. Per-key version check
+    IF p_key_version IS NOT NULL AND p_key IS NOT NULL AND p_key != '' THEN
+        SELECT sn.key_version, sn.key_version_epoch
+        INTO v_current_version, v_current_version_epoch
+        FROM cf_map_state sn WHERE sn.channel = p_channel AND sn.key = p_key;
+        IF FOUND AND v_current_version IS NOT NULL AND v_current_version > 0 THEN
+            IF (p_key_version_epoch IS NULL OR p_key_version_epoch = v_current_version_epoch)
+               AND p_key_version <= v_current_version THEN
+                RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'version'::TEXT, NULL::JSONB, NULL::BIGINT;
+                RETURN;
+            END IF;
         END IF;
     END IF;
 
-    -- 6. All checks passed - increment offset and update version
+    -- 6. All checks passed - increment offset
     UPDATE cf_map_meta SET
         top_offset = top_offset + 1,
-        version = GREATEST(COALESCE(version, 0), COALESCE(p_version, 0)),
-        version_epoch = COALESCE(p_version_epoch, version_epoch),
         expires_at = COALESCE(CASE WHEN p_meta_ttl IS NOT NULL THEN NOW() + p_meta_ttl ELSE NULL END, expires_at),
         updated_at = NOW()
     WHERE channel = p_channel

@@ -46,6 +46,8 @@ Publishing format (via PUBLISH/SPUBLISH):
 -- ARGV[21] = expected_epoch (for CAS, empty '' to disable)
 -- ARGV[22] = state_payload (for state storage, empty '' to use message_payload)
 -- ARGV[23] = nil_key (slot-aligned placeholder for unused KEYS in cluster mode, empty '' to disable)
+-- ARGV[24] = version_field (pre-computed "v:KEY" for per-key version, empty '' to disable)
+-- ARGV[25] = version_epoch_field (pre-computed "ve:KEY" for per-key version epoch, empty '' to disable)
 
 -- Local variables from KEYS
 local stream_key = KEYS[1]
@@ -85,6 +87,8 @@ local state_payload_arg = ARGV[22] or ""
 -- a slot-aligned placeholder instead of '' (empty string hashes to slot 0). Convert
 -- those placeholders back to '' so all existing conditional checks still work.
 local nil_key = ARGV[23] or ""
+local version_field = ARGV[24] or ""
+local version_epoch_field = ARGV[25] or ""
 if nil_key ~= "" then
     if stream_key == nil_key then stream_key = '' end
     if meta_key == nil_key then meta_key = '' end
@@ -123,18 +127,35 @@ if meta_key ~= '' then
         redis.call("hset", meta_key, "e", current_epoch)
     end
 
-    -- ==== Step 2: Version-based idempotency check (BEFORE incrementing offset) ====
-    if version ~= "0" then
-        local prev_vals = redis.call("hmget", meta_key, "v", "ve", "s")
-        local prev_version, prev_version_epoch, current_offset = prev_vals[1], prev_vals[2], prev_vals[3]
+    -- ==== Step 2: Epoch change check for state (moved here for version check correctness) ====
+    if state_meta_key ~= '' and state_hash_key ~= '' then
+        local old_state_epoch = redis.call("hget", state_meta_key, "epoch")
+        if old_state_epoch and old_state_epoch ~= current_epoch then
+            -- Epoch changed - clear old state data (including per-key versions)
+            redis.call("del", state_hash_key)
+            if state_order_key ~= '' then
+                redis.call("del", state_order_key)
+            end
+            if state_expire_key ~= '' then
+                redis.call("del", state_expire_key)
+            end
+            redis.call("del", state_meta_key)
+            -- Remove channel from cleanup registration (no entries left after epoch change)
+            if cleanup_registration_key ~= '' and channel_for_cleanup ~= '' then
+                redis.call("zrem", cleanup_registration_key, channel_for_cleanup)
+            end
+        end
+    end
+
+    -- ==== Step 2a: Per-key version check (BEFORE incrementing offset) ====
+    if version ~= "0" and version_field ~= "" and state_meta_key ~= "" then
+        local prev_vals = redis.call("hmget", state_meta_key, version_field, version_epoch_field)
+        local prev_version, prev_version_epoch = prev_vals[1], prev_vals[2]
         if prev_version then
             if (version_epoch == "" or version_epoch == prev_version_epoch) and (tonumber(prev_version) >= tonumber(version)) then
                 -- Suppressed: return current offset without incrementing
-                local offset_num = 0
-                if current_offset then
-                    offset_num = tonumber(current_offset)
-                end
-                return { offset_num, current_epoch, "version" }
+                local current_offset = redis.call("hget", meta_key, "s") or 0
+                return { tonumber(current_offset), current_epoch, "version" }
             end
         end
     end
@@ -237,9 +258,9 @@ if meta_key ~= '' then
         redis.call("expire", meta_key, meta_expire)
     end
 
-    -- Update version tracking after successful increment
-    if version ~= "0" then
-        redis.call("hset", meta_key, "v", version, "ve", version_epoch)
+    -- Update per-key version tracking in state_meta_key (tied to state lifecycle)
+    if version ~= "0" and version_field ~= "" and state_meta_key ~= "" then
+        redis.call("hset", state_meta_key, version_field, version, version_epoch_field, version_epoch)
     end
 else
     -- No append log, use epoch from ARGV
@@ -265,6 +286,10 @@ if is_leave == "1" then
         end
         if state_expire_key ~= '' then
             redis.call("zrem", state_expire_key, message_key)
+        end
+        -- Clean up per-key version fields from state meta (tied to state lifecycle)
+        if version_field ~= "" and state_meta_key ~= "" then
+            redis.call("hdel", state_meta_key, version_field, version_epoch_field)
         end
 
         -- Update cleanup registration: remove channel if no entries left, or update to next expiry
@@ -297,25 +322,7 @@ end
 -- ==== Step 5: Add/update keyed state ====
 -- Skip for leave messages (they already removed entries in Step 4)
 if state_hash_key ~= '' and is_leave ~= "1" then
-    -- Check if state is from a different epoch - clear if so
-    if state_meta_key ~= '' then
-        local old_state_epoch = redis.call("hget", state_meta_key, "epoch")
-        if old_state_epoch and old_state_epoch ~= current_epoch then
-            -- Epoch changed - clear old state data
-            redis.call("del", state_hash_key)
-            if state_order_key ~= '' then
-                redis.call("del", state_order_key)
-            end
-            if state_expire_key ~= '' then
-                redis.call("del", state_expire_key)
-            end
-            redis.call("del", state_meta_key)
-            -- Remove channel from cleanup registration (no entries left after epoch change)
-            if cleanup_registration_key ~= '' and channel_for_cleanup ~= '' then
-                redis.call("zrem", cleanup_registration_key, channel_for_cleanup)
-            end
-        end
-    end
+    -- Epoch change check already done in Step 2 (moved there for version check correctness)
 
     local now = tonumber(redis.call("time")[1])
     local expire_at = now + tonumber(keyed_member_ttl)

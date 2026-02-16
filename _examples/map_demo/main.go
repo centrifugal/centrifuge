@@ -51,6 +51,13 @@ func main() {
 					MetaTTL:    24 * time.Hour,
 				}
 			}
+			if channel == "scoreboard" {
+				return centrifuge.MapChannelOptions{
+					StreamSize: 1000,
+					StreamTTL:  time.Hour,
+					MetaTTL:    time.Hour,
+				}
+			}
 			if channel == "board" {
 				return centrifuge.MapChannelOptions{
 					StreamSize: 1000,
@@ -61,6 +68,13 @@ func main() {
 			if strings.HasPrefix(channel, "poll:") {
 				return centrifuge.MapChannelOptions{
 					StreamSize: 100,
+					StreamTTL:  time.Hour,
+					MetaTTL:    time.Hour,
+				}
+			}
+			if channel == "visualizer" {
+				return centrifuge.MapChannelOptions{
+					StreamSize: 30,
 					StreamTTL:  time.Hour,
 					MetaTTL:    time.Hour,
 				}
@@ -129,10 +143,15 @@ func main() {
 				Type: e.Type,
 			}
 
-			// Inventory, leaderboard, and poll channels use streams — enable positioned mode with recovery.
-			if e.Channel == "inventory" || e.Channel == "leaderboard" || e.Channel == "board" || strings.HasPrefix(e.Channel, "poll:") {
+			// Inventory, leaderboard, poll, and scoreboard channels use streams — enable positioned mode with recovery.
+			if e.Channel == "inventory" || e.Channel == "leaderboard" || e.Channel == "board" || strings.HasPrefix(e.Channel, "poll:") || e.Channel == "scoreboard" || e.Channel == "visualizer" {
 				opts.EnablePositioning = true
 				opts.EnableRecovery = true
+			}
+
+			// Enable delta compression for scoreboard channel.
+			if e.Channel == "scoreboard" {
+				opts.AllowedDeltaTypes = []centrifuge.DeltaType{centrifuge.DeltaTypeFossil}
 			}
 
 			// Enable map presence for games and individual game channels.
@@ -206,6 +225,9 @@ func main() {
 	// Start publishing ticker data every second.
 	go publishTickerData(node)
 
+	// Start publishing scoreboard data (6 live matches with delta compression).
+	go publishScoreboardData(node)
+
 	// Start poll manager goroutine.
 	go runPollManager()
 
@@ -225,6 +247,12 @@ func main() {
 	http.HandleFunc("/api/board/update", handleBoardUpdateHTTP)
 	http.HandleFunc("/api/board/delete", handleBoardDeleteHTTP)
 
+	http.HandleFunc("/api/viz/populate", handleVizPopulate(node))
+	http.HandleFunc("/api/viz/publish", handleVizPublish(node))
+	http.HandleFunc("/api/viz/remove", handleVizRemove(node))
+	http.HandleFunc("/api/viz/clear", handleVizClear(node))
+	http.HandleFunc("/api/viz/stats", handleVizStats(node))
+
 	server := &http.Server{Addr: ":" + *port}
 
 	go func() {
@@ -236,6 +264,8 @@ func main() {
 		log.Printf("  - Tickers demo:    http://localhost:%s/tickers.html", *port)
 		log.Printf("  - Live Polls demo: http://localhost:%s/polls.html", *port)
 		log.Printf("  - Sprint Board:    http://localhost:%s/board.html", *port)
+		log.Printf("  - Scoreboard:      http://localhost:%s/scoreboard.html", *port)
+		log.Printf("  - Visualizer:      http://localhost:%s/visualizer.html", *port)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)
 		}

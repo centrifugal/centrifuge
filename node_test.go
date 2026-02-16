@@ -1596,3 +1596,37 @@ func TestGetMapBroker(t *testing.T) {
 	require.Len(t, result.Publications, 1)
 	require.Equal(t, []byte(`{"v":2}`), result.Publications[0].Data) // Still custom data
 }
+
+func TestNode_MapStreamReadUnrecoverablePosition(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	ctx := context.Background()
+	ch := "test_overflow"
+
+	// Publish 200 messages with StreamSize=30 to force heavy trimming.
+	var epoch string
+	for i := 1; i <= 200; i++ {
+		res, err := mapBroker.Publish(ctx, ch, fmt.Sprintf("key_%d", i), MapPublishOptions{
+			Data:       []byte(fmt.Sprintf("data_%d", i)),
+			StreamSize: 30,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+		epoch = res.Position.Epoch
+	}
+
+	// Try to recover from offset 3 — should fail because entries 4..170+ are gone.
+	_, err = node.MapStreamRead(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{
+			Since: &StreamPosition{Offset: 3, Epoch: epoch},
+			Limit: -1,
+		},
+	})
+	require.ErrorIs(t, err, ErrorUnrecoverablePosition)
+}

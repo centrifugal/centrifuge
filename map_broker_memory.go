@@ -380,11 +380,13 @@ type mapChannel struct {
 }
 
 type stateEntry struct {
-	Key         string
-	Revision    StreamPosition
-	Publication *Publication
-	Score       int64 // For ordered state
-	ExpireAt    int64 // Unix timestamp for key TTL expiration (0 = no expiration)
+	Key          string
+	Revision     StreamPosition
+	Publication  *Publication
+	Score        int64  // For ordered state
+	ExpireAt     int64  // Unix timestamp for key TTL expiration (0 = no expiration)
+	Version      uint64 // Per-key version for ordering (0 = disabled)
+	VersionEpoch string // Per-key version epoch
 }
 
 func newMapHub(node *Node, historyMetaTTL time.Duration, pubLocks map[int]*sync.Mutex, closeCh chan struct{}) *mapHub {
@@ -785,17 +787,16 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 			}
 		}
 
-		if opts.Version > 0 {
-			topVersion := channel.stream.TopVersion()
-			topVersionEpoch := channel.stream.TopVersionEpoch()
-			if (opts.VersionEpoch == "" || opts.VersionEpoch == topVersionEpoch) &&
-				opts.Version <= topVersion {
-				// Skip unordered publication
-				return StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}, nil, SuppressReasonVersion, nil
+		if key != "" && opts.Version > 0 {
+			if existing, ok := channel.state[key]; ok {
+				if (opts.VersionEpoch == "" || opts.VersionEpoch == existing.VersionEpoch) &&
+					opts.Version <= existing.Version {
+					return StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}, nil, SuppressReasonVersion, nil
+				}
 			}
 		}
 
-		offset, _ := channel.stream.Add(streamPub, opts.StreamSize, opts.Version, opts.VersionEpoch)
+		offset, _ := channel.stream.Add(streamPub, opts.StreamSize, 0, "")
 		streamPub.Offset = offset // Set offset on publication for delivery
 		streamPosition = StreamPosition{
 			Offset: offset,
@@ -822,11 +823,13 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 		// Store statePub in state (contains full state Data)
 		statePub.Offset = streamPosition.Offset
 		entry := &stateEntry{
-			Key:         key,
-			Revision:    streamPosition,
-			Publication: statePub,
-			Score:       opts.Score,
-			ExpireAt:    expireAt,
+			Key:          key,
+			Revision:     streamPosition,
+			Publication:  statePub,
+			Score:        opts.Score,
+			ExpireAt:     expireAt,
+			Version:      opts.Version,
+			VersionEpoch: opts.VersionEpoch,
 		}
 
 		channel.state[key] = entry

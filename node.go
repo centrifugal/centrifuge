@@ -1913,18 +1913,34 @@ func (n *Node) MapStreamRead(ctx context.Context, ch string, opts MapReadStreamO
 	}
 
 	n.metrics.incActionCount("map_stream_read", ch)
+
+	var result MapStreamResult
+	var err error
 	if n.config.UseSingleFlight {
 		key := n.mapStreamKey(ch, opts)
-		result, err, _ := mapStreamGroup.Do(key, func() (any, error) {
+		r, e, _ := mapStreamGroup.Do(key, func() (any, error) {
 			return mapBroker.ReadStream(ctx, ch, opts)
 		})
+		if e != nil {
+			return MapStreamResult{}, e
+		}
+		result = r.(MapStreamResult)
+	} else {
+		result, err = mapBroker.ReadStream(ctx, ch, opts)
 		if err != nil {
 			return MapStreamResult{}, err
 		}
-		return result.(MapStreamResult), nil
 	}
 
-	return mapBroker.ReadStream(ctx, ch, opts)
+	// Detect unrecoverable position: if we requested entries after a known offset
+	// but the first returned entry has a higher offset, entries were lost due to
+	// stream trimming — the client cannot recover cleanly.
+	if !opts.Filter.Reverse && opts.Filter.Since != nil && opts.Filter.Since.Offset > 0 &&
+		len(result.Publications) > 0 && result.Publications[0].Offset > opts.Filter.Since.Offset+1 {
+		return MapStreamResult{}, ErrorUnrecoverablePosition
+	}
+
+	return result, nil
 }
 
 func (n *Node) mapStreamKey(ch string, opts MapReadStreamOptions) string {

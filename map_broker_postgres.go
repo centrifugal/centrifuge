@@ -665,21 +665,10 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		score = &opts.Score
 	}
 
-	// Prepare version
-	var version *int64
-	var versionEpoch *string
-	if opts.Version > 0 {
-		v := int64(opts.Version)
-		version = &v
-		if opts.VersionEpoch != "" {
-			versionEpoch = &opts.VersionEpoch
-		}
-	}
-
-	// Prepare key version (stored in state)
+	// Prepare per-key version (stored in state, used for per-key version check)
 	var keyVersion *int64
 	var keyVersionEpoch *string
-	if opts.Version > 0 {
+	if opts.Version > 0 && key != "" {
 		v := int64(opts.Version)
 		keyVersion = &v
 		if opts.VersionEpoch != "" {
@@ -725,7 +714,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		ch, key, opts.Data, tagsJSON,
 		clientID, userID, connInfo, chanInfo, subscribedAt,
 		keyMode, keyTTL, streamTTL, streamSize, metaTTL,
-		expectedOffset, score, version, versionEpoch,
+		expectedOffset, score, nil, nil, // p_version, p_version_epoch (unused, per-key version used instead)
 		keyVersion, keyVersionEpoch,
 		idempotencyKey, idempotencyTTL, opts.RefreshTTLOnSuppress,
 		useDelta, numShards, streamData,

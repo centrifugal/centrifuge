@@ -380,17 +380,28 @@ func (c *Client) handleMapStatePhase(
 	// Check for direct STATE→LIVE transition on last page.
 	if nextCursor == "" {
 		positioning := state.options.EnablePositioning || state.options.EnableRecovery
+
+		// Use frozen offset from first page when available (multi-page pagination).
+		// stateResult.Position reflects the stream top at the time of THIS page read,
+		// but publications made during pagination won't appear in state pages AND would
+		// be missed by stream catch-up if we use the current page's offset. The frozen
+		// offset from the first page ensures stream catch-up covers the full gap.
+		effectivePos := streamPos
+		if state.offsetCaptured && req.Cursor != "" {
+			effectivePos = StreamPosition{Offset: state.offset, Epoch: state.epoch}
+		}
+
 		if !positioning {
 			// Streamless: always go LIVE on last page (no stream to paginate through).
-			return c.handleMapStateToLive(req, reply, state, cmd, started, rw, pubs, streamPos)
+			return c.handleMapStateToLive(req, reply, state, cmd, started, rw, pubs, effectivePos)
 		}
 		// Positioned: optionally skip STREAM phase if stream hasn't advanced much.
 		if c.node.config.MapStateToLiveEnabled {
 			currentStreamPos, err := c.node.MapStreamPosition(c.ctx, channel, state.options.HistoryMetaTTL)
 			if err == nil {
 				// Use limit as threshold - if stream is within one page, go LIVE.
-				if streamPos.Offset+uint64(limit) >= currentStreamPos.Offset {
-					return c.handleMapStateToLive(req, reply, state, cmd, started, rw, pubs, streamPos)
+				if effectivePos.Offset+uint64(limit) >= currentStreamPos.Offset {
+					return c.handleMapStateToLive(req, reply, state, cmd, started, rw, pubs, effectivePos)
 				}
 			}
 			// If error or stream too far ahead, fall through to normal STATE response.

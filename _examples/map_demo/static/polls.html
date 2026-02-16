@@ -730,6 +730,20 @@
             setTimeout(() => toast.classList.remove('show'), 2500);
         }
 
+        // Check if PostgreSQL is available by probing the vote endpoint.
+        // If not, show a clear message instead of an endless loader.
+        fetch('/api/poll/vote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+            .then(resp => {
+                if (resp.status === 503) {
+                    document.getElementById('pollContainer').innerHTML = `
+                        <div class="waiting">
+                            <p style="color: #f88; font-size: 16px; font-weight: 600;">PostgreSQL not configured</p>
+                            <p style="margin-top: 8px;">Start the server with <code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px;">-postgres</code> flag to enable this demo.</p>
+                        </div>`;
+                }
+            })
+            .catch(() => {});
+
         metaSub.subscribe();
         resultsSub.subscribe();
         centrifuge.connect();

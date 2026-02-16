@@ -21,6 +21,7 @@ Storage format in state hash: offset:epoch:publication_bytes
 -- KEYS[4] = stream meta key (for offset/epoch)
 -- KEYS[5] = cleanup registration zset key (for scheduling)
 -- KEYS[6] = state order zset key (always passed, ZREM is no-op if key doesn't exist)
+-- KEYS[7] = state meta key (for per-key version cleanup)
 
 -- ==== ARGV ====
 -- ARGV[1]  = now (unix timestamp)
@@ -42,6 +43,7 @@ local stream_key = KEYS[3]
 local meta_key = KEYS[4]
 local cleanup_registration_key = KEYS[5]
 local state_order_key = KEYS[6]
+local state_meta_key = KEYS[7]
 
 local now = tonumber(ARGV[1])
 local batch_size = tonumber(ARGV[2])
@@ -161,6 +163,10 @@ for _, entry_key in ipairs(expired) do
         redis.call("hdel", state_hash_key, entry_key)
         redis.call("zrem", state_expire_key, entry_key)
         redis.call("zrem", state_order_key, entry_key)
+        -- Clean up per-key version fields from state meta (tied to state lifecycle)
+        if state_meta_key ~= '' then
+            redis.call("hdel", state_meta_key, "v:" .. entry_key, "ve:" .. entry_key)
+        end
 
         removed_count = removed_count + 1
     end

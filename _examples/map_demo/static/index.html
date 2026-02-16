@@ -26,7 +26,7 @@
             color: rgba(255,255,255,0.8);
             text-align: center;
             margin-bottom: 20px;
-            font-size: 14px;
+            font-size: 20px;
         }
         .demos {
             display: grid;
@@ -105,13 +105,36 @@
         .demo-card a:hover {
             opacity: 0.9;
         }
+        .pg-notice {
+            display: inline-block;
+            background: rgba(74, 144, 226, 0.15);
+            color: #4A90E2;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
     </style>
 </head>
 <body>
-    <h1>Map Subscriptions Demo</h1>
-    <p class="subtitle">Real-time state synchronization with Centrifuge</p>
+    <p class="subtitle">Map Subscriptions Demo. Real-time state synchronization with Centrifuge.</p>
 
     <div class="demos">
+        <div class="demo-card">
+            <div class="demo-header">
+                <div class="icon">🔬</div>
+                <h2>Sync Protocol Visualizer</h2>
+            </div>
+            <div class="features">
+                <span class="feature">STATE → STREAM → LIVE</span>
+                <span class="feature">Sequence diagram</span>
+                <span class="feature">6 scenarios</span>
+            </div>
+            <p>Visualize the map subscription sync protocol with interactive scenarios and live frame inspection.</p>
+            <a href="/visualizer.html">Open Demo</a>
+        </div>
+
         <div class="demo-card">
             <div class="demo-header">
                 <div class="icon">🖱️</div>
@@ -142,20 +165,6 @@
 
         <div class="demo-card">
             <div class="demo-header">
-                <div class="icon">🏆</div>
-                <h2>Leaderboard (PostgreSQL)</h2>
-            </div>
-            <div class="features">
-                <span class="feature">Native PG</span>
-                <span class="feature">Persistent</span>
-                <span class="feature">Ordered</span>
-            </div>
-            <p>Persistent leaderboard using native PostgreSQL cf_map_* functions.</p>
-            <a href="/leaderboard.html">Open Demo</a>
-        </div>
-
-        <div class="demo-card">
-            <div class="demo-header">
                 <div class="icon">📦</div>
                 <h2>Inventory (CAS)</h2>
             </div>
@@ -167,6 +176,7 @@
             <p>Purchase items with CAS to prevent overselling and handle conflicts.</p>
             <a href="/inventory.html">Open Demo</a>
         </div>
+
         <div class="demo-card">
             <div class="demo-header">
                 <div class="icon">📈</div>
@@ -180,6 +190,21 @@
             <p>Real-time stock price feed with sector filtering using map state and TagsFilter.</p>
             <a href="/tickers.html">Open Demo</a>
         </div>
+
+        <div class="demo-card">
+            <div class="demo-header">
+                <div class="icon">⚽</div>
+                <h2>Live Scoreboard (Delta)</h2>
+            </div>
+            <div class="features">
+                <span class="feature">Delta compression</span>
+                <span class="feature">Live matches</span>
+                <span class="feature">6 concurrent games</span>
+            </div>
+            <p>6 concurrent football matches with fossil delta compression. See bandwidth savings in real-time.</p>
+            <a href="/scoreboard.html">Open Demo</a>
+        </div>
+
         <div class="demo-card">
             <div class="demo-header">
                 <div class="icon">📋</div>
@@ -190,21 +215,40 @@
                 <span class="feature">Native PG</span>
                 <span class="feature">LWW</span>
             </div>
+            <span class="pg-notice">Requires -postgres flag</span>
             <p>Kanban board with draggable task cards. Create, edit, move, and delete tasks collaboratively.</p>
             <a href="/board.html">Open Demo</a>
         </div>
+
         <div class="demo-card">
             <div class="demo-header">
                 <div class="icon">📊</div>
-                <h2>Live Polls</h2>
+                <h2>Live Polls (PostgreSQL)</h2>
             </div>
             <div class="features">
+                <span class="feature">Native PG</span>
                 <span class="feature">Real-time voting</span>
                 <span class="feature">Bot voters</span>
                 <span class="feature">Auto-rotation</span>
             </div>
+            <span class="pg-notice">Requires -postgres flag</span>
             <p>Server-driven polls with real-time voting, bot participation, and automatic rotation.</p>
             <a href="/polls.html">Open Demo</a>
+        </div>
+
+        <div class="demo-card">
+            <div class="demo-header">
+                <div class="icon">🏆</div>
+                <h2>Leaderboard (PostgreSQL)</h2>
+            </div>
+            <div class="features">
+                <span class="feature">Native PG</span>
+                <span class="feature">Persistent</span>
+                <span class="feature">Ordered</span>
+            </div>
+            <span class="pg-notice">Requires -postgres flag</span>
+            <p>Persistent leaderboard using native PostgreSQL cf_map_* functions.</p>
+            <a href="/leaderboard.html">Open Demo</a>
         </div>
     </div>
 </body>

@@ -187,11 +187,12 @@ type MapPublishOptions struct {
 	// StreamData provides explicit incremental data, making delta redundant.
 	UseDelta bool
 
-	// Version enables optimistic concurrency control. If set, the publish only
-	// succeeds if the current version is lower. Use with VersionEpoch for
-	// cross-epoch version tracking.
+	// Version enables per-key version-based ordering. If set, the publish only
+	// succeeds if the key's current version is lower. Each key tracks its own
+	// version independently. Requires a non-empty key and StreamSize > 0.
 	Version uint64
-	// VersionEpoch scopes the Version. Different epochs reset version comparison.
+	// VersionEpoch scopes the Version per key. Different epochs reset version
+	// comparison. Empty string is valid — use when only incremental version matters.
 	VersionEpoch string
 
 	// Score is the sort value when Ordered=true (configured in MapChannelOptions).
