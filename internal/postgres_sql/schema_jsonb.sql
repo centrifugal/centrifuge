@@ -192,9 +192,9 @@ BEGIN
         END IF;
     END IF;
 
-    -- 4. KeyMode check
+    -- 4. KeyMode check (exclude expired entries — they are logically deleted)
     IF p_key_mode IS NOT NULL THEN
-        SELECT EXISTS(SELECT 1 FROM cf_map_state WHERE channel = p_channel AND key = p_key) INTO v_exists;
+        SELECT EXISTS(SELECT 1 FROM cf_map_state WHERE channel = p_channel AND key = p_key AND (expires_at IS NULL OR expires_at > NOW())) INTO v_exists;
         IF p_key_mode = 'if_new' AND v_exists THEN
             IF p_refresh_ttl_on_suppress AND p_key_ttl IS NOT NULL THEN
                 UPDATE cf_map_state SET expires_at = NOW() + p_key_ttl, updated_at = NOW()
@@ -428,8 +428,8 @@ BEGIN
         END IF;
     END IF;
 
-    -- 4. Check if key exists
-    SELECT EXISTS(SELECT 1 FROM cf_map_state WHERE channel = p_channel AND key = p_key) INTO v_exists;
+    -- 4. Check if key exists (exclude expired entries — they are logically deleted)
+    SELECT EXISTS(SELECT 1 FROM cf_map_state WHERE channel = p_channel AND key = p_key AND (expires_at IS NULL OR expires_at > NOW())) INTO v_exists;
     IF NOT v_exists THEN
         RETURN QUERY SELECT NULL::BIGINT, v_offset, v_epoch, TRUE, 'key_not_found'::TEXT, NULL::JSONB, NULL::BIGINT;
         RETURN;

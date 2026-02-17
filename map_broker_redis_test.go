@@ -2739,6 +2739,76 @@ func TestRedisMapBroker_RemoveEmptyKey(t *testing.T) {
 	})
 }
 
+func TestRedisMapBroker_ClientInfoInState(t *testing.T) {
+	testMapBrokerClientInfoInState(t, func(t *testing.T) MapBroker {
+		node, _ := New(Config{})
+		return newTestRedisMapBroker(t, node)
+	})
+}
+
+func TestRedisMapBroker_ClientInfoInStream(t *testing.T) {
+	testMapBrokerClientInfoInStream(t, func(t *testing.T) MapBroker {
+		node, _ := New(Config{})
+		return newTestRedisMapBroker(t, node)
+	})
+}
+
+// TestRedisMapBroker_ClientInfoDelivery tests that ClientInfo is delivered
+// via PUB/SUB when publishing with ClientInfo.
+func TestRedisMapBroker_ClientInfoDelivery(t *testing.T) {
+	node, _ := New(Config{})
+
+	type pubEvent struct {
+		ch  string
+		pub *Publication
+	}
+
+	eventCh := make(chan pubEvent, 10)
+
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			eventCh <- pubEvent{ch: ch, pub: pub}
+			return nil
+		},
+	}
+
+	e := newTestRedisMapBrokerWithHandler(t, node, handler)
+
+	ctx := context.Background()
+	channel := randomChannel("test_client_info_delivery")
+
+	err := e.Subscribe(channel)
+	require.NoError(t, err)
+	time.Sleep(100 * time.Millisecond)
+
+	info := &ClientInfo{
+		ClientID: "c1",
+		UserID:   "u1",
+		ConnInfo: []byte("conn"),
+		ChanInfo: []byte("chan"),
+	}
+
+	_, err = e.Publish(ctx, channel, "k1", MapPublishOptions{
+		Data:       []byte("data1"),
+		ClientInfo: info,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	select {
+	case ev := <-eventCh:
+		require.NotNil(t, ev.pub.Info, "ClientInfo should be present in delivered publication")
+		require.Equal(t, "c1", ev.pub.Info.ClientID)
+		require.Equal(t, "u1", ev.pub.Info.UserID)
+		require.Equal(t, []byte("conn"), ev.pub.Info.ConnInfo)
+		require.Equal(t, []byte("chan"), ev.pub.Info.ChanInfo)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for publication event")
+	}
+}
+
 // TestRedisMapBroker_OrderedStateAsc tests that ASC ordering returns entries
 // in ascending score order (lowest score first).
 func TestRedisMapBroker_OrderedStateAsc(t *testing.T) {

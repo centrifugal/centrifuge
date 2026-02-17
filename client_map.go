@@ -14,8 +14,6 @@ import (
 	"github.com/segmentio/encoding/json"
 )
 
-// Map Subscriptions
-//
 // Map subscriptions provide synchronized state across clients. Unlike normal pub/sub
 // subscriptions, map subscriptions maintain a state of key-value entries plus a stream
 // of changes for recovery.
@@ -627,11 +625,11 @@ func (c *Client) handleMapStateToLive(
 
 	// Convert state publications to protocol format.
 	isJSON := c.transport.Protocol() == ProtocolTypeJSON
-	stateProtos := make([]*protocol.Publication, 0, len(statePubs))
+	protoStatePubs := make([]*protocol.Publication, 0, len(statePubs))
 	for _, pub := range statePubs {
-		stateProtos = append(stateProtos, pubToProto(pub))
+		protoStatePubs = append(protoStatePubs, pubToProto(pub))
 	}
-	stateProtos = escapeStateForDelta(stateProtos, deltaEnabled, isJSON)
+	protoStatePubs = escapeStateForDelta(protoStatePubs, deltaEnabled, isJSON)
 
 	// Build response with phase=0 (LIVE), both state and stream publications.
 	res := &protocol.SubscribeResult{
@@ -647,7 +645,7 @@ func (c *Client) handleMapStateToLive(
 	if chanID > 0 {
 		res.Id = chanID
 	}
-	res.State = stateProtos          // Last page state entries
+	res.State = protoStatePubs       // Last page state entries
 	res.Publications = recoveredPubs // Stream catch-up publications
 
 	// Write response before stopping buffer.
@@ -1927,7 +1925,7 @@ func (c *Client) addMapClientPresence(channel string, prefix string, info *Clien
 	// Use KeyModeIfNew with RefreshTTLOnSuppress to:
 	// - Publish JOIN event only if this is a new presence entry
 	// - Refresh TTL without publishing if entry already exists (quick reconnect)
-	// Stream options (StreamSize/TTL/MetaTTL) use defaults from GetMapChannelOptions.
+	// Stream options (StreamSize/TTL/MetaTTL) use GetMapChannelOptions.
 	_, err := c.node.MapPublish(c.ctx, presenceChannel, c.uid, MapPublishOptions{
 		ClientInfo:           info,
 		KeyTTL:               c.mapPresenceTTL(),

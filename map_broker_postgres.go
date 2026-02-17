@@ -901,7 +901,7 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 		err := tx.QueryRow(ctx, fmt.Sprintf(`
 			SELECT key, data, tags, key_offset, client_id, user_id, conn_info, chan_info
 			FROM %s
-			WHERE channel = $1 AND key = $2 AND (expires_at IS NULL OR expires_at > NOW())
+			WHERE channel = $1 AND key = $2
 		`, e.names.state), ch, opts.Key).Scan(&p.Key, &p.Data, &tagsJSON, &p.Offset, &clientID, &userID, &connInfo, &chanInfo)
 
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -950,7 +950,7 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 				rows, err = tx.Query(ctx, fmt.Sprintf(`
 					SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
 					FROM %s
-					WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
+					WHERE channel = $1
 					ORDER BY score ASC, key ASC
 					LIMIT $2
 				`, stateTable), ch, limit+1)
@@ -958,7 +958,7 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 				rows, err = tx.Query(ctx, fmt.Sprintf(`
 					SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
 					FROM %s
-					WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
+					WHERE channel = $1
 					ORDER BY score DESC, key DESC
 					LIMIT $2
 				`, stateTable), ch, limit+1)
@@ -970,7 +970,7 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 				rows, err = tx.Query(ctx, fmt.Sprintf(`
 					SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
 					FROM %s
-					WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
+					WHERE channel = $1
 					  AND (score > $3 OR (score = $3 AND key > $4))
 					ORDER BY score ASC, key ASC
 					LIMIT $2
@@ -979,7 +979,7 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 				rows, err = tx.Query(ctx, fmt.Sprintf(`
 					SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
 					FROM %s
-					WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
+					WHERE channel = $1
 					  AND (score < $3 OR (score = $3 AND key < $4))
 					ORDER BY score DESC, key DESC
 					LIMIT $2
@@ -992,7 +992,7 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 			rows, err = tx.Query(ctx, fmt.Sprintf(`
 				SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
 				FROM %s
-				WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
+				WHERE channel = $1
 				ORDER BY key
 				LIMIT $2
 			`, stateTable), ch, limit+1)
@@ -1000,7 +1000,7 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 			rows, err = tx.Query(ctx, fmt.Sprintf(`
 				SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
 				FROM %s
-				WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW()) AND key > $3
+				WHERE channel = $1 AND key > $3
 				ORDER BY key
 				LIMIT $2
 			`, stateTable), ch, limit+1, opts.Cursor)
@@ -1225,7 +1225,7 @@ func (e *PostgresMapBroker) Stats(ctx context.Context, ch string) (MapStats, err
 	var count int
 	err := pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT COUNT(*) FROM %s
-		WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
+		WHERE channel = $1
 	`, e.names.state), ch).Scan(&count)
 	if err != nil {
 		return MapStats{}, err
@@ -1589,15 +1589,40 @@ func (e *PostgresMapBroker) processInsertMessage(ctx context.Context, rel *pglog
 		previousData = decodePgBytea(prevBytes)
 	}
 
-	// Create publication
+	// Extract client info fields
+	var clientID, userID string
+	if v, ok := values["client_id"]; ok {
+		clientID = string(v)
+	}
+	if v, ok := values["user_id"]; ok {
+		userID = string(v)
+	}
+	var connInfo, chanInfo []byte
+	if v, ok := values["conn_info"]; ok {
+		connInfo = decodePgBytea(v)
+	}
+	if v, ok := values["chan_info"]; ok {
+		chanInfo = decodePgBytea(v)
+	}
+
+	// Create publication. Epoch is NOT set on Publication — see handleOutboxEntry.
 	pub := &Publication{
 		Offset:  offset,
-		Epoch:   epoch,
 		Key:     key,
 		Data:    data,
 		Tags:    tags,
 		Removed: removed,
 		Score:   score,
+	}
+
+	// Add client info if present
+	if clientID != "" || userID != "" {
+		pub.Info = &ClientInfo{
+			ClientID: clientID,
+			UserID:   userID,
+			ConnInfo: connInfo,
+			ChanInfo: chanInfo,
+		}
 	}
 
 	// Construct prevPub for key-based delta if previous data available.
@@ -1610,12 +1635,13 @@ func (e *PostgresMapBroker) processInsertMessage(ctx context.Context, rel *pglog
 	if e.conf.Broker != nil {
 		// Multi-node: publish to broker, which will deliver to all subscribed nodes (including this one)
 		_, err := e.conf.Broker.Publish(channel, data, PublishOptions{
-			Key:     key,
-			Removed: removed,
-			Score:   score,
-			Tags:    tags,
-			Offset:  offset,
-			Epoch:   epoch,
+			ClientInfo: pub.Info,
+			Key:        key,
+			Removed:    removed,
+			Score:      score,
+			Tags:       tags,
+			Offset:     offset,
+			Epoch:      epoch,
 		})
 		if err != nil {
 			return fmt.Errorf("broker publish: %w", err)
@@ -1749,7 +1775,8 @@ func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 
 	// Process each channel with its own resolved options.
 	for _, ch := range channels {
-		chOpts := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
+		resolved := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
+		chOpts := applyChannelOptionsDefaults(resolved, resolved)
 		var streamTTL, metaTTL *string
 		if chOpts.StreamTTL > 0 {
 			s := strconv.Itoa(int(chOpts.StreamTTL.Seconds())) + " seconds"
@@ -1760,6 +1787,12 @@ func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 			metaTTL = &s
 		}
 
+		// Call expire_keys SQL function which atomically:
+		// 1. Deletes expired keys from state
+		// 2. Inserts removal events into the stream
+		// The outbox/WAL worker will pick up the stream entries and deliver them
+		// via HandlePublication — we must NOT call HandlePublication here to avoid
+		// duplicate delivery.
 		rows, err := e.pool.Query(ctx, fmt.Sprintf(`
 			SELECT out_channel, out_key, out_offset, out_epoch
 			FROM %s($1, $2, $3::interval, $4::interval, $5)
@@ -1768,28 +1801,8 @@ func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 			e.node.logger.log(newErrorLogEntry(err, "error in batch key expiration", map[string]any{"channel": ch}))
 			continue
 		}
-
+		// Drain rows to ensure SQL function completes fully.
 		for rows.Next() {
-			var expCh, key, epochStr string
-			var offset int64
-			if err := rows.Scan(&expCh, &key, &offset, &epochStr); err != nil {
-				continue
-			}
-			// Emit removal event to subscribers (outbox/WAL handles delivery to other nodes).
-			if e.eventHandler != nil {
-				pub := &Publication{
-					Key:     key,
-					Removed: true,
-					Offset:  uint64(offset),
-					Time:    time.Now().UnixMilli(),
-				}
-				pos := StreamPosition{Offset: uint64(offset), Epoch: epochStr}
-				if err := e.eventHandler.HandlePublication(expCh, pub, pos, false, nil); err != nil {
-					e.node.logger.log(newErrorLogEntry(err, "error handling expired key publication", map[string]any{
-						"channel": expCh, "key": key,
-					}))
-				}
-			}
 		}
 		rows.Close()
 	}
@@ -2111,10 +2124,12 @@ func (e *PostgresMapBroker) handleOutboxEntry(_ context.Context, entry streamRow
 		score = *entry.score
 	}
 
-	// Create publication
+	// Create publication. Note: Epoch is NOT set on Publication — it travels
+	// only in StreamPosition (passed to HandlePublication) and PublishOptions
+	// (for multi-node broker fan-out). Setting Epoch on Publication would leak
+	// it to the client protocol via pubToProto.
 	pub := &Publication{
 		Offset:  uint64(entry.channelOffset),
-		Epoch:   entry.epoch,
 		Key:     entry.key,
 		Data:    entry.data,
 		Tags:    entry.tags,
@@ -2148,12 +2163,13 @@ func (e *PostgresMapBroker) handleOutboxEntry(_ context.Context, entry streamRow
 	if e.conf.Broker != nil {
 		// Multi-node: publish to broker, which will deliver to all subscribed nodes (including this one)
 		_, err := e.conf.Broker.Publish(entry.channel, entry.data, PublishOptions{
-			Key:     entry.key,
-			Removed: entry.removed,
-			Score:   score,
-			Tags:    entry.tags,
-			Offset:  uint64(entry.channelOffset),
-			Epoch:   entry.epoch,
+			ClientInfo: pub.Info,
+			Key:        entry.key,
+			Removed:    entry.removed,
+			Score:      score,
+			Tags:       entry.tags,
+			Offset:     uint64(entry.channelOffset),
+			Epoch:      entry.epoch,
 		})
 		if err != nil {
 			return fmt.Errorf("broker publish: %w", err)

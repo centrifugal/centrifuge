@@ -79,6 +79,22 @@ func main() {
 					MetaTTL:    time.Hour,
 				}
 			}
+			if strings.HasPrefix(channel, "clients:") {
+				return centrifuge.MapChannelOptions{
+					//StreamSize: 100,
+					//StreamTTL:  300 * time.Second,
+					KeyTTL:  60 * time.Second,
+					MetaTTL: 60 * time.Second,
+				}
+			}
+			if strings.HasPrefix(channel, "users:") {
+				return centrifuge.MapChannelOptions{
+					//StreamSize: 100,
+					//StreamTTL:  300 * time.Second,
+					KeyTTL:  60 * time.Second,
+					MetaTTL: 60 * time.Second,
+				}
+			}
 			// Cursors, games — all streamless (default).
 			return centrifuge.DefaultMapChannelOptions()
 		},
@@ -144,7 +160,14 @@ func main() {
 			}
 
 			// Inventory, leaderboard, poll, and scoreboard channels use streams — enable positioned mode with recovery.
-			if e.Channel == "inventory" || e.Channel == "leaderboard" || e.Channel == "board" || strings.HasPrefix(e.Channel, "poll:") || e.Channel == "scoreboard" || e.Channel == "visualizer" {
+			if strings.HasPrefix(e.Channel, "XXclients:") ||
+				strings.HasPrefix(e.Channel, "XXusers:") ||
+				e.Channel == "inventory" ||
+				e.Channel == "leaderboard" ||
+				e.Channel == "board" ||
+				strings.HasPrefix(e.Channel, "poll:") ||
+				e.Channel == "scoreboard" ||
+				e.Channel == "visualizer" {
 				opts.EnablePositioning = true
 				opts.EnableRecovery = true
 			}

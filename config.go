@@ -12,13 +12,12 @@ type MapChannelOptions struct {
 	MetaTTL time.Duration
 	// StreamSize is the maximum number of entries in the stream.
 	StreamSize int
-	// StreamTTL is how long stream entries are retained.
+	// StreamTTL is how long stream is retained.
 	StreamTTL time.Duration
 	// KeyTTL is the default TTL for keys in the channel.
 	KeyTTL time.Duration
 	// Ordered enables score-based ordering in the state. When true, entries
-	// are returned sorted by Score (descending) instead of by key.
-	// Use for leaderboards, priority queues, and sorted collections.
+	// are returned sorted by Score (descending).
 	Ordered bool
 }
 

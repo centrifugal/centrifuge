@@ -2016,6 +2016,78 @@ func TestMemoryMapBroker_RemoveEmptyKey(t *testing.T) {
 	})
 }
 
+func TestMemoryMapBroker_ClientInfoInState(t *testing.T) {
+	testMapBrokerClientInfoInState(t, func(t *testing.T) MapBroker {
+		node, _ := New(Config{})
+		return newTestMemoryMapBroker(t, node)
+	})
+}
+
+func TestMemoryMapBroker_ClientInfoInStream(t *testing.T) {
+	testMapBrokerClientInfoInStream(t, func(t *testing.T) MapBroker {
+		node, _ := New(Config{})
+		return newTestMemoryMapBroker(t, node)
+	})
+}
+
+// TestMemoryMapBroker_ClientInfoDelivery tests that ClientInfo is delivered
+// to the event handler when publishing with ClientInfo.
+func TestMemoryMapBroker_ClientInfoDelivery(t *testing.T) {
+	node, _ := New(Config{})
+
+	type pubEvent struct {
+		ch  string
+		pub *Publication
+	}
+
+	eventCh := make(chan pubEvent, 10)
+
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			eventCh <- pubEvent{ch: ch, pub: pub}
+			return nil
+		},
+	}
+
+	broker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	err = broker.RegisterEventHandler(handler)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+	})
+
+	ctx := context.Background()
+	channel := "test_client_info_delivery"
+
+	info := &ClientInfo{
+		ClientID: "c1",
+		UserID:   "u1",
+		ConnInfo: []byte("conn"),
+		ChanInfo: []byte("chan"),
+	}
+
+	_, err = broker.Publish(ctx, channel, "k1", MapPublishOptions{
+		Data:       []byte("data1"),
+		ClientInfo: info,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	select {
+	case ev := <-eventCh:
+		require.NotNil(t, ev.pub.Info, "ClientInfo should be present in delivered publication")
+		require.Equal(t, "c1", ev.pub.Info.ClientID)
+		require.Equal(t, "u1", ev.pub.Info.UserID)
+		require.Equal(t, []byte("conn"), ev.pub.Info.ConnInfo)
+		require.Equal(t, []byte("chan"), ev.pub.Info.ChanInfo)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for publication event")
+	}
+}
+
 // TestMemoryMapBroker_OrderedStateAsc tests ascending sort direction.
 func TestMemoryMapBroker_OrderedStateAsc(t *testing.T) {
 	node, _ := New(Config{})

@@ -1289,13 +1289,13 @@ func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 	require.GreaterOrEqual(t, len(received), 1)
 	found := false
 	for _, pub := range received {
-		if pub.Key == "test_key" && string(pub.Data) == "test_data" && pub.Score == 100 && pub.Offset > 0 && pub.Epoch != "" {
+		if pub.Key == "test_key" && string(pub.Data) == "test_data" && pub.Score == 100 && pub.Offset > 0 {
 			found = true
 			break
 		}
 	}
 	receivedMu.Unlock()
-	require.True(t, found, "expected to receive publication with key=test_key, data=test_data, score=100, offset>0, epoch non-empty")
+	require.True(t, found, "expected to receive publication with key=test_key, data=test_data, score=100, offset>0")
 }
 
 // ============================================================================
@@ -1703,7 +1703,7 @@ func TestPostgresMapBroker_OutboxWithBroker(t *testing.T) {
 	require.GreaterOrEqual(t, len(received), 1)
 	found := false
 	for _, pub := range received {
-		if pub.Key == "test_key" && string(pub.Data) == "test_data" && pub.Score == 100 && pub.Offset > 0 && pub.Epoch != "" {
+		if pub.Key == "test_key" && string(pub.Data) == "test_data" && pub.Score == 100 && pub.Offset > 0 {
 			found = true
 			break
 		}
@@ -2681,4 +2681,398 @@ func TestPostgresMapBroker_OrderedStateAscSameScores(t *testing.T) {
 	require.Empty(t, stateRes.Cursor)
 	require.Equal(t, "mango", stateRes.Publications[0].Key)
 	require.Equal(t, "zebra", stateRes.Publications[1].Key)
+}
+
+func TestPostgresMapBroker_ClientInfoInState(t *testing.T) {
+	testMapBrokerClientInfoInState(t, func(t *testing.T) MapBroker {
+		node, _ := New(Config{})
+		return newTestPostgresMapBroker(t, node)
+	})
+}
+
+func TestPostgresMapBroker_ClientInfoInStream(t *testing.T) {
+	testMapBrokerClientInfoInStream(t, func(t *testing.T) MapBroker {
+		node, _ := New(Config{})
+		return newTestPostgresMapBroker(t, node)
+	})
+}
+
+// TestPostgresMapBroker_ClientInfoDelivery_Outbox tests that ClientInfo is delivered
+// via outbox workers (single-node, local delivery).
+func TestPostgresMapBroker_ClientInfoDelivery_Outbox(t *testing.T) {
+	connString := getPostgresConnString(t)
+	node, err := New(Config{})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
+
+	type pubEvent struct {
+		ch  string
+		pub *Publication
+	}
+
+	eventCh := make(chan pubEvent, 10)
+
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			eventCh <- pubEvent{ch: ch, pub: pub}
+			return nil
+		},
+	}
+
+	e, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+		BinaryData: true,
+		NumShards:  4,
+		Outbox: OutboxConfig{
+			PollInterval: 10 * time.Millisecond,
+			BatchSize:    100,
+		},
+	})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	require.NoError(t, e.EnsureSchema(ctx))
+	cleanupTestTables(ctx, e)
+
+	err = e.RegisterEventHandler(handler)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = e.Close(context.Background())
+		_ = node.Shutdown(context.Background())
+	})
+
+	require.Eventually(t, func() bool {
+		return len(e.OutboxClaimedShards()) > 0
+	}, 10*time.Second, 100*time.Millisecond, "Outbox worker should claim at least one shard")
+
+	channel := fmt.Sprintf("test_client_info_outbox_%d", time.Now().UnixNano())
+
+	info := &ClientInfo{
+		ClientID: "c1",
+		UserID:   "u1",
+		ConnInfo: []byte("conn"),
+		ChanInfo: []byte("chan"),
+	}
+
+	_, err = e.Publish(ctx, channel, "k1", MapPublishOptions{
+		Data:       []byte("data1"),
+		ClientInfo: info,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	for {
+		select {
+		case ev := <-eventCh:
+			if ev.ch != channel {
+				continue
+			}
+			require.NotNil(t, ev.pub.Info, "ClientInfo should be present in outbox delivery")
+			require.Equal(t, "c1", ev.pub.Info.ClientID)
+			require.Equal(t, "u1", ev.pub.Info.UserID)
+			require.Equal(t, []byte("conn"), ev.pub.Info.ConnInfo)
+			require.Equal(t, []byte("chan"), ev.pub.Info.ChanInfo)
+			return
+		case <-time.After(10 * time.Second):
+			t.Fatal("timeout waiting for publication event")
+		}
+	}
+}
+
+// TestPostgresMapBroker_ClientInfoDelivery_OutboxWithBroker tests that ClientInfo
+// is delivered via outbox workers through Redis broker (multi-node).
+func TestPostgresMapBroker_ClientInfoDelivery_OutboxWithBroker(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, err := New(Config{})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
+
+	redisShard, err := NewRedisShard(node, RedisShardConfig{
+		Address: "127.0.0.1:6379",
+	})
+	require.NoError(t, err)
+
+	broker, err := NewRedisBroker(node, RedisBrokerConfig{
+		Shards: []*RedisShard{redisShard},
+		Prefix: "test_outbox_ci_" + fmt.Sprintf("%d", time.Now().UnixNano()),
+	})
+	require.NoError(t, err)
+	node.SetBroker(broker)
+
+	channel := fmt.Sprintf("test_outbox_ci_%d", time.Now().UnixNano())
+
+	var received []*Publication
+	var receivedMu sync.Mutex
+	receivedCh := make(chan struct{}, 10)
+
+	pgBroker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+		BinaryData: true,
+		Broker:     broker,
+		NumShards:  4,
+		Outbox: OutboxConfig{
+			PollInterval: 10 * time.Millisecond,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, pgBroker.EnsureSchema(ctx))
+	cleanupTestTables(ctx, pgBroker)
+
+	t.Cleanup(func() {
+		_ = pgBroker.Close(context.Background())
+		_ = node.Shutdown(context.Background())
+	})
+
+	err = pgBroker.RegisterEventHandler(&testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			if ch != channel {
+				return nil
+			}
+			receivedMu.Lock()
+			received = append(received, pub)
+			receivedMu.Unlock()
+			select {
+			case receivedCh <- struct{}{}:
+			default:
+			}
+			return nil
+		},
+	})
+	require.NoError(t, err)
+
+	err = broker.Subscribe(channel)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return len(pgBroker.OutboxClaimedShards()) > 0
+	}, 10*time.Second, 100*time.Millisecond, "Outbox worker should claim at least one shard")
+
+	info := &ClientInfo{
+		ClientID: "c1",
+		UserID:   "u1",
+		ConnInfo: []byte("conn"),
+		ChanInfo: []byte("chan"),
+	}
+
+	_, err = pgBroker.Publish(ctx, channel, "k1", MapPublishOptions{
+		Data:       []byte("data1"),
+		ClientInfo: info,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	select {
+	case <-receivedCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for publication via broker")
+	}
+
+	receivedMu.Lock()
+	require.GreaterOrEqual(t, len(received), 1)
+	found := false
+	for _, pub := range received {
+		if pub.Key == "k1" && pub.Info != nil {
+			require.Equal(t, "c1", pub.Info.ClientID)
+			require.Equal(t, "u1", pub.Info.UserID)
+			require.Equal(t, []byte("conn"), pub.Info.ConnInfo)
+			require.Equal(t, []byte("chan"), pub.Info.ChanInfo)
+			found = true
+			break
+		}
+	}
+	receivedMu.Unlock()
+	require.True(t, found, "expected to receive publication with ClientInfo via broker")
+}
+
+// TestPostgresMapBroker_ClientInfoDelivery_WAL tests that ClientInfo is delivered
+// via WAL reader (single-node, local delivery).
+func TestPostgresMapBroker_ClientInfoDelivery_WAL(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, err := New(Config{})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
+
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+		BinaryData: true,
+		WAL: WALConfig{
+			Enabled:           true,
+			HeartbeatInterval: 5 * time.Second,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, broker.EnsureSchema(ctx))
+	dropStaleReplicationSlots(ctx, broker.pool)
+
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_binary_map_stream WHERE channel LIKE 'test_wal_ci_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_binary_map_state WHERE channel LIKE 'test_wal_ci_%'")
+	_, _ = broker.pool.Exec(ctx, "DELETE FROM cf_binary_map_meta WHERE channel LIKE 'test_wal_ci_%'")
+
+	channel := fmt.Sprintf("test_wal_ci_%d", time.Now().UnixNano())
+
+	t.Cleanup(func() {
+		_ = broker.Close(context.Background())
+		_ = node.Shutdown(context.Background())
+	})
+
+	var received []*Publication
+	var receivedMu sync.Mutex
+	receivedCh := make(chan struct{}, 10)
+
+	err = broker.RegisterEventHandler(&testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			if ch != channel {
+				return nil
+			}
+			receivedMu.Lock()
+			received = append(received, pub)
+			receivedMu.Unlock()
+			select {
+			case receivedCh <- struct{}{}:
+			default:
+			}
+			return nil
+		},
+	})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return len(broker.ClaimedShards()) > 0
+	}, 10*time.Second, 100*time.Millisecond, "WAL reader should claim at least one shard")
+
+	// Publish via SQL with client_id, user_id, conn_info, chan_info
+	_, err = broker.pool.Exec(ctx, `
+		SELECT * FROM cf_binary_map_publish($1, $2, $3, NULL, $4, $5, $6, $7, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, 16)
+	`, channel, "k1", []byte("data1"), "c1", "u1", []byte("conn"), []byte("chan"))
+	require.NoError(t, err)
+
+	select {
+	case <-receivedCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for publication via WAL reader")
+	}
+
+	receivedMu.Lock()
+	found := false
+	for _, pub := range received {
+		if pub.Key == "k1" && pub.Info != nil {
+			require.Equal(t, "c1", pub.Info.ClientID)
+			require.Equal(t, "u1", pub.Info.UserID)
+			require.Equal(t, []byte("conn"), pub.Info.ConnInfo)
+			require.Equal(t, []byte("chan"), pub.Info.ChanInfo)
+			found = true
+			break
+		}
+	}
+	receivedMu.Unlock()
+	require.True(t, found, "expected to receive publication with ClientInfo via WAL reader")
+}
+
+// TestPostgresMapBroker_ClientInfoDelivery_WALWithBroker tests that ClientInfo is delivered
+// via WAL reader through Redis broker (multi-node).
+func TestPostgresMapBroker_ClientInfoDelivery_WALWithBroker(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, err := New(Config{})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
+
+	redisShard, err := NewRedisShard(node, RedisShardConfig{
+		Address: "127.0.0.1:6379",
+	})
+	require.NoError(t, err)
+
+	redisBroker, err := NewRedisBroker(node, RedisBrokerConfig{
+		Shards: []*RedisShard{redisShard},
+		Prefix: "test_wal_ci_broker_" + fmt.Sprintf("%d", time.Now().UnixNano()),
+	})
+	require.NoError(t, err)
+	node.SetBroker(redisBroker)
+
+	channel := fmt.Sprintf("test_wal_ci_broker_%d", time.Now().UnixNano())
+
+	var received []*Publication
+	var receivedMu sync.Mutex
+	receivedCh := make(chan struct{}, 10)
+
+	pgBroker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+		BinaryData: true,
+		Broker:     redisBroker,
+		WAL: WALConfig{
+			Enabled:           true,
+			HeartbeatInterval: 5 * time.Second,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, pgBroker.EnsureSchema(ctx))
+	dropStaleReplicationSlots(ctx, pgBroker.pool)
+
+	_, _ = pgBroker.pool.Exec(ctx, "DELETE FROM cf_binary_map_stream WHERE channel LIKE 'test_wal_ci_broker_%'")
+	_, _ = pgBroker.pool.Exec(ctx, "DELETE FROM cf_binary_map_state WHERE channel LIKE 'test_wal_ci_broker_%'")
+	_, _ = pgBroker.pool.Exec(ctx, "DELETE FROM cf_binary_map_meta WHERE channel LIKE 'test_wal_ci_broker_%'")
+
+	t.Cleanup(func() {
+		_ = pgBroker.Close(context.Background())
+		_ = node.Shutdown(context.Background())
+	})
+
+	err = pgBroker.RegisterEventHandler(&testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			if ch != channel {
+				return nil
+			}
+			receivedMu.Lock()
+			received = append(received, pub)
+			receivedMu.Unlock()
+			select {
+			case receivedCh <- struct{}{}:
+			default:
+			}
+			return nil
+		},
+	})
+	require.NoError(t, err)
+
+	err = redisBroker.Subscribe(channel)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return len(pgBroker.ClaimedShards()) > 0
+	}, 10*time.Second, 100*time.Millisecond, "WAL reader should claim at least one shard")
+
+	// Publish via SQL with client_id, user_id, conn_info, chan_info
+	_, err = pgBroker.pool.Exec(ctx, `
+		SELECT * FROM cf_binary_map_publish($1, $2, $3, NULL, $4, $5, $6, $7, NULL, NULL, NULL, '300 seconds'::interval, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, false, 16)
+	`, channel, "k1", []byte("data1"), "c1", "u1", []byte("conn"), []byte("chan"))
+	require.NoError(t, err)
+
+	select {
+	case <-receivedCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for publication via broker")
+	}
+
+	receivedMu.Lock()
+	found := false
+	for _, pub := range received {
+		if pub.Key == "k1" && pub.Info != nil {
+			require.Equal(t, "c1", pub.Info.ClientID)
+			require.Equal(t, "u1", pub.Info.UserID)
+			require.Equal(t, []byte("conn"), pub.Info.ConnInfo)
+			require.Equal(t, []byte("chan"), pub.Info.ChanInfo)
+			found = true
+			break
+		}
+	}
+	receivedMu.Unlock()
+	require.True(t, found, "expected to receive publication with ClientInfo via WAL+broker")
 }

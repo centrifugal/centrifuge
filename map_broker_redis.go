@@ -2514,8 +2514,9 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 		chID = e.messageChannelID(shard, ch)
 	}
 
-	// Get channel options for this channel.
-	opts := e.node.ResolveMapChannelOptions(ch)
+	// Get channel options for this channel, applying defaults (ensures MetaTTL >= StreamTTL).
+	resolved := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
+	opts := applyChannelOptionsDefaults(resolved, resolved)
 
 	metaExpire := "0"
 	if opts.MetaTTL > 0 {

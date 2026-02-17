@@ -1248,6 +1248,7 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 		}
 		if pub.Epoch != "" {
 			sp.Epoch = pub.Epoch
+			pub.Epoch = "" // Clear — epoch travels in StreamPosition, not in Publication to clients.
 		}
 		if pub.Delta {
 			// In at most once scenario we are passing delta in Publication itself. But need to clean it

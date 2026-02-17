@@ -134,3 +134,109 @@ func testMapBrokerRemoveEmptyKey(t *testing.T, factory mapBrokerFactory) {
 		require.Error(t, err)
 	})
 }
+
+// testMapBrokerClientInfoInState verifies that ClientInfo is preserved in state
+// when reading back via ReadState (both with Key filter and paginated).
+func testMapBrokerClientInfoInState(t *testing.T, factory mapBrokerFactory) {
+	ctx := context.Background()
+
+	info := &ClientInfo{
+		ClientID: "c1",
+		UserID:   "u1",
+		ConnInfo: []byte("conn"),
+		ChanInfo: []byte("chan"),
+	}
+
+	t.Run("ReadState_with_key_filter", func(t *testing.T) {
+		broker := factory(t)
+		ch := "client_info_state_key_ch"
+
+		_, err := broker.Publish(ctx, ch, "k1", MapPublishOptions{
+			Data:       []byte("data1"),
+			ClientInfo: info,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+
+		result, err := broker.ReadState(ctx, ch, MapReadStateOptions{
+			Key:     "k1",
+			MetaTTL: 300 * time.Second,
+		})
+		require.NoError(t, err)
+		require.Len(t, result.Publications, 1)
+		pub := result.Publications[0]
+		require.NotNil(t, pub.Info, "ClientInfo should be present in state")
+		require.Equal(t, "c1", pub.Info.ClientID)
+		require.Equal(t, "u1", pub.Info.UserID)
+		require.Equal(t, []byte("conn"), pub.Info.ConnInfo)
+		require.Equal(t, []byte("chan"), pub.Info.ChanInfo)
+	})
+
+	t.Run("ReadState_paginated", func(t *testing.T) {
+		broker := factory(t)
+		ch := "client_info_state_pag_ch"
+
+		_, err := broker.Publish(ctx, ch, "k1", MapPublishOptions{
+			Data:       []byte("data1"),
+			ClientInfo: info,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+
+		result, err := broker.ReadState(ctx, ch, MapReadStateOptions{
+			Limit:   -1,
+			MetaTTL: 300 * time.Second,
+		})
+		require.NoError(t, err)
+		require.Len(t, result.Publications, 1)
+		pub := result.Publications[0]
+		require.NotNil(t, pub.Info, "ClientInfo should be present in paginated state")
+		require.Equal(t, "c1", pub.Info.ClientID)
+		require.Equal(t, "u1", pub.Info.UserID)
+		require.Equal(t, []byte("conn"), pub.Info.ConnInfo)
+		require.Equal(t, []byte("chan"), pub.Info.ChanInfo)
+	})
+}
+
+// testMapBrokerClientInfoInStream verifies that ClientInfo is preserved in stream
+// when reading back via ReadStream.
+func testMapBrokerClientInfoInStream(t *testing.T, factory mapBrokerFactory) {
+	ctx := context.Background()
+
+	info := &ClientInfo{
+		ClientID: "c1",
+		UserID:   "u1",
+		ConnInfo: []byte("conn"),
+		ChanInfo: []byte("chan"),
+	}
+
+	t.Run("ReadStream_contains_client_info", func(t *testing.T) {
+		broker := factory(t)
+		ch := "client_info_stream_ch"
+
+		_, err := broker.Publish(ctx, ch, "k1", MapPublishOptions{
+			Data:       []byte("data1"),
+			ClientInfo: info,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+
+		result, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{
+			Filter: StreamFilter{Limit: -1},
+		})
+		require.NoError(t, err)
+		require.Len(t, result.Publications, 1)
+		pub := result.Publications[0]
+		require.NotNil(t, pub.Info, "ClientInfo should be present in stream")
+		require.Equal(t, "c1", pub.Info.ClientID)
+		require.Equal(t, "u1", pub.Info.UserID)
+		require.Equal(t, []byte("conn"), pub.Info.ConnInfo)
+		require.Equal(t, []byte("chan"), pub.Info.ChanInfo)
+	})
+}
