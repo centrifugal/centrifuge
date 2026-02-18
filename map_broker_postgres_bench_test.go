@@ -16,7 +16,14 @@ func setupPostgresMapBrokerBench(b *testing.B) (*PostgresMapBroker, func()) {
 
 	connString := getPostgresConnString(b)
 
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionPermanent,
+			}
+		},
+	})
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		BinaryData: true,
@@ -51,6 +58,7 @@ func setupPostgresMapBrokerBenchOrdered(b *testing.B) (*PostgresMapBroker, func(
 			Ordered:       true,
 			SyncMode:      MapSyncConverging,
 			RetentionMode: MapRetentionExpiring,
+			KeyTTL:        time.Minute,
 		}
 	}
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
@@ -82,7 +90,6 @@ func BenchmarkPostgresMapBroker_PublishStreamOnly(b *testing.B) {
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := "bench_stream"
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -91,8 +98,9 @@ func BenchmarkPostgresMapBroker_PublishStreamOnly(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			i := atomic.AddInt64(&counter, 1)
+			ch := fmt.Sprintf("bench_stream_%d", i%1000)
 			data := []byte(fmt.Sprintf("message_%d", i))
-			_, err := broker.Publish(ctx, channel, "", MapPublishOptions{
+			_, err := broker.Publish(ctx, ch, "", MapPublishOptions{
 				Data: data,
 			})
 			if err != nil {
@@ -108,7 +116,6 @@ func BenchmarkPostgresMapBroker_PublishMapStateSimple(b *testing.B) {
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := "bench_map_simple"
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -117,9 +124,10 @@ func BenchmarkPostgresMapBroker_PublishMapStateSimple(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			i := atomic.AddInt64(&counter, 1)
-			key := fmt.Sprintf("key%d", i)
+			ch := fmt.Sprintf("bench_map_simple_%d", i%1000)
+			key := fmt.Sprintf("key%d", i%1000)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
+			_, err := broker.Publish(ctx, ch, key, MapPublishOptions{
 				Data: data,
 			})
 			if err != nil {
@@ -135,7 +143,6 @@ func BenchmarkPostgresMapBroker_PublishMapStateOrdered(b *testing.B) {
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := "bench_map_ordered"
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -144,9 +151,10 @@ func BenchmarkPostgresMapBroker_PublishMapStateOrdered(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			i := atomic.AddInt64(&counter, 1)
-			key := fmt.Sprintf("key%d", i)
+			ch := fmt.Sprintf("bench_map_ordered_%d", i%1000)
+			key := fmt.Sprintf("key%d", i%1000)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
+			_, err := broker.Publish(ctx, ch, key, MapPublishOptions{
 				Data:  data,
 				Score: i,
 			})
@@ -163,7 +171,6 @@ func BenchmarkPostgresMapBroker_PublishCombined(b *testing.B) {
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := "bench_combined"
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -172,9 +179,10 @@ func BenchmarkPostgresMapBroker_PublishCombined(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			i := atomic.AddInt64(&counter, 1)
-			key := fmt.Sprintf("key%d", i)
+			ch := fmt.Sprintf("bench_combined_%d", i%1000)
+			key := fmt.Sprintf("key%d", i%1000)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
+			_, err := broker.Publish(ctx, ch, key, MapPublishOptions{
 				Data: data,
 			})
 			if err != nil {
@@ -370,17 +378,18 @@ func BenchmarkPostgresMapBroker_Remove(b *testing.B) {
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := "bench_remove"
 
-	// Prepopulate with keys
-	for i := 0; i < 10000; i++ {
-		key := fmt.Sprintf("key%d", i)
-		data := []byte(fmt.Sprintf("data%d", i))
-		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
-		})
-		if err != nil {
-			b.Fatal(err)
+	// Prepopulate 100 channels × 100 keys.
+	for ch := 0; ch < 100; ch++ {
+		channel := fmt.Sprintf("bench_remove_%d", ch)
+		for k := 0; k < 100; k++ {
+			key := fmt.Sprintf("key%d", k)
+			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
+				Data: []byte("data"),
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
 		}
 	}
 
@@ -391,11 +400,9 @@ func BenchmarkPostgresMapBroker_Remove(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			i := atomic.AddInt64(&counter, 1)
-			key := fmt.Sprintf("key%d", i)
-			_, err := broker.Remove(ctx, channel, key, MapRemoveOptions{})
-			if err != nil {
-				b.Fatal(err)
-			}
+			ch := fmt.Sprintf("bench_remove_%d", i%100)
+			key := fmt.Sprintf("key%d", i%100)
+			_, _ = broker.Remove(ctx, ch, key, MapRemoveOptions{})
 		}
 	})
 }
@@ -406,7 +413,6 @@ func BenchmarkPostgresMapBroker_IdempotentPublish(b *testing.B) {
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := "bench_idempotent"
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -415,9 +421,10 @@ func BenchmarkPostgresMapBroker_IdempotentPublish(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			i := atomic.AddInt64(&counter, 1)
+			ch := fmt.Sprintf("bench_idempotent_%d", i%1000)
 			data := []byte(fmt.Sprintf("message_%d", i))
 			idempotencyKey := fmt.Sprintf("key_%d", i)
-			_, err := broker.Publish(ctx, channel, "", MapPublishOptions{
+			_, err := broker.Publish(ctx, ch, "", MapPublishOptions{
 				Data:                data,
 				IdempotencyKey:      idempotencyKey,
 				IdempotentResultTTL: 60 * time.Second,
@@ -480,7 +487,14 @@ func setupPostgresMapBrokerOutboxBench(b *testing.B) (*PostgresMapBroker, func()
 
 	connString := getPostgresConnString(b)
 
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionPermanent,
+			}
+		},
+	})
 	// Use fewer shards than pool size to leave connections available for Publish calls.
 	// Each outbox worker holds a connection for its advisory lock.
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
@@ -518,7 +532,14 @@ func setupPostgresMapBrokerOutboxBenchWithHandler(b *testing.B, handler BrokerEv
 
 	connString := getPostgresConnString(b)
 
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionPermanent,
+			}
+		},
+	})
 	// Use fewer shards than pool size to leave connections available for Publish calls.
 	// Each outbox worker holds a connection for its advisory lock.
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
@@ -558,7 +579,6 @@ func BenchmarkPostgresMapBroker_OutboxPublish(b *testing.B) {
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := "bench_outbox_publish"
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -567,9 +587,10 @@ func BenchmarkPostgresMapBroker_OutboxPublish(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			i := atomic.AddInt64(&counter, 1)
-			key := fmt.Sprintf("key%d", i)
+			ch := fmt.Sprintf("bench_outbox_publish_%d", i%1000)
+			key := fmt.Sprintf("key%d", i%1000)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
+			_, err := broker.Publish(ctx, ch, key, MapPublishOptions{
 				Data: data,
 			})
 			if err != nil {
@@ -658,7 +679,7 @@ func BenchmarkPostgresMapBroker_PublishWithStreamTrim(b *testing.B) {
 			// Pre-fill stream to stream_size so trim runs on every publish.
 			for i := 0; i < streamSize; i++ {
 				_, err := broker.Publish(ctx, channel, fmt.Sprintf("prefill_%d", i), MapPublishOptions{
-					Data: []byte(fmt.Sprintf("data_%d", i)),
+					Data: []byte("data"),
 				})
 				if err != nil {
 					b.Fatal(err)
@@ -669,7 +690,7 @@ func BenchmarkPostgresMapBroker_PublishWithStreamTrim(b *testing.B) {
 			b.ResetTimer()
 
 			for i := 0; i < b.N; i++ {
-				key := fmt.Sprintf("key_%d", i)
+				key := fmt.Sprintf("key_%d", i%1000)
 				_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 					Data: []byte("x"),
 				})
@@ -687,14 +708,14 @@ func BenchmarkPostgresMapBroker_PublishNoTrim(b *testing.B) {
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := fmt.Sprintf("bench_notrim_%d", time.Now().UnixNano())
 
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		key := fmt.Sprintf("key_%d", i)
-		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
+		ch := fmt.Sprintf("bench_notrim_%d", i%1000)
+		key := fmt.Sprintf("key_%d", i%1000)
+		_, err := broker.Publish(ctx, ch, key, MapPublishOptions{
 			Data: []byte("x"),
 		})
 		if err != nil {

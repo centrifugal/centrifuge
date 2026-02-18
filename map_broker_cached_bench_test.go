@@ -602,6 +602,7 @@ func BenchmarkMapReadState_Postgres_Direct_vs_Cached(b *testing.B) {
 	})
 	backend, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: pgURL,
+		BinaryData: true,
 	})
 	require.NoError(b, err)
 	err = backend.RegisterEventHandler(nil)
@@ -648,7 +649,7 @@ func BenchmarkMapReadState_Postgres_Direct_vs_Cached(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: -1})
+			_, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: -1, Cached: true})
 		}
 	})
 
@@ -676,6 +677,7 @@ func BenchmarkMapReadState_Postgres_Parallel(b *testing.B) {
 	backend, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: pgURL,
 		PoolSize:   32,
+		BinaryData: true,
 	})
 	require.NoError(b, err)
 	err = backend.RegisterEventHandler(nil)
