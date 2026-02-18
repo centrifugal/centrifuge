@@ -1149,7 +1149,7 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
-	empty, wasRemoved, wasKeyed := n.hub.removeSub(ch, c)
+	empty, wasRemoved, wasMap := n.hub.removeSub(ch, c)
 	if wasRemoved {
 		n.metrics.subscriptionsInflight.WithLabelValues(c.metricName, n.metrics.getChannelNamespaceLabel(ch)).Dec()
 	}
@@ -1166,7 +1166,7 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 			noSubscribers := n.hub.NumSubscribers(ch) == 0
 			if noSubscribers {
 				// Unsubscribe from appropriate broker based on channel type.
-				if wasKeyed {
+				if wasMap {
 					if mapBroker := n.getMapBroker(ch); mapBroker != nil {
 						n.metrics.incActionCount("map_broker_unsubscribe", ch)
 						err := mapBroker.Unsubscribe(ch)
@@ -1956,9 +1956,9 @@ func (n *Node) mapStreamKey(ch string, opts MapReadStreamOptions) string {
 	return builder.String()
 }
 
-// MapStreamPosition returns the current stream position for a map channel.
+// mapStreamPosition returns the current stream position for a map channel.
 // This is useful for capturing the stream top before starting stream pagination.
-func (n *Node) MapStreamPosition(ctx context.Context, ch string) (StreamPosition, error) {
+func (n *Node) mapStreamPosition(ctx context.Context, ch string) (StreamPosition, error) {
 	mapBroker := n.getMapBroker(ch)
 	if mapBroker == nil {
 		return StreamPosition{}, ErrorNotAvailable
@@ -1968,7 +1968,10 @@ func (n *Node) MapStreamPosition(ctx context.Context, ch string) (StreamPosition
 	result, err := mapBroker.ReadStream(ctx, ch, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: 0},
 	})
-	return result.Position, err
+	if err != nil {
+		return StreamPosition{}, err
+	}
+	return result.Position, nil
 }
 
 // MapStatsResult wraps keyed stats result.
@@ -2014,7 +2017,11 @@ func (n *Node) MapPublish(ctx context.Context, ch string, key string, opts MapPu
 	}
 	n.metrics.incActionCount("map_publish", ch)
 	n.metrics.incMessagesSent("map_publication", ch)
-	return mapBroker.Publish(ctx, ch, key, opts)
+	result, err := mapBroker.Publish(ctx, ch, key, opts)
+	if err == nil && result.Suppressed {
+		n.metrics.incMapPublishSuppressed(result.SuppressReason, ch)
+	}
+	return result, err
 }
 
 // MapRemove removes a key from a map channel.
@@ -2025,11 +2032,16 @@ func (n *Node) MapRemove(ctx context.Context, ch string, key string, opts MapRem
 		return MapPublishResult{}, ErrorNotAvailable
 	}
 	n.metrics.incActionCount("map_remove", ch)
-	return mapBroker.Remove(ctx, ch, key, opts)
+	n.metrics.incMessagesSent("map_removal", ch)
+	result, err := mapBroker.Remove(ctx, ch, key, opts)
+	if err == nil && result.Suppressed {
+		n.metrics.incMapPublishSuppressed(result.SuppressReason, ch)
+	}
+	return result, err
 }
 
 // MapClear deletes all data for a map channel (state and stream).
-// Use for cleanup when a channel is no longer needed.
+// Use for cleanup when a channel data is no longer needed.
 func (n *Node) MapClear(ctx context.Context, ch string, opts MapClearOptions) error {
 	mapBroker := n.getMapBroker(ch)
 	if mapBroker == nil {

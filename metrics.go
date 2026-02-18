@@ -69,6 +69,7 @@ type metrics struct {
 	broadcastDurationHistogram *prometheus.HistogramVec
 	pubSubLagHistogram         prometheus.Histogram
 	pingPongDurationHistogram  *prometheus.HistogramVec
+	mapPublishSuppressedCount *prometheus.CounterVec
 
 	redisBrokerPubSubErrors           *prometheus.CounterVec
 	redisBrokerPubSubDroppedMessages  *prometheus.CounterVec
@@ -87,6 +88,7 @@ type metrics struct {
 	messagesSentCache              sync.Map
 	messagesReceivedCache          sync.Map
 	tagsFilterDroppedCache         sync.Map
+	mapPublishSuppressedCache sync.Map
 	nsCache                        *otter.Cache[string, string]
 	codeStrings                    map[uint32]string
 }
@@ -356,6 +358,13 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			1.0, 2.5, 5.0, 10.0, // Second resolution.
 		}}, []string{"type", "channel_namespace"})
 
+	m.mapPublishSuppressedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "map_broker",
+		Name:      "publish_suppressed_count",
+		Help:      "Number of suppressed map publish/remove operations.",
+	}, []string{"reason", "channel_namespace"})
+
 	m.redisBrokerPubSubErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "broker",
@@ -437,6 +446,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.surveyDurationSummary,
 		m.pubSubLagHistogram,
 		m.broadcastDurationHistogram,
+		m.mapPublishSuppressedCount,
 		m.redisBrokerPubSubErrors,
 		m.redisBrokerPubSubDroppedMessages,
 		m.redisBrokerPubSubBufferedMessages,
@@ -844,6 +854,25 @@ func (m *metrics) incTagsFilterDropped(ch string, count int) {
 		m.tagsFilterDroppedCache.Store(labels, counter)
 	}
 	counter.(prometheus.Counter).Add(float64(count))
+}
+
+type mapPublishSuppressedLabels struct {
+	Reason           string
+	ChannelNamespace string
+}
+
+func (m *metrics) incMapPublishSuppressed(reason SuppressReason, ch string) {
+	channelNamespace := m.getChannelNamespaceLabel(ch)
+	labels := mapPublishSuppressedLabels{
+		Reason:           string(reason),
+		ChannelNamespace: channelNamespace,
+	}
+	counter, ok := m.mapPublishSuppressedCache.Load(labels)
+	if !ok {
+		counter = m.mapPublishSuppressedCount.WithLabelValues(string(reason), channelNamespace)
+		m.mapPublishSuppressedCache.Store(labels, counter)
+	}
+	counter.(prometheus.Counter).Inc()
 }
 
 // getAcceptProtocolLabel returns the transport accept protocol label based on HTTP version.

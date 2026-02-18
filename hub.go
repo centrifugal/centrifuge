@@ -628,7 +628,7 @@ func (s *subShard) removeSubID(ch string) {
 // Returns (isEmpty, wasRemoved, wasKeyed) where:
 // - isEmpty: true if channel has no subscribers left
 // - wasRemoved: true if subscription was found and removed
-// - wasKeyed: true if the now-empty channel was a keyed subscription channel
+// - wasMap: true if the now-empty channel was a keyed subscription channel
 func (s *subShard) removeSub(ch string, c *Client) (bool, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -649,9 +649,9 @@ func (s *subShard) removeSub(ch string, c *Client) (bool, bool, bool) {
 	// clean up subs map if it's needed.
 	if len(s.subs[ch]) == 0 {
 		delete(s.subs, ch)
-		wasKeyed := s.mapChannels[ch]
+		wasMap := s.mapChannels[ch]
 		delete(s.mapChannels, ch)
-		return true, true, wasKeyed
+		return true, true, wasMap
 	}
 
 	return false, true, false

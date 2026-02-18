@@ -216,6 +216,11 @@ type Config struct {
 	// When enabled for positioned mode, if stream hasn't advanced much during state
 	// pagination, server goes LIVE immediately, reducing round trips.
 	MapStateToLiveEnabled bool
+	// MapSubscribeCatchUpTimeout sets the maximum time a client can spend paginating
+	// through state and stream phases before going live. If exceeded, the client is
+	// disconnected with DisconnectStale. Zero means 5 seconds (default). Negative
+	// means no timeout.
+	MapSubscribeCatchUpTimeout time.Duration
 	// GetMapChannelOptions returns channel options for map channels.
 	// Required for map channel operations. If nil, any map operation returns an error.
 	// Each channel must have SyncMode and RetentionMode explicitly set.

@@ -2972,6 +2972,227 @@ func TestMapSubscribe_StreamPhaseOffset(t *testing.T) {
 
 // TestMapSubscribe_WasRecovering verifies that WasRecovering flag is set
 // correctly on recovery join responses.
+func TestMapSubscribe_CatchUpTimeout_StatePagination(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	// Set a very short timeout so we can trigger it without sleeping.
+	node.config.MapSubscribeCatchUpTimeout = time.Nanosecond
+
+	channel := "test_catchup_timeout"
+	ctx := context.Background()
+
+	for i := 0; i < 10; i++ {
+		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+			Data: []byte(`{"v":"data"}`),
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// First page succeeds (creates mapSubscribeState).
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   5,
+	})
+	require.Equal(t, MapPhaseState, result.Phase)
+	require.NotEmpty(t, result.Cursor)
+
+	// Second page (cursor continuation) — timeout already expired.
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   5,
+		Cursor:  result.Cursor,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.ErrorIs(t, err, DisconnectStale)
+
+	// mapSubscribing state should be cleaned up.
+	client.mu.RLock()
+	_, hasState := client.mapSubscribing[channel]
+	client.mu.RUnlock()
+	require.False(t, hasState)
+}
+
+func TestMapSubscribe_CatchUpTimeout_PhaseTransition(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+	node.config.MapSubscribeCatchUpTimeout = time.Nanosecond
+
+	channel := "test_catchup_timeout_phase"
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		_, err := broker.Publish(ctx, channel, "key"+string(rune('A'+i)), MapPublishOptions{
+			Data: []byte(`{"v":"data"}`),
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// State phase succeeds (limit large enough for single page → stays in STATE phase
+	// because positioned mode needs stream catch-up, and StateToLive is not enabled).
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+	require.Equal(t, MapPhaseState, result.Phase)
+	require.Empty(t, result.Cursor) // All state delivered.
+
+	// Phase transition to stream — timeout expired.
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseStream,
+		Offset:  result.Offset,
+		Epoch:   result.Epoch,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.ErrorIs(t, err, DisconnectStale)
+}
+
+func TestMapSubscribe_CatchUpTimeout_Sweep(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	node.config.MapSubscribeCatchUpTimeout = time.Nanosecond
+
+	ctx := context.Background()
+
+	// Create two channels with data.
+	for _, ch := range []string{"ch_a", "ch_b"} {
+		_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
+			Data: []byte(`{"v":"data"}`),
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Start catch-up on ch_a (limit=1 with 1 entry → goes LIVE in streamless mode).
+	// We need to prevent going live so mapSubscribing stays. Use a larger dataset.
+	_, err := broker.Publish(ctx, "ch_a", "key2", MapPublishOptions{
+		Data: []byte(`{"v":"data2"}`),
+	})
+	require.NoError(t, err)
+
+	// First page of ch_a (limit=1 so cursor remains).
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: "ch_a",
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   1,
+	})
+	require.NotEmpty(t, result.Cursor)
+
+	// Verify ch_a is in mapSubscribing.
+	client.mu.RLock()
+	_, hasA := client.mapSubscribing["ch_a"]
+	client.mu.RUnlock()
+	require.True(t, hasA)
+
+	// Now start a fresh subscription on ch_b — this triggers sweep that should
+	// clean up expired ch_a state (but ch_b itself proceeds normally).
+	result2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: "ch_b",
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+	require.Equal(t, MapPhaseLive, result2.Phase) // Single page streamless → LIVE.
+
+	// ch_a should have been swept.
+	client.mu.RLock()
+	_, hasA = client.mapSubscribing["ch_a"]
+	client.mu.RUnlock()
+	require.False(t, hasA, "expired ch_a catch-up should be swept")
+}
+
+func TestMapSubscribe_CatchUpTimeout_Disabled(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	// Negative timeout disables the check.
+	node.config.MapSubscribeCatchUpTimeout = -1
+
+	channel := "test_catchup_no_timeout"
+	ctx := context.Background()
+
+	for i := 0; i < 10; i++ {
+		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+			Data: []byte(`{"v":"data"}`),
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Manually set startedAt far in the past.
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   5,
+	})
+	require.NotEmpty(t, result.Cursor)
+
+	client.mu.Lock()
+	client.mapSubscribing[channel].startedAt = time.Now().Add(-time.Hour).UnixNano()
+	client.mu.Unlock()
+
+	// Should still succeed — timeout disabled.
+	result2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   5,
+		Cursor:  result.Cursor,
+	})
+	require.Equal(t, MapPhaseLive, result2.Phase)
+}
+
 func TestMapSubscribe_WasRecovering(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)

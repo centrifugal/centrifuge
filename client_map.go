@@ -117,8 +117,9 @@ type mapSubscribeState struct {
 	options             SubscribeOptions // From OnSubscribe callback
 	epoch               string           // Epoch from first response (for validation)
 	offset              uint64           // Offset from first state page (frozen for consistency)
-	offsetCaptured      bool             // True after offset is captured (since 0 is valid offset)
+	startedAt           int64            // UnixNano when catch-up started (for timeout)
 	streamStart         uint64           // Stream top captured on first stream request
+	offsetCaptured      bool             // True after offset is captured (since 0 is valid offset)
 	streamStartCaptured bool             // True after streamStart is captured (since 0 is valid offset)
 	isPresence          bool             // True if this is a presence subscription
 	subscribingCh       chan struct{}    // Closed when subscription completes (for race handling)
@@ -145,6 +146,11 @@ func (c *Client) handleMapSubscribeCommand(
 		return replyError
 	}
 
+	// Sweep expired catch-ups on other channels. Handles abandoned catch-ups where
+	// the client stopped sending requests but stayed connected. The current channel
+	// is skipped — its expiry is checked below with a proper DisconnectStale.
+	c.sweepExpiredMapSubscribing(req.Channel)
+
 	// For map subscription continuation requests (pagination or non-state phase with existing state),
 	// bypass the OnSubscribe callback - we already authorized on the first request.
 	c.mu.RLock()
@@ -155,6 +161,13 @@ func (c *Client) handleMapSubscribeCommand(
 		if !hasState {
 			return ErrorPermissionDenied
 		}
+		if c.isMapCatchUpExpired(state) {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "map subscribe catch-up timeout", map[string]any{
+				"channel": req.Channel, "user": c.user, "client": c.uid,
+			}))
+			c.cleanupMapSubscribing(req.Channel)
+			return DisconnectStale
+		}
 		reply := SubscribeReply{Options: state.options}
 		if handleErr := c.handleMapSubscribe(req, reply, cmd, started, rw); handleErr != nil {
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
@@ -163,6 +176,13 @@ func (c *Client) handleMapSubscribeCommand(
 	}
 
 	if req.Phase != MapPhaseState && hasState {
+		if c.isMapCatchUpExpired(state) {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "map subscribe catch-up timeout", map[string]any{
+				"channel": req.Channel, "user": c.user, "client": c.uid,
+			}))
+			c.cleanupMapSubscribing(req.Channel)
+			return DisconnectStale
+		}
 		reply := SubscribeReply{Options: state.options}
 		if handleErr := c.handleMapSubscribe(req, reply, cmd, started, rw); handleErr != nil {
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
@@ -286,6 +306,7 @@ func (c *Client) handleMapStatePhase(
 		}
 		c.mapSubscribing[channel] = &mapSubscribeState{
 			options:       reply.Options,
+			startedAt:     time.Now().UnixNano(),
 			isPresence:    reply.Options.Type == SubscriptionTypeMapClients || reply.Options.Type == SubscriptionTypeMapUsers,
 			subscribingCh: make(chan struct{}),
 			tagsFilter:    tf,
@@ -411,7 +432,7 @@ func (c *Client) handleMapStatePhase(
 		}
 		// Positioned: optionally skip STREAM phase if stream hasn't advanced much.
 		if c.node.config.MapStateToLiveEnabled {
-			currentStreamPos, err := c.node.MapStreamPosition(c.ctx, channel)
+			currentStreamPos, err := c.node.mapStreamPosition(c.ctx, channel)
 			if err == nil {
 				// Use limit as threshold - if stream is within one page, go LIVE.
 				if effectivePos.Offset+uint64(limit) >= currentStreamPos.Offset {
@@ -678,6 +699,7 @@ func (c *Client) handleMapStateToLive(
 	c.writeEncodedCommandReply(channel, protocol.FrameTypeSubscribe, cmd, protoReply, rw)
 	c.handleCommandFinished(cmd, protocol.FrameTypeSubscribe, nil, protoReply, started, "")
 	c.releaseSubscribeCommandReply(protoReply)
+	c.node.metrics.incActionCount("map_subscribe_state_to_live", channel)
 
 	// Build channel context with map flag.
 	channelFlags := c.buildMapChannelFlags(deltaEnabled, req.Delta, isPresence, opts, reply)
@@ -749,6 +771,7 @@ func (c *Client) handleMapStreamPhase(
 		// Client is reconnecting with offset/epoch, skip state phase.
 		state = &mapSubscribeState{
 			options:       reply.Options,
+			startedAt:     time.Now().UnixNano(),
 			isPresence:    reply.Options.Type == SubscriptionTypeMapClients || reply.Options.Type == SubscriptionTypeMapUsers,
 			subscribingCh: make(chan struct{}),
 			epoch:         req.Epoch,
@@ -794,7 +817,7 @@ func (c *Client) handleMapStreamPhase(
 
 	// Capture stream top on first stream request.
 	if !state.streamStartCaptured {
-		streamPos, err := c.node.MapStreamPosition(c.ctx, channel)
+		streamPos, err := c.node.mapStreamPosition(c.ctx, channel)
 		if err != nil {
 			if errors.Is(err, ErrorUnrecoverablePosition) {
 				c.cleanupMapSubscribing(channel)
@@ -1094,6 +1117,11 @@ func (c *Client) handleMapStreamToLive(
 	c.writeEncodedCommandReply(channel, protocol.FrameTypeSubscribe, cmd, protoReply, rw)
 	c.handleCommandFinished(cmd, protocol.FrameTypeSubscribe, nil, protoReply, started, "")
 	c.releaseSubscribeCommandReply(protoReply)
+	c.node.metrics.incActionCount("map_subscribe_stream_to_live", channel)
+	if req.Recover {
+		c.node.metrics.incRecover(true, channel, len(recoveredPubs) > 0)
+		c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
+	}
 
 	// Build channel context with map flag.
 	channelFlags := c.buildMapChannelFlags(deltaEnabled, req.Delta, isPresence, opts, reply)
@@ -1487,6 +1515,7 @@ func (c *Client) handleMapImmediateJoin(
 	c.writeEncodedCommandReply(channel, protocol.FrameTypeSubscribe, cmd, protoReply, rw)
 	c.handleCommandFinished(cmd, protocol.FrameTypeSubscribe, nil, protoReply, started, "")
 	c.releaseSubscribeCommandReply(protoReply)
+	c.node.metrics.incActionCount("map_subscribe_immediate_join", channel)
 
 	// Build channel context with map flag.
 	channelFlags := c.buildMapChannelFlags(deltaEnabled, req.Delta, isPresence, opts, reply)
@@ -1536,6 +1565,9 @@ func (c *Client) handleMapRecoveryJoin(
 	// In streamless mode, redirect recovery to immediate join (full state re-sync).
 	if !opts.EnablePositioning && !opts.EnableRecovery {
 		c.cleanupMapSubscribing(channel)
+		if req.Recover {
+			c.node.metrics.incRecover(false, channel, false)
+		}
 		return c.handleMapImmediateJoin(req, reply, opts, isPresence, cmd, started, rw)
 	}
 
@@ -1723,6 +1755,11 @@ func (c *Client) handleMapRecoveryJoin(
 	c.writeEncodedCommandReply(channel, protocol.FrameTypeSubscribe, cmd, protoReply, rw)
 	c.handleCommandFinished(cmd, protocol.FrameTypeSubscribe, nil, protoReply, started, "")
 	c.releaseSubscribeCommandReply(protoReply)
+	c.node.metrics.incActionCount("map_subscribe_recovery_join", channel)
+	if req.Recover {
+		c.node.metrics.incRecover(true, channel, len(recoveredPubs) > 0)
+		c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
+	}
 
 	// Build channel context with map flag.
 	channelFlags := c.buildMapChannelFlags(deltaEnabled, req.Delta, isPresence, opts, reply)
@@ -1872,6 +1909,18 @@ func (c *Client) writeMapSubscribeReply(
 	return nil
 }
 
+// isMapCatchUpExpired checks whether the map catch-up has exceeded the configured timeout.
+func (c *Client) isMapCatchUpExpired(state *mapSubscribeState) bool {
+	timeout := c.node.config.MapSubscribeCatchUpTimeout
+	if timeout == 0 {
+		timeout = 5 * time.Second
+	}
+	if timeout < 0 {
+		return false // Disabled.
+	}
+	return time.Duration(time.Now().UnixNano()-state.startedAt) > timeout
+}
+
 // acquireMapPaginationLock tries to acquire a pagination lock for the channel.
 // Returns true if lock acquired, false if another pagination is in progress.
 func (c *Client) acquireMapPaginationLock(channel string) bool {
@@ -1892,6 +1941,34 @@ func (c *Client) releaseMapPaginationLock(channel string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.mapPaginationLocks, channel)
+}
+
+// sweepExpiredMapSubscribing removes expired mapSubscribing entries for channels
+// other than skipChannel. The skipped channel is handled by the caller with a
+// proper DisconnectStale. Cleans up abandoned catch-ups where the client stopped
+// sending requests but stayed connected. Called at the start of every map subscribe
+// command — O(n) where n is in-progress catch-ups (typically 0–2), no-op when map
+// is empty.
+func (c *Client) sweepExpiredMapSubscribing(skipChannel string) {
+	c.mu.RLock()
+	n := len(c.mapSubscribing)
+	c.mu.RUnlock()
+	if n == 0 {
+		return
+	}
+	c.mu.Lock()
+	for ch, state := range c.mapSubscribing {
+		if ch == skipChannel {
+			continue
+		}
+		if c.isMapCatchUpExpired(state) {
+			if state.subscribingCh != nil {
+				close(state.subscribingCh)
+			}
+			delete(c.mapSubscribing, ch)
+		}
+	}
+	c.mu.Unlock()
 }
 
 // cleanupMapSubscribing removes map subscribing state for a channel.
