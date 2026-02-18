@@ -896,18 +896,31 @@ func TestRedisMapBroker_CleanupGeneratesRemovalEvents(t *testing.T) {
 	require.Equal(t, 0, stats.NumKeys, "Stats should show 0 keys")
 }
 
-// TestRedisMapBroker_CleanupPartialExpiry verifies that cleanup only removes expired entries,
-// leaving non-expired ones untouched.
-func TestRedisMapBroker_CleanupPartialExpiry(t *testing.T) {
+// TestRedisMapBroker_CleanupExpiry verifies that cleanup removes expired entries
+// and publishes removal events to the stream. Uses two channels with different
+// TTLs to verify that only expired channel entries are cleaned up.
+func TestRedisMapBroker_CleanupExpiry(t *testing.T) {
+	shortChannel := randomChannel("test_cleanup_short")
+	longChannel := randomChannel("test_cleanup_long")
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			if channel == shortChannel {
+				return MapChannelOptions{
+					SyncMode:      MapSyncConverging,
+					RetentionMode: MapRetentionExpiring,
+					StreamSize:    100,
+					StreamTTL:     300 * time.Second,
+					MetaTTL:       3600 * time.Second,
+					KeyTTL:        10 * time.Second,
+				}
+			}
 			return MapChannelOptions{
 				SyncMode:      MapSyncConverging,
 				RetentionMode: MapRetentionExpiring,
 				StreamSize:    100,
 				StreamTTL:     300 * time.Second,
 				MetaTTL:       3600 * time.Second,
-				KeyTTL:        60 * time.Second,
+				KeyTTL:        600 * time.Second,
 			}
 		},
 	})
@@ -925,47 +938,51 @@ func TestRedisMapBroker_CleanupPartialExpiry(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	channel := randomChannel("test_cleanup_partial")
 
-	// Publish key1 with short TTL.
-	_, err = broker.Publish(ctx, channel, "key_short", MapPublishOptions{
+	// Publish key in short-TTL channel (10s).
+	_, err = broker.Publish(ctx, shortChannel, "key_short", MapPublishOptions{
 		Data: []byte(`{"ttl":"short"}`),
 	})
 	require.NoError(t, err)
 
-	// Publish key2 with long TTL.
-	_, err = broker.Publish(ctx, channel, "key_long", MapPublishOptions{
+	// Publish key in long-TTL channel (600s).
+	_, err = broker.Publish(ctx, longChannel, "key_long", MapPublishOptions{
 		Data: []byte(`{"ttl":"long"}`),
 	})
 	require.NoError(t, err)
 
-	// Simulate time passing: 15 seconds (key_short expired, key_long still alive).
+	// Simulate time passing: 15 seconds.
 	shardWrapper := broker.shards[0]
-	cleanupKey := broker.cleanupRegistrationKeyForChannel(shardWrapper.shard, channel)
 	futureNow := time.Now().Unix() + 15
 
-	err = broker.cleanupChannel(ctx, shardWrapper.shard, channel, cleanupKey, futureNow)
+	// Cleanup both channels.
+	shortCleanupKey := broker.cleanupRegistrationKeyForChannel(shardWrapper.shard, shortChannel)
+	err = broker.cleanupChannel(ctx, shardWrapper.shard, shortChannel, shortCleanupKey, futureNow)
 	require.NoError(t, err)
 
-	// Verify only key_short was removed.
-	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit: 100,
-	})
-	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
+	longCleanupKey := broker.cleanupRegistrationKeyForChannel(shardWrapper.shard, longChannel)
+	err = broker.cleanupChannel(ctx, shardWrapper.shard, longChannel, longCleanupKey, futureNow)
 	require.NoError(t, err)
-	require.Len(t, entries, 1, "Only key_long should remain")
-	require.Equal(t, "key_long", entries[0].Key)
 
-	// Verify stream has 2 publish + 1 removal event.
-	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+	// Short-TTL channel: key should be removed (10s TTL < 15s elapsed).
+	stateRes, err := broker.ReadState(ctx, shortChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 0, "Short-TTL key should be expired")
+
+	// Short channel stream: 1 publish + 1 removal.
+	streamResult, err := broker.ReadStream(ctx, shortChannel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err)
-	require.Len(t, streamResult.Publications, 3, "Expected 3 events (2 publish + 1 removal)")
+	require.Len(t, streamResult.Publications, 2, "Expected 2 events (1 publish + 1 removal)")
+	require.True(t, streamResult.Publications[1].Removed)
+	require.Equal(t, "key_short", streamResult.Publications[1].Key)
 
-	lastPub := streamResult.Publications[2]
-	require.True(t, lastPub.Removed)
-	require.Equal(t, "key_short", lastPub.Key)
+	// Long-TTL channel: key should still exist (600s TTL > 15s elapsed).
+	stateRes, err = broker.ReadState(ctx, longChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 1, "Long-TTL key should still be alive")
+	require.Equal(t, "key_long", stateRes.Publications[0].Key)
 }
 
 // TestRedisMapBroker_CleanupRefreshedTTL verifies that refreshing a key's TTL

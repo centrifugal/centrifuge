@@ -24,6 +24,7 @@ func setupTwoNodeCachedRedis(t *testing.T) (node1 *Node, cached1 *CachedMapBroke
 				SyncMode:      MapSyncConverging,
 				RetentionMode: MapRetentionExpiring,
 				KeyTTL:        60 * time.Second,
+				StreamSize:    1000,
 			}
 		},
 	})
@@ -54,6 +55,7 @@ func setupTwoNodeCachedRedis(t *testing.T) (node1 *Node, cached1 *CachedMapBroke
 				SyncMode:      MapSyncConverging,
 				RetentionMode: MapRetentionExpiring,
 				KeyTTL:        60 * time.Second,
+				StreamSize:    1000,
 			}
 		},
 	})

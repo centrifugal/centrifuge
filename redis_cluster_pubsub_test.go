@@ -51,7 +51,15 @@ func newNodeGroupedMapBrokerPrefix(t *testing.T, n *Node, numPartitions int, pre
 // first-dimension subClients entries equals the number of Redis Cluster nodes,
 // not the number of partitions.
 func TestRedisMapBroker_NodeGrouped_ConnectionCount(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	numPartitions := 32
 	e := newNodeGroupedMapBroker(t, node, numPartitions)
 	defer func() { _ = e.Close(context.Background()) }()
@@ -85,7 +93,15 @@ func TestRedisMapBroker_NodeGrouped_ConnectionCount(t *testing.T) {
 
 // TestRedisMapBroker_NodeGrouped_Basic tests basic Publish + ReadState with node-grouped PubSub.
 func TestRedisMapBroker_NodeGrouped_Basic(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	e := newNodeGroupedMapBroker(t, node, 16)
 	defer func() { _ = e.Close(context.Background()) }()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -118,6 +134,13 @@ func TestRedisMapBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 	node1, _ := New(Config{
 		LogLevel:   LogLevelDebug,
 		LogHandler: func(entry LogEntry) {},
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
 	})
 	e1 := newNodeGroupedMapBrokerPrefix(t, node1, 16, prefix)
 	defer func() { _ = e1.Close(context.Background()) }()
@@ -167,7 +190,15 @@ func TestRedisMapBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 	t.Logf("channel distribution across %d nodes: %v", numNodesHit, nodeHits)
 
 	// Setup a second broker to publish (same prefix).
-	node2, _ := New(Config{})
+	node2, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	e2 := newNodeGroupedMapBrokerPrefix(t, node2, 16, prefix)
 	defer func() { _ = e2.Close(context.Background()) }()
 	defer func() { _ = node2.Shutdown(context.Background()) }()
@@ -199,7 +230,15 @@ func TestRedisMapBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 // TestRedisMapBroker_NodeGrouped_TopologyStable verifies that refreshTopology
 // returns false when the cluster topology hasn't changed.
 func TestRedisMapBroker_NodeGrouped_TopologyStable(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	e := newNodeGroupedMapBroker(t, node, 32)
 	defer func() { _ = e.Close(context.Background()) }()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -223,7 +262,15 @@ func TestRedisMapBroker_NodeGrouped_TopologyStable(t *testing.T) {
 // TestRedisMapBroker_NodeGrouped_TopologyDoneChannel verifies that
 // closeTopologyDone properly signals goroutines and can be called multiple times.
 func TestRedisMapBroker_NodeGrouped_TopologyDoneChannel(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	e := newNodeGroupedMapBroker(t, node, 16)
 	defer func() { _ = e.Close(context.Background()) }()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -266,7 +313,15 @@ func TestRedisMapBroker_NodeGrouped_TopologyDoneChannel(t *testing.T) {
 // TestRedisMapBroker_NodeGrouped_QueryClusterSlots verifies that CLUSTER SLOTS
 // returns valid slot ranges from the live cluster.
 func TestRedisMapBroker_NodeGrouped_QueryClusterSlots(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	redisConf := RedisShardConfig{
 		ClusterAddresses: []string{"localhost:7001", "localhost:7002", "localhost:7003"},
 		IOTimeout:        10 * time.Second,
@@ -303,7 +358,15 @@ func TestRedisMapBroker_NodeGrouped_QueryClusterSlots(t *testing.T) {
 // TestRedisMapBroker_NodeGrouped_RebuildPreservesPartitions verifies that
 // rebuildNodeGroupedPubSub produces the same mapping on a stable cluster.
 func TestRedisMapBroker_NodeGrouped_RebuildPreservesPartitions(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	e := newNodeGroupedMapBroker(t, node, 64)
 	defer func() { _ = e.Close(context.Background()) }()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -333,7 +396,15 @@ func TestRedisMapBroker_NodeGrouped_RebuildPreservesPartitions(t *testing.T) {
 // TestRedisMapBroker_NodeGrouped_Cleanup tests that the cleanup worker functions
 // correctly with node-grouped PubSub connections.
 func TestRedisMapBroker_NodeGrouped_Cleanup(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        1 * time.Second,
+			}
+		},
+	})
 	redisConf := RedisShardConfig{
 		ClusterAddresses: []string{"localhost:7001", "localhost:7002", "localhost:7003"},
 		IOTimeout:        10 * time.Second,
@@ -434,7 +505,15 @@ func newNodeGroupedBrokerPrefix(t *testing.T, n *Node, numPartitions int, prefix
 // TestRedisBroker_NodeGrouped_ConnectionCount verifies that the number of
 // first-dimension subClients entries equals the number of Redis Cluster nodes.
 func TestRedisBroker_NodeGrouped_ConnectionCount(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	numPartitions := 32
 	b := newNodeGroupedBroker(t, node, numPartitions)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -475,6 +554,13 @@ func TestRedisBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 	node1, _ := New(Config{
 		LogLevel:   LogLevelDebug,
 		LogHandler: func(entry LogEntry) {},
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
 	})
 	b1 := newNodeGroupedBrokerPrefix(t, node1, 16, prefix)
 	defer func() { _ = node1.Shutdown(context.Background()) }()
@@ -536,7 +622,15 @@ func TestRedisBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 	t.Logf("channel distribution across %d nodes: %v", numNodesHit, nodeHits)
 
 	// Setup a second broker to publish (same prefix).
-	node2, _ := New(Config{})
+	node2, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	b2 := newNodeGroupedBrokerPrefix(t, node2, 16, prefix)
 	_ = node2.Run()
 	defer func() { _ = node2.Shutdown(context.Background()) }()
@@ -573,7 +667,15 @@ func TestRedisBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 // TestRedisBroker_NodeGrouped_TopologyStable verifies that refreshBrokerTopology
 // returns false when the cluster topology hasn't changed.
 func TestRedisBroker_NodeGrouped_TopologyStable(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	b := newNodeGroupedBroker(t, node, 32)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	defer stopRedisBroker(b)
@@ -597,7 +699,15 @@ func TestRedisBroker_NodeGrouped_TopologyStable(t *testing.T) {
 // TestRedisBroker_NodeGrouped_RebuildPreservesPartitions verifies that
 // rebuildBrokerNodeGroupedPubSub produces the same mapping on a stable cluster.
 func TestRedisBroker_NodeGrouped_RebuildPreservesPartitions(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	b := newNodeGroupedBroker(t, node, 64)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	defer stopRedisBroker(b)
@@ -771,6 +881,13 @@ func TestRedisMapBroker_NodeGrouped_SlotMigration(t *testing.T) {
 		LogHandler: func(entry LogEntry) {
 			t.Logf("[node1] %s %v", entry.Message, entry.Fields)
 		},
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
 	})
 	e1 := newNodeGroupedMapBrokerPrefix(t, node1, numPartitions, prefix)
 	defer func() { _ = e1.Close(context.Background()) }()
@@ -831,7 +948,15 @@ func TestRedisMapBroker_NodeGrouped_SlotMigration(t *testing.T) {
 	require.NoError(t, e1.Subscribe(testChannel))
 
 	// Second broker to publish.
-	node2, _ := New(Config{})
+	node2, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	e2 := newNodeGroupedMapBrokerPrefix(t, node2, numPartitions, prefix)
 	defer func() { _ = e2.Close(context.Background()) }()
 	defer func() { _ = node2.Shutdown(context.Background()) }()
@@ -1156,6 +1281,13 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 		LogHandler: func(entry LogEntry) {
 			t.Logf("[e1] %s %v", entry.Message, entry.Fields)
 		},
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
 	})
 	e1 := newNodeGroupedMapBrokerPrefix(t, node1, numPartitions, prefix)
 	defer func() { _ = e1.Close(context.Background()) }()
@@ -1185,7 +1317,15 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 	require.NoError(t, e1.Subscribe(testChannel))
 
 	// Publisher broker (same prefix).
-	node2, _ := New(Config{})
+	node2, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	e2 := newNodeGroupedMapBrokerPrefix(t, node2, numPartitions, prefix)
 	defer func() { _ = e2.Close(context.Background()) }()
 	defer func() { _ = node2.Shutdown(context.Background()) }()

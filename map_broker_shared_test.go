@@ -2,7 +2,9 @@ package centrifuge
 
 import (
 	"context"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -201,7 +203,7 @@ func testMapBrokerClientInfoInStream(t *testing.T, factory mapBrokerFactory) {
 
 	t.Run("ReadStream_contains_client_info", func(t *testing.T) {
 		broker := factory(t)
-		ch := "client_info_stream_ch"
+		ch := "client_info_stream_ch_" + strconv.FormatInt(time.Now().UnixNano(), 36)
 
 		_, err := broker.Publish(ctx, ch, "k1", MapPublishOptions{
 			Data:       []byte("data1"),

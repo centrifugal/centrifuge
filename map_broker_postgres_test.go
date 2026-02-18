@@ -555,7 +555,7 @@ func TestPostgresMapBroker_KeyTTL(t *testing.T) {
 			return MapChannelOptions{
 				SyncMode:      MapSyncConverging,
 				RetentionMode: MapRetentionExpiring,
-				KeyTTL:        60 * time.Second,
+				KeyTTL:        2 * time.Second,
 			}
 		},
 	})
@@ -564,7 +564,7 @@ func TestPostgresMapBroker_KeyTTL(t *testing.T) {
 	ctx := context.Background()
 	channel := "test_key_ttl"
 
-	// Publish with short TTL
+	// Publish with short TTL (2s from channel config)
 	_, err := broker.Publish(ctx, channel, "ephemeral", MapPublishOptions{
 		Data: []byte("temporary"),
 	})
