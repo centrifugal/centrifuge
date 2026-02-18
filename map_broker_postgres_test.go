@@ -125,7 +125,15 @@ func stateToMapPostgres(pubs []*Publication) map[string][]byte {
 
 // TestPostgresMapBroker_StatefulChannel tests stateful channel with keyed state and revisions.
 func TestPostgresMapBroker_StatefulChannel(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -174,7 +182,15 @@ func TestPostgresMapBroker_StatefulChannel(t *testing.T) {
 
 // TestPostgresMapBroker_StatefulChannelOrdered tests ordered stateful channel.
 func TestPostgresMapBroker_StatefulChannelOrdered(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Ordered:       true,
@@ -217,7 +233,15 @@ func TestPostgresMapBroker_StatefulChannelOrdered(t *testing.T) {
 
 // TestPostgresMapBroker_StateRevision tests that state values include revisions.
 func TestPostgresMapBroker_StateRevision(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -261,7 +285,15 @@ func TestPostgresMapBroker_StateRevision(t *testing.T) {
 
 // TestPostgresMapBroker_StatePagination tests cursor-based state pagination.
 func TestPostgresMapBroker_StatePagination(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -314,7 +346,15 @@ func TestPostgresMapBroker_StatePagination(t *testing.T) {
 
 // TestPostgresMapBroker_StreamRecovery tests stream recovery.
 func TestPostgresMapBroker_StreamRecovery(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -345,7 +385,15 @@ func TestPostgresMapBroker_StreamRecovery(t *testing.T) {
 
 // TestPostgresMapBroker_Idempotency tests idempotent publishing.
 func TestPostgresMapBroker_Idempotency(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -385,7 +433,15 @@ func TestPostgresMapBroker_Idempotency(t *testing.T) {
 
 // TestPostgresMapBroker_KeyMode tests KeyMode (IfNew, IfExists).
 func TestPostgresMapBroker_KeyMode(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -438,7 +494,15 @@ func TestPostgresMapBroker_KeyMode(t *testing.T) {
 
 // TestPostgresMapBroker_CAS tests Compare-And-Swap operations.
 func TestPostgresMapBroker_CAS(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -486,7 +550,15 @@ func TestPostgresMapBroker_KeyTTL(t *testing.T) {
 		t.Skip("skipping TTL test in short mode")
 	}
 
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -523,7 +595,15 @@ func TestPostgresMapBroker_KeyTTL(t *testing.T) {
 
 // TestPostgresMapBroker_Version tests version-based ordering.
 func TestPostgresMapBroker_Version(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -565,7 +645,15 @@ func TestPostgresMapBroker_Version(t *testing.T) {
 
 // TestPostgresMapBroker_PerKeyVersion tests that version tracking is per-key independent.
 func TestPostgresMapBroker_PerKeyVersion(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -620,7 +708,15 @@ func TestPostgresMapBroker_PerKeyVersion(t *testing.T) {
 
 // TestPostgresMapBroker_Remove tests removing keys.
 func TestPostgresMapBroker_Remove(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -679,7 +775,15 @@ func TestPostgresMapBroker_Remove(t *testing.T) {
 
 // TestPostgresMapBroker_Stats tests state statistics.
 func TestPostgresMapBroker_Stats(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -706,7 +810,15 @@ func TestPostgresMapBroker_Stats(t *testing.T) {
 
 // TestPostgresMapBroker_EpochMismatch tests epoch validation.
 func TestPostgresMapBroker_EpochMismatch(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -761,7 +873,15 @@ func TestPostgresMapBroker_WALReader(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, err := New(Config{})
+	node, err := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
@@ -881,7 +1001,15 @@ func TestPostgresMapBroker_WALReaderOrdering(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, err := New(Config{})
+	node, err := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
@@ -968,7 +1096,15 @@ func TestPostgresMapBroker_WALReaderMetadata(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, err := New(Config{})
+	node, err := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
@@ -1053,7 +1189,15 @@ func TestPostgresMapBroker_WALReaderMetadata(t *testing.T) {
 
 // TestPostgresMapBroker_ConcurrentPublishOrdering tests that concurrent publishes maintain per-channel ordering.
 func TestPostgresMapBroker_ConcurrentPublishOrdering(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -1106,7 +1250,15 @@ func TestPostgresMapBroker_WALReaderWithBroker(t *testing.T) {
 	ctx := context.Background()
 
 	// Create node
-	node, err := New(Config{})
+	node, err := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	require.NoError(t, err)
 
 	// Set up Redis broker
@@ -1219,7 +1371,15 @@ func TestPostgresMapBroker_OutboxOrdering(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, err := New(Config{})
+	node, err := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
@@ -1314,7 +1474,15 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 	channel := fmt.Sprintf("test_outbox_guarantee_%d", time.Now().UnixNano())
 
 	// First, publish some messages without starting workers
-	node1, err := New(Config{})
+	node1, err := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	require.NoError(t, err)
 
 	broker1, err := NewPostgresMapBroker(node1, PostgresMapBrokerConfig{
@@ -1348,7 +1516,15 @@ func TestPostgresMapBroker_OutboxDeliveryGuarantee(t *testing.T) {
 	_ = node1.Shutdown(ctx)
 
 	// Now start a new broker with workers - they should pick up the pending messages
-	node2, err := New(Config{})
+	node2, err := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	require.NoError(t, err)
 	require.NoError(t, node2.Run())
 
@@ -1418,7 +1594,15 @@ func TestPostgresMapBroker_OutboxConcurrentPublish(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, err := New(Config{})
+	node, err := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
@@ -1524,7 +1708,15 @@ func TestPostgresMapBroker_OutboxWithBroker(t *testing.T) {
 	ctx := context.Background()
 
 	// Create node
-	node, err := New(Config{})
+	node, err := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	require.NoError(t, err)
 
 	// Set up Redis broker
@@ -1624,7 +1816,15 @@ func TestPostgresMapBroker_OutboxWithBroker(t *testing.T) {
 // TestPostgresMapBroker_Delta_Outbox tests key-based delta delivery via outbox workers.
 func TestPostgresMapBroker_Delta_Outbox(t *testing.T) {
 	connString := getPostgresConnString(t)
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 
 	type pubEvent struct {
 		ch      string
@@ -1761,7 +1961,15 @@ func TestPostgresMapBroker_Delta_Outbox(t *testing.T) {
 }
 
 func TestPostgresMapBroker_Clear(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -1815,7 +2023,15 @@ func TestPostgresMapBroker_CursorBasedDelivery(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, err := New(Config{})
+	node, err := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
@@ -1903,7 +2119,15 @@ func TestPostgresMapBroker_CursorBasedDelivery(t *testing.T) {
 }
 
 func TestPostgresMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
@@ -2060,7 +2284,15 @@ func TestPostgresMapBroker_EnsureSchema_Fresh(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		NumShards:  4,
@@ -2087,7 +2319,15 @@ func TestPostgresMapBroker_EnsureSchema_Idempotent(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		NumShards:  4,
@@ -2116,7 +2356,15 @@ func TestPostgresMapBroker_EnsureSchema_PartialState(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		NumShards:  4,
@@ -2151,7 +2399,15 @@ func TestPostgresMapBroker_EnsureSchema_WALPublications(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		NumShards:  4,
@@ -2195,7 +2451,15 @@ func TestPostgresMapBroker_EnsureSchema_NumShardsMismatch(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 
 	// First, create schema with 4 shards.
 	broker4, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
@@ -2238,7 +2502,15 @@ func TestPostgresMapBroker_EnsureSchema_OutboxNoPublications(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		NumShards:  4,
@@ -2271,7 +2543,15 @@ func TestPostgresMapBroker_EnsureSchema_BinaryData(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		NumShards:  4,
@@ -2297,7 +2577,15 @@ func TestPostgresMapBroker_EnsureSchema_FunctionalAfterSetup(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		NumShards:  4,
@@ -2353,7 +2641,15 @@ func TestPostgresMapBroker_EnsureSchema_FunctionalAfterSetup(t *testing.T) {
 // TestPostgresMapBroker_OrderedStateAsc tests that ASC ordering returns entries
 // in ascending score order (lowest score first).
 func TestPostgresMapBroker_OrderedStateAsc(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Ordered:       true,
@@ -2418,7 +2714,15 @@ func TestPostgresMapBroker_OrderedStateAsc(t *testing.T) {
 // TestPostgresMapBroker_OrderedStatePaginationAsc tests cursor-based pagination
 // with ASC ordering across multiple pages.
 func TestPostgresMapBroker_OrderedStatePaginationAsc(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Ordered:       true,
@@ -2489,7 +2793,15 @@ func TestPostgresMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 // TestPostgresMapBroker_OrderedStateAscSameScores tests ASC ordering with
 // same-score entries — secondary sort by key ascending.
 func TestPostgresMapBroker_OrderedStateAscSameScores(t *testing.T) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Ordered:       true,
@@ -2558,14 +2870,30 @@ func TestPostgresMapBroker_OrderedStateAscSameScores(t *testing.T) {
 
 func TestPostgresMapBroker_ClientInfoInState(t *testing.T) {
 	testMapBrokerClientInfoInState(t, func(t *testing.T) MapBroker {
-		node, _ := New(Config{})
+		node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 		return newTestPostgresMapBroker(t, node)
 	})
 }
 
 func TestPostgresMapBroker_ClientInfoInStream(t *testing.T) {
 	testMapBrokerClientInfoInStream(t, func(t *testing.T) MapBroker {
-		node, _ := New(Config{})
+		node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 		return newTestPostgresMapBroker(t, node)
 	})
 }
@@ -2574,7 +2902,15 @@ func TestPostgresMapBroker_ClientInfoInStream(t *testing.T) {
 // via outbox workers (single-node, local delivery).
 func TestPostgresMapBroker_ClientInfoDelivery_Outbox(t *testing.T) {
 	connString := getPostgresConnString(t)
-	node, err := New(Config{})
+	node, err := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
@@ -2658,7 +2994,15 @@ func TestPostgresMapBroker_ClientInfoDelivery_OutboxWithBroker(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, err := New(Config{})
+	node, err := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
@@ -2764,7 +3108,15 @@ func TestPostgresMapBroker_ClientInfoDelivery_WAL(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, err := New(Config{})
+	node, err := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 
@@ -2850,7 +3202,15 @@ func TestPostgresMapBroker_ClientInfoDelivery_WALWithBroker(t *testing.T) {
 	connString := getPostgresConnString(t)
 	ctx := context.Background()
 
-	node, err := New(Config{})
+	node, err := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	require.NoError(t, err)
 	require.NoError(t, node.Run())
 

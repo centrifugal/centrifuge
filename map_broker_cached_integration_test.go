@@ -18,7 +18,15 @@ import (
 // Instead, we rely on the sync mechanism to propagate changes between nodes.
 func setupTwoNodeCachedRedis(t *testing.T) (node1 *Node, cached1 *CachedMapBroker, node2 *Node, cached2 *CachedMapBroker, cleanup func()) {
 	// Node 1
-	node1, _ = New(Config{})
+	node1, _ = New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	redisConf := testSingleRedisConf(6379)
 	shard1, err := NewRedisShard(node1, redisConf)
 	require.NoError(t, err)
@@ -40,7 +48,15 @@ func setupTwoNodeCachedRedis(t *testing.T) (node1 *Node, cached1 *CachedMapBroke
 	require.NoError(t, err)
 
 	// Node 2 - separate node, same Redis
-	node2, _ = New(Config{})
+	node2, _ = New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	shard2, err := NewRedisShard(node2, redisConf)
 	require.NoError(t, err)
 	backend2, err := NewRedisMapBroker(node2, RedisMapBrokerConfig{
@@ -456,7 +472,15 @@ func TestCachedMapBroker_TwoNodes_HighConcurrency(t *testing.T) {
 // to ensure tests rely on PUB/SUB propagation, not periodic sync.
 func setupTwoNodeCachedRedisWithPubSub(t *testing.T) (node1 *Node, cached1 *CachedMapBroker, node2 *Node, cached2 *CachedMapBroker, cleanup func()) {
 	// Node 1
-	node1, _ = New(Config{})
+	node1, _ = New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	redisConf := testSingleRedisConf(6379)
 	shard1, err := NewRedisShard(node1, redisConf)
 	require.NoError(t, err)
@@ -478,7 +502,15 @@ func setupTwoNodeCachedRedisWithPubSub(t *testing.T) (node1 *Node, cached1 *Cach
 	require.NoError(t, err)
 
 	// Node 2 - separate node, same Redis
-	node2, _ = New(Config{})
+	node2, _ = New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	shard2, err := NewRedisShard(node2, redisConf)
 	require.NoError(t, err)
 	backend2, err := NewRedisMapBroker(node2, RedisMapBrokerConfig{
@@ -854,7 +886,15 @@ func TestCachedMapBroker_TwoNodes_ConcurrentPublishPubSub(t *testing.T) {
 // sending a later message via PUB/SUB to trigger gap detection.
 func TestCachedMapBroker_TwoNodes_MissedPubSubMessages(t *testing.T) {
 	// Node 1 setup - regular node with PUB/SUB
-	node1, _ := New(Config{})
+	node1, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	redisConf := testSingleRedisConf(6379)
 	shard1, err := NewRedisShard(node1, redisConf)
 	require.NoError(t, err)
@@ -876,7 +916,15 @@ func TestCachedMapBroker_TwoNodes_MissedPubSubMessages(t *testing.T) {
 	require.NoError(t, err)
 
 	// Node 2 setup
-	node2, _ := New(Config{})
+	node2, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	shard2, err := NewRedisShard(node2, redisConf)
 	require.NoError(t, err)
 	backend2, err := NewRedisMapBroker(node2, RedisMapBrokerConfig{
@@ -898,7 +946,15 @@ func TestCachedMapBroker_TwoNodes_MissedPubSubMessages(t *testing.T) {
 
 	// "Silent" backend - writes to same Redis but with SkipPubSub
 	// This simulates messages that node2 would miss via PUB/SUB
-	node3, _ := New(Config{})
+	node3, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	shard3, err := NewRedisShard(node3, redisConf)
 	require.NoError(t, err)
 	silentBackend, err := NewRedisMapBroker(node3, RedisMapBrokerConfig{
