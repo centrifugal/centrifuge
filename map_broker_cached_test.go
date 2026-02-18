@@ -11,6 +11,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newTestCachedNode(tb testing.TB) *Node {
+	node, err := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+				StreamSize:    1000,
+				StreamTTL:     300 * time.Second,
+			}
+		},
+	})
+	require.NoError(tb, err)
+	return node
+}
+
 func newTestCachedMapBroker(tb testing.TB, n *Node) (*CachedMapBroker, *MemoryMapBroker) {
 	backend, err := NewMemoryMapBroker(n, MemoryMapBrokerConfig{})
 	require.NoError(tb, err)
@@ -41,7 +57,7 @@ func newTestCachedMapBroker(tb testing.TB, n *Node) (*CachedMapBroker, *MemoryMa
 
 // TestMapCache_EnsureLoaded tests lazy loading.
 func TestMapCache_EnsureLoaded(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -49,9 +65,7 @@ func TestMapCache_EnsureLoaded(t *testing.T) {
 
 	// Publish some data to backend directly
 	_, err := backend.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
@@ -72,7 +86,7 @@ func TestMapCache_EnsureLoaded(t *testing.T) {
 
 // TestMapCache_EnsureLoaded_Singleflight tests that concurrent loads call loader once.
 func TestMapCache_EnsureLoaded_Singleflight(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -80,9 +94,7 @@ func TestMapCache_EnsureLoaded_Singleflight(t *testing.T) {
 
 	// Publish data to backend
 	_, err := backend.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
@@ -104,7 +116,7 @@ func TestMapCache_EnsureLoaded_Singleflight(t *testing.T) {
 
 // TestMapCache_Evict tests manual eviction.
 func TestMapCache_Evict(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -112,9 +124,7 @@ func TestMapCache_Evict(t *testing.T) {
 
 	// Publish and load
 	_, err := backend.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
@@ -129,7 +139,7 @@ func TestMapCache_Evict(t *testing.T) {
 
 // TestMapCache_LRUEviction tests LRU eviction when MaxChannels is exceeded.
 func TestMapCache_LRUEviction(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	err = backend.RegisterEventHandler(nil)
@@ -151,9 +161,7 @@ func TestMapCache_LRUEviction(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		ch := fmt.Sprintf("channel_%d", i)
 		_, err := backend.Publish(ctx, ch, "key", MapPublishOptions{
-			Data:       []byte("data"),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte("data"),
 		})
 		require.NoError(t, err)
 
@@ -168,7 +176,7 @@ func TestMapCache_LRUEviction(t *testing.T) {
 
 // TestMapCache_ApplyPublication tests that publications update state correctly.
 func TestMapCache_ApplyPublication(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -176,9 +184,7 @@ func TestMapCache_ApplyPublication(t *testing.T) {
 
 	// Publish to create channel
 	_, err := cached.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
@@ -190,9 +196,7 @@ func TestMapCache_ApplyPublication(t *testing.T) {
 
 	// Publish another key
 	_, err = cached.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("data2"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data2"),
 	})
 	require.NoError(t, err)
 
@@ -205,7 +209,7 @@ func TestMapCache_ApplyPublication(t *testing.T) {
 
 // TestMapCache_ApplyPublication_Remove tests removal publications.
 func TestMapCache_ApplyPublication_Remove(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -213,16 +217,12 @@ func TestMapCache_ApplyPublication_Remove(t *testing.T) {
 
 	// Publish some keys
 	_, err := cached.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
 	_, err = cached.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("data2"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data2"),
 	})
 	require.NoError(t, err)
 
@@ -233,10 +233,7 @@ func TestMapCache_ApplyPublication_Remove(t *testing.T) {
 	require.Len(t, pubs, 2)
 
 	// Remove key1
-	_, err = cached.Remove(ctx, channel, "key1", MapRemoveOptions{
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-	})
+	_, err = cached.Remove(ctx, channel, "key1", MapRemoveOptions{})
 	require.NoError(t, err)
 
 	// Should only have key2
@@ -249,7 +246,7 @@ func TestMapCache_ApplyPublication_Remove(t *testing.T) {
 
 // TestCachedMapBroker_Publish tests write to backend + cache.
 func TestCachedMapBroker_Publish(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -257,9 +254,7 @@ func TestCachedMapBroker_Publish(t *testing.T) {
 
 	// Publish through cached broker
 	result, err := cached.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 	require.False(t, result.Suppressed)
@@ -275,7 +270,7 @@ func TestCachedMapBroker_Publish(t *testing.T) {
 
 // TestCachedMapBroker_Publish_ReadYourOwnWrite tests immediate visibility after publish.
 func TestCachedMapBroker_Publish_ReadYourOwnWrite(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -283,9 +278,7 @@ func TestCachedMapBroker_Publish_ReadYourOwnWrite(t *testing.T) {
 
 	// Publish
 	_, err := cached.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
@@ -299,7 +292,7 @@ func TestCachedMapBroker_Publish_ReadYourOwnWrite(t *testing.T) {
 
 // TestCachedMapBroker_Publish_Suppressed tests that suppressed publishes don't update cache.
 func TestCachedMapBroker_Publish_Suppressed(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -307,19 +300,15 @@ func TestCachedMapBroker_Publish_Suppressed(t *testing.T) {
 
 	// First publish
 	_, err := cached.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyMode:    KeyModeIfNew,
+		Data:    []byte("data1"),
+		KeyMode: KeyModeIfNew,
 	})
 	require.NoError(t, err)
 
 	// Second publish with KeyModeIfNew - should be suppressed
 	result, err := cached.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1_new"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyMode:    KeyModeIfNew,
+		Data:    []byte("data1_new"),
+		KeyMode: KeyModeIfNew,
 	})
 	require.NoError(t, err)
 	require.True(t, result.Suppressed)
@@ -335,7 +324,7 @@ func TestCachedMapBroker_Publish_Suppressed(t *testing.T) {
 
 // TestCachedMapBroker_ReadState_LazyLoad tests that first read triggers load.
 func TestCachedMapBroker_ReadState_LazyLoad(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -343,9 +332,7 @@ func TestCachedMapBroker_ReadState_LazyLoad(t *testing.T) {
 
 	// Populate backend directly
 	_, err := backend.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("backend_data"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("backend_data"),
 	})
 	require.NoError(t, err)
 
@@ -366,7 +353,7 @@ func TestCachedMapBroker_ReadState_LazyLoad(t *testing.T) {
 // TestCachedMapBroker_ReadState_Cached tests subsequent reads from cache
 // and that writes through the backend's event handler update the cache immediately.
 func TestCachedMapBroker_ReadState_Cached(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -374,9 +361,7 @@ func TestCachedMapBroker_ReadState_Cached(t *testing.T) {
 
 	// Populate (before cache is loaded, event handler won't update cache)
 	_, err := backend.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("original_data"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("original_data"),
 	})
 	require.NoError(t, err)
 
@@ -389,9 +374,7 @@ func TestCachedMapBroker_ReadState_Cached(t *testing.T) {
 	// Backend publish after cache is loaded - event handler updates cache immediately
 	// (simulating PUB/SUB message received from another node)
 	_, err = backend.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("new_data"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("new_data"),
 	})
 	require.NoError(t, err)
 
@@ -404,7 +387,7 @@ func TestCachedMapBroker_ReadState_Cached(t *testing.T) {
 
 // TestCachedMapBroker_ReadState_Pagination tests paginated reads.
 func TestCachedMapBroker_ReadState_Pagination(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -413,9 +396,7 @@ func TestCachedMapBroker_ReadState_Pagination(t *testing.T) {
 	// Publish multiple keys
 	for i := 0; i < 10; i++ {
 		_, err := cached.Publish(ctx, channel, fmt.Sprintf("key%02d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -448,7 +429,7 @@ func TestCachedMapBroker_ReadState_Pagination(t *testing.T) {
 
 // TestCachedMapBroker_Stats tests stats from cache.
 func TestCachedMapBroker_Stats(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -457,9 +438,7 @@ func TestCachedMapBroker_Stats(t *testing.T) {
 	// Publish some keys
 	for i := 0; i < 5; i++ {
 		_, err := cached.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte("data"),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte("data"),
 		})
 		require.NoError(t, err)
 	}
@@ -472,7 +451,7 @@ func TestCachedMapBroker_Stats(t *testing.T) {
 
 // TestCachedMapBroker_Remove tests removing channel from cache.
 func TestCachedMapBroker_Remove(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -480,9 +459,7 @@ func TestCachedMapBroker_Remove(t *testing.T) {
 
 	// Publish
 	_, err := cached.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
@@ -504,7 +481,7 @@ func TestCachedMapBroker_Remove(t *testing.T) {
 
 // TestCachedMapBroker_Sync_NewPublications tests that sync picks up new publications.
 func TestCachedMapBroker_Sync_NewPublications(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -512,17 +489,13 @@ func TestCachedMapBroker_Sync_NewPublications(t *testing.T) {
 
 	// Load channel into cache
 	_, err := cached.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
 	// Publish directly to backend (simulating cross-node write)
 	_, err = backend.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("cross_node_data"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("cross_node_data"),
 	})
 	require.NoError(t, err)
 
@@ -539,7 +512,7 @@ func TestCachedMapBroker_Sync_NewPublications(t *testing.T) {
 // TestCachedMapBroker_Sync_ReappliesOwnWrites tests that own writes are safely re-applied during sync.
 // This is intentional - we don't skip own writes to avoid missing cross-node writes.
 func TestCachedMapBroker_Sync_ReappliesOwnWrites(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -547,9 +520,7 @@ func TestCachedMapBroker_Sync_ReappliesOwnWrites(t *testing.T) {
 
 	// Publish through cached broker
 	_, err := cached.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
@@ -566,7 +537,7 @@ func TestCachedMapBroker_Sync_ReappliesOwnWrites(t *testing.T) {
 
 // TestCachedMapBroker_ConcurrentReadWrite tests race condition safety.
 func TestCachedMapBroker_ConcurrentReadWrite(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -583,9 +554,7 @@ func TestCachedMapBroker_ConcurrentReadWrite(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
 				_, err := cached.Publish(ctx, channel, fmt.Sprintf("key_%d_%d", id, j), MapPublishOptions{
-					Data:       []byte(fmt.Sprintf("data_%d_%d", id, j)),
-					StreamSize: 1000,
-					StreamTTL:  300 * time.Second,
+					Data: []byte(fmt.Sprintf("data_%d_%d", id, j)),
 				})
 				if err == nil {
 					writeCount.Add(1)
@@ -617,7 +586,7 @@ func TestCachedMapBroker_ConcurrentReadWrite(t *testing.T) {
 
 // TestCachedMapBroker_CAS_Success tests CAS succeeds with correct position.
 func TestCachedMapBroker_CAS_Success(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -625,9 +594,7 @@ func TestCachedMapBroker_CAS_Success(t *testing.T) {
 
 	// Create initial state
 	_, err := cached.Publish(ctx, channel, "counter", MapPublishOptions{
-		Data:       []byte(`{"value": 0}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte(`{"value": 0}`),
 	})
 	require.NoError(t, err)
 
@@ -645,8 +612,6 @@ func TestCachedMapBroker_CAS_Success(t *testing.T) {
 
 	result, err := cached.Publish(ctx, channel, "counter", MapPublishOptions{
 		Data:             []byte(`{"value": 1}`),
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
 		ExpectedPosition: &expectedPos,
 	})
 	require.NoError(t, err)
@@ -655,7 +620,7 @@ func TestCachedMapBroker_CAS_Success(t *testing.T) {
 
 // TestCachedMapBroker_CAS_Conflict tests CAS fails with stale position.
 func TestCachedMapBroker_CAS_Conflict(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -663,9 +628,7 @@ func TestCachedMapBroker_CAS_Conflict(t *testing.T) {
 
 	// Create initial state
 	_, err := cached.Publish(ctx, channel, "counter", MapPublishOptions{
-		Data:       []byte(`{"value": 0}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte(`{"value": 0}`),
 	})
 	require.NoError(t, err)
 
@@ -676,9 +639,7 @@ func TestCachedMapBroker_CAS_Conflict(t *testing.T) {
 
 	// Update (changes position)
 	_, err = cached.Publish(ctx, channel, "counter", MapPublishOptions{
-		Data:       []byte(`{"value": 1}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte(`{"value": 1}`),
 	})
 	require.NoError(t, err)
 
@@ -690,8 +651,6 @@ func TestCachedMapBroker_CAS_Conflict(t *testing.T) {
 
 	result, err := cached.Publish(ctx, channel, "counter", MapPublishOptions{
 		Data:             []byte(`{"value": 2}`),
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
 		ExpectedPosition: &stalePos,
 	})
 	require.NoError(t, err)
@@ -701,7 +660,7 @@ func TestCachedMapBroker_CAS_Conflict(t *testing.T) {
 
 // TestCachedMapBroker_KeyMode_IfNew tests KeyModeIfNew with cache.
 func TestCachedMapBroker_KeyMode_IfNew(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -709,20 +668,16 @@ func TestCachedMapBroker_KeyMode_IfNew(t *testing.T) {
 
 	// First publish - should succeed
 	result, err := cached.Publish(ctx, channel, "slot", MapPublishOptions{
-		Data:       []byte("player1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyMode:    KeyModeIfNew,
+		Data:    []byte("player1"),
+		KeyMode: KeyModeIfNew,
 	})
 	require.NoError(t, err)
 	require.False(t, result.Suppressed)
 
 	// Second publish - should be suppressed
 	result, err = cached.Publish(ctx, channel, "slot", MapPublishOptions{
-		Data:       []byte("player2"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyMode:    KeyModeIfNew,
+		Data:    []byte("player2"),
+		KeyMode: KeyModeIfNew,
 	})
 	require.NoError(t, err)
 	require.True(t, result.Suppressed)
@@ -738,7 +693,7 @@ func TestCachedMapBroker_KeyMode_IfNew(t *testing.T) {
 
 // TestCachedMapBroker_KeyMode_IfExists tests KeyModeIfExists with cache.
 func TestCachedMapBroker_KeyMode_IfExists(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -746,10 +701,8 @@ func TestCachedMapBroker_KeyMode_IfExists(t *testing.T) {
 
 	// First publish with IfExists - should be suppressed (key doesn't exist)
 	result, err := cached.Publish(ctx, channel, "heartbeat", MapPublishOptions{
-		Data:       []byte("ping1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyMode:    KeyModeIfExists,
+		Data:    []byte("ping1"),
+		KeyMode: KeyModeIfExists,
 	})
 	require.NoError(t, err)
 	require.True(t, result.Suppressed)
@@ -757,18 +710,14 @@ func TestCachedMapBroker_KeyMode_IfExists(t *testing.T) {
 
 	// Create the key normally
 	_, err = cached.Publish(ctx, channel, "heartbeat", MapPublishOptions{
-		Data:       []byte("init"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("init"),
 	})
 	require.NoError(t, err)
 
 	// Now IfExists should work
 	result, err = cached.Publish(ctx, channel, "heartbeat", MapPublishOptions{
-		Data:       []byte("ping2"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyMode:    KeyModeIfExists,
+		Data:    []byte("ping2"),
+		KeyMode: KeyModeIfExists,
 	})
 	require.NoError(t, err)
 	require.False(t, result.Suppressed)
@@ -782,7 +731,7 @@ func TestCachedMapBroker_KeyMode_IfExists(t *testing.T) {
 
 // TestCachedMapBroker_Backend returns the underlying backend.
 func TestCachedMapBroker_Backend(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, backend := newTestCachedMapBroker(t, node)
 
 	require.Same(t, backend, cached.underlyingBackend())
@@ -790,7 +739,7 @@ func TestCachedMapBroker_Backend(t *testing.T) {
 
 // TestNewCachedMapBroker_NilBackend tests error on nil backend.
 func TestNewCachedMapBroker_NilBackend(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	_, err := NewCachedMapBroker(node, nil, DefaultCachedMapBrokerConfig())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "backend is required")
@@ -815,7 +764,7 @@ func TestCachedMapBrokerConfig_Defaults(t *testing.T) {
 // This test would have caught the epoch mismatch bug where GetStream returned
 // memstream's auto-generated epoch instead of the backend's epoch.
 func TestCachedMapBroker_EpochConsistency(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -823,9 +772,7 @@ func TestCachedMapBroker_EpochConsistency(t *testing.T) {
 
 	// Publish some data to backend to establish initial state with an epoch
 	_, err := backend.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
@@ -856,7 +803,7 @@ func TestCachedMapBroker_EpochConsistency(t *testing.T) {
 // TestCachedMapBroker_SubscriptionPhaseFlow simulates the client subscription
 // flow: state phase → stream phase → live phase, verifying positions are consistent.
 func TestCachedMapBroker_SubscriptionPhaseFlow(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -871,9 +818,7 @@ func TestCachedMapBroker_SubscriptionPhaseFlow(t *testing.T) {
 	// Simulate server publishing some initial data
 	for i := 0; i < 5; i++ {
 		_, err := cached.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -905,9 +850,7 @@ func TestCachedMapBroker_SubscriptionPhaseFlow(t *testing.T) {
 
 	// Now simulate new publication while client is in stream phase
 	_, err = cached.Publish(ctx, channel, "key_new", MapPublishOptions{
-		Data:       []byte("new_data"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("new_data"),
 	})
 	require.NoError(t, err)
 
@@ -930,7 +873,7 @@ func TestCachedMapBroker_SubscriptionPhaseFlow(t *testing.T) {
 // TestCachedMapBroker_CrossNodeEpochConsistency tests that when data is loaded
 // from a backend (simulating cross-node scenario), the epoch is preserved correctly.
 func TestCachedMapBroker_CrossNodeEpochConsistency(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -939,9 +882,7 @@ func TestCachedMapBroker_CrossNodeEpochConsistency(t *testing.T) {
 	// Simulate data published by another node (directly to backend)
 	for i := 0; i < 3; i++ {
 		_, err := backend.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -968,7 +909,7 @@ func TestCachedMapBroker_CrossNodeEpochConsistency(t *testing.T) {
 
 // TestCachedMapBroker_Sync_GapDetection tests that sync detects gaps and reloads.
 func TestCachedMapBroker_Sync_GapDetection(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -977,9 +918,7 @@ func TestCachedMapBroker_Sync_GapDetection(t *testing.T) {
 	// Publish initial data and load into cache
 	for i := 0; i < 3; i++ {
 		_, err := cached.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -995,9 +934,7 @@ func TestCachedMapBroker_Sync_GapDetection(t *testing.T) {
 	// and then removing some publications to create a gap
 	for i := 3; i < 10; i++ {
 		_, err := backend.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 5, // Small stream size to trigger trimming
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1019,7 +956,7 @@ func TestCachedMapBroker_Sync_GapDetection(t *testing.T) {
 // receives a publication with a gap (offset > cached + 1), it fetches missing
 // publications from backend to maintain consistency.
 func TestCachedMapBroker_HandlePublication_GapFilling(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	err = backend.RegisterEventHandler(nil)
@@ -1044,9 +981,7 @@ func TestCachedMapBroker_HandlePublication_GapFilling(t *testing.T) {
 
 	// Step 1: Publish initial data through cached broker to load cache
 	_, err = cached.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
@@ -1062,9 +997,7 @@ func TestCachedMapBroker_HandlePublication_GapFilling(t *testing.T) {
 	// HandlePublication won't be called.
 	for i := 2; i <= 5; i++ {
 		_, err = backend.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1119,7 +1052,7 @@ func TestCachedMapBroker_HandlePublication_GapFilling(t *testing.T) {
 // TestCachedMapBroker_HandlePublication_EpochMismatch tests that when HandlePublication
 // receives a publication with a different epoch, the cache is evicted.
 func TestCachedMapBroker_HandlePublication_EpochMismatch(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	err = backend.RegisterEventHandler(nil)
@@ -1144,9 +1077,7 @@ func TestCachedMapBroker_HandlePublication_EpochMismatch(t *testing.T) {
 
 	// Load cache with initial data
 	_, err = cached.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
@@ -1184,7 +1115,7 @@ func TestCachedMapBroker_HandlePublication_EpochMismatch(t *testing.T) {
 // TestCachedMapBroker_HandlePublication_NoGap tests that publications without gaps
 // are applied normally without fetching from backend.
 func TestCachedMapBroker_HandlePublication_NoGap(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	err = backend.RegisterEventHandler(nil)
@@ -1209,9 +1140,7 @@ func TestCachedMapBroker_HandlePublication_NoGap(t *testing.T) {
 
 	// Publish initial data
 	_, err = cached.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
@@ -1253,7 +1182,7 @@ func TestCachedMapBroker_HandlePublication_NoGap(t *testing.T) {
 // TestCachedMapBroker_PositionAfterPublish tests that position is correctly
 // updated after publishes through the cache.
 func TestCachedMapBroker_PositionAfterPublish(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -1261,9 +1190,7 @@ func TestCachedMapBroker_PositionAfterPublish(t *testing.T) {
 
 	// First publish
 	result1, err := cached.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
@@ -1276,9 +1203,7 @@ func TestCachedMapBroker_PositionAfterPublish(t *testing.T) {
 
 	// Second publish
 	result2, err := cached.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("data2"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data2"),
 	})
 	require.NoError(t, err)
 	require.Greater(t, result2.Position.Offset, result1.Position.Offset)
@@ -1304,7 +1229,7 @@ func TestCachedMapBroker_PositionAfterPublish(t *testing.T) {
 // 2. Cache loads both state AND stream on first access
 // 3. Reconnecting clients can recover from cached stream without hitting backend
 func TestCachedMapBroker_SnapshotAndStreamRecovery(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 
 	// Create backend with data
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
@@ -1320,9 +1245,7 @@ func TestCachedMapBroker_SnapshotAndStreamRecovery(t *testing.T) {
 	var positions []StreamPosition
 	for i := 1; i <= 10; i++ {
 		result, err := backend.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 		positions = append(positions, result.Position)
@@ -1420,7 +1343,7 @@ func TestCachedMapBroker_SnapshotAndStreamRecovery(t *testing.T) {
 // TestCachedMapBroker_StreamRecoveryAfterNewPublications tests recovery when
 // new publications arrive after cache is loaded.
 func TestCachedMapBroker_StreamRecoveryAfterNewPublications(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, backend := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -1429,9 +1352,7 @@ func TestCachedMapBroker_StreamRecoveryAfterNewPublications(t *testing.T) {
 	// Step 1: Publish initial data through cache
 	for i := 1; i <= 5; i++ {
 		_, err := cached.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1448,9 +1369,7 @@ func TestCachedMapBroker_StreamRecoveryAfterNewPublications(t *testing.T) {
 	// Step 3: More publications happen (client A is "disconnected")
 	for i := 6; i <= 10; i++ {
 		_, err := cached.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1476,7 +1395,7 @@ func TestCachedMapBroker_StreamRecoveryAfterNewPublications(t *testing.T) {
 // TestCachedMapBroker_StreamRecoveryWithRemovals tests that stream recovery
 // correctly includes removal publications.
 func TestCachedMapBroker_StreamRecoveryWithRemovals(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -1485,9 +1404,7 @@ func TestCachedMapBroker_StreamRecoveryWithRemovals(t *testing.T) {
 	// Step 1: Publish initial data
 	for i := 1; i <= 5; i++ {
 		_, err := cached.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1500,24 +1417,17 @@ func TestCachedMapBroker_StreamRecoveryWithRemovals(t *testing.T) {
 
 	// Step 2: Mix of publishes and removals
 	_, err = cached.Publish(ctx, channel, "key6", MapPublishOptions{
-		Data:       []byte("data6"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data6"),
 	})
 	require.NoError(t, err)
 
 	// Remove key3
-	_, err = cached.Remove(ctx, channel, "key3", MapRemoveOptions{
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-	})
+	_, err = cached.Remove(ctx, channel, "key3", MapRemoveOptions{})
 	require.NoError(t, err)
 
 	// Add key7
 	_, err = cached.Publish(ctx, channel, "key7", MapPublishOptions{
-		Data:       []byte("data7"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data7"),
 	})
 	require.NoError(t, err)
 
@@ -1565,17 +1475,28 @@ func TestCachedMapBroker_ChannelOptionsInheritance(t *testing.T) {
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			if channel == "small_stream" {
 				return MapChannelOptions{
-					StreamSize: 5, // Small stream
-					StreamTTL:  time.Minute,
+					SyncMode:      MapSyncConverging,
+					RetentionMode: MapRetentionPermanent,
+					StreamSize:    5, // Small stream
+					StreamTTL:     time.Minute,
 				}
 			}
 			if channel == "large_stream" {
 				return MapChannelOptions{
-					StreamSize: 100, // Large stream
-					StreamTTL:  time.Hour,
+					SyncMode:      MapSyncConverging,
+					RetentionMode: MapRetentionPermanent,
+					StreamSize:    100, // Large stream
+					StreamTTL:     time.Hour,
 				}
 			}
-			return DefaultMapChannelOptions()
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				StreamSize:    100,
+				StreamTTL:     60 * time.Second,
+				MetaTTL:       600 * time.Second,
+				KeyTTL:        60 * time.Second,
+			}
 		},
 	})
 
@@ -1602,9 +1523,7 @@ func TestCachedMapBroker_ChannelOptionsInheritance(t *testing.T) {
 	// Test 1: Small stream channel - publish 10 entries, only 5 should be retained
 	for i := 1; i <= 10; i++ {
 		_, err := cached.Publish(ctx, "small_stream", fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 5,
-			StreamTTL:  time.Minute,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1633,9 +1552,7 @@ func TestCachedMapBroker_ChannelOptionsInheritance(t *testing.T) {
 	// Test 2: Large stream channel - publish 10 entries, all should be retained
 	for i := 1; i <= 10; i++ {
 		_, err := cached.Publish(ctx, "large_stream", fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  time.Hour,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1661,8 +1578,10 @@ func TestCachedMapBroker_OptionsFromBackendLoad(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				StreamSize: 3, // Very small - only keep 3 entries
-				StreamTTL:  time.Minute,
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionPermanent,
+				StreamSize:    3, // Very small - only keep 3 entries
+				StreamTTL:     time.Minute,
 			}
 		},
 	})
@@ -1679,19 +1598,17 @@ func TestCachedMapBroker_OptionsFromBackendLoad(t *testing.T) {
 	// Publish 10 entries directly to backend
 	for i := 1; i <= 10; i++ {
 		_, err := backend.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100, // Backend keeps 100
-			StreamTTL:  time.Hour,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
 
-	// Verify backend has all 10 in stream
+	// Backend stream is truncated to StreamSize (3) during publish.
 	backendResult, err := backend.ReadStream(ctx, channel, MapReadStreamOptions{
 		Filter: StreamFilter{Limit: 100},
 	})
 	require.NoError(t, err)
-	require.Len(t, backendResult.Publications, 10, "backend should have all 10 stream entries")
+	require.Len(t, backendResult.Publications, 3, "backend stream should be truncated to StreamSize")
 
 	// Now create cached broker - it should only load 3 stream entries per channel options
 	cached, err := NewCachedMapBroker(node, backend, CachedMapBrokerConfig{
@@ -1731,7 +1648,7 @@ func TestCachedMapBroker_OptionsFromBackendLoad(t *testing.T) {
 // TestCachedMapBroker_ConcurrentWriteOrdering tests that concurrent writes
 // to the same channel are properly ordered in the cache.
 func TestCachedMapBroker_ConcurrentWriteOrdering(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	cached, _ := newTestCachedMapBroker(t, node)
 
 	ctx := context.Background()
@@ -1739,9 +1656,7 @@ func TestCachedMapBroker_ConcurrentWriteOrdering(t *testing.T) {
 
 	// Initialize cache by publishing first key
 	_, err := cached.Publish(ctx, channel, "init", MapPublishOptions{
-		Data:       []byte("init"),
-		StreamSize: 1000,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("init"),
 	})
 	require.NoError(t, err)
 
@@ -1761,9 +1676,7 @@ func TestCachedMapBroker_ConcurrentWriteOrdering(t *testing.T) {
 			for i := 0; i < numWritesPerGoroutine; i++ {
 				key := fmt.Sprintf("g%d_key%d", goroutineID, i)
 				_, err := cached.Publish(ctx, channel, key, MapPublishOptions{
-					Data:       []byte(fmt.Sprintf("data_%d_%d", goroutineID, i)),
-					StreamSize: 1000,
-					StreamTTL:  300 * time.Second,
+					Data: []byte(fmt.Sprintf("data_%d_%d", goroutineID, i)),
 				})
 				if err != nil {
 					t.Errorf("publish failed: %v", err)
@@ -1812,7 +1725,7 @@ func TestCachedMapBroker_ConcurrentWriteOrdering(t *testing.T) {
 // are not lost when loading finishes between IsLoading check and BufferPublication.
 // This is the TOCTOU (Time Of Check To Time Of Use) race condition fix.
 func TestCachedMapBroker_HandlePublication_LoadingRace(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 
@@ -1851,9 +1764,7 @@ func TestCachedMapBroker_HandlePublication_LoadingRace(t *testing.T) {
 	// Publish initial data to backend
 	for i := 1; i <= 3; i++ {
 		_, err := backend.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf(`{"id":%d}`, i)),
-			StreamSize: 1000,
-			StreamTTL:  time.Hour,
+			Data: []byte(fmt.Sprintf(`{"id":%d}`, i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1878,9 +1789,7 @@ func TestCachedMapBroker_HandlePublication_LoadingRace(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			_, err := cached.Publish(ctx, channel, fmt.Sprintf("race_key%d", idx), MapPublishOptions{
-				Data:       []byte(fmt.Sprintf(`{"race":%d}`, idx)),
-				StreamSize: 1000,
-				StreamTTL:  time.Hour,
+				Data: []byte(fmt.Sprintf(`{"race":%d}`, idx)),
 			})
 			require.NoError(t, err)
 		}(i)
@@ -1903,7 +1812,7 @@ func TestCachedMapBroker_HandlePublication_LoadingRace(t *testing.T) {
 // TestCachedMapBroker_ResubscribeFreshData tests that when re-subscribing to
 // an already-loaded channel, we get fresh data from backend (not stale cache).
 func TestCachedMapBroker_ResubscribeFreshData(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 
@@ -1931,9 +1840,7 @@ func TestCachedMapBroker_ResubscribeFreshData(t *testing.T) {
 	// Step 1: Publish initial data and subscribe
 	for i := 1; i <= 3; i++ {
 		_, err := backend.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf(`{"id":%d}`, i)),
-			StreamSize: 1000,
-			StreamTTL:  time.Hour,
+			Data: []byte(fmt.Sprintf(`{"id":%d}`, i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1955,9 +1862,7 @@ func TestCachedMapBroker_ResubscribeFreshData(t *testing.T) {
 	// These publications won't be seen by the cached broker (not subscribed to pub/sub)
 	for i := 4; i <= 6; i++ {
 		_, err := backend.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf(`{"id":%d}`, i)),
-			StreamSize: 1000,
-			StreamTTL:  time.Hour,
+			Data: []byte(fmt.Sprintf(`{"id":%d}`, i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1986,7 +1891,7 @@ func TestCachedMapBroker_ResubscribeFreshData(t *testing.T) {
 // multiple clients publish presence and subscribe concurrently after server restart.
 // All clients should eventually see the same count.
 func TestCachedMapBroker_ConcurrentPresenceScenario(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 
@@ -2024,9 +1929,7 @@ func TestCachedMapBroker_ConcurrentPresenceScenario(t *testing.T) {
 
 			// Each client publishes their presence
 			_, err := cached.Publish(ctx, channel, fmt.Sprintf("client%d", clientIdx), MapPublishOptions{
-				Data:       []byte(fmt.Sprintf(`{"client":%d}`, clientIdx)),
-				StreamSize: 1000,
-				StreamTTL:  time.Hour,
+				Data: []byte(fmt.Sprintf(`{"client":%d}`, clientIdx)),
 			})
 			require.NoError(t, err)
 
@@ -2068,7 +1971,7 @@ func TestCachedMapBroker_ConcurrentPresenceScenario(t *testing.T) {
 // TestCachedMapBroker_SubscribeAlreadyLoadedChannel tests that subscribing
 // to a channel that's already in cache forces a refresh.
 func TestCachedMapBroker_SubscribeAlreadyLoadedChannel(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 
@@ -2095,9 +1998,7 @@ func TestCachedMapBroker_SubscribeAlreadyLoadedChannel(t *testing.T) {
 
 	// Publish initial data
 	_, err = backend.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte(`{"id":1}`),
-		StreamSize: 1000,
-		StreamTTL:  time.Hour,
+		Data: []byte(`{"id":1}`),
 	})
 	require.NoError(t, err)
 
@@ -2113,9 +2014,7 @@ func TestCachedMapBroker_SubscribeAlreadyLoadedChannel(t *testing.T) {
 	// Cache is now loaded. Publish more data directly to backend.
 	// Since we're subscribed to pub/sub, this will update the cache.
 	_, err = backend.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte(`{"id":2}`),
-		StreamSize: 1000,
-		StreamTTL:  time.Hour,
+		Data: []byte(`{"id":2}`),
 	})
 	require.NoError(t, err)
 
@@ -2133,9 +2032,7 @@ func TestCachedMapBroker_SubscribeAlreadyLoadedChannel(t *testing.T) {
 
 	// Publish another entry
 	_, err = backend.Publish(ctx, channel, "key3", MapPublishOptions{
-		Data:       []byte(`{"id":3}`),
-		StreamSize: 1000,
-		StreamTTL:  time.Hour,
+		Data: []byte(`{"id":3}`),
 	})
 	require.NoError(t, err)
 
@@ -2166,9 +2063,14 @@ func TestCachedMapBroker_BufferPublicationRace(t *testing.T) {
 	require.True(t, cache.IsLoading(channel))
 
 	// 2. Start loading (via EnsureLoaded)
-	opts := DefaultMapChannelOptions()
-	opts.StreamSize = 1000
-	opts.StreamTTL = time.Hour
+	opts := MapChannelOptions{
+		SyncMode:      MapSyncConverging,
+		RetentionMode: MapRetentionExpiring,
+		StreamSize:    1000,
+		StreamTTL:     time.Hour,
+		MetaTTL:       600 * time.Second,
+		KeyTTL:        60 * time.Second,
+	}
 
 	var loadStarted sync.WaitGroup
 	loadStarted.Add(1)
@@ -2218,7 +2120,16 @@ func TestCachedMapBroker_BufferPublicationRace(t *testing.T) {
 
 func TestCachedMapBroker_ReadStream_Table(t *testing.T) {
 	testMapBrokerReadStream(t, func(t *testing.T) MapBroker {
-		node, _ := New(Config{})
+		node := newTestCachedNode(t)
+		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				StreamSize:    100,
+				StreamTTL:     300 * time.Second,
+				KeyTTL:        300 * time.Second,
+			}
+		}
 		cached, _ := newTestCachedMapBroker(t, node)
 		return cached
 	})
@@ -2229,7 +2140,14 @@ func TestCachedMapBroker_ReadStream_Table(t *testing.T) {
 // check (pub.Offset <= cachedPos.Offset) always evaluated to 0 <= 0 = true,
 // silently dropping all cache updates for streamless channels.
 func TestCachedMapBroker_Streamless(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncEphemeral,
+			RetentionMode: MapRetentionExpiring,
+			KeyTTL:        60 * time.Second,
+		}
+	}
 
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
@@ -2304,13 +2222,15 @@ func TestCachedMapBroker_Streamless(t *testing.T) {
 // TestCachedMapBroker_OrderedStateAsc tests that ASC ordering returns entries
 // in ascending score order (lowest score first).
 func TestCachedMapBroker_OrderedStateAsc(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
 		}
 	}
 	cached, _ := newTestCachedMapBroker(t, node)
@@ -2332,10 +2252,8 @@ func TestCachedMapBroker_OrderedStateAsc(t *testing.T) {
 
 	for _, tc := range testCases {
 		_, err := cached.Publish(ctx, channel, tc.key, MapPublishOptions{
-			Data:       []byte(tc.data),
-			Score:      tc.score,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data:  []byte(tc.data),
+			Score: tc.score,
 		})
 		require.NoError(t, err)
 	}
@@ -2368,13 +2286,15 @@ func TestCachedMapBroker_OrderedStateAsc(t *testing.T) {
 // TestCachedMapBroker_OrderedStatePaginationAsc tests cursor-based pagination
 // with ASC ordering across multiple pages.
 func TestCachedMapBroker_OrderedStatePaginationAsc(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
 		}
 	}
 	cached, _ := newTestCachedMapBroker(t, node)
@@ -2385,10 +2305,8 @@ func TestCachedMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 	// Publish 10 entries with scores 100..1000.
 	for i := 1; i <= 10; i++ {
 		_, err := cached.Publish(ctx, channel, fmt.Sprintf("key_%02d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Score:      int64(i * 100),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data:  []byte(fmt.Sprintf("data_%02d", i)),
+			Score: int64(i * 100),
 		})
 		require.NoError(t, err)
 	}
@@ -2439,13 +2357,15 @@ func TestCachedMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 // TestCachedMapBroker_OrderedStateAscSameScores tests ASC ordering with
 // same-score entries — secondary sort by key ascending.
 func TestCachedMapBroker_OrderedStateAscSameScores(t *testing.T) {
-	node, _ := New(Config{})
+	node := newTestCachedNode(t)
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
 		}
 	}
 	cached, _ := newTestCachedMapBroker(t, node)
@@ -2456,10 +2376,8 @@ func TestCachedMapBroker_OrderedStateAscSameScores(t *testing.T) {
 	// All entries have score=100.
 	for _, key := range []string{"zebra", "apple", "mango", "banana"} {
 		_, err := cached.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte("data"),
-			Score:      100,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data:  []byte("data"),
+			Score: 100,
 		})
 		require.NoError(t, err)
 	}

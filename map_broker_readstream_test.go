@@ -15,18 +15,13 @@ func testMapBrokerReadStream(t *testing.T, factory mapBrokerFactory) {
 	ctx := context.Background()
 
 	publishOpts := func(streamSize int) MapPublishOptions {
-		return MapPublishOptions{
-			StreamSize: streamSize,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
-		}
+		_ = streamSize // streamSize now configured via MapChannelOptions
+		return MapPublishOptions{}
 	}
 
 	removeOpts := func(streamSize int) MapRemoveOptions {
-		return MapRemoveOptions{
-			StreamSize: streamSize,
-			StreamTTL:  300 * time.Second,
-		}
+		_ = streamSize // streamSize now configured via MapChannelOptions
+		return MapRemoveOptions{}
 	}
 
 	// publishN publishes n messages with keys "key_1".."key_n" and data "data_1".."data_n".

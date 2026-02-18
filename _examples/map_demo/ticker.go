@@ -53,9 +53,8 @@ func publishTickerData(node *centrifuge.Node) {
 				continue
 			}
 			_, err = node.MapPublish(context.Background(), "tickers", ticker, centrifuge.MapPublishOptions{
-				Data:   jsonData,
-				Tags:   map[string]string{"sector": tickerSectors[ticker]},
-				KeyTTL: -1, // No expiration — tickers are permanent.
+				Data: jsonData,
+				Tags: map[string]string{"sector": tickerSectors[ticker]},
 			})
 			if err != nil {
 				log.Printf("Failed to publish ticker %s: %v", ticker, err)

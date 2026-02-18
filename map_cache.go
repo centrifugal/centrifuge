@@ -790,7 +790,7 @@ func (c *mapCacheImpl) ApplyState(ch string, pubs []*Publication, pos StreamPosi
 	} else if existing, ok := c.channels[ch]; ok {
 		channelOpts = existing.options
 	} else {
-		channelOpts = DefaultMapChannelOptions()
+		channelOpts = MapChannelOptions{}
 	}
 
 	channel := &cachedChannel{

@@ -283,7 +283,6 @@ func publishScoreboardData(node *centrifuge.Node) {
 			_, err = node.MapPublish(context.Background(), "scoreboard", m.id, centrifuge.MapPublishOptions{
 				Data:     jsonData,
 				UseDelta: true,
-				KeyTTL:   -1,
 			})
 			if err != nil {
 				log.Printf("Failed to publish match %s: %v", m.id, err)

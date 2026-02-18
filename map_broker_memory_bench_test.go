@@ -10,7 +10,15 @@ import (
 
 func setupMemoryMapBrokerBench(b *testing.B) (*MemoryMapBroker, func()) {
 	b.Helper()
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	broker, _ := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	_ = broker.RegisterEventHandler(nil)
 	return broker, func() {
@@ -35,9 +43,7 @@ func BenchmarkMemoryMapBroker_PublishStreamOnly(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			data := []byte(fmt.Sprintf("message_%d", i))
 			_, err := broker.Publish(ctx, channel, "", MapPublishOptions{
-				Data:       data,
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
+				Data: data,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -64,10 +70,7 @@ func BenchmarkMemoryMapBroker_PublishMapStateSimple(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-				Data:       data,
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
-				KeyTTL:     300 * time.Second,
+				Data: data,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -81,10 +84,12 @@ func BenchmarkMemoryMapBroker_PublishMapStateOrdered(b *testing.B) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			Ordered:       true,
+			StreamSize:    10000,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
 		}
 	}
 	broker, _ := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
@@ -106,11 +111,8 @@ func BenchmarkMemoryMapBroker_PublishMapStateOrdered(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-				Data:       data,
-				Score:      i,
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
-				KeyTTL:     300 * time.Second,
+				Data:  data,
+				Score: i,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -137,10 +139,7 @@ func BenchmarkMemoryMapBroker_PublishCombined(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-				Data:       data,
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
-				KeyTTL:     300 * time.Second,
+				Data: data,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -162,9 +161,7 @@ func BenchmarkMemoryMapBroker_ReadStream(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		data := []byte(fmt.Sprintf("message_%d", i))
 		res, err := broker.Publish(ctx, channel, "", MapPublishOptions{
-			Data:       data,
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
+			Data: data,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -205,10 +202,7 @@ func BenchmarkMemoryMapBroker_ReadStateFull(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       data,
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: data,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -221,8 +215,7 @@ func BenchmarkMemoryMapBroker_ReadStateFull(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-				Limit:   -1, // Read all
-				MetaTTL: 300 * time.Second,
+				Limit: -1, // Read all
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -244,10 +237,7 @@ func BenchmarkMemoryMapBroker_ReadStatePaginated(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       data,
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: data,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -260,8 +250,7 @@ func BenchmarkMemoryMapBroker_ReadStatePaginated(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-				Limit:   100, // Read 100 at a time
-				MetaTTL: 300 * time.Second,
+				Limit: 100, // Read 100 at a time
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -275,10 +264,12 @@ func BenchmarkMemoryMapBroker_ReadStateOrdered(b *testing.B) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			Ordered:       true,
+			StreamSize:    10000,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
 		}
 	}
 	broker, _ := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
@@ -295,11 +286,8 @@ func BenchmarkMemoryMapBroker_ReadStateOrdered(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       data,
-			Score:      int64(i),
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data:  data,
+			Score: int64(i),
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -312,8 +300,7 @@ func BenchmarkMemoryMapBroker_ReadStateOrdered(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-				Limit:   100,
-				MetaTTL: 300 * time.Second,
+				Limit: 100,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -335,10 +322,7 @@ func BenchmarkMemoryMapBroker_Stats(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       data,
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: data,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -371,10 +355,7 @@ func BenchmarkMemoryMapBroker_Remove(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       data,
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: data,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -389,10 +370,7 @@ func BenchmarkMemoryMapBroker_Remove(b *testing.B) {
 		for pb.Next() {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
-			_, err := broker.Remove(ctx, channel, key, MapRemoveOptions{
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
-			})
+			_, err := broker.Remove(ctx, channel, key, MapRemoveOptions{})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -421,8 +399,6 @@ func BenchmarkMemoryMapBroker_IdempotentPublish(b *testing.B) {
 				Data:                data,
 				IdempotencyKey:      idempotencyKey,
 				IdempotentResultTTL: 60 * time.Second,
-				StreamSize:          10000,
-				StreamTTL:           300 * time.Second,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -449,11 +425,8 @@ func BenchmarkMemoryMapBroker_VersionedPublish(b *testing.B) {
 			key := fmt.Sprintf("key%d", i%100) // Reuse 100 keys
 			data := []byte(fmt.Sprintf("data_%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-				Data:       data,
-				Version:    uint64(i),
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
-				KeyTTL:     300 * time.Second,
+				Data:    data,
+				Version: uint64(i),
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -475,10 +448,7 @@ func BenchmarkMemoryMapBroker_PublishWithDelta(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("initial_data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       data,
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: data,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -495,11 +465,8 @@ func BenchmarkMemoryMapBroker_PublishWithDelta(b *testing.B) {
 			key := fmt.Sprintf("key%d", i%100) // Reuse 100 keys
 			data := []byte(fmt.Sprintf("updated_data_%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-				Data:       data,
-				UseDelta:   true,
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
-				KeyTTL:     300 * time.Second,
+				Data:     data,
+				UseDelta: true,
 			})
 			if err != nil {
 				b.Fatal(err)

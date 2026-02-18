@@ -95,9 +95,7 @@ func TestRedisMapBroker_NodeGrouped_Basic(t *testing.T) {
 
 	// Publish keyed state.
 	result, err := e.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte(`"value1"`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte(`"value1"`),
 	})
 	require.NoError(t, err)
 	require.True(t, result.Position.Offset > 0)
@@ -378,10 +376,7 @@ func TestRedisMapBroker_NodeGrouped_Cleanup(t *testing.T) {
 
 	// Publish with very short TTL.
 	_, err = e.Publish(ctx, channel, "expire_key", MapPublishOptions{
-		Data:       []byte(`"temp"`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     1 * time.Second,
+		Data: []byte(`"temp"`),
 	})
 	require.NoError(t, err)
 

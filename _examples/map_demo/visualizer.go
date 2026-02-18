@@ -36,8 +36,7 @@ func handleVizPopulate(node *centrifuge.Node) http.HandlerFunc {
 				"ts":    time.Now().UnixMilli(),
 			})
 			_, err := node.MapPublish(ctx, "visualizer", key, centrifuge.MapPublishOptions{
-				Data:   data,
-				KeyTTL: -1,
+				Data: data,
 			})
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -71,8 +70,7 @@ func handleVizPublish(node *centrifuge.Node) http.HandlerFunc {
 		}
 		data, _ := json.Marshal(req.Value)
 		_, err := node.MapPublish(context.Background(), "visualizer", req.Key, centrifuge.MapPublishOptions{
-			Data:   data,
-			KeyTTL: -1,
+			Data: data,
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

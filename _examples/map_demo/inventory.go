@@ -43,7 +43,7 @@ func initInventory(node *centrifuge.Node) {
 	ctx := context.Background()
 	for _, item := range inventoryItems {
 		payload, _ := json.Marshal(InventoryPayload{Item: *item})
-		// Note: StreamSize/TTL/MetaTTL are configured via GetMapChannelOptions in node config.
+		// Note: SyncMode/RetentionMode are configured via GetMapChannelOptions in node config.
 		_, _ = node.MapPublish(ctx, "inventory", item.ID, centrifuge.MapPublishOptions{
 			Data:    payload,
 			KeyMode: centrifuge.KeyModeIfNew, // Only set if item doesn't exist yet.
@@ -141,7 +141,7 @@ func handleInventoryBuy(client *centrifuge.Client, node *centrifuge.Node, data [
 			Epoch:  pos.Epoch,
 		}
 
-		// Note: StreamSize/TTL/MetaTTL are configured via GetMapChannelOptions in node config.
+		// Note: SyncMode/RetentionMode are configured via GetMapChannelOptions in node config.
 		result, err := node.MapPublish(ctx, "inventory", req.ItemID, centrifuge.MapPublishOptions{
 			Data:             payload,
 			ExpectedPosition: &expectedPos,
@@ -252,7 +252,7 @@ func handleInventoryRestock(_ *centrifuge.Client, node *centrifuge.Node, data []
 			Epoch:  pos.Epoch,
 		}
 
-		// Note: StreamSize/TTL/MetaTTL are configured via GetMapChannelOptions in node config.
+		// Note: SyncMode/RetentionMode are configured via GetMapChannelOptions in node config.
 		result, err := node.MapPublish(ctx, "inventory", req.ItemID, centrifuge.MapPublishOptions{
 			Data:             payload,
 			ExpectedPosition: &expectedPos,

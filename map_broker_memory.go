@@ -47,7 +47,7 @@ func NewMemoryMapBroker(n *Node, _ MemoryMapBrokerConfig) (*MemoryMapBroker, err
 	}
 	closeCh := make(chan struct{})
 	mapHub := newMapHub(n, n.config.HistoryMetaTTL, pubLocks, closeCh)
-	mapHub.setChannelOptionsResolver(n.ResolveMapChannelOptions)
+	mapHub.setChannelOptionsResolver(n.config.GetMapChannelOptions)
 	e := &MemoryMapBroker{
 		node:        n,
 		mapHub:      mapHub,
@@ -104,22 +104,19 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Resolve channel options once for this operation.
-	resolved := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
+	// Resolve and validate channel options.
+	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	if err != nil {
+		return MapPublishResult{}, err
+	}
 
-	// Apply channel options defaults from node config.
-	chOpts := applyChannelOptionsDefaults(MapChannelOptions{
-		StreamSize: opts.StreamSize, StreamTTL: opts.StreamTTL, MetaTTL: opts.MetaTTL, KeyTTL: opts.KeyTTL,
-	}, resolved)
-	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL, chOpts.KeyTTL
-
-	// Reject CAS and Version in streamless mode.
-	if opts.StreamSize <= 0 || opts.StreamTTL <= 0 {
+	// Reject CAS and Version in ephemeral mode.
+	if chOpts.SyncMode == MapSyncEphemeral {
 		if opts.ExpectedPosition != nil {
-			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires stream (StreamSize > 0)")
+			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
 		}
 		if opts.Version > 0 {
-			return MapPublishResult{}, errors.New("version-based dedup requires stream (StreamSize > 0)")
+			return MapPublishResult{}, errors.New("version-based dedup requires SyncMode Converging")
 		}
 	}
 
@@ -156,10 +153,8 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 		streamPub = statePub
 	}
 
-	ordered := resolved.Ordered
-
 	var prevPub *Publication
-	streamTop, prevPub, suppressReason, err := e.mapHub.add(ch, key, statePub, streamPub, ordered, opts)
+	streamTop, prevPub, suppressReason, err := e.mapHub.add(ch, key, statePub, streamPub, chOpts, opts)
 	if err != nil {
 		return MapPublishResult{}, err
 	}
@@ -202,19 +197,16 @@ func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opt
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Resolve channel options once for this operation.
-	resolved := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
+	// Resolve and validate channel options.
+	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	if err != nil {
+		return MapPublishResult{}, err
+	}
 
-	// Apply channel options defaults from node config.
-	chOpts := applyChannelOptionsDefaults(MapChannelOptions{
-		StreamSize: opts.StreamSize, StreamTTL: opts.StreamTTL, MetaTTL: opts.MetaTTL,
-	}, resolved)
-	opts.StreamSize, opts.StreamTTL, opts.MetaTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL
-
-	// Reject CAS in streamless mode.
-	if opts.StreamSize <= 0 || opts.StreamTTL <= 0 {
+	// Reject CAS in ephemeral mode.
+	if chOpts.SyncMode == MapSyncEphemeral {
 		if opts.ExpectedPosition != nil {
-			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires stream (StreamSize > 0)")
+			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
 		}
 	}
 
@@ -224,7 +216,7 @@ func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opt
 		}
 	}
 
-	streamTop, removePub, suppressReason, err := e.mapHub.remove(ch, key, opts)
+	streamTop, removePub, suppressReason, err := e.mapHub.remove(ch, key, chOpts, opts)
 	if err != nil {
 		return MapPublishResult{}, err
 	}
@@ -359,11 +351,11 @@ type mapHub struct {
 	closeCh         chan struct{}
 	// Key TTL tracking
 	nextKeyExpireCheck     int64
-	keyExpireQueue         priority.Queue     // priority queue of {ch:key, expireAt}
-	keyExpires             map[string]int64   // "ch:key" -> expireAt
-	eventHandler           BrokerEventHandler // for publishing removal events
-	channelOptionsResolver MapChannelOptionsResolver
-	pubLocks               map[int]*sync.Mutex // for ordering HandlePublication calls
+	keyExpireQueue         priority.Queue                          // priority queue of {ch:key, expireAt}
+	keyExpires             map[string]int64                        // "ch:key" -> expireAt
+	eventHandler           BrokerEventHandler                     // for publishing removal events
+	channelOptionsResolver func(channel string) MapChannelOptions // for key expiration events
+	pubLocks               map[int]*sync.Mutex                    // for ordering HandlePublication calls
 }
 
 // mapChannel represents keyed state for a single channel.
@@ -405,7 +397,7 @@ func newMapHub(node *Node, historyMetaTTL time.Duration, pubLocks map[int]*sync.
 	}
 }
 
-func (h *mapHub) setChannelOptionsResolver(r MapChannelOptionsResolver) {
+func (h *mapHub) setChannelOptionsResolver(r func(channel string) MapChannelOptions) {
 	h.Lock()
 	defer h.Unlock()
 	h.channelOptionsResolver = r
@@ -612,14 +604,17 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 		}
 
 		if eventHandler != nil {
-			opts := DefaultMapChannelOptions()
+			var streamSize int
 			if h.channelOptionsResolver != nil {
-				opts = h.channelOptionsResolver(ch)
+				chOpts, err := resolveAndValidateMapChannelOptions(h.channelOptionsResolver, ch)
+				if err == nil && chOpts.SyncMode == MapSyncConverging {
+					streamSize = chOpts.StreamSize
+				}
 			}
 			expiredEvents = append(expiredEvents, expiredKeyEvent{
 				channel:    ch,
 				key:        key,
-				streamSize: opts.StreamSize,
+				streamSize: streamSize,
 			})
 		}
 	}
@@ -680,7 +675,7 @@ func (h *mapHub) parseChKey(chKey string) (string, string) {
 	return "", ""
 }
 
-func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Publication, ordered bool, opts MapPublishOptions) (StreamPosition, *Publication, SuppressReason, error) {
+func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Publication, chOpts MapChannelOptions, opts MapPublishOptions) (StreamPosition, *Publication, SuppressReason, error) {
 	h.Lock()
 	defer h.Unlock()
 
@@ -699,7 +694,7 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 		channel = &mapChannel{
 			stream:  memstream.New(),
 			state:   make(map[string]*stateEntry),
-			ordered: ordered,
+			ordered: chOpts.Ordered,
 			scores:  make(map[string]int64),
 		}
 		h.channels[ch] = channel
@@ -711,8 +706,8 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 		if opts.KeyMode == KeyModeIfNew && keyExists {
 			// KeyModeIfNew but key already exists - suppress publish
 			// But optionally refresh TTL if RefreshTTLOnSuppress is set
-			if opts.RefreshTTLOnSuppress && opts.KeyTTL > 0 {
-				expireAt := time.Now().Unix() + int64(opts.KeyTTL.Seconds())
+			if opts.RefreshTTLOnSuppress && chOpts.KeyTTL > 0 {
+				expireAt := time.Now().Unix() + int64(chOpts.KeyTTL.Seconds())
 				existingEntry.ExpireAt = expireAt
 				// Update TTL tracking
 				chKey := h.makeChKey(ch, key)
@@ -761,8 +756,8 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 	var streamPosition StreamPosition
 
 	// Handle stream
-	if opts.StreamSize > 0 && opts.StreamTTL > 0 {
-		expireAt := time.Now().Unix() + int64(opts.StreamTTL.Seconds())
+	if chOpts.SyncMode == MapSyncConverging {
+		expireAt := time.Now().Unix() + int64(chOpts.StreamTTL.Seconds())
 		if _, ok := h.expires[ch]; !ok {
 			heap.Push(&h.expireQueue, &priority.Item{Value: ch, Priority: expireAt})
 		}
@@ -771,7 +766,7 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 			h.nextExpireCheck = expireAt
 		}
 
-		historyMetaTTL := opts.MetaTTL
+		historyMetaTTL := chOpts.MetaTTL
 		if historyMetaTTL == 0 {
 			historyMetaTTL = h.historyMetaTTL
 		}
@@ -796,7 +791,7 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 			}
 		}
 
-		offset, _ := channel.stream.Add(streamPub, opts.StreamSize, 0, "")
+		offset, _ := channel.stream.Add(streamPub, chOpts.StreamSize, 0, "")
 		streamPub.Offset = offset // Set offset on publication for delivery
 		streamPosition = StreamPosition{
 			Offset: offset,
@@ -816,8 +811,8 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 	if key != "" {
 		// Calculate expiration time
 		var expireAt int64
-		if opts.KeyTTL > 0 {
-			expireAt = time.Now().Unix() + int64(opts.KeyTTL.Seconds())
+		if chOpts.KeyTTL > 0 {
+			expireAt = time.Now().Unix() + int64(chOpts.KeyTTL.Seconds())
 		}
 
 		// Store statePub in state (contains full state Data)
@@ -836,12 +831,12 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 
 		// Mark sorted keys as dirty for any state change
 		channel.sortedKeysDirty = true
-		if ordered {
+		if chOpts.Ordered {
 			channel.scores[key] = opts.Score
 		}
 
 		// Handle key TTL expiration tracking
-		if opts.KeyTTL > 0 {
+		if chOpts.KeyTTL > 0 {
 			chKey := h.makeChKey(ch, key)
 			// Always push new heap entry. When a key is refreshed, the old heap entry
 			// becomes stale and will be discarded in expireKeysIteration (which checks
@@ -858,7 +853,7 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 	return streamPosition, prevPub, SuppressReasonNone, nil
 }
 
-func (h *mapHub) remove(ch string, key string, opts MapRemoveOptions) (StreamPosition, *Publication, SuppressReason, error) {
+func (h *mapHub) remove(ch string, key string, chOpts MapChannelOptions, opts MapRemoveOptions) (StreamPosition, *Publication, SuppressReason, error) {
 	h.Lock()
 	defer h.Unlock()
 
@@ -914,9 +909,9 @@ func (h *mapHub) remove(ch string, key string, opts MapRemoveOptions) (StreamPos
 
 	var streamPosition StreamPosition
 
-	// Add to stream if requested
-	if opts.StreamSize > 0 && opts.StreamTTL > 0 {
-		expireAt := time.Now().Unix() + int64(opts.StreamTTL.Seconds())
+	// Add to stream if converging mode
+	if chOpts.SyncMode == MapSyncConverging {
+		expireAt := time.Now().Unix() + int64(chOpts.StreamTTL.Seconds())
 		if _, ok := h.expires[ch]; !ok {
 			heap.Push(&h.expireQueue, &priority.Item{Value: ch, Priority: expireAt})
 		}
@@ -926,7 +921,7 @@ func (h *mapHub) remove(ch string, key string, opts MapRemoveOptions) (StreamPos
 		}
 
 		// Refresh MetaTTL so the channel isn't garbage-collected while active.
-		historyMetaTTL := opts.MetaTTL
+		historyMetaTTL := chOpts.MetaTTL
 		if historyMetaTTL == 0 {
 			historyMetaTTL = h.historyMetaTTL
 		}
@@ -941,7 +936,7 @@ func (h *mapHub) remove(ch string, key string, opts MapRemoveOptions) (StreamPos
 			}
 		}
 
-		offset, _ := channel.stream.Add(removePub, opts.StreamSize, 0, "")
+		offset, _ := channel.stream.Add(removePub, chOpts.StreamSize, 0, "")
 		removePub.Offset = offset
 		streamPosition = StreamPosition{
 			Offset: offset,
@@ -979,8 +974,14 @@ func (h *mapHub) clear(ch string) {
 }
 
 func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
-	// Update meta TTL before acquiring read lock
-	historyMetaTTL := opts.MetaTTL
+	// Resolve MetaTTL from channel config.
+	var historyMetaTTL time.Duration
+	if h.channelOptionsResolver != nil {
+		chOpts, err := resolveAndValidateMapChannelOptions(h.channelOptionsResolver, ch)
+		if err == nil {
+			historyMetaTTL = chOpts.MetaTTL
+		}
+	}
 	if historyMetaTTL == 0 {
 		historyMetaTTL = h.historyMetaTTL
 	}
@@ -1075,8 +1076,14 @@ func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) (MapStreamResul
 }
 
 func (h *mapHub) getState(ch string, opts MapReadStateOptions) (MapStateResult, error) {
-	// Update meta TTL under write lock (brief).
-	metaTTL := opts.MetaTTL
+	// Resolve MetaTTL from channel config.
+	var metaTTL time.Duration
+	if h.channelOptionsResolver != nil {
+		chOpts, err := resolveAndValidateMapChannelOptions(h.channelOptionsResolver, ch)
+		if err == nil {
+			metaTTL = chOpts.MetaTTL
+		}
+	}
 	if metaTTL == 0 {
 		metaTTL = h.historyMetaTTL
 	}

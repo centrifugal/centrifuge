@@ -1430,6 +1430,14 @@ func TestNodeCheckPositionMap(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			KeyTTL:        60 * time.Second,
+		}
+	}
+
 	// Set up map broker.
 	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
@@ -1440,9 +1448,7 @@ func TestNodeCheckPositionMap(t *testing.T) {
 
 	// Publish some data to create stream position.
 	result, err := mapBroker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte(`{"test": 1}`),
-		StreamSize: 100,
-		StreamTTL:  time.Hour,
+		Data: []byte(`{"test": 1}`),
 	})
 	require.NoError(t, err)
 	streamPos := result.Position
@@ -1470,9 +1476,7 @@ func TestNodeCheckPositionMap(t *testing.T) {
 
 	// Publish more data.
 	result2, err := mapBroker.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte(`{"test": 2}`),
-		StreamSize: 100,
-		StreamTTL:  time.Hour,
+		Data: []byte(`{"test": 2}`),
 	})
 	require.NoError(t, err)
 	streamPos2 := result2.Position
@@ -1538,6 +1542,14 @@ func TestGetMapBroker(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			KeyTTL:        60 * time.Second,
+		}
+	}
+
 	// Create two map brokers
 	defaultBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
@@ -1601,6 +1613,14 @@ func TestNode_MapStreamReadUnrecoverablePosition(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			KeyTTL:        60 * time.Second,
+		}
+	}
+
 	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	node.SetMapBroker(mapBroker)
@@ -1612,10 +1632,7 @@ func TestNode_MapStreamReadUnrecoverablePosition(t *testing.T) {
 	var epoch string
 	for i := 1; i <= 200; i++ {
 		res, err := mapBroker.Publish(ctx, ch, fmt.Sprintf("key_%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%d", i)),
-			StreamSize: 30,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(fmt.Sprintf("data_%d", i)),
 		})
 		require.NoError(t, err)
 		epoch = res.Position.Epoch

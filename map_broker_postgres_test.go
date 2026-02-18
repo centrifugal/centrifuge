@@ -133,33 +133,23 @@ func TestPostgresMapBroker_StatefulChannel(t *testing.T) {
 
 	// Publish some keyed state updates
 	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
 	_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("data2"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte("data2"),
 	})
 	require.NoError(t, err)
 
 	_, err = broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1_updated"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte("data1_updated"),
 	})
 	require.NoError(t, err)
 
 	// Read state
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, streamPos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -187,10 +177,12 @@ func TestPostgresMapBroker_StatefulChannelOrdered(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
 		}
 	}
 	broker := newTestPostgresMapBroker(t, node)
@@ -201,19 +193,15 @@ func TestPostgresMapBroker_StatefulChannelOrdered(t *testing.T) {
 	// Publish with scores for ordering
 	for i := 0; i < 5; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			Score:      int64(i * 10), // Scores: 0, 10, 20, 30, 40
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data:  []byte(fmt.Sprintf("data%d", i)),
+			Score: int64(i * 10), // Scores: 0, 10, 20, 30, 40
 		})
 		require.NoError(t, err)
 	}
 
 	// Read ordered state (descending by score)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -237,20 +225,14 @@ func TestPostgresMapBroker_StateRevision(t *testing.T) {
 
 	// Publish a keyed state update
 	res1, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), res1.Position.Offset)
 
 	// Publish another update
 	res2, err := broker.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("data2"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte("data2"),
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), res2.Position.Offset)
@@ -258,8 +240,7 @@ func TestPostgresMapBroker_StateRevision(t *testing.T) {
 
 	// Read state - entries now include per-entry revisions
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, streamPos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -289,19 +270,15 @@ func TestPostgresMapBroker_StatePagination(t *testing.T) {
 	// Publish 10 keyed entries
 	for i := 0; i < 10; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
 
 	// Read state with limit
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   3,
-		Cursor:  "",
-		MetaTTL: 300 * time.Second,
+		Limit:  3,
+		Cursor: "",
 	})
 	page1, pos1, cursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -316,9 +293,8 @@ func TestPostgresMapBroker_StatePagination(t *testing.T) {
 	// Continue reading until cursor is empty
 	for cursor != "" {
 		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-			Limit:   3,
-			Cursor:  cursor,
-			MetaTTL: 300 * time.Second,
+			Limit:  3,
+			Cursor: cursor,
 		})
 		page, pos, newCursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
@@ -347,9 +323,7 @@ func TestPostgresMapBroker_StreamRecovery(t *testing.T) {
 	// Publish some updates
 	for i := 1; i <= 5; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -382,9 +356,6 @@ func TestPostgresMapBroker_Idempotency(t *testing.T) {
 		Data:                []byte("data1"),
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
-		StreamSize:          100,
-		StreamTTL:           300 * time.Second,
-		KeyTTL:              300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.False(t, res1.Suppressed)
@@ -395,9 +366,6 @@ func TestPostgresMapBroker_Idempotency(t *testing.T) {
 		Data:                []byte("data1_different"),
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
-		StreamSize:          100,
-		StreamTTL:           300 * time.Second,
-		KeyTTL:              300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.True(t, res2.Suppressed)                                 // Suppressed due to idempotency
@@ -406,8 +374,7 @@ func TestPostgresMapBroker_Idempotency(t *testing.T) {
 
 	// State should still have original data
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -426,11 +393,8 @@ func TestPostgresMapBroker_KeyMode(t *testing.T) {
 
 	// First publish with KeyModeIfNew should succeed
 	res1, err := broker.Publish(ctx, channel, "slot1", MapPublishOptions{
-		Data:       []byte("player1"),
-		KeyMode:    KeyModeIfNew,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("player1"),
+		KeyMode: KeyModeIfNew,
 	})
 	require.NoError(t, err)
 	require.False(t, res1.Suppressed)
@@ -438,11 +402,8 @@ func TestPostgresMapBroker_KeyMode(t *testing.T) {
 
 	// Second publish with KeyModeIfNew should be suppressed
 	res2, err := broker.Publish(ctx, channel, "slot1", MapPublishOptions{
-		Data:       []byte("player2"),
-		KeyMode:    KeyModeIfNew,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("player2"),
+		KeyMode: KeyModeIfNew,
 	})
 	require.NoError(t, err)
 	require.True(t, res2.Suppressed)
@@ -450,8 +411,7 @@ func TestPostgresMapBroker_KeyMode(t *testing.T) {
 
 	// Verify state still has original data
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -460,11 +420,8 @@ func TestPostgresMapBroker_KeyMode(t *testing.T) {
 
 	// KeyModeIfExists should be suppressed for non-existent key
 	res3, err := broker.Publish(ctx, channel, "nonexistent", MapPublishOptions{
-		Data:       []byte("data"),
-		KeyMode:    KeyModeIfExists,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("data"),
+		KeyMode: KeyModeIfExists,
 	})
 	require.NoError(t, err)
 	require.True(t, res3.Suppressed)
@@ -472,11 +429,8 @@ func TestPostgresMapBroker_KeyMode(t *testing.T) {
 
 	// KeyModeIfExists should succeed for existing key
 	res4, err := broker.Publish(ctx, channel, "slot1", MapPublishOptions{
-		Data:       []byte("updated"),
-		KeyMode:    KeyModeIfExists,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("updated"),
+		KeyMode: KeyModeIfExists,
 	})
 	require.NoError(t, err)
 	require.False(t, res4.Suppressed)
@@ -492,9 +446,7 @@ func TestPostgresMapBroker_CAS(t *testing.T) {
 
 	// Initial publish
 	res1, err := broker.Publish(ctx, channel, "item1", MapPublishOptions{
-		Data:       []byte(`{"stock": 10}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte(`{"stock": 10}`),
 	})
 	require.NoError(t, err)
 	require.False(t, res1.Suppressed)
@@ -512,8 +464,6 @@ func TestPostgresMapBroker_CAS(t *testing.T) {
 	res2, err := broker.Publish(ctx, channel, "item1", MapPublishOptions{
 		Data:             []byte(`{"stock": 9}`),
 		ExpectedPosition: &expectedPos,
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.False(t, res2.Suppressed)
@@ -522,8 +472,6 @@ func TestPostgresMapBroker_CAS(t *testing.T) {
 	res3, err := broker.Publish(ctx, channel, "item1", MapPublishOptions{
 		Data:             []byte(`{"stock": 8}`),
 		ExpectedPosition: &expectedPos, // Using old position
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.True(t, res3.Suppressed)
@@ -546,10 +494,7 @@ func TestPostgresMapBroker_KeyTTL(t *testing.T) {
 
 	// Publish with short TTL
 	_, err := broker.Publish(ctx, channel, "ephemeral", MapPublishOptions{
-		Data:       []byte("temporary"),
-		KeyTTL:     2 * time.Second,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("temporary"),
 	})
 	require.NoError(t, err)
 
@@ -586,20 +531,16 @@ func TestPostgresMapBroker_Version(t *testing.T) {
 
 	// Publish with version 2
 	res1, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data_v2"),
-		Version:    2,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data:    []byte("data_v2"),
+		Version: 2,
 	})
 	require.NoError(t, err)
 	require.False(t, res1.Suppressed)
 
 	// Try to publish older version (should be suppressed)
 	res2, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data_v1"),
-		Version:    1,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data:    []byte("data_v1"),
+		Version: 1,
 	})
 	require.NoError(t, err)
 	require.True(t, res2.Suppressed)
@@ -607,10 +548,8 @@ func TestPostgresMapBroker_Version(t *testing.T) {
 
 	// Publish newer version
 	res3, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data_v3"),
-		Version:    3,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data:    []byte("data_v3"),
+		Version: 3,
 	})
 	require.NoError(t, err)
 	require.False(t, res3.Suppressed)
@@ -634,48 +573,37 @@ func TestPostgresMapBroker_PerKeyVersion(t *testing.T) {
 
 	// key1 with version=10 → accepted
 	res1, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("key1_v10"),
-		Version:    10,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data:    []byte("key1_v10"),
+		Version: 10,
 	})
 	require.NoError(t, err)
 	require.False(t, res1.Suppressed)
 
 	// key2 with version=5 → accepted (independent, was broken before per-key version)
 	res2, err := broker.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("key2_v5"),
-		Version:    5,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data:    []byte("key2_v5"),
+		Version: 5,
 	})
 	require.NoError(t, err)
 	require.False(t, res2.Suppressed, "key2 should not be suppressed by key1's version")
 
 	// key1 with version=5 → suppressed (same key, lower version)
 	res3, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("key1_v5"),
-		Version:    5,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data:    []byte("key1_v5"),
+		Version: 5,
 	})
 	require.NoError(t, err)
 	require.True(t, res3.Suppressed)
 	require.Equal(t, SuppressReasonVersion, res3.SuppressReason)
 
 	// Remove key1
-	_, err = broker.Remove(ctx, channel, "key1", MapRemoveOptions{
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-	})
+	_, err = broker.Remove(ctx, channel, "key1", MapRemoveOptions{})
 	require.NoError(t, err)
 
 	// Publish key1 with version=1 → accepted (version cleared by remove)
 	res4, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("key1_v1"),
-		Version:    1,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data:    []byte("key1_v1"),
+		Version: 1,
 	})
 	require.NoError(t, err)
 	require.False(t, res4.Suppressed, "key1 version should be cleared after remove")
@@ -700,16 +628,12 @@ func TestPostgresMapBroker_Remove(t *testing.T) {
 
 	// Publish some keys
 	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
 	_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("data2"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data2"),
 	})
 	require.NoError(t, err)
 
@@ -722,10 +646,7 @@ func TestPostgresMapBroker_Remove(t *testing.T) {
 	require.Len(t, entries, 2)
 
 	// Remove key1
-	res, err := broker.Remove(ctx, channel, "key1", MapRemoveOptions{
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-	})
+	res, err := broker.Remove(ctx, channel, "key1", MapRemoveOptions{})
 	require.NoError(t, err)
 	require.False(t, res.Suppressed)
 
@@ -739,10 +660,7 @@ func TestPostgresMapBroker_Remove(t *testing.T) {
 	require.Equal(t, "key2", entries[0].Key)
 
 	// Remove non-existent key should be suppressed
-	res, err = broker.Remove(ctx, channel, "nonexistent", MapRemoveOptions{
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-	})
+	res, err = broker.Remove(ctx, channel, "nonexistent", MapRemoveOptions{})
 	require.NoError(t, err)
 	require.True(t, res.Suppressed)
 	require.Equal(t, SuppressReasonKeyNotFound, res.SuppressReason)
@@ -775,9 +693,7 @@ func TestPostgresMapBroker_Stats(t *testing.T) {
 	// Publish some keys
 	for i := 0; i < 5; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -808,9 +724,7 @@ func TestPostgresMapBroker_EpochMismatch(t *testing.T) {
 
 	// Create channel
 	_, err = broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
@@ -1159,9 +1073,7 @@ func TestPostgresMapBroker_ConcurrentPublishOrdering(t *testing.T) {
 				key := fmt.Sprintf("g%d_k%d", goroutineID, i)
 				data := []byte(fmt.Sprintf("data_%d_%d", goroutineID, i))
 				_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-					Data:       data,
-					StreamSize: 1000,
-					StreamTTL:  300 * time.Second,
+					Data: data,
 				})
 				require.NoError(t, err)
 			}
@@ -1369,8 +1281,7 @@ func TestPostgresMapBroker_OutboxOrdering(t *testing.T) {
 	// Publish multiple messages in sequence
 	for i := 0; i < numMessages; i++ {
 		_, err = broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:      []byte(fmt.Sprintf("data%d", i)),
-			StreamTTL: 300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1573,8 +1484,7 @@ func TestPostgresMapBroker_OutboxConcurrentPublish(t *testing.T) {
 				key := fmt.Sprintf("g%d_k%d", goroutineID, i)
 				data := []byte(fmt.Sprintf("data_%d_%d", goroutineID, i))
 				_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-					Data:      data,
-					StreamTTL: 300 * time.Second,
+					Data: data,
 				})
 				require.NoError(t, err)
 			}
@@ -1685,9 +1595,8 @@ func TestPostgresMapBroker_OutboxWithBroker(t *testing.T) {
 
 	// Publish via broker
 	_, err = pgBroker.Publish(ctx, channel, "test_key", MapPublishOptions{
-		Data:      []byte("test_data"),
-		Score:     100,
-		StreamTTL: 300 * time.Second,
+		Data:  []byte("test_data"),
+		Score: 100,
 	})
 	require.NoError(t, err)
 
@@ -1780,11 +1689,8 @@ func TestPostgresMapBroker_Delta_Outbox(t *testing.T) {
 
 	// 1. First publish with UseDelta - no previous state.
 	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		UseDelta:   true,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:     []byte("data1"),
+		UseDelta: true,
 	})
 	require.NoError(t, err)
 
@@ -1795,11 +1701,8 @@ func TestPostgresMapBroker_Delta_Outbox(t *testing.T) {
 
 	// 2. Second publish same key - should get prevPub with first data.
 	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1_updated"),
-		UseDelta:   true,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:     []byte("data1_updated"),
+		UseDelta: true,
 	})
 	require.NoError(t, err)
 
@@ -1811,11 +1714,8 @@ func TestPostgresMapBroker_Delta_Outbox(t *testing.T) {
 
 	// 3. Different key - no previous state for this key.
 	_, err = e.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("data2"),
-		UseDelta:   true,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:     []byte("data2"),
+		UseDelta: true,
 	})
 	require.NoError(t, err)
 
@@ -1829,9 +1729,6 @@ func TestPostgresMapBroker_Delta_Outbox(t *testing.T) {
 		Data:       []byte("data1_full"),
 		StreamData: []byte("data1_stream"),
 		UseDelta:   true,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -1841,11 +1738,8 @@ func TestPostgresMapBroker_Delta_Outbox(t *testing.T) {
 
 	// 5. UseDelta=false - no delta.
 	_, err = e.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("data2_updated"),
-		UseDelta:   false,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:     []byte("data2_updated"),
+		UseDelta: false,
 	})
 	require.NoError(t, err)
 
@@ -1855,11 +1749,8 @@ func TestPostgresMapBroker_Delta_Outbox(t *testing.T) {
 
 	// 6. Third publish to key1 after StreamData update - prevPub should have data1_full.
 	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1_v3"),
-		UseDelta:   true,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:     []byte("data1_v3"),
+		UseDelta: true,
 	})
 	require.NoError(t, err)
 
@@ -1879,16 +1770,13 @@ func TestPostgresMapBroker_Clear(t *testing.T) {
 	// Publish some keyed state and stream entries.
 	for i := 0; i < 3; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
 
 	// Verify data exists.
-	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, MetaTTL: 300 * time.Second})
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 3)
@@ -1906,7 +1794,7 @@ func TestPostgresMapBroker_Clear(t *testing.T) {
 	require.NoError(t, err)
 
 	// State should be empty.
-	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, MetaTTL: 300 * time.Second})
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Empty(t, entries)
@@ -1984,8 +1872,7 @@ func TestPostgresMapBroker_CursorBasedDelivery(t *testing.T) {
 	// Publish messages
 	for i := 0; i < numMessages; i++ {
 		_, err = broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:      []byte(fmt.Sprintf("data%d", i)),
-			StreamTTL: 300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -2024,10 +1911,7 @@ func TestPostgresMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 	// Populate two channels.
 	for _, ch := range []string{"test_clear_iso_ch1", "test_clear_iso_ch2"} {
 		_, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
-			Data:       []byte("v"),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte("v"),
 		})
 		require.NoError(t, err)
 	}
@@ -2037,13 +1921,13 @@ func TestPostgresMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	// ch1 empty.
-	stateRes, err := broker.ReadState(ctx, "test_clear_iso_ch1", MapReadStateOptions{Limit: 100, MetaTTL: 300 * time.Second})
+	stateRes, err := broker.ReadState(ctx, "test_clear_iso_ch1", MapReadStateOptions{Limit: 100})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Empty(t, entries)
 
 	// ch2 still intact.
-	stateRes, err = broker.ReadState(ctx, "test_clear_iso_ch2", MapReadStateOptions{Limit: 100, MetaTTL: 300 * time.Second})
+	stateRes, err = broker.ReadState(ctx, "test_clear_iso_ch2", MapReadStateOptions{Limit: 100})
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -2441,10 +2325,7 @@ func TestPostgresMapBroker_EnsureSchema_FunctionalAfterSetup(t *testing.T) {
 
 	// Publish.
 	res, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte(`{"hello":"world"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"hello":"world"}`),
 	})
 	require.NoError(t, err)
 	require.False(t, res.Suppressed)
@@ -2459,10 +2340,7 @@ func TestPostgresMapBroker_EnsureSchema_FunctionalAfterSetup(t *testing.T) {
 	require.JSONEq(t, `{"hello":"world"}`, string(stateRes.Publications[0].Data))
 
 	// Remove.
-	removeRes, err := broker.Remove(ctx, channel, "key1", MapRemoveOptions{
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-	})
+	removeRes, err := broker.Remove(ctx, channel, "key1", MapRemoveOptions{})
 	require.NoError(t, err)
 	require.False(t, removeRes.Suppressed)
 
@@ -2478,10 +2356,12 @@ func TestPostgresMapBroker_OrderedStateAsc(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
 		}
 	}
 	broker := newTestPostgresMapBroker(t, node)
@@ -2503,20 +2383,16 @@ func TestPostgresMapBroker_OrderedStateAsc(t *testing.T) {
 
 	for _, tc := range testCases {
 		_, err := broker.Publish(ctx, channel, tc.key, MapPublishOptions{
-			Data:       []byte(tc.data),
-			Score:      tc.score,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data:  []byte(tc.data),
+			Score: tc.score,
 		})
 		require.NoError(t, err)
 	}
 
 	// ASC: lowest score first.
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
-		Asc:     true,
+		Limit: 100,
+		Asc:   true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 5)
@@ -2528,8 +2404,7 @@ func TestPostgresMapBroker_OrderedStateAsc(t *testing.T) {
 
 	// DESC (default): highest score first.
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 5)
@@ -2546,10 +2421,12 @@ func TestPostgresMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
 		}
 	}
 	broker := newTestPostgresMapBroker(t, node)
@@ -2560,18 +2437,15 @@ func TestPostgresMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 	// Publish 10 entries with scores 100..1000.
 	for i := 1; i <= 10; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key_%02d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Score:      int64(i * 100),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data:  []byte(fmt.Sprintf("data_%02d", i)),
+			Score: int64(i * 100),
 		})
 		require.NoError(t, err)
 	}
 
 	// Page 1.
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit: 3, MetaTTL: 300 * time.Second, Asc: true,
+		Limit: 3, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 3)
@@ -2582,7 +2456,7 @@ func TestPostgresMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 
 	// Page 2.
 	stateRes2, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Cursor: stateRes.Cursor, Limit: 3, MetaTTL: 300 * time.Second, Asc: true,
+		Cursor: stateRes.Cursor, Limit: 3, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes2.Publications, 3)
@@ -2593,7 +2467,7 @@ func TestPostgresMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 
 	// Page 3.
 	stateRes3, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Cursor: stateRes2.Cursor, Limit: 3, MetaTTL: 300 * time.Second, Asc: true,
+		Cursor: stateRes2.Cursor, Limit: 3, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes3.Publications, 3)
@@ -2604,7 +2478,7 @@ func TestPostgresMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 
 	// Page 4: last entry.
 	stateRes4, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Cursor: stateRes3.Cursor, Limit: 3, MetaTTL: 300 * time.Second, Asc: true,
+		Cursor: stateRes3.Cursor, Limit: 3, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes4.Publications, 1)
@@ -2618,10 +2492,12 @@ func TestPostgresMapBroker_OrderedStateAscSameScores(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
 		}
 	}
 	broker := newTestPostgresMapBroker(t, node)
@@ -2632,18 +2508,15 @@ func TestPostgresMapBroker_OrderedStateAscSameScores(t *testing.T) {
 	// All entries have score=100.
 	for _, key := range []string{"zebra", "apple", "mango", "banana"} {
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte("data"),
-			Score:      100,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data:  []byte("data"),
+			Score: 100,
 		})
 		require.NoError(t, err)
 	}
 
 	// ASC with same scores → key ASC.
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit: 100, MetaTTL: 300 * time.Second, Asc: true,
+		Limit: 100, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 4)
@@ -2654,7 +2527,7 @@ func TestPostgresMapBroker_OrderedStateAscSameScores(t *testing.T) {
 
 	// DESC with same scores → key DESC.
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit: 100, MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 4)
@@ -2665,7 +2538,7 @@ func TestPostgresMapBroker_OrderedStateAscSameScores(t *testing.T) {
 
 	// Paginate ASC with limit=2.
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit: 2, MetaTTL: 300 * time.Second, Asc: true,
+		Limit: 2, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 2)
@@ -2674,7 +2547,7 @@ func TestPostgresMapBroker_OrderedStateAscSameScores(t *testing.T) {
 	require.Equal(t, "banana", stateRes.Publications[1].Key)
 
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Cursor: stateRes.Cursor, Limit: 2, MetaTTL: 300 * time.Second, Asc: true,
+		Cursor: stateRes.Cursor, Limit: 2, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 2)
@@ -2758,9 +2631,6 @@ func TestPostgresMapBroker_ClientInfoDelivery_Outbox(t *testing.T) {
 	_, err = e.Publish(ctx, channel, "k1", MapPublishOptions{
 		Data:       []byte("data1"),
 		ClientInfo: info,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -2862,7 +2732,6 @@ func TestPostgresMapBroker_ClientInfoDelivery_OutboxWithBroker(t *testing.T) {
 	_, err = pgBroker.Publish(ctx, channel, "k1", MapPublishOptions{
 		Data:       []byte("data1"),
 		ClientInfo: info,
-		StreamTTL:  300 * time.Second,
 	})
 	require.NoError(t, err)
 

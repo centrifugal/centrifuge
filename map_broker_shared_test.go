@@ -3,7 +3,6 @@ package centrifuge
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -82,10 +81,7 @@ func testMapBrokerReadStateAllEntries(t *testing.T, factory mapBrokerFactory) {
 		// Publish multiple entries.
 		for i := 0; i < 25; i++ {
 			_, err := broker.Publish(ctx, ch, "key"+string(rune('a'+i)), MapPublishOptions{
-				Data:       []byte("data"),
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				KeyTTL:     300 * time.Second,
+				Data: []byte("data"),
 			})
 			require.NoError(t, err)
 		}
@@ -106,10 +102,7 @@ func testMapBrokerReadStateAllEntries(t *testing.T, factory mapBrokerFactory) {
 		// Publish a few entries.
 		for i := 0; i < 5; i++ {
 			_, err := broker.Publish(ctx, ch, "k"+string(rune('0'+i)), MapPublishOptions{
-				Data:       []byte("data"),
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				KeyTTL:     300 * time.Second,
+				Data: []byte("data"),
 			})
 			require.NoError(t, err)
 		}
@@ -154,15 +147,11 @@ func testMapBrokerClientInfoInState(t *testing.T, factory mapBrokerFactory) {
 		_, err := broker.Publish(ctx, ch, "k1", MapPublishOptions{
 			Data:       []byte("data1"),
 			ClientInfo: info,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
 		})
 		require.NoError(t, err)
 
 		result, err := broker.ReadState(ctx, ch, MapReadStateOptions{
-			Key:     "k1",
-			MetaTTL: 300 * time.Second,
+			Key: "k1",
 		})
 		require.NoError(t, err)
 		require.Len(t, result.Publications, 1)
@@ -181,15 +170,11 @@ func testMapBrokerClientInfoInState(t *testing.T, factory mapBrokerFactory) {
 		_, err := broker.Publish(ctx, ch, "k1", MapPublishOptions{
 			Data:       []byte("data1"),
 			ClientInfo: info,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
 		})
 		require.NoError(t, err)
 
 		result, err := broker.ReadState(ctx, ch, MapReadStateOptions{
-			Limit:   -1,
-			MetaTTL: 300 * time.Second,
+			Limit: -1,
 		})
 		require.NoError(t, err)
 		require.Len(t, result.Publications, 1)
@@ -221,9 +206,6 @@ func testMapBrokerClientInfoInStream(t *testing.T, factory mapBrokerFactory) {
 		_, err := broker.Publish(ctx, ch, "k1", MapPublishOptions{
 			Data:       []byte("data1"),
 			ClientInfo: info,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
 		})
 		require.NoError(t, err)
 

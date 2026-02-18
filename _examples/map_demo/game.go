@@ -56,8 +56,7 @@ func handleGameCreate(client *centrifuge.Client, node *centrifuge.Node, data []b
 	// Publish game to games list channel (single source of truth).
 	gameData, _ := json.Marshal(game)
 	_, err := node.MapPublish(context.Background(), "games", gameID, centrifuge.MapPublishOptions{
-		Data:   gameData,
-		KeyTTL: 10 * time.Minute, // Games expire after 10 minutes of inactivity.
+		Data: gameData,
 	})
 	if err != nil {
 		log.Printf("game create error: %v", err)
@@ -119,7 +118,6 @@ func handleGameJoin(client *centrifuge.Client, node *centrifuge.Node, data []byt
 	result, err := node.MapPublish(context.Background(), channel, key, centrifuge.MapPublishOptions{
 		Data:    playerData,
 		KeyMode: centrifuge.KeyModeIfNew,
-		KeyTTL:  5 * time.Minute,
 	})
 	if err != nil {
 		log.Printf("game join error: %v", err)

@@ -87,9 +87,7 @@ func TestCachedMapBroker_TwoNodes_BasicPublish(t *testing.T) {
 
 	// Node 1 publishes
 	_, err = cached1.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("from_node1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("from_node1"),
 	})
 	require.NoError(t, err)
 
@@ -141,9 +139,7 @@ func TestCachedMapBroker_TwoNodes_ConcurrentPublish(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < numPubsPerNode; i++ {
 			_, err := cached1.Publish(ctx, channel, fmt.Sprintf("node1_key%d", i), MapPublishOptions{
-				Data:       []byte(fmt.Sprintf("node1_data%d", i)),
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
+				Data: []byte(fmt.Sprintf("node1_data%d", i)),
 			})
 			if err != nil {
 				t.Errorf("node1 publish error: %v", err)
@@ -157,9 +153,7 @@ func TestCachedMapBroker_TwoNodes_ConcurrentPublish(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < numPubsPerNode; i++ {
 			_, err := cached2.Publish(ctx, channel, fmt.Sprintf("node2_key%d", i), MapPublishOptions{
-				Data:       []byte(fmt.Sprintf("node2_data%d", i)),
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
+				Data: []byte(fmt.Sprintf("node2_data%d", i)),
 			})
 			if err != nil {
 				t.Errorf("node2 publish error: %v", err)
@@ -225,16 +219,12 @@ func TestCachedMapBroker_TwoNodes_UpdateSameKey(t *testing.T) {
 	// Both nodes update the same key multiple times
 	for i := 0; i < 5; i++ {
 		_, err = cached1.Publish(ctx, channel, "shared_key", MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("node1_update%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("node1_update%d", i)),
 		})
 		require.NoError(t, err)
 
 		_, err = cached2.Publish(ctx, channel, "shared_key", MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("node2_update%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("node2_update%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -288,9 +278,7 @@ func TestCachedMapBroker_TwoNodes_GapFilling(t *testing.T) {
 	// Node 1 publishes several keys
 	for i := 0; i < 5; i++ {
 		_, err = cached1.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -304,9 +292,7 @@ func TestCachedMapBroker_TwoNodes_GapFilling(t *testing.T) {
 	// Node 1 publishes more
 	for i := 5; i < 10; i++ {
 		_, err = cached1.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -346,9 +332,7 @@ func TestCachedMapBroker_TwoNodes_Remove(t *testing.T) {
 	// Node 1 publishes some keys
 	for i := 0; i < 5; i++ {
 		_, err = cached1.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -366,10 +350,7 @@ func TestCachedMapBroker_TwoNodes_Remove(t *testing.T) {
 
 	// Node 2 removes some keys
 	for i := 0; i < 3; i++ {
-		_, err = cached2.Remove(ctx, channel, fmt.Sprintf("key%d", i), MapRemoveOptions{
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-		})
+		_, err = cached2.Remove(ctx, channel, fmt.Sprintf("key%d", i), MapRemoveOptions{})
 		require.NoError(t, err)
 	}
 
@@ -424,9 +405,7 @@ func TestCachedMapBroker_TwoNodes_HighConcurrency(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < pubsPerGoroutine; i++ {
 				_, err := cached1.Publish(ctx, channel, fmt.Sprintf("n1_g%d_k%d", gid, i), MapPublishOptions{
-					Data:       []byte(fmt.Sprintf("n1_g%d_d%d", gid, i)),
-					StreamSize: 1000,
-					StreamTTL:  300 * time.Second,
+					Data: []byte(fmt.Sprintf("n1_g%d_d%d", gid, i)),
 				})
 				if err != nil {
 					t.Errorf("n1 g%d publish error: %v", gid, err)
@@ -442,9 +421,7 @@ func TestCachedMapBroker_TwoNodes_HighConcurrency(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < pubsPerGoroutine; i++ {
 				_, err := cached2.Publish(ctx, channel, fmt.Sprintf("n2_g%d_k%d", gid, i), MapPublishOptions{
-					Data:       []byte(fmt.Sprintf("n2_g%d_d%d", gid, i)),
-					StreamSize: 1000,
-					StreamTTL:  300 * time.Second,
+					Data: []byte(fmt.Sprintf("n2_g%d_d%d", gid, i)),
 				})
 				if err != nil {
 					t.Errorf("n2 g%d publish error: %v", gid, err)
@@ -551,9 +528,7 @@ func TestCachedMapBroker_TwoNodes_PubSub(t *testing.T) {
 
 	// Node 1 publishes
 	_, err = cached1.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("from_node1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("from_node1"),
 	})
 	require.NoError(t, err)
 
@@ -600,16 +575,12 @@ func TestCachedMapBroker_TwoNodes_UpdateSameKeyPubSub(t *testing.T) {
 	// Both nodes update the same key multiple times
 	for i := 0; i < 5; i++ {
 		_, err = cached1.Publish(ctx, channel, "shared_key", MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("node1_update%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("node1_update%d", i)),
 		})
 		require.NoError(t, err)
 
 		_, err = cached2.Publish(ctx, channel, "shared_key", MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("node2_update%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("node2_update%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -667,9 +638,7 @@ func TestCachedMapBroker_TwoNodes_GapFillingPubSub(t *testing.T) {
 	// Node 1 publishes several keys
 	for i := 0; i < 5; i++ {
 		_, err = cached1.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -687,9 +656,7 @@ func TestCachedMapBroker_TwoNodes_GapFillingPubSub(t *testing.T) {
 	// Node 1 publishes more - these should propagate via PUB/SUB
 	for i := 5; i < 10; i++ {
 		_, err = cached1.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -736,9 +703,7 @@ func TestCachedMapBroker_TwoNodes_RemovePubSub(t *testing.T) {
 	// Node 1 publishes some keys
 	for i := 0; i < 5; i++ {
 		_, err = cached1.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -756,10 +721,7 @@ func TestCachedMapBroker_TwoNodes_RemovePubSub(t *testing.T) {
 
 	// Node 2 removes some keys
 	for i := 0; i < 3; i++ {
-		_, err = cached2.Remove(ctx, channel, fmt.Sprintf("key%d", i), MapRemoveOptions{
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-		})
+		_, err = cached2.Remove(ctx, channel, fmt.Sprintf("key%d", i), MapRemoveOptions{})
 		require.NoError(t, err)
 	}
 
@@ -820,9 +782,7 @@ func TestCachedMapBroker_TwoNodes_ConcurrentPublishPubSub(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < numPubsPerNode; i++ {
 			_, err := cached1.Publish(ctx, channel, fmt.Sprintf("node1_key%d", i), MapPublishOptions{
-				Data:       []byte(fmt.Sprintf("node1_data%d", i)),
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
+				Data: []byte(fmt.Sprintf("node1_data%d", i)),
 			})
 			if err != nil {
 				t.Errorf("node1 publish error: %v", err)
@@ -836,9 +796,7 @@ func TestCachedMapBroker_TwoNodes_ConcurrentPublishPubSub(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < numPubsPerNode; i++ {
 			_, err := cached2.Publish(ctx, channel, fmt.Sprintf("node2_key%d", i), MapPublishOptions{
-				Data:       []byte(fmt.Sprintf("node2_data%d", i)),
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
+				Data: []byte(fmt.Sprintf("node2_data%d", i)),
 			})
 			if err != nil {
 				t.Errorf("node2 publish error: %v", err)
@@ -970,9 +928,7 @@ func TestCachedMapBroker_TwoNodes_MissedPubSubMessages(t *testing.T) {
 
 	// Node 1 publishes message 1 - both nodes receive via PUB/SUB
 	_, err = cached1.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
@@ -991,9 +947,7 @@ func TestCachedMapBroker_TwoNodes_MissedPubSubMessages(t *testing.T) {
 	// This simulates messages that node2 misses
 	for i := 2; i <= 4; i++ {
 		_, err = silentBackend.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1007,9 +961,7 @@ func TestCachedMapBroker_TwoNodes_MissedPubSubMessages(t *testing.T) {
 	// Node 1 publishes message 5 via PUB/SUB
 	// Node2 receives this, detects gap (cache at 1, received 5), fills from backend
 	_, err = cached1.Publish(ctx, channel, "key5", MapPublishOptions{
-		Data:       []byte("data5"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data5"),
 	})
 	require.NoError(t, err)
 
@@ -1057,16 +1009,12 @@ func TestCachedMapBroker_TwoNodes_StreamOrderConsistency(t *testing.T) {
 	// Interleaved publications from both nodes
 	for i := 0; i < 10; i++ {
 		_, err = cached1.Publish(ctx, channel, fmt.Sprintf("n1_key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("n1_data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("n1_data%d", i)),
 		})
 		require.NoError(t, err)
 
 		_, err = cached2.Publish(ctx, channel, fmt.Sprintf("n2_key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("n2_data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("n2_data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1148,9 +1096,7 @@ func TestCachedMapBroker_TwoNodes_HighConcurrencyPubSub(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < pubsPerGoroutine; i++ {
 				_, err := cached1.Publish(ctx, channel, fmt.Sprintf("n1_g%d_k%d", gid, i), MapPublishOptions{
-					Data:       []byte(fmt.Sprintf("n1_g%d_d%d", gid, i)),
-					StreamSize: 1000,
-					StreamTTL:  300 * time.Second,
+					Data: []byte(fmt.Sprintf("n1_g%d_d%d", gid, i)),
 				})
 				if err != nil {
 					t.Errorf("n1 g%d publish error: %v", gid, err)
@@ -1166,9 +1112,7 @@ func TestCachedMapBroker_TwoNodes_HighConcurrencyPubSub(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < pubsPerGoroutine; i++ {
 				_, err := cached2.Publish(ctx, channel, fmt.Sprintf("n2_g%d_k%d", gid, i), MapPublishOptions{
-					Data:       []byte(fmt.Sprintf("n2_g%d_d%d", gid, i)),
-					StreamSize: 1000,
-					StreamTTL:  300 * time.Second,
+					Data: []byte(fmt.Sprintf("n2_g%d_d%d", gid, i)),
 				})
 				if err != nil {
 					t.Errorf("n2 g%d publish error: %v", gid, err)

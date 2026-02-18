@@ -48,7 +48,9 @@ func setupPostgresMapBrokerBenchOrdered(b *testing.B) (*PostgresMapBroker, func(
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered: true,
+			Ordered:       true,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
 		}
 	}
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
@@ -91,9 +93,7 @@ func BenchmarkPostgresMapBroker_PublishStreamOnly(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			data := []byte(fmt.Sprintf("message_%d", i))
 			_, err := broker.Publish(ctx, channel, "", MapPublishOptions{
-				Data:       data,
-				StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
-				StreamTTL:  300 * time.Second,
+				Data: data,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -120,10 +120,7 @@ func BenchmarkPostgresMapBroker_PublishMapStateSimple(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-				Data:       data,
-				StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
-				StreamTTL:  300 * time.Second,
-				KeyTTL:     300 * time.Second,
+				Data: data,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -150,11 +147,8 @@ func BenchmarkPostgresMapBroker_PublishMapStateOrdered(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-				Data:       data,
-				Score:      i,
-				StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
-				StreamTTL:  300 * time.Second,
-				KeyTTL:     300 * time.Second,
+				Data:  data,
+				Score: i,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -181,10 +175,7 @@ func BenchmarkPostgresMapBroker_PublishCombined(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-				Data:       data,
-				StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
-				StreamTTL:  300 * time.Second,
-				KeyTTL:     300 * time.Second,
+				Data: data,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -206,9 +197,7 @@ func BenchmarkPostgresMapBroker_ReadStream(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		data := []byte(fmt.Sprintf("message_%d", i))
 		res, err := broker.Publish(ctx, channel, "", MapPublishOptions{
-			Data:       data,
-			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
-			StreamTTL:  300 * time.Second,
+			Data: data,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -249,10 +238,7 @@ func BenchmarkPostgresMapBroker_ReadStateFull(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       data,
-			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: data,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -265,8 +251,7 @@ func BenchmarkPostgresMapBroker_ReadStateFull(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-				Limit:   -1, // Read all
-				MetaTTL: 300 * time.Second,
+				Limit: -1, // Read all
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -288,10 +273,7 @@ func BenchmarkPostgresMapBroker_ReadStatePaginated(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       data,
-			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: data,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -304,8 +286,7 @@ func BenchmarkPostgresMapBroker_ReadStatePaginated(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-				Limit:   100, // Read 100 at a time
-				MetaTTL: 300 * time.Second,
+				Limit: 100, // Read 100 at a time
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -327,11 +308,8 @@ func BenchmarkPostgresMapBroker_ReadStateOrdered(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       data,
-			Score:      int64(i),
-			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data:  data,
+			Score: int64(i),
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -344,8 +322,7 @@ func BenchmarkPostgresMapBroker_ReadStateOrdered(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-				Limit:   100,
-				MetaTTL: 300 * time.Second,
+				Limit: 100,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -367,10 +344,7 @@ func BenchmarkPostgresMapBroker_Stats(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       data,
-			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: data,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -403,10 +377,7 @@ func BenchmarkPostgresMapBroker_Remove(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       data,
-			StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: data,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -421,10 +392,7 @@ func BenchmarkPostgresMapBroker_Remove(b *testing.B) {
 		for pb.Next() {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
-			_, err := broker.Remove(ctx, channel, key, MapRemoveOptions{
-				StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
-				StreamTTL:  300 * time.Second,
-			})
+			_, err := broker.Remove(ctx, channel, key, MapRemoveOptions{})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -453,8 +421,6 @@ func BenchmarkPostgresMapBroker_IdempotentPublish(b *testing.B) {
 				Data:                data,
 				IdempotencyKey:      idempotencyKey,
 				IdempotentResultTTL: 60 * time.Second,
-				//StreamSize:          10000, // This is rather expensive, rely on TTL fits PG better.
-				StreamTTL: 300 * time.Second,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -473,9 +439,7 @@ func BenchmarkPostgresMapBroker_CAS(b *testing.B) {
 
 	// Create initial key
 	res, err := broker.Publish(ctx, channel, "shared_counter", MapPublishOptions{
-		Data:       []byte("0"),
-		StreamSize: -1, // Disable size and rely only on TTL for better efficiency.
-		StreamTTL:  300 * time.Second,
+		Data: []byte("0"),
 	})
 	if err != nil {
 		b.Fatal(err)
@@ -501,8 +465,6 @@ func BenchmarkPostgresMapBroker_CAS(b *testing.B) {
 			_, _ = broker.Publish(ctx, channel, "shared_counter", MapPublishOptions{
 				Data:             []byte("updated"),
 				ExpectedPosition: &expectedPos,
-				//StreamSize:       10000, // This is rather expensive, rely on TTL fits PG better.
-				StreamTTL: 300 * time.Second,
 			})
 		}
 	})
@@ -608,10 +570,7 @@ func BenchmarkPostgresMapBroker_OutboxPublish(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-				Data:       data,
-				StreamSize: -1,
-				StreamTTL:  300 * time.Second,
-				KeyTTL:     300 * time.Second,
+				Data: data,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -666,9 +625,7 @@ func BenchmarkPostgresMapBroker_OutboxThroughput(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       data,
-			StreamSize: -1,
-			StreamTTL:  300 * time.Second,
+			Data: data,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -701,9 +658,7 @@ func BenchmarkPostgresMapBroker_PublishWithStreamTrim(b *testing.B) {
 			// Pre-fill stream to stream_size so trim runs on every publish.
 			for i := 0; i < streamSize; i++ {
 				_, err := broker.Publish(ctx, channel, fmt.Sprintf("prefill_%d", i), MapPublishOptions{
-					Data:       []byte(fmt.Sprintf("data_%d", i)),
-					StreamSize: streamSize,
-					StreamTTL:  300 * time.Second,
+					Data: []byte(fmt.Sprintf("data_%d", i)),
 				})
 				if err != nil {
 					b.Fatal(err)
@@ -716,9 +671,7 @@ func BenchmarkPostgresMapBroker_PublishWithStreamTrim(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				key := fmt.Sprintf("key_%d", i)
 				_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-					Data:       []byte("x"),
-					StreamSize: streamSize,
-					StreamTTL:  300 * time.Second,
+					Data: []byte("x"),
 				})
 				if err != nil {
 					b.Fatal(err)
@@ -742,9 +695,7 @@ func BenchmarkPostgresMapBroker_PublishNoTrim(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("key_%d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte("x"),
-			StreamSize: -1,
-			StreamTTL:  300 * time.Second,
+			Data: []byte("x"),
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -805,9 +756,7 @@ func BenchmarkPostgresMapBroker_OutboxLatency(b *testing.B) {
 		mu.Unlock()
 
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       data,
-			StreamSize: -1,
-			StreamTTL:  300 * time.Second,
+			Data: data,
 		})
 		if err != nil {
 			b.Fatal(err)

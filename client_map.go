@@ -38,21 +38,23 @@ import (
 //
 // Key differences from normal subscriptions:
 //
-// EnablePositioning and EnableRecovery options control whether stream-based consistency
-// is used for map subscriptions, similar to how they work for regular subscriptions:
+// EnablePositioning and EnableRecovery are auto-set from the channel's SyncMode
+// (configured in MapChannelOptions via GetMapChannelOptions resolver):
 //
-//   - When both are false (default): Streamless mode. No stream history is maintained.
+//   - MapSyncEphemeral: Streamless mode. No stream history is maintained.
 //     State is always available, but recovery on reconnect requires a full state re-sync.
 //     CAS (ExpectedPosition) and Version-based dedup are not available.
+//     EnablePositioning and EnableRecovery are both set to false.
 //
-//   - When either is true: Stream mode. Publications are tracked with offsets, stream
+//   - MapSyncConverging: Stream mode. Publications are tracked with offsets, stream
 //     history is maintained, and clients can recover missed publications on reconnect.
 //     CAS and Version features are available.
+//     EnablePositioning and EnableRecovery are both set to true.
 //
 // When Type is SubscriptionTypeMap in SubscribeOptions, the subscription gets:
 //   - State delivery (always)
-//   - Stream position tracking (if EnablePositioning or EnableRecovery)
-//   - Stream-based recovery (if EnablePositioning or EnableRecovery)
+//   - Stream position tracking (if MapSyncConverging)
+//   - Stream-based recovery (if MapSyncConverging)
 //   - Delta compression support for stream catch-up (if negotiated)
 //   - Tags filtering for stream and live publications (if allowed)
 //
@@ -208,6 +210,20 @@ func (c *Client) handleMapSubscribe(
 	rw *replyWriter,
 ) error {
 	channel := req.Channel
+
+	// Auto-set positioning flags from SyncMode.
+	chOpts, err := c.node.ResolveMapChannelOptions(channel)
+	if err != nil {
+		c.cleanupMapSubscribing(channel)
+		return err
+	}
+	if chOpts.SyncMode == MapSyncConverging {
+		reply.Options.EnablePositioning = true
+		reply.Options.EnableRecovery = true
+	} else {
+		reply.Options.EnablePositioning = false
+		reply.Options.EnableRecovery = false
+	}
 
 	// Route based on phase.
 	switch req.Phase {
@@ -395,7 +411,7 @@ func (c *Client) handleMapStatePhase(
 		}
 		// Positioned: optionally skip STREAM phase if stream hasn't advanced much.
 		if c.node.config.MapStateToLiveEnabled {
-			currentStreamPos, err := c.node.MapStreamPosition(c.ctx, channel, state.options.HistoryMetaTTL)
+			currentStreamPos, err := c.node.MapStreamPosition(c.ctx, channel)
 			if err == nil {
 				// Use limit as threshold - if stream is within one page, go LIVE.
 				if effectivePos.Offset+uint64(limit) >= currentStreamPos.Offset {
@@ -531,7 +547,6 @@ func (c *Client) handleMapStateToLive(
 				},
 				Limit: readLimit,
 			},
-			MetaTTL: opts.HistoryMetaTTL,
 		}
 
 		streamResult, err := c.node.MapStreamRead(c.ctx, channel, streamOpts)
@@ -779,7 +794,7 @@ func (c *Client) handleMapStreamPhase(
 
 	// Capture stream top on first stream request.
 	if !state.streamStartCaptured {
-		streamPos, err := c.node.MapStreamPosition(c.ctx, channel, state.options.HistoryMetaTTL)
+		streamPos, err := c.node.MapStreamPosition(c.ctx, channel)
 		if err != nil {
 			if errors.Is(err, ErrorUnrecoverablePosition) {
 				c.cleanupMapSubscribing(channel)
@@ -826,7 +841,6 @@ func (c *Client) handleMapStreamPhase(
 			},
 			Limit: limit,
 		},
-		MetaTTL: state.options.HistoryMetaTTL,
 	}
 
 	// Read stream.
@@ -973,7 +987,6 @@ func (c *Client) handleMapStreamToLive(
 			},
 			Limit: readLimit,
 		},
-		MetaTTL: opts.HistoryMetaTTL,
 	}
 
 	streamResult, err := c.node.MapStreamRead(c.ctx, channel, streamOpts)
@@ -1347,7 +1360,6 @@ func (c *Client) handleMapImmediateJoin(
 				},
 				Limit: readLimit,
 			},
-			MetaTTL: opts.HistoryMetaTTL,
 		}
 
 		streamResult, err := c.node.MapStreamRead(c.ctx, channel, streamOpts)
@@ -1602,7 +1614,6 @@ func (c *Client) handleMapRecoveryJoin(
 			},
 			Limit: readLimit,
 		},
-		MetaTTL: opts.HistoryMetaTTL,
 	}
 
 	streamResult, err := c.node.MapStreamRead(c.ctx, channel, streamOpts)
@@ -1925,10 +1936,9 @@ func (c *Client) addMapClientPresence(channel string, prefix string, info *Clien
 	// Use KeyModeIfNew with RefreshTTLOnSuppress to:
 	// - Publish JOIN event only if this is a new presence entry
 	// - Refresh TTL without publishing if entry already exists (quick reconnect)
-	// Stream options (StreamSize/TTL/MetaTTL) use GetMapChannelOptions.
+	// KeyTTL is configured in GetMapChannelOptions for presence channels.
 	_, err := c.node.MapPublish(c.ctx, presenceChannel, c.uid, MapPublishOptions{
 		ClientInfo:           info,
-		KeyTTL:               c.mapPresenceTTL(),
 		KeyMode:              KeyModeIfNew,
 		RefreshTTLOnSuppress: true,
 	})
@@ -1943,9 +1953,8 @@ func (c *Client) addMapUserPresence(channel string, prefix string) error {
 	// Use KeyModeIfNew with RefreshTTLOnSuppress to:
 	// - Publish JOIN event only if this is a new user
 	// - Refresh TTL without publishing if user already exists
-	// Stream options (StreamSize/TTL/MetaTTL) use defaults from GetMapChannelOptions.
+	// KeyTTL is configured in GetMapChannelOptions for presence channels.
 	_, err := c.node.MapPublish(c.ctx, presenceChannel, c.user, MapPublishOptions{
-		KeyTTL:               c.mapPresenceTTL(),
 		KeyMode:              KeyModeIfNew,
 		RefreshTTLOnSuppress: true,
 	})
@@ -1966,7 +1975,6 @@ func (c *Client) updateMapPresence(channel string, info *ClientInfo, ctx Channel
 		presenceChannel := ctx.mapClientPresenceChannelPrefix + channel
 		_, err := c.node.MapPublish(c.ctx, presenceChannel, c.uid, MapPublishOptions{
 			ClientInfo:           info,
-			KeyTTL:               c.mapPresenceTTL(),
 			KeyMode:              KeyModeIfNew,
 			RefreshTTLOnSuppress: true,
 		})
@@ -1979,7 +1987,6 @@ func (c *Client) updateMapPresence(channel string, info *ClientInfo, ctx Channel
 	if ctx.mapUserPresenceChannelPrefix != "" {
 		presenceChannel := ctx.mapUserPresenceChannelPrefix + channel
 		_, err := c.node.MapPublish(c.ctx, presenceChannel, c.user, MapPublishOptions{
-			KeyTTL:               c.mapPresenceTTL(),
 			KeyMode:              KeyModeIfNew,
 			RefreshTTLOnSuppress: true,
 		})

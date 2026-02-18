@@ -496,7 +496,10 @@ func (e *CachedMapBroker) Clear(ctx context.Context, ch string, opts MapClearOpt
 // Uses resolved channel options for stream size/TTL configuration.
 func (e *CachedMapBroker) ensureLoaded(ctx context.Context, ch string) error {
 	// Resolve channel options for stream size/TTL
-	opts := e.resolveChannelOptions(ch)
+	opts, err := e.resolveChannelOptions(ch)
+	if err != nil {
+		return err
+	}
 
 	return e.cache.EnsureLoaded(ctx, ch, opts, func(ctx context.Context, ch string, opts MapChannelOptions) ([]*Publication, []*Publication, StreamPosition, error) {
 		loadCtx, cancel := context.WithTimeout(ctx, e.conf.LoadTimeout)
@@ -539,8 +542,8 @@ func (e *CachedMapBroker) ensureLoaded(ctx context.Context, ch string) error {
 }
 
 // resolveChannelOptions resolves map channel options for a channel.
-func (e *CachedMapBroker) resolveChannelOptions(ch string) MapChannelOptions {
-	return e.node.ResolveMapChannelOptions(ch)
+func (e *CachedMapBroker) resolveChannelOptions(ch string) (MapChannelOptions, error) {
+	return resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 }
 
 // runSyncLoop runs the background sync scheduler.

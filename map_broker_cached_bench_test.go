@@ -12,7 +12,15 @@ import (
 
 // BenchmarkCachedMapBroker_ReadState_Cached benchmarks reading from warm cache.
 func BenchmarkCachedMapBroker_ReadState_Cached(b *testing.B) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterEventHandler(nil)
@@ -33,9 +41,7 @@ func BenchmarkCachedMapBroker_ReadState_Cached(b *testing.B) {
 	// Prepopulate with 1000 entries
 	for i := 0; i < 1000; i++ {
 		_, err := cached.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte("benchmark_data_payload_for_testing"),
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
+			Data: []byte("benchmark_data_payload_for_testing"),
 		})
 		require.NoError(b, err)
 	}
@@ -56,7 +62,15 @@ func BenchmarkCachedMapBroker_ReadState_Cached(b *testing.B) {
 
 // BenchmarkCachedMapBroker_ReadState_ColdLoad benchmarks first read (load from backend).
 func BenchmarkCachedMapBroker_ReadState_ColdLoad(b *testing.B) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterEventHandler(nil)
@@ -66,9 +80,7 @@ func BenchmarkCachedMapBroker_ReadState_ColdLoad(b *testing.B) {
 	// Prepopulate backend
 	for i := 0; i < 1000; i++ {
 		_, err := backend.Publish(ctx, "bench_cold_load", fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte("benchmark_data_payload_for_testing"),
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
+			Data: []byte("benchmark_data_payload_for_testing"),
 		})
 		require.NoError(b, err)
 	}
@@ -99,7 +111,15 @@ func BenchmarkCachedMapBroker_ReadState_ColdLoad(b *testing.B) {
 
 // BenchmarkCachedMapBroker_ReadState_Parallel benchmarks parallel cached reads.
 func BenchmarkCachedMapBroker_ReadState_Parallel(b *testing.B) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterEventHandler(nil)
@@ -120,9 +140,7 @@ func BenchmarkCachedMapBroker_ReadState_Parallel(b *testing.B) {
 	// Prepopulate
 	for i := 0; i < 1000; i++ {
 		_, err := cached.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte("benchmark_data_payload_for_testing"),
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
+			Data: []byte("benchmark_data_payload_for_testing"),
 		})
 		require.NoError(b, err)
 	}
@@ -139,7 +157,15 @@ func BenchmarkCachedMapBroker_ReadState_Parallel(b *testing.B) {
 
 // BenchmarkCachedMapBroker_ReadState_Paginated benchmarks paginated reads.
 func BenchmarkCachedMapBroker_ReadState_Paginated(b *testing.B) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterEventHandler(nil)
@@ -160,9 +186,7 @@ func BenchmarkCachedMapBroker_ReadState_Paginated(b *testing.B) {
 	// Prepopulate
 	for i := 0; i < 1000; i++ {
 		_, err := cached.Publish(ctx, channel, fmt.Sprintf("key%04d", i), MapPublishOptions{
-			Data:       []byte("benchmark_data"),
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
+			Data: []byte("benchmark_data"),
 		})
 		require.NoError(b, err)
 	}
@@ -188,7 +212,15 @@ func BenchmarkCachedMapBroker_ReadState_Paginated(b *testing.B) {
 
 // BenchmarkCachedMapBroker_Publish benchmarks publish (backend + cache).
 func BenchmarkCachedMapBroker_Publish(b *testing.B) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterEventHandler(nil)
@@ -211,16 +243,22 @@ func BenchmarkCachedMapBroker_Publish(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		_, _ = cached.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte("benchmark_data_payload"),
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
+			Data: []byte("benchmark_data_payload"),
 		})
 	}
 }
 
 // BenchmarkCachedMapBroker_Publish_Parallel benchmarks parallel publishes.
 func BenchmarkCachedMapBroker_Publish_Parallel(b *testing.B) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterEventHandler(nil)
@@ -247,9 +285,7 @@ func BenchmarkCachedMapBroker_Publish_Parallel(b *testing.B) {
 		for pb.Next() {
 			localCounter++
 			_, _ = cached.Publish(ctx, channel, fmt.Sprintf("key%d", localCounter), MapPublishOptions{
-				Data:       []byte("benchmark_data_payload"),
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
+				Data: []byte("benchmark_data_payload"),
 			})
 		}
 	})
@@ -258,7 +294,15 @@ func BenchmarkCachedMapBroker_Publish_Parallel(b *testing.B) {
 
 // BenchmarkMapCache_EnsureLoaded benchmarks load latency.
 func BenchmarkMapCache_EnsureLoaded(b *testing.B) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterEventHandler(nil)
@@ -269,9 +313,7 @@ func BenchmarkMapCache_EnsureLoaded(b *testing.B) {
 	for ch := 0; ch < 100; ch++ {
 		for i := 0; i < 100; i++ {
 			_, _ = backend.Publish(ctx, fmt.Sprintf("ch%d", ch), fmt.Sprintf("key%d", i), MapPublishOptions{
-				Data:       []byte("data"),
-				StreamSize: 1000,
-				StreamTTL:  300 * time.Second,
+				Data: []byte("data"),
 			})
 		}
 	}
@@ -312,7 +354,14 @@ func BenchmarkMapCache_ApplyPublication(b *testing.B) {
 	channel := "bench_apply"
 
 	// Initialize channel
-	opts := DefaultMapChannelOptions()
+	opts := MapChannelOptions{
+		SyncMode:      MapSyncConverging,
+		RetentionMode: MapRetentionExpiring,
+		StreamSize:    100,
+		StreamTTL:     60 * time.Second,
+		MetaTTL:       600 * time.Second,
+		KeyTTL:        60 * time.Second,
+	}
 	_ = cache.EnsureLoaded(ctx, channel, opts, func(ctx context.Context, ch string, opts MapChannelOptions) ([]*Publication, []*Publication, StreamPosition, error) {
 		return []*Publication{}, []*Publication{}, StreamPosition{Offset: 0, Epoch: "test"}, nil
 	})
@@ -333,7 +382,15 @@ func BenchmarkMapCache_ApplyPublication(b *testing.B) {
 
 // BenchmarkReadState_Direct_vs_Cached compares direct vs cached reads.
 func BenchmarkReadState_Direct_vs_Cached(b *testing.B) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterEventHandler(nil)
@@ -354,9 +411,7 @@ func BenchmarkReadState_Direct_vs_Cached(b *testing.B) {
 	// Prepopulate
 	for i := 0; i < 1000; i++ {
 		_, err := backend.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte("benchmark_data_payload_for_testing"),
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
+			Data: []byte("benchmark_data_payload_for_testing"),
 		})
 		require.NoError(b, err)
 	}
@@ -381,7 +436,15 @@ func BenchmarkReadState_Direct_vs_Cached(b *testing.B) {
 
 // BenchmarkPublish_Direct_vs_Cached compares direct vs cached writes.
 func BenchmarkPublish_Direct_vs_Cached(b *testing.B) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterEventHandler(nil)
@@ -403,9 +466,7 @@ func BenchmarkPublish_Direct_vs_Cached(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			_, _ = backend.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-				Data:       []byte("benchmark_data"),
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
+				Data: []byte("benchmark_data"),
 			})
 		}
 	})
@@ -415,9 +476,7 @@ func BenchmarkPublish_Direct_vs_Cached(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			_, _ = cached.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-				Data:       []byte("benchmark_data"),
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
+				Data: []byte("benchmark_data"),
 			})
 		}
 	})
@@ -425,7 +484,15 @@ func BenchmarkPublish_Direct_vs_Cached(b *testing.B) {
 
 // BenchmarkCachedMapBroker_SyncChannel benchmarks single channel sync.
 func BenchmarkCachedMapBroker_SyncChannel(b *testing.B) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterEventHandler(nil)
@@ -447,9 +514,7 @@ func BenchmarkCachedMapBroker_SyncChannel(b *testing.B) {
 	// Prepopulate and load
 	for i := 0; i < 100; i++ {
 		_, _ = cached.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte("data"),
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
+			Data: []byte("data"),
 		})
 	}
 
@@ -459,9 +524,7 @@ func BenchmarkCachedMapBroker_SyncChannel(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// Add new data to backend
 		_, _ = backend.Publish(ctx, channel, fmt.Sprintf("sync_key%d", i), MapPublishOptions{
-			Data:       []byte("sync_data"),
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
+			Data: []byte("sync_data"),
 		})
 
 		// Manually trigger sync
@@ -471,7 +534,15 @@ func BenchmarkCachedMapBroker_SyncChannel(b *testing.B) {
 
 // BenchmarkCachedMapBroker_ManyChannels benchmarks with many active channels.
 func BenchmarkCachedMapBroker_ManyChannels(b *testing.B) {
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	backend, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(b, err)
 	_ = backend.RegisterEventHandler(nil)
@@ -492,9 +563,7 @@ func BenchmarkCachedMapBroker_ManyChannels(b *testing.B) {
 	for ch := 0; ch < 1000; ch++ {
 		for i := 0; i < 10; i++ {
 			_, _ = cached.Publish(ctx, fmt.Sprintf("channel_%d", ch), fmt.Sprintf("key%d", i), MapPublishOptions{
-				Data:       []byte("data"),
-				StreamSize: 1000,
-				StreamTTL:  300 * time.Second,
+				Data: []byte("data"),
 			})
 		}
 	}
@@ -522,7 +591,15 @@ func BenchmarkMapReadState_Postgres_Direct_vs_Cached(b *testing.B) {
 		b.Skip("CENTRIFUGE_POSTGRES_URL not set, skipping Postgres benchmark")
 	}
 
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	backend, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: pgURL,
 	})
@@ -550,9 +627,7 @@ func BenchmarkMapReadState_Postgres_Direct_vs_Cached(b *testing.B) {
 	// Prepopulate with 1000 entries
 	for i := 0; i < 1000; i++ {
 		_, err := backend.Publish(ctx, channel, fmt.Sprintf("key%04d", i), MapPublishOptions{
-			Data:       []byte("benchmark_data_payload_for_testing_postgres_performance"),
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
+			Data: []byte("benchmark_data_payload_for_testing_postgres_performance"),
 		})
 		require.NoError(b, err)
 	}
@@ -589,7 +664,15 @@ func BenchmarkMapReadState_Postgres_Parallel(b *testing.B) {
 		b.Skip("CENTRIFUGE_POSTGRES_URL not set, skipping Postgres benchmark")
 	}
 
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	backend, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: pgURL,
 		PoolSize:   32,
@@ -618,9 +701,7 @@ func BenchmarkMapReadState_Postgres_Parallel(b *testing.B) {
 	// Prepopulate
 	for i := 0; i < 1000; i++ {
 		_, err := backend.Publish(ctx, channel, fmt.Sprintf("key%04d", i), MapPublishOptions{
-			Data:       []byte("benchmark_data_payload_for_testing"),
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
+			Data: []byte("benchmark_data_payload_for_testing"),
 		})
 		require.NoError(b, err)
 	}
@@ -660,7 +741,15 @@ func BenchmarkMapPublish_Postgres_Direct_vs_Cached(b *testing.B) {
 		b.Skip("CENTRIFUGE_POSTGRES_URL not set, skipping Postgres benchmark")
 	}
 
-	node, _ := New(Config{})
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
 	backend, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: pgURL,
 	})
@@ -689,9 +778,7 @@ func BenchmarkMapPublish_Postgres_Direct_vs_Cached(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			_, _ = backend.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-				Data:       []byte("benchmark_data"),
-				StreamSize: -1,
-				StreamTTL:  300 * time.Second,
+				Data: []byte("benchmark_data"),
 			})
 		}
 
@@ -707,9 +794,7 @@ func BenchmarkMapPublish_Postgres_Direct_vs_Cached(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			_, _ = cached.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-				Data:       []byte("benchmark_data"),
-				StreamSize: -1,
-				StreamTTL:  300 * time.Second,
+				Data: []byte("benchmark_data"),
 			})
 		}
 

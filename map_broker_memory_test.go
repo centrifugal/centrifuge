@@ -34,6 +34,15 @@ func stateToMapMemory(pubs []*Publication) map[string][]byte {
 // TestMemoryMapBroker_StatefulChannel tests stateful channel with keyed state and revisions.
 func TestMemoryMapBroker_StatefulChannel(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
@@ -41,33 +50,23 @@ func TestMemoryMapBroker_StatefulChannel(t *testing.T) {
 
 	// Publish some keyed state updates
 	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
 	_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("data2"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte("data2"),
 	})
 	require.NoError(t, err)
 
 	_, err = broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1_updated"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte("data1_updated"),
 	})
 	require.NoError(t, err)
 
 	// Read state
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, streamPos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -95,10 +94,12 @@ func TestMemoryMapBroker_StatefulChannelOrdered(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -109,19 +110,15 @@ func TestMemoryMapBroker_StatefulChannelOrdered(t *testing.T) {
 	// Publish with scores for ordering
 	for i := 0; i < 5; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			Score:      int64(i * 10), // Scores: 0, 10, 20, 30, 40
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data:  []byte(fmt.Sprintf("data%d", i)),
+			Score: int64(i * 10), // Scores: 0, 10, 20, 30, 40
 		})
 		require.NoError(t, err)
 	}
 
 	// Read ordered state (descending by score)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -138,6 +135,15 @@ func TestMemoryMapBroker_StatefulChannelOrdered(t *testing.T) {
 // TestMemoryMapBroker_StateRevision tests that state values include revisions.
 func TestMemoryMapBroker_StateRevision(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
@@ -145,20 +151,14 @@ func TestMemoryMapBroker_StateRevision(t *testing.T) {
 
 	// Publish a keyed state update
 	res1, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), res1.Position.Offset)
 
 	// Publish another update
 	res2, err := broker.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("data2"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte("data2"),
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), res2.Position.Offset)
@@ -166,8 +166,7 @@ func TestMemoryMapBroker_StateRevision(t *testing.T) {
 
 	// Read state - entries now include per-entry revisions
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, streamPos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -189,6 +188,15 @@ func TestMemoryMapBroker_StateRevision(t *testing.T) {
 // TestMemoryMapBroker_StatePagination tests cursor-based state pagination.
 func TestMemoryMapBroker_StatePagination(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
@@ -197,19 +205,15 @@ func TestMemoryMapBroker_StatePagination(t *testing.T) {
 	// Publish 10 keyed entries
 	for i := 0; i < 10; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
 
 	// Read state with limit
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   3,
-		Cursor:  "",
-		MetaTTL: 300 * time.Second,
+		Limit:  3,
+		Cursor: "",
 	})
 	page1, pos1, cursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -224,9 +228,8 @@ func TestMemoryMapBroker_StatePagination(t *testing.T) {
 	// Continue reading until cursor is empty
 	for cursor != "" {
 		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-			Limit:   3,
-			Cursor:  cursor,
-			MetaTTL: 300 * time.Second,
+			Limit:  3,
+			Cursor: cursor,
 		})
 		page, pos, newCursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 		require.NoError(t, err)
@@ -247,6 +250,15 @@ func TestMemoryMapBroker_StatePagination(t *testing.T) {
 // TestMemoryMapBroker_EpochHandling tests epoch changes and state invalidation.
 func TestMemoryMapBroker_EpochHandling(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
@@ -254,18 +266,14 @@ func TestMemoryMapBroker_EpochHandling(t *testing.T) {
 
 	// Publish initial data
 	res1, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 	epoch1 := res1.Position.Epoch
 
 	// Read state
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, streamPos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -281,6 +289,15 @@ func TestMemoryMapBroker_EpochHandling(t *testing.T) {
 // (e.g., after server restart). This is the server restart recovery scenario.
 func TestMemoryMapBroker_EpochMismatchWhenChannelNotExists(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
@@ -302,6 +319,15 @@ func TestMemoryMapBroker_EpochMismatchWhenChannelNotExists(t *testing.T) {
 // when client doesn't send an epoch and the channel doesn't exist (fresh subscription).
 func TestMemoryMapBroker_NoEpochWhenChannelNotExists(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
@@ -321,6 +347,15 @@ func TestMemoryMapBroker_NoEpochWhenChannelNotExists(t *testing.T) {
 // TestMemoryMapBroker_Idempotency tests idempotent publishing.
 func TestMemoryMapBroker_Idempotency(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
@@ -331,9 +366,6 @@ func TestMemoryMapBroker_Idempotency(t *testing.T) {
 		Data:                []byte("data1"),
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
-		StreamSize:          100,
-		StreamTTL:           300 * time.Second,
-		KeyTTL:              300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.False(t, res1.Suppressed)
@@ -344,9 +376,6 @@ func TestMemoryMapBroker_Idempotency(t *testing.T) {
 		Data:                []byte("data1_different"),
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
-		StreamSize:          100,
-		StreamTTL:           300 * time.Second,
-		KeyTTL:              300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.True(t, res2.Suppressed) // Suppressed due to idempotency
@@ -356,8 +385,7 @@ func TestMemoryMapBroker_Idempotency(t *testing.T) {
 
 	// State should still have original data (second publish was cached/skipped)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -369,6 +397,15 @@ func TestMemoryMapBroker_Idempotency(t *testing.T) {
 // TestMemoryMapBroker_VersionedPublishing tests version-based idempotency.
 func TestMemoryMapBroker_VersionedPublishing(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
@@ -376,11 +413,8 @@ func TestMemoryMapBroker_VersionedPublishing(t *testing.T) {
 
 	// Publish with version 2 (version 0 means "disable version check")
 	res1, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data_v2"),
-		Version:    2,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("data_v2"),
+		Version: 2,
 	})
 	require.NoError(t, err)
 	require.False(t, res1.Suppressed)
@@ -388,11 +422,8 @@ func TestMemoryMapBroker_VersionedPublishing(t *testing.T) {
 
 	// Try to publish older version (should be suppressed)
 	res2, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data_v1"),
-		Version:    1,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("data_v1"),
+		Version: 1,
 	})
 	require.NoError(t, err)
 	require.True(t, res2.Suppressed) // Suppressed due to out-of-order version
@@ -401,11 +432,8 @@ func TestMemoryMapBroker_VersionedPublishing(t *testing.T) {
 
 	// Publish newer version
 	res3, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data_v3"),
-		Version:    3,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("data_v3"),
+		Version: 3,
 	})
 	require.NoError(t, err)
 	require.False(t, res3.Suppressed)
@@ -413,8 +441,7 @@ func TestMemoryMapBroker_VersionedPublishing(t *testing.T) {
 
 	// State should have v3 data
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -425,6 +452,15 @@ func TestMemoryMapBroker_VersionedPublishing(t *testing.T) {
 // TestMemoryMapBroker_PerKeyVersion tests that version tracking is per-key independent.
 func TestMemoryMapBroker_PerKeyVersion(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
@@ -432,60 +468,44 @@ func TestMemoryMapBroker_PerKeyVersion(t *testing.T) {
 
 	// key1 with version=10 → accepted
 	res1, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("key1_v10"),
-		Version:    10,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("key1_v10"),
+		Version: 10,
 	})
 	require.NoError(t, err)
 	require.False(t, res1.Suppressed)
 
 	// key2 with version=5 → accepted (independent, was broken before per-key version)
 	res2, err := broker.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("key2_v5"),
-		Version:    5,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("key2_v5"),
+		Version: 5,
 	})
 	require.NoError(t, err)
 	require.False(t, res2.Suppressed, "key2 should not be suppressed by key1's version")
 
 	// key1 with version=5 → suppressed (same key, lower version)
 	res3, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("key1_v5"),
-		Version:    5,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("key1_v5"),
+		Version: 5,
 	})
 	require.NoError(t, err)
 	require.True(t, res3.Suppressed)
 	require.Equal(t, SuppressReasonVersion, res3.SuppressReason)
 
 	// Remove key1
-	_, err = broker.Remove(ctx, channel, "key1", MapRemoveOptions{
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-	})
+	_, err = broker.Remove(ctx, channel, "key1", MapRemoveOptions{})
 	require.NoError(t, err)
 
 	// Publish key1 with version=1 → accepted (version cleared by remove)
 	res4, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("key1_v1"),
-		Version:    1,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("key1_v1"),
+		Version: 1,
 	})
 	require.NoError(t, err)
 	require.False(t, res4.Suppressed, "key1 version should be cleared after remove")
 
 	// Verify final state
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	require.NoError(t, err)
 	state := stateToMapMemory(stateRes.Publications)
@@ -496,6 +516,15 @@ func TestMemoryMapBroker_PerKeyVersion(t *testing.T) {
 // TestMemoryMapBroker_MultipleChannels tests multiple channels independently.
 func TestMemoryMapBroker_MultipleChannels(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
@@ -504,26 +533,19 @@ func TestMemoryMapBroker_MultipleChannels(t *testing.T) {
 
 	// Publish to channel1
 	_, err := broker.Publish(ctx, channel1, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
 	// Publish to channel2
 	_, err = broker.Publish(ctx, channel2, "key2", MapPublishOptions{
-		Data:       []byte("data2"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte("data2"),
 	})
 	require.NoError(t, err)
 
 	// Read channel1 state
 	stateRes, err := broker.ReadState(ctx, channel1, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries1, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -533,8 +555,7 @@ func TestMemoryMapBroker_MultipleChannels(t *testing.T) {
 
 	// Read channel2 state
 	stateRes, err = broker.ReadState(ctx, channel2, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries2, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -549,10 +570,12 @@ func TestMemoryMapBroker_OrderedStateOrdering(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -575,19 +598,15 @@ func TestMemoryMapBroker_OrderedStateOrdering(t *testing.T) {
 
 	for _, tc := range testCases {
 		_, err := broker.Publish(ctx, channel, tc.key, MapPublishOptions{
-			Data:       []byte(tc.data),
-			Score:      tc.score,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data:  []byte(tc.data),
+			Score: tc.score,
 		})
 		require.NoError(t, err)
 	}
 
 	// Read ordered state - should be sorted by score (descending)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -608,10 +627,12 @@ func TestMemoryMapBroker_OrderedStatePagination(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -626,19 +647,15 @@ func TestMemoryMapBroker_OrderedStatePagination(t *testing.T) {
 		data := fmt.Sprintf("data_%02d", i)
 
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(data),
-			Score:      score,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data:  []byte(data),
+			Score: score,
 		})
 		require.NoError(t, err)
 	}
 
 	// Read first page (limit=5, no cursor)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   5,
-		MetaTTL: 300 * time.Second,
+		Limit: 5,
 	})
 	page1, pos1, cursor1 := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -653,9 +670,8 @@ func TestMemoryMapBroker_OrderedStatePagination(t *testing.T) {
 
 	// Read second page (using cursor)
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Cursor:  cursor1,
-		Limit:   5,
-		MetaTTL: 300 * time.Second,
+		Cursor: cursor1,
+		Limit:  5,
 	})
 	page2, pos2, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -676,10 +692,12 @@ func TestMemoryMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -701,19 +719,15 @@ func TestMemoryMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 
 	for _, tc := range testCases {
 		_, err := broker.Publish(ctx, channel, tc.key, MapPublishOptions{
-			Data:       []byte("data"),
-			Score:      tc.score,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data:  []byte("data"),
+			Score: tc.score,
 		})
 		require.NoError(t, err)
 	}
 
 	// Read ordered state
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -734,10 +748,12 @@ func TestMemoryMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -748,19 +764,15 @@ func TestMemoryMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 	// Publish 5 entries
 	for i := 1; i <= 5; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key_%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%d", i)),
-			Score:      int64(i * 10), // 10, 20, 30, 40, 50
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data:  []byte(fmt.Sprintf("data_%d", i)),
+			Score: int64(i * 10), // 10, 20, 30, 40, 50
 		})
 		require.NoError(t, err)
 	}
 
 	// Read initial order (descending: 50, 40, 30, 20, 10)
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries1, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -769,18 +781,14 @@ func TestMemoryMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 
 	// Update key_1 to have highest score (60)
 	_, err = broker.Publish(ctx, channel, "key_1", MapPublishOptions{
-		Data:       []byte("updated_data"),
-		Score:      60, // Now highest
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:  []byte("updated_data"),
+		Score: 60, // Now highest
 	})
 	require.NoError(t, err)
 
 	// Read updated order
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries2, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -798,6 +806,15 @@ func TestMemoryMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 // TestMemoryMapBroker_Remove tests removing keys from state.
 func TestMemoryMapBroker_Remove(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
@@ -805,42 +822,30 @@ func TestMemoryMapBroker_Remove(t *testing.T) {
 
 	// Publish some keys
 	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
 	_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("data2"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte("data2"),
 	})
 	require.NoError(t, err)
 
 	// Verify state has 2 keys
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 
 	// Remove key1
-	_, err = broker.Remove(ctx, channel, "key1", MapRemoveOptions{
-
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-	})
+	_, err = broker.Remove(ctx, channel, "key1", MapRemoveOptions{})
 	require.NoError(t, err)
 
 	// Verify state has 1 key
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -859,10 +864,7 @@ func TestMemoryMapBroker_Remove(t *testing.T) {
 	require.Equal(t, "key1", streamResult.Publications[2].Key)
 
 	// Remove non-existent key should be suppressed with key_not_found
-	res, err := broker.Remove(ctx, channel, "nonexistent", MapRemoveOptions{
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-	})
+	res, err := broker.Remove(ctx, channel, "nonexistent", MapRemoveOptions{})
 	require.NoError(t, err)
 	require.True(t, res.Suppressed)
 	require.Equal(t, SuppressReasonKeyNotFound, res.SuppressReason)
@@ -880,6 +882,15 @@ func TestMemoryMapBroker_Remove(t *testing.T) {
 // TestMemoryMapBroker_KeyModeIfNew tests KeyModeIfNew - only write if key doesn't exist.
 func TestMemoryMapBroker_KeyModeIfNew(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
@@ -887,11 +898,8 @@ func TestMemoryMapBroker_KeyModeIfNew(t *testing.T) {
 
 	// First publish with KeyModeIfNew should succeed (key doesn't exist)
 	res1, err := broker.Publish(ctx, channel, "slot1", MapPublishOptions{
-		Data:       []byte("player1"),
-		KeyMode:    KeyModeIfNew,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("player1"),
+		KeyMode: KeyModeIfNew,
 	})
 	require.NoError(t, err)
 	require.False(t, res1.Suppressed, "First publish should not be suppressed")
@@ -899,11 +907,8 @@ func TestMemoryMapBroker_KeyModeIfNew(t *testing.T) {
 
 	// Second publish with KeyModeIfNew should be suppressed (key exists)
 	res2, err := broker.Publish(ctx, channel, "slot1", MapPublishOptions{
-		Data:       []byte("player2"),
-		KeyMode:    KeyModeIfNew,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("player2"),
+		KeyMode: KeyModeIfNew,
 	})
 	require.NoError(t, err)
 	require.True(t, res2.Suppressed, "Second publish should be suppressed (key exists)")
@@ -912,8 +917,7 @@ func TestMemoryMapBroker_KeyModeIfNew(t *testing.T) {
 
 	// Verify state still has original data
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -931,6 +935,15 @@ func TestMemoryMapBroker_KeyModeIfNew(t *testing.T) {
 // TestMemoryMapBroker_KeyModeIfExists tests KeyModeIfExists - only write if key exists.
 func TestMemoryMapBroker_KeyModeIfExists(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
@@ -938,11 +951,8 @@ func TestMemoryMapBroker_KeyModeIfExists(t *testing.T) {
 
 	// First publish with KeyModeIfExists should be suppressed (key doesn't exist)
 	res1, err := broker.Publish(ctx, channel, "presence1", MapPublishOptions{
-		Data:       []byte("heartbeat1"),
-		KeyMode:    KeyModeIfExists,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("heartbeat1"),
+		KeyMode: KeyModeIfExists,
 	})
 	require.NoError(t, err)
 	require.True(t, res1.Suppressed, "First publish should be suppressed (key doesn't exist)")
@@ -950,30 +960,23 @@ func TestMemoryMapBroker_KeyModeIfExists(t *testing.T) {
 
 	// Create the key first with regular publish
 	res2, err := broker.Publish(ctx, channel, "presence1", MapPublishOptions{
-		Data:       []byte("initial"),
-		KeyMode:    KeyModeReplace, // or just leave empty
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("initial"),
+		KeyMode: KeyModeReplace, // or just leave empty
 	})
 	require.NoError(t, err)
 	require.False(t, res2.Suppressed, "Regular publish should not be suppressed")
 
 	// Now publish with KeyModeIfExists should succeed (key exists)
 	res3, err := broker.Publish(ctx, channel, "presence1", MapPublishOptions{
-		Data:       []byte("heartbeat2"),
-		KeyMode:    KeyModeIfExists,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("heartbeat2"),
+		KeyMode: KeyModeIfExists,
 	})
 	require.NoError(t, err)
 	require.False(t, res3.Suppressed, "Third publish should not be suppressed (key exists)")
 
 	// Verify state has updated data
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -984,6 +987,15 @@ func TestMemoryMapBroker_KeyModeIfExists(t *testing.T) {
 // TestMemoryMapBroker_KeyModeReplace tests default KeyModeReplace behavior.
 func TestMemoryMapBroker_KeyModeReplace(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
@@ -991,30 +1003,23 @@ func TestMemoryMapBroker_KeyModeReplace(t *testing.T) {
 
 	// First publish (key doesn't exist)
 	res1, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("value1"),
-		KeyMode:    KeyModeReplace, // explicit, same as default
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("value1"),
+		KeyMode: KeyModeReplace, // explicit, same as default
 	})
 	require.NoError(t, err)
 	require.False(t, res1.Suppressed)
 
 	// Second publish (key exists) - should still apply
 	res2, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("value2"),
-		KeyMode:    KeyModeReplace,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:    []byte("value2"),
+		KeyMode: KeyModeReplace,
 	})
 	require.NoError(t, err)
 	require.False(t, res2.Suppressed, "Replace should never be suppressed")
 
 	// Verify state has updated data
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
@@ -1106,6 +1111,14 @@ func simulateClientRecovery(
 // an entry during unordered pagination doesn't cause data loss.
 func TestMemoryMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionPermanent,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 	ctx := context.Background()
 	channel := "test_unordered_continuity_remove"
@@ -1114,9 +1127,7 @@ func TestMemoryMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data_%02d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1133,11 +1144,7 @@ func TestMemoryMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	// CONCURRENT MODIFICATION: Remove key_10 (first entry of next page)
 	// This would cause key_11 to shift into position 10, potentially being skipped
 	// with integer offset pagination
-	_, err = broker.Remove(ctx, channel, "key_10", MapRemoveOptions{
-
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-	})
+	_, err = broker.Remove(ctx, channel, "key_10", MapRemoveOptions{})
 	require.NoError(t, err)
 
 	// Read second page with cursor
@@ -1205,6 +1212,14 @@ func TestMemoryMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
 // an entry during unordered pagination doesn't cause issues.
 func TestMemoryMapBroker_UnorderedContinuity_EntryAdded(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionPermanent,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 	ctx := context.Background()
 	channel := "test_unordered_continuity_add"
@@ -1213,9 +1228,7 @@ func TestMemoryMapBroker_UnorderedContinuity_EntryAdded(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data: []byte(fmt.Sprintf("data_%02d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1231,9 +1244,7 @@ func TestMemoryMapBroker_UnorderedContinuity_EntryAdded(t *testing.T) {
 	// CONCURRENT MODIFICATION: Add new entry that lexicographically comes before cursor
 	// This would shift entries with integer offset pagination
 	_, err = broker.Publish(ctx, channel, "key_05b", MapPublishOptions{
-		Data:       []byte("data_05b"),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data: []byte("data_05b"),
 	})
 	require.NoError(t, err)
 
@@ -1252,9 +1263,11 @@ func TestMemoryMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionPermanent,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -1265,10 +1278,8 @@ func TestMemoryMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Score:      int64(i * 100),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data:  []byte(fmt.Sprintf("data_%02d", i)),
+			Score: int64(i * 100),
 		})
 		require.NoError(t, err)
 	}
@@ -1288,10 +1299,8 @@ func TestMemoryMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	// CONCURRENT MODIFICATION: Add entry with HIGHEST score
 	// This entry would appear at position 0, shifting all entries
 	_, err = broker.Publish(ctx, channel, "key_top", MapPublishOptions{
-		Data:       []byte("data_top"),
-		Score:      5000, // Higher than any existing
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data:  []byte("data_top"),
+		Score: 5000, // Higher than any existing
 	})
 	require.NoError(t, err)
 
@@ -1316,9 +1325,11 @@ func TestMemoryMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionPermanent,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -1329,10 +1340,8 @@ func TestMemoryMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Score:      int64(i * 100),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data:  []byte(fmt.Sprintf("data_%02d", i)),
+			Score: int64(i * 100),
 		})
 		require.NoError(t, err)
 	}
@@ -1347,10 +1356,8 @@ func TestMemoryMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	// CONCURRENT MODIFICATION: Add entry with LOWEST score
 	// This entry appears at end, shouldn't affect pagination much
 	_, err = broker.Publish(ctx, channel, "key_bottom", MapPublishOptions{
-		Data:       []byte("data_bottom"),
-		Score:      1, // Lower than any existing
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data:  []byte("data_bottom"),
+		Score: 1, // Lower than any existing
 	})
 	require.NoError(t, err)
 
@@ -1376,9 +1383,11 @@ func TestMemoryMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionPermanent,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -1389,10 +1398,8 @@ func TestMemoryMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Score:      int64(i * 100),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data:  []byte(fmt.Sprintf("data_%02d", i)),
+			Score: int64(i * 100),
 		})
 		require.NoError(t, err)
 	}
@@ -1409,10 +1416,8 @@ func TestMemoryMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	// key_05 had score 500, now gets score 3000 (highest)
 	// This entry was NOT in first page, but now would appear at position 0
 	_, err = broker.Publish(ctx, channel, "key_05", MapPublishOptions{
-		Data:       []byte("data_05_updated"),
-		Score:      3000,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data:  []byte("data_05_updated"),
+		Score: 3000,
 	})
 	require.NoError(t, err)
 
@@ -1465,9 +1470,11 @@ func TestMemoryMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionPermanent,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -1478,10 +1485,8 @@ func TestMemoryMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Score:      int64(i * 100),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data:  []byte(fmt.Sprintf("data_%02d", i)),
+			Score: int64(i * 100),
 		})
 		require.NoError(t, err)
 	}
@@ -1494,11 +1499,7 @@ func TestMemoryMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 	require.NoError(t, err)
 
 	// CONCURRENT MODIFICATION: Remove key_10 (first entry of next page)
-	_, err = broker.Remove(ctx, channel, "key_10", MapRemoveOptions{
-
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-	})
+	_, err = broker.Remove(ctx, channel, "key_10", MapRemoveOptions{})
 	require.NoError(t, err)
 
 	// Read remaining pages
@@ -1556,9 +1557,11 @@ func TestMemoryMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionPermanent,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -1569,10 +1572,8 @@ func TestMemoryMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	for i := 1; i <= 30; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Score:      int64(i * 100),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
+			Data:  []byte(fmt.Sprintf("data_%02d", i)),
+			Score: int64(i * 100),
 		})
 		require.NoError(t, err)
 	}
@@ -1587,27 +1588,19 @@ func TestMemoryMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	// CONCURRENT MODIFICATIONS:
 	// 1. Add new highest score entry
 	_, err = broker.Publish(ctx, channel, "key_new_top", MapPublishOptions{
-		Data:       []byte("data_new_top"),
-		Score:      5000,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data:  []byte("data_new_top"),
+		Score: 5000,
 	})
 	require.NoError(t, err)
 
 	// 2. Remove an entry from middle
-	_, err = broker.Remove(ctx, channel, "key_15", MapRemoveOptions{
-
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-	})
+	_, err = broker.Remove(ctx, channel, "key_15", MapRemoveOptions{})
 	require.NoError(t, err)
 
 	// 3. Update score of an entry (move it)
 	_, err = broker.Publish(ctx, channel, "key_05", MapPublishOptions{
-		Data:       []byte("data_05_moved"),
-		Score:      4000, // Move from 500 to 4000
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data:  []byte("data_05_moved"),
+		Score: 4000, // Move from 500 to 4000
 	})
 	require.NoError(t, err)
 
@@ -1621,10 +1614,8 @@ func TestMemoryMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 
 	// 4. Add new lowest score entry
 	_, err = broker.Publish(ctx, channel, "key_new_bottom", MapPublishOptions{
-		Data:       []byte("data_new_bottom"),
-		Score:      1,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
+		Data:  []byte("data_new_bottom"),
+		Score: 1,
 	})
 	require.NoError(t, err)
 
@@ -1658,6 +1649,14 @@ func TestMemoryMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 // TestMemoryMapBroker_CursorFormat tests that cursor format is correct.
 func TestMemoryMapBroker_CursorFormat(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionPermanent,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 	ctx := context.Background()
 
@@ -1668,9 +1667,7 @@ func TestMemoryMapBroker_CursorFormat(t *testing.T) {
 		for i := 0; i < 20; i++ {
 			key := fmt.Sprintf("key_%02d", i)
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-				Data:       []byte("data"),
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
+				Data: []byte("data"),
 			})
 			require.NoError(t, err)
 		}
@@ -1708,9 +1705,11 @@ func TestMemoryMapBroker_CursorFormat(t *testing.T) {
 
 		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionPermanent,
+				Ordered:       true,
+				StreamSize:    100,
+				StreamTTL:     300 * time.Second,
 			}
 		}
 
@@ -1718,10 +1717,8 @@ func TestMemoryMapBroker_CursorFormat(t *testing.T) {
 		for i := 1; i <= 20; i++ {
 			key := fmt.Sprintf("key_%02d", i)
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-				Data:       []byte("data"),
-				Score:      int64(i * 100),
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
+				Data:  []byte("data"),
+				Score: int64(i * 100),
 			})
 			require.NoError(t, err)
 		}
@@ -1769,6 +1766,15 @@ func TestMemoryMapBroker_CursorFormat(t *testing.T) {
 // TestMemoryMapBroker_Delta tests key-based delta delivery via HandlePublication.
 func TestMemoryMapBroker_Delta(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 
 	type pubEvent struct {
 		ch      string
@@ -1802,11 +1808,8 @@ func TestMemoryMapBroker_Delta(t *testing.T) {
 
 	// 1. First publish with UseDelta - no previous state, prevPub should be nil.
 	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		UseDelta:   true,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:     []byte("data1"),
+		UseDelta: true,
 	})
 	require.NoError(t, err)
 
@@ -1818,11 +1821,8 @@ func TestMemoryMapBroker_Delta(t *testing.T) {
 
 	// 2. Second publish same key - should get prevPub with first data.
 	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1_updated"),
-		UseDelta:   true,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:     []byte("data1_updated"),
+		UseDelta: true,
 	})
 	require.NoError(t, err)
 
@@ -1835,11 +1835,8 @@ func TestMemoryMapBroker_Delta(t *testing.T) {
 
 	// 3. Different key - no previous state for this key.
 	_, err = e.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("data2"),
-		UseDelta:   true,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:     []byte("data2"),
+		UseDelta: true,
 	})
 	require.NoError(t, err)
 
@@ -1854,9 +1851,6 @@ func TestMemoryMapBroker_Delta(t *testing.T) {
 		Data:       []byte("data1_full"),
 		StreamData: []byte("data1_stream"),
 		UseDelta:   true,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -1868,11 +1862,8 @@ func TestMemoryMapBroker_Delta(t *testing.T) {
 
 	// 5. UseDelta=false - no delta.
 	_, err = e.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("data2_updated"),
-		UseDelta:   false,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:     []byte("data2_updated"),
+		UseDelta: false,
 	})
 	require.NoError(t, err)
 
@@ -1885,11 +1876,8 @@ func TestMemoryMapBroker_Delta(t *testing.T) {
 	// 6. Third publish to key1 after StreamData update - prevPub should have data1_full
 	// (state was updated to data1_full by the StreamData publish).
 	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1_v3"),
-		UseDelta:   true,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data:     []byte("data1_v3"),
+		UseDelta: true,
 	})
 	require.NoError(t, err)
 
@@ -1903,6 +1891,15 @@ func TestMemoryMapBroker_Delta(t *testing.T) {
 
 func TestMemoryMapBroker_Clear(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
@@ -1911,16 +1908,13 @@ func TestMemoryMapBroker_Clear(t *testing.T) {
 	// Publish some keyed state and stream entries.
 	for i := 0; i < 3; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
 
 	// Verify data exists.
-	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, MetaTTL: 300 * time.Second})
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 3)
@@ -1938,7 +1932,7 @@ func TestMemoryMapBroker_Clear(t *testing.T) {
 	require.NoError(t, err)
 
 	// State should be empty.
-	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100, MetaTTL: 300 * time.Second})
+	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Empty(t, entries)
@@ -1956,6 +1950,15 @@ func TestMemoryMapBroker_Clear(t *testing.T) {
 
 func TestMemoryMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 	broker := newTestMemoryMapBroker(t, node)
 
 	ctx := context.Background()
@@ -1963,10 +1966,7 @@ func TestMemoryMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 	// Populate two channels.
 	for _, ch := range []string{"ch1", "ch2"} {
 		_, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
-			Data:       []byte("v"),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte("v"),
 		})
 		require.NoError(t, err)
 	}
@@ -1976,13 +1976,13 @@ func TestMemoryMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	// ch1 empty.
-	stateRes, err := broker.ReadState(ctx, "ch1", MapReadStateOptions{Limit: 100, MetaTTL: 300 * time.Second})
+	stateRes, err := broker.ReadState(ctx, "ch1", MapReadStateOptions{Limit: 100})
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Empty(t, entries)
 
 	// ch2 still intact.
-	stateRes, err = broker.ReadState(ctx, "ch2", MapReadStateOptions{Limit: 100, MetaTTL: 300 * time.Second})
+	stateRes, err = broker.ReadState(ctx, "ch2", MapReadStateOptions{Limit: 100})
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -1991,6 +1991,15 @@ func TestMemoryMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 func TestMemoryMapBroker_ReadStream_Table(t *testing.T) {
 	testMapBrokerReadStream(t, func(t *testing.T) MapBroker {
 		node, _ := New(Config{})
+		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				StreamSize:    100,
+				StreamTTL:     300 * time.Second,
+				KeyTTL:        300 * time.Second,
+			}
+		}
 		return newTestMemoryMapBroker(t, node)
 	})
 }
@@ -1998,6 +2007,15 @@ func TestMemoryMapBroker_ReadStream_Table(t *testing.T) {
 func TestMemoryMapBroker_EpochOnEmptyChannel(t *testing.T) {
 	testMapBrokerEpochOnEmptyChannel(t, func(t *testing.T) MapBroker {
 		node, _ := New(Config{})
+		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				StreamSize:    100,
+				StreamTTL:     300 * time.Second,
+				KeyTTL:        300 * time.Second,
+			}
+		}
 		return newTestMemoryMapBroker(t, node)
 	})
 }
@@ -2005,6 +2023,15 @@ func TestMemoryMapBroker_EpochOnEmptyChannel(t *testing.T) {
 func TestMemoryMapBroker_ReadStateAllEntries(t *testing.T) {
 	testMapBrokerReadStateAllEntries(t, func(t *testing.T) MapBroker {
 		node, _ := New(Config{})
+		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				StreamSize:    100,
+				StreamTTL:     300 * time.Second,
+				KeyTTL:        300 * time.Second,
+			}
+		}
 		return newTestMemoryMapBroker(t, node)
 	})
 }
@@ -2012,6 +2039,15 @@ func TestMemoryMapBroker_ReadStateAllEntries(t *testing.T) {
 func TestMemoryMapBroker_RemoveEmptyKey(t *testing.T) {
 	testMapBrokerRemoveEmptyKey(t, func(t *testing.T) MapBroker {
 		node, _ := New(Config{})
+		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				StreamSize:    100,
+				StreamTTL:     300 * time.Second,
+				KeyTTL:        300 * time.Second,
+			}
+		}
 		return newTestMemoryMapBroker(t, node)
 	})
 }
@@ -2019,6 +2055,15 @@ func TestMemoryMapBroker_RemoveEmptyKey(t *testing.T) {
 func TestMemoryMapBroker_ClientInfoInState(t *testing.T) {
 	testMapBrokerClientInfoInState(t, func(t *testing.T) MapBroker {
 		node, _ := New(Config{})
+		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				StreamSize:    100,
+				StreamTTL:     300 * time.Second,
+				KeyTTL:        300 * time.Second,
+			}
+		}
 		return newTestMemoryMapBroker(t, node)
 	})
 }
@@ -2026,6 +2071,15 @@ func TestMemoryMapBroker_ClientInfoInState(t *testing.T) {
 func TestMemoryMapBroker_ClientInfoInStream(t *testing.T) {
 	testMapBrokerClientInfoInStream(t, func(t *testing.T) MapBroker {
 		node, _ := New(Config{})
+		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				StreamSize:    100,
+				StreamTTL:     300 * time.Second,
+				KeyTTL:        300 * time.Second,
+			}
+		}
 		return newTestMemoryMapBroker(t, node)
 	})
 }
@@ -2034,6 +2088,15 @@ func TestMemoryMapBroker_ClientInfoInStream(t *testing.T) {
 // to the event handler when publishing with ClientInfo.
 func TestMemoryMapBroker_ClientInfoDelivery(t *testing.T) {
 	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
+		}
+	}
 
 	type pubEvent struct {
 		ch  string
@@ -2070,9 +2133,6 @@ func TestMemoryMapBroker_ClientInfoDelivery(t *testing.T) {
 	_, err = broker.Publish(ctx, channel, "k1", MapPublishOptions{
 		Data:       []byte("data1"),
 		ClientInfo: info,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -2093,10 +2153,12 @@ func TestMemoryMapBroker_OrderedStateAsc(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -2117,20 +2179,16 @@ func TestMemoryMapBroker_OrderedStateAsc(t *testing.T) {
 
 	for _, tc := range testCases {
 		_, err := broker.Publish(ctx, channel, tc.key, MapPublishOptions{
-			Data:       []byte("data"),
-			Score:      tc.score,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data:  []byte("data"),
+			Score: tc.score,
 		})
 		require.NoError(t, err)
 	}
 
 	// Read with Asc=true — should be sorted by score ascending.
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
-		Asc:     true,
+		Limit: 100,
+		Asc:   true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 5)
@@ -2142,8 +2200,7 @@ func TestMemoryMapBroker_OrderedStateAsc(t *testing.T) {
 
 	// Read with Asc=false (default) — should be descending.
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit:   100,
-		MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 5)
@@ -2159,10 +2216,12 @@ func TestMemoryMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -2174,18 +2233,15 @@ func TestMemoryMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 	for i := 1; i <= 10; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Score:      int64(i * 100),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data:  []byte(fmt.Sprintf("data_%02d", i)),
+			Score: int64(i * 100),
 		})
 		require.NoError(t, err)
 	}
 
 	// Page 1: limit=3, asc.
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit: 3, MetaTTL: 300 * time.Second, Asc: true,
+		Limit: 3, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 3)
@@ -2198,7 +2254,7 @@ func TestMemoryMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 
 	// Page 2: using cursor.
 	stateRes2, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Cursor: stateRes.Cursor, Limit: 3, MetaTTL: 300 * time.Second, Asc: true,
+		Cursor: stateRes.Cursor, Limit: 3, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes2.Publications, 3)
@@ -2211,7 +2267,7 @@ func TestMemoryMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 
 	// Page 3.
 	stateRes3, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Cursor: stateRes2.Cursor, Limit: 3, MetaTTL: 300 * time.Second, Asc: true,
+		Cursor: stateRes2.Cursor, Limit: 3, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes3.Publications, 3)
@@ -2223,7 +2279,7 @@ func TestMemoryMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 
 	// Page 4: last entry.
 	stateRes4, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Cursor: stateRes3.Cursor, Limit: 3, MetaTTL: 300 * time.Second, Asc: true,
+		Cursor: stateRes3.Cursor, Limit: 3, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes4.Publications, 1)
@@ -2238,10 +2294,12 @@ func TestMemoryMapBroker_OrderedStateAscSameScores(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Ordered:    true,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			Ordered:       true,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -2252,18 +2310,15 @@ func TestMemoryMapBroker_OrderedStateAscSameScores(t *testing.T) {
 	// All entries have score=100, ordering should be by key ASC.
 	for _, key := range []string{"zebra", "apple", "mango", "banana"} {
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte("data"),
-			Score:      100,
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data:  []byte("data"),
+			Score: 100,
 		})
 		require.NoError(t, err)
 	}
 
 	// ASC with same scores → key ASC.
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit: 100, MetaTTL: 300 * time.Second, Asc: true,
+		Limit: 100, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 4)
@@ -2275,7 +2330,7 @@ func TestMemoryMapBroker_OrderedStateAscSameScores(t *testing.T) {
 
 	// DESC with same scores → key DESC.
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit: 100, MetaTTL: 300 * time.Second,
+		Limit: 100,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 4)
@@ -2287,7 +2342,7 @@ func TestMemoryMapBroker_OrderedStateAscSameScores(t *testing.T) {
 
 	// Paginate ASC with limit=2.
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Limit: 2, MetaTTL: 300 * time.Second, Asc: true,
+		Limit: 2, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 2)
@@ -2297,7 +2352,7 @@ func TestMemoryMapBroker_OrderedStateAscSameScores(t *testing.T) {
 	require.Equal(t, "banana", stateRes.Publications[1].Key)
 
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
-		Cursor: stateRes.Cursor, Limit: 2, MetaTTL: 300 * time.Second, Asc: true,
+		Cursor: stateRes.Cursor, Limit: 2, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 2)

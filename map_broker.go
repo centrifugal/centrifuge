@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strconv"
 	"time"
@@ -150,25 +151,6 @@ type MapPublishOptions struct {
 	IdempotencyKey      string
 	IdempotentResultTTL time.Duration
 
-	// StreamSize sets the maximum number of entries in the stream (history).
-	// Zero value means using default from MapChannelOptionsResolver (which defaults
-	// to 0, i.e. streamless). Negative values are treated as 0 (disabled).
-	// When StreamSize is 0 after defaults are applied, no stream history is maintained.
-	// CAS (ExpectedPosition) and Version-based dedup require StreamSize > 0.
-	StreamSize int
-	// StreamTTL sets how long stream entries are retained.
-	// Zero value means using default from MapChannelOptionsResolver.
-	StreamTTL time.Duration
-	// MetaTTL sets how long stream metadata (epoch, top offset) is retained
-	// after all entries expire. Allows position validation even with empty stream.
-	// Zero value means using default from MapChannelOptionsResolver.
-	MetaTTL time.Duration
-
-	// KeyTTL sets automatic expiration for this key. After TTL expires, the key
-	// is removed from state and a removal event is published to stream.
-	// Zero value means using default from MapChannelOptionsResolver (1 minute by default).
-	// Use negative value (-1) to explicitly disable key expiration.
-	KeyTTL time.Duration
 	// Data is the publication payload (usually JSON, but can be binary also).
 	// Stored in state and published to stream/pub-sub (unless StreamData is set).
 	Data []byte
@@ -224,17 +206,6 @@ type MapRemoveOptions struct {
 	IdempotencyKey      string
 	IdempotentResultTTL time.Duration
 
-	// StreamSize sets the maximum stream size. The removal event is appended
-	// to the stream so clients can recover the removal during catch-up.
-	// Zero value means using default from MapChannelOptionsResolver.
-	StreamSize int
-	// StreamTTL sets how long the removal entry is retained in stream.
-	// Zero value means using default from MapChannelOptionsResolver.
-	StreamTTL time.Duration
-	// MetaTTL sets how long stream metadata is retained.
-	// Zero value means using default from MapChannelOptionsResolver.
-	MetaTTL time.Duration
-
 	// ExpectedPosition enables Compare-And-Swap semantics for removal.
 	// If set, remove only succeeds if the key's current position (offset+epoch) matches.
 	// Returns Suppressed=true with SuppressReasonPositionMismatch on mismatch.
@@ -262,10 +233,6 @@ type StreamFilter struct {
 type MapReadStreamOptions struct {
 	// Filter controls which publications are returned (position, limit, direction).
 	Filter StreamFilter
-
-	// MetaTTL extends the stream metadata TTL when reading.
-	// Overrides the default Config.HistoryMetaTTL for this operation.
-	MetaTTL time.Duration
 }
 
 // MapReadStateOptions defines options for reading a channel's state.
@@ -284,9 +251,6 @@ type MapReadStateOptions struct {
 	//   0 = return only current stream position (no entries)
 	//  >0 = return at most this many entries
 	Limit int
-
-	// MetaTTL extends the state metadata TTL when reading.
-	MetaTTL time.Duration
 
 	// Key filters to a single entry by exact key match.
 	// When set, returns at most one publication (or empty if key not found).
@@ -375,63 +339,88 @@ type MapStateResult struct {
 // Currently empty but reserved for future options (e.g., selective removal).
 type MapClearOptions struct{}
 
-// resolveChannelOptions resolves channel options from the resolver, falling back to defaults.
-// Used by broker implementations to resolve once per operation and avoid repeated resolver calls.
-func resolveChannelOptions(resolver MapChannelOptionsResolver, channel string) MapChannelOptions {
-	if resolver != nil {
-		return resolver(channel)
-	}
-	return DefaultMapChannelOptions()
-}
-
-// applyChannelOptionsDefaults fills in missing channel options from the resolver.
-// If a value is 0, it's replaced with the default from resolver.
-// If a value is -1 (for durations) or negative (for StreamSize), it's set to 0 (explicitly disabled).
-// Positive values are kept as-is.
-func applyChannelOptionsDefaults(
-	opts MapChannelOptions,
-	resolved MapChannelOptions,
-) MapChannelOptions {
-	defaults := resolved
-
-	// Apply StreamSize: negative means explicitly disabled (use 0), 0 means use default.
-	if opts.StreamSize < 0 {
-		opts.StreamSize = 0
-	} else if opts.StreamSize == 0 {
-		opts.StreamSize = defaults.StreamSize
+// resolveAndValidateMapChannelOptions resolves and validates map channel options
+// for a channel. Returns an error if the resolver is nil, modes are not set,
+// or the configuration is invalid. Auto-derives stream defaults for Converging mode.
+func resolveAndValidateMapChannelOptions(resolver func(channel string) MapChannelOptions, channel string) (MapChannelOptions, error) {
+	if resolver == nil {
+		return MapChannelOptions{}, errors.New("map channel options resolver not configured")
 	}
 
-	// Apply StreamTTL: -1 means explicitly disabled (use 0), 0 means use default.
-	if opts.StreamTTL < 0 {
-		opts.StreamTTL = 0
-	} else if opts.StreamTTL == 0 {
-		opts.StreamTTL = defaults.StreamTTL
+	opts := resolver(channel)
+
+	// Validate modes.
+	if opts.SyncMode == 0 {
+		return MapChannelOptions{}, errors.New("map channel not configured: set SyncMode")
+	}
+	if opts.RetentionMode == 0 {
+		return MapChannelOptions{}, errors.New("map channel not configured: set RetentionMode")
+	}
+	if opts.SyncMode != MapSyncEphemeral && opts.SyncMode != MapSyncConverging {
+		return MapChannelOptions{}, errors.New("invalid SyncMode value")
+	}
+	if opts.RetentionMode != MapRetentionExpiring && opts.RetentionMode != MapRetentionPermanent {
+		return MapChannelOptions{}, errors.New("invalid RetentionMode value")
 	}
 
-	// Apply MetaTTL: -1 means explicitly disabled (use 0), 0 means use default.
-	if opts.MetaTTL < 0 {
-		opts.MetaTTL = 0
-	} else if opts.MetaTTL == 0 {
-		opts.MetaTTL = defaults.MetaTTL
+	// Validate retention.
+	if opts.RetentionMode == MapRetentionExpiring {
+		if opts.KeyTTL == 0 {
+			return MapChannelOptions{}, errors.New("KeyTTL required for RetentionMode Expiring")
+		}
+		if opts.KeyTTL < 0 {
+			return MapChannelOptions{}, errors.New("KeyTTL must be positive")
+		}
+	}
+	if opts.RetentionMode == MapRetentionPermanent {
+		if opts.KeyTTL > 0 {
+			return MapChannelOptions{}, errors.New("KeyTTL must be 0 for RetentionMode Permanent (entries don't expire)")
+		}
 	}
 
-	// Apply KeyTTL: -1 means explicitly disabled (use 0), 0 means use default.
-	if opts.KeyTTL < 0 {
-		opts.KeyTTL = 0
-	} else if opts.KeyTTL == 0 {
-		opts.KeyTTL = defaults.KeyTTL
+	// Validate sync.
+	if opts.SyncMode == MapSyncEphemeral {
+		if opts.StreamSize > 0 {
+			return MapChannelOptions{}, errors.New("StreamSize requires SyncMode Converging")
+		}
+		if opts.StreamTTL > 0 {
+			return MapChannelOptions{}, errors.New("StreamTTL requires SyncMode Converging")
+		}
+		if opts.MetaTTL > 0 {
+			return MapChannelOptions{}, errors.New("MetaTTL requires SyncMode Converging")
+		}
+	}
+	if opts.SyncMode == MapSyncConverging {
+		if opts.StreamSize < 0 {
+			return MapChannelOptions{}, errors.New("StreamSize must be non-negative")
+		}
+		if opts.StreamTTL < 0 {
+			return MapChannelOptions{}, errors.New("StreamTTL must be non-negative")
+		}
+		if opts.MetaTTL < 0 {
+			return MapChannelOptions{}, errors.New("MetaTTL must be non-negative")
+		}
+		// Auto-derive defaults for Converging mode.
+		if opts.StreamSize == 0 {
+			opts.StreamSize = 100
+		}
+		if opts.StreamTTL == 0 {
+			opts.StreamTTL = time.Minute
+		}
+		// Auto-derive MetaTTL.
+		if opts.MetaTTL == 0 {
+			if opts.RetentionMode == MapRetentionExpiring {
+				opts.MetaTTL = opts.StreamTTL * 10
+			}
+			// For Permanent, MetaTTL stays 0 (permanent).
+		}
+		// Validate MetaTTL >= StreamTTL when both explicit.
+		if opts.MetaTTL > 0 && opts.MetaTTL < opts.StreamTTL {
+			return MapChannelOptions{}, errors.New("MetaTTL must be >= StreamTTL (metadata must outlive stream)")
+		}
 	}
 
-	// Ensure MetaTTL is never less than StreamTTL or KeyTTL.
-	// Meta must outlive the data it describes to avoid stale reads.
-	if opts.StreamTTL > 0 && opts.MetaTTL < opts.StreamTTL {
-		opts.MetaTTL = opts.StreamTTL
-	}
-	if opts.KeyTTL > 0 && opts.MetaTTL < opts.KeyTTL {
-		opts.MetaTTL = opts.KeyTTL
-	}
-
-	return opts
+	return opts, nil
 }
 
 // makeOrderedCursor creates a cursor for ordered state: "score\x00key".

@@ -14,6 +14,13 @@ func newTestNodeWithMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
 	node, err := New(Config{
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncEphemeral,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
 	})
 	require.NoError(t, err)
 
@@ -32,6 +39,16 @@ func newTestNodeWithMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
 	})
 
 	return node, broker
+}
+
+func setTestMapChannelOptionsConverging(node *Node) {
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			KeyTTL:        60 * time.Second,
+		}
+	}
 }
 
 // subscribeMapClient performs a keyed subscribe request and returns the result.
@@ -70,18 +87,12 @@ func TestMapSubscribe_StatePhase(t *testing.T) {
 
 	// Pre-populate some keyed data. Must use valid JSON for data since test uses JSON transport.
 	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte(`{"value":"data1"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"value":"data1"}`),
 	})
 	require.NoError(t, err)
 
 	_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte(`{"value":"data2"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"value":"data2"}`),
 	})
 	require.NoError(t, err)
 
@@ -129,10 +140,7 @@ func TestMapSubscribe_StatePagination(t *testing.T) {
 	// Pre-populate keyed data.
 	for i := 0; i < 10; i++ {
 		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 	}
@@ -184,6 +192,7 @@ func TestMapSubscribe_StatePagination(t *testing.T) {
 
 func TestMapSubscribe_StreamPhase(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 
 	channel := "test_stream"
 	ctx := context.Background()
@@ -193,10 +202,7 @@ func TestMapSubscribe_StreamPhase(t *testing.T) {
 	var epoch string
 	for i := 0; i < 5; i++ {
 		res, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 		lastOffset = res.Position.Offset
@@ -207,8 +213,7 @@ func TestMapSubscribe_StreamPhase(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -245,16 +250,14 @@ func TestMapSubscribe_StreamPhase(t *testing.T) {
 
 func TestMapSubscribe_LivePhase(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 
 	channel := "test_live"
 	ctx := context.Background()
 
 	// Pre-populate some data.
 	res, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte(`{"v":"data1"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"v":"data1"}`),
 	})
 	require.NoError(t, err)
 
@@ -262,8 +265,7 @@ func TestMapSubscribe_LivePhase(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true, // Positioned mode: STATE doesn't auto-subscribe.
+					Type: SubscriptionTypeMap, // Positioned mode: STATE doesn't auto-subscribe.
 				},
 			}, nil)
 		})
@@ -307,10 +309,7 @@ func TestMapSubscribe_DirectLive(t *testing.T) {
 
 	// Pre-populate some data.
 	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte(`{"v":"data1"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"v":"data1"}`),
 	})
 	require.NoError(t, err)
 
@@ -341,6 +340,7 @@ func TestMapSubscribe_DirectLive(t *testing.T) {
 
 func TestMapSubscribe_FullTwoPhase(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 
 	channel := "test_two_phase"
 	ctx := context.Background()
@@ -348,10 +348,7 @@ func TestMapSubscribe_FullTwoPhase(t *testing.T) {
 	// Pre-populate data.
 	for i := 0; i < 5; i++ {
 		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 	}
@@ -360,8 +357,7 @@ func TestMapSubscribe_FullTwoPhase(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true, // Positioned mode for explicit two-phase flow.
+					Type: SubscriptionTypeMap, // Positioned mode for explicit two-phase flow.
 				},
 			}, nil)
 		})
@@ -468,10 +464,7 @@ func TestMapSubscribe_WithPresence(t *testing.T) {
 
 	// Pre-populate data.
 	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte(`{"v":"data1"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"v":"data1"}`),
 	})
 	require.NoError(t, err)
 
@@ -636,9 +629,7 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 
 	// Publish a key with key=clientID (simulating cursor/ephemeral state).
 	_, err := broker.Publish(ctx, channel, clientID, MapPublishOptions{
-
 		Data:       []byte(`{"x":100,"y":200}`),
-		StreamSize: 1000,
 		ClientInfo: &ClientInfo{ClientID: clientID, UserID: "user1"},
 	})
 	require.NoError(t, err)
@@ -693,9 +684,7 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 
 	// Publish a key with key=clientID.
 	_, err := broker.Publish(ctx, channel, clientID, MapPublishOptions{
-
 		Data:       []byte(`{"x":100,"y":200}`),
-		StreamSize: 1000,
 		ClientInfo: &ClientInfo{ClientID: clientID, UserID: "user1"},
 	})
 	require.NoError(t, err)
@@ -731,13 +720,11 @@ func TestPresenceSubscribe_State(t *testing.T) {
 	presenceChannel := "clients:test_presence_sub"
 	_, err := broker.Publish(ctx, presenceChannel, "client1", MapPublishOptions{
 		ClientInfo: &ClientInfo{ClientID: "client1", UserID: "user1"},
-		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
 	_, err = broker.Publish(ctx, presenceChannel, "client2", MapPublishOptions{
 		ClientInfo: &ClientInfo{ClientID: "client2", UserID: "user2"},
-		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -773,7 +760,6 @@ func TestPresenceSubscribe_Live(t *testing.T) {
 	presenceChannel := "clients:test_presence_live"
 	_, err := broker.Publish(ctx, presenceChannel, "client1", MapPublishOptions{
 		ClientInfo: &ClientInfo{ClientID: "client1", UserID: "user1"},
-		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -808,23 +794,20 @@ func TestPresenceSubscribe_Positioned_TwoPhase(t *testing.T) {
 	// Presence subscriptions can also be positioned (EnablePositioning: true).
 	// In that case, the two-phase STATE→LIVE flow works like regular map subscriptions.
 	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 
 	ctx := context.Background()
 
 	presenceChannel := "clients:test_presence_positioned"
 	_, err := broker.Publish(ctx, presenceChannel, "client1", MapPublishOptions{
 		ClientInfo: &ClientInfo{ClientID: "client1", UserID: "user1"},
-		KeyTTL:     300 * time.Second,
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
 	})
 	require.NoError(t, err)
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{Options: SubscribeOptions{
-				Type:              e.Type,
-				EnablePositioning: true,
+				Type: e.Type,
 			}}, nil)
 		})
 	})
@@ -1152,26 +1135,17 @@ func TestMapBroker_ReadStateByKey(t *testing.T) {
 
 	// Publish 3 keys
 	_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
-		Data:       []byte(`{"value":"data1"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"value":"data1"}`),
 	})
 	require.NoError(t, err)
 
 	_, err = broker.Publish(ctx, ch, "key2", MapPublishOptions{
-		Data:       []byte(`{"value":"data2"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"value":"data2"}`),
 	})
 	require.NoError(t, err)
 
 	_, err = broker.Publish(ctx, ch, "key3", MapPublishOptions{
-		Data:       []byte(`{"value":"data3"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"value":"data3"}`),
 	})
 	require.NoError(t, err)
 
@@ -1198,16 +1172,14 @@ func TestMapBroker_ReadStateByKey(t *testing.T) {
 
 // TestMapBroker_CASSuccess tests successful CAS update.
 func TestMapBroker_CASSuccess(t *testing.T) {
-	_, broker := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 	ctx := context.Background()
 	ch := "test_cas_success"
 
 	// Publish initial value
 	res1, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
-		Data:       []byte(`{"value":10}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"value":10}`),
 	})
 	require.NoError(t, err)
 	require.False(t, res1.Suppressed)
@@ -1223,9 +1195,6 @@ func TestMapBroker_CASSuccess(t *testing.T) {
 	res2, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
 		Data:             []byte(`{"value":15}`),
 		ExpectedPosition: &expectedPos,
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
-		KeyTTL:           300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.False(t, res2.Suppressed)
@@ -1241,16 +1210,14 @@ func TestMapBroker_CASSuccess(t *testing.T) {
 
 // TestMapBroker_CASConflict tests CAS conflict when position has changed.
 func TestMapBroker_CASConflict(t *testing.T) {
-	_, broker := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 	ctx := context.Background()
 	ch := "test_cas_conflict"
 
 	// Publish initial value
 	_, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
-		Data:       []byte(`{"value":10}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"value":10}`),
 	})
 	require.NoError(t, err)
 
@@ -1263,10 +1230,7 @@ func TestMapBroker_CASConflict(t *testing.T) {
 
 	// Another client updates the key (simulated)
 	_, err = broker.Publish(ctx, ch, "counter", MapPublishOptions{
-		Data:       []byte(`{"value":12}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"value":12}`),
 	})
 	require.NoError(t, err)
 
@@ -1274,9 +1238,6 @@ func TestMapBroker_CASConflict(t *testing.T) {
 	res, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
 		Data:             []byte(`{"value":15}`),
 		ExpectedPosition: &originalPos, // stale offset!
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
-		KeyTTL:           300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.True(t, res.Suppressed)
@@ -1291,9 +1252,6 @@ func TestMapBroker_CASConflict(t *testing.T) {
 	res2, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
 		Data:             []byte(`{"value":15}`),
 		ExpectedPosition: &retryPos,
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
-		KeyTTL:           300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.False(t, res2.Suppressed)
@@ -1308,16 +1266,14 @@ func TestMapBroker_CASConflict(t *testing.T) {
 
 // TestMapBroker_CASNonExistent tests CAS on a key that doesn't exist.
 func TestMapBroker_CASNonExistent(t *testing.T) {
-	_, broker := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 	ctx := context.Background()
 	ch := "test_cas_nonexistent"
 
 	// First create the channel by publishing something
 	_, err := broker.Publish(ctx, ch, "other_key", MapPublishOptions{
-		Data:       []byte(`{"value":1}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"value":1}`),
 	})
 	require.NoError(t, err)
 
@@ -1331,9 +1287,6 @@ func TestMapBroker_CASNonExistent(t *testing.T) {
 	res, err := broker.Publish(ctx, ch, "newkey", MapPublishOptions{
 		Data:             []byte(`{"value":1}`),
 		ExpectedPosition: &expectedPos, // expects key to exist
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
-		KeyTTL:           300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.True(t, res.Suppressed)
@@ -1342,16 +1295,14 @@ func TestMapBroker_CASNonExistent(t *testing.T) {
 
 // TestMapBroker_CASWrongEpoch tests CAS with correct offset but wrong epoch.
 func TestMapBroker_CASWrongEpoch(t *testing.T) {
-	_, broker := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 	ctx := context.Background()
 	ch := "test_cas_wrong_epoch"
 
 	// Publish initial value
 	_, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
-		Data:       []byte(`{"value":10}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"value":10}`),
 	})
 	require.NoError(t, err)
 
@@ -1367,9 +1318,6 @@ func TestMapBroker_CASWrongEpoch(t *testing.T) {
 	res, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
 		Data:             []byte(`{"value":15}`),
 		ExpectedPosition: &wrongPos,
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
-		KeyTTL:           300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.True(t, res.Suppressed)
@@ -1390,7 +1338,8 @@ func TestMapBroker_CASWrongEpoch(t *testing.T) {
 // TestMapBroker_StreamDataDifferentPayloads tests publishing with different
 // data for state (full state) and stream (incremental update).
 func TestMapBroker_StreamDataDifferentPayloads(t *testing.T) {
-	_, broker := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 	ctx := context.Background()
 	ch := "test_stream_data"
 
@@ -1398,9 +1347,6 @@ func TestMapBroker_StreamDataDifferentPayloads(t *testing.T) {
 	_, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
 		Data:       []byte(`{"count":100}`), // Full state → state
 		StreamData: []byte(`{"delta":100}`), // Incremental → stream
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -1425,9 +1371,6 @@ func TestMapBroker_StreamDataDifferentPayloads(t *testing.T) {
 		Data:             []byte(`{"count":105}`), // New full state → state
 		StreamData:       []byte(`{"delta":5}`),   // Incremental → stream
 		ExpectedPosition: &expectedPos,
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
-		KeyTTL:           300 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -1451,16 +1394,14 @@ func TestMapBroker_StreamDataDifferentPayloads(t *testing.T) {
 // TestMapBroker_StreamDataWithoutStreamData tests that when StreamData is not set,
 // Data is used for both state and stream.
 func TestMapBroker_StreamDataWithoutStreamData(t *testing.T) {
-	_, broker := newTestNodeWithMapBroker(t)
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 	ctx := context.Background()
 	ch := "test_no_stream_data"
 
 	// Publish without StreamData - Data should be used for both
 	_, err := broker.Publish(ctx, ch, "item", MapPublishOptions{
-		Data:       []byte(`{"name":"test","value":42}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"name":"test","value":42}`),
 	})
 	require.NoError(t, err)
 
@@ -1489,6 +1430,13 @@ func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
 		LogLevel:              LogLevelTrace,
 		LogHandler:            func(entry LogEntry) {},
 		MapStateToLiveEnabled: true, // Enable the optimization
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
 	})
 	require.NoError(t, err)
 
@@ -1510,10 +1458,7 @@ func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
 	// Pre-populate state with a few entries.
 	for i := 0; i < 3; i++ {
 		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 	}
@@ -1522,8 +1467,7 @@ func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -1561,6 +1505,13 @@ func TestMapSubscribe_StateToLive_WithStreamPublications(t *testing.T) {
 		LogLevel:              LogLevelTrace,
 		LogHandler:            func(entry LogEntry) {},
 		MapStateToLiveEnabled: true,
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
 	})
 	require.NoError(t, err)
 
@@ -1581,10 +1532,7 @@ func TestMapSubscribe_StateToLive_WithStreamPublications(t *testing.T) {
 
 	// Pre-populate initial state.
 	_, err = broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte(`{"v":"initial"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"v":"initial"}`),
 	})
 	require.NoError(t, err)
 
@@ -1627,6 +1575,13 @@ func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
 		LogLevel:              LogLevelTrace,
 		LogHandler:            func(entry LogEntry) {},
 		MapStateToLiveEnabled: true,
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
 	})
 	require.NoError(t, err)
 
@@ -1648,10 +1603,7 @@ func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
 	// Pre-populate 10 entries.
 	for i := 0; i < 10; i++ {
 		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 	}
@@ -1715,6 +1667,13 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination(t *testing.T) {
 		LogLevel:              LogLevelTrace,
 		LogHandler:            func(entry LogEntry) {},
 		MapStateToLiveEnabled: true,
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
 	})
 	require.NoError(t, err)
 
@@ -1736,10 +1695,7 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination(t *testing.T) {
 	// Pre-populate 10 entries.
 	for i := 0; i < 10; i++ {
 		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"initial"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"initial"}`),
 		})
 		require.NoError(t, err)
 	}
@@ -1748,8 +1704,7 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -1774,17 +1729,11 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination(t *testing.T) {
 	// These won't appear in state pages (filtered by offset > frozenOffset).
 	// They MUST be caught up via stream read when going LIVE.
 	_, err = broker.Publish(ctx, channel, "new_x", MapPublishOptions{
-		Data:       []byte(`{"v":"during_sync_1"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"v":"during_sync_1"}`),
 	})
 	require.NoError(t, err)
 	_, err = broker.Publish(ctx, channel, "new_y", MapPublishOptions{
-		Data:       []byte(`{"v":"during_sync_2"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"v":"during_sync_2"}`),
 	})
 	require.NoError(t, err)
 
@@ -1827,6 +1776,13 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination_ManyPublishes(t *testi
 		LogLevel:              LogLevelTrace,
 		LogHandler:            func(entry LogEntry) {},
 		MapStateToLiveEnabled: true,
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
 	})
 	require.NoError(t, err)
 
@@ -1846,10 +1802,7 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination_ManyPublishes(t *testi
 	ctx := context.Background()
 
 	publishOpts := MapPublishOptions{
-		Data:       []byte(`{"v":"initial"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"v":"initial"}`),
 	}
 
 	// Pre-populate 15 entries.
@@ -1862,8 +1815,7 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination_ManyPublishes(t *testi
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -1952,6 +1904,7 @@ func TestMapSubscribe_StreamPhaseRecovery(t *testing.T) {
 	// to catch up from its last known position without going through STATE phase.
 	// This simulates a client reconnection after disconnect.
 	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 
 	channel := "test_stream_recovery"
 	ctx := context.Background()
@@ -1961,10 +1914,7 @@ func TestMapSubscribe_StreamPhaseRecovery(t *testing.T) {
 	var epoch string
 	for i := 0; i < 5; i++ {
 		res, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 		lastOffset = res.Position.Offset
@@ -1975,8 +1925,7 @@ func TestMapSubscribe_StreamPhaseRecovery(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -2026,16 +1975,14 @@ func TestMapSubscribe_StreamPhaseRecovery_WithoutRecoverFlag(t *testing.T) {
 	// Test that phase=1 (STREAM) without recover=true and without prior STATE
 	// phase returns permission denied.
 	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 
 	channel := "test_stream_no_recover"
 	ctx := context.Background()
 
 	// Pre-populate some data.
 	res, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte(`{"v":"data"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"v":"data"}`),
 	})
 	require.NoError(t, err)
 
@@ -2043,8 +1990,7 @@ func TestMapSubscribe_StreamPhaseRecovery_WithoutRecoverFlag(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -2071,6 +2017,7 @@ func TestMapSubscribe_StreamPhaseRecovery_LargeGap(t *testing.T) {
 	// Test stream phase recovery with a larger gap that requires multiple
 	// pagination rounds before going LIVE.
 	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 
 	channel := "test_stream_recovery_large_gap"
 	ctx := context.Background()
@@ -2080,10 +2027,7 @@ func TestMapSubscribe_StreamPhaseRecovery_LargeGap(t *testing.T) {
 	var epoch string
 	for i := 0; i < 100; i++ {
 		res, err := broker.Publish(ctx, channel, string(rune('a'+(i%26)))+string(rune('0'+(i/26))), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 1000,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 		lastOffset = res.Position.Offset
@@ -2094,8 +2038,7 @@ func TestMapSubscribe_StreamPhaseRecovery_LargeGap(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -2155,6 +2098,7 @@ func TestMapSubscribe_LivePhaseRecovery(t *testing.T) {
 	// Test that a reconnecting client can use phase=0 (LIVE) with recover=true
 	// to catch up directly without any pagination.
 	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 
 	channel := "test_live_recovery"
 	ctx := context.Background()
@@ -2164,10 +2108,7 @@ func TestMapSubscribe_LivePhaseRecovery(t *testing.T) {
 	var epoch string
 	for i := 0; i < 5; i++ {
 		res, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 		lastOffset = res.Position.Offset
@@ -2178,8 +2119,7 @@ func TestMapSubscribe_LivePhaseRecovery(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -2224,6 +2164,13 @@ func TestMapSubscribe_StateToLive_Disabled(t *testing.T) {
 		LogLevel:              LogLevelTrace,
 		LogHandler:            func(entry LogEntry) {},
 		MapStateToLiveEnabled: false, // Disable the optimization
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
 	})
 	require.NoError(t, err)
 
@@ -2244,10 +2191,7 @@ func TestMapSubscribe_StateToLive_Disabled(t *testing.T) {
 
 	// Pre-populate state.
 	_, err = broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte(`{"v":"data"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"v":"data"}`),
 	})
 	require.NoError(t, err)
 
@@ -2255,8 +2199,7 @@ func TestMapSubscribe_StateToLive_Disabled(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true, // Positioned mode: flag controls STATE→LIVE.
+					Type: SubscriptionTypeMap, // Positioned mode: flag controls STATE→LIVE.
 				},
 			}, nil)
 		})
@@ -2293,8 +2236,7 @@ func TestMapSubscribe_Streamless_StreamPhaseRejected(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:   []byte(`{"v":"data"}`),
-		KeyTTL: 300 * time.Second,
+		Data: []byte(`{"v":"data"}`),
 	})
 	require.NoError(t, err)
 
@@ -2335,13 +2277,11 @@ func TestMapSubscribe_Streamless_RecoveryRedirectsToImmediateJoin(t *testing.T) 
 	ctx := context.Background()
 
 	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:   []byte(`{"v":"data1"}`),
-		KeyTTL: 300 * time.Second,
+		Data: []byte(`{"v":"data1"}`),
 	})
 	require.NoError(t, err)
 	_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:   []byte(`{"v":"data2"}`),
-		KeyTTL: 300 * time.Second,
+		Data: []byte(`{"v":"data2"}`),
 	})
 	require.NoError(t, err)
 
@@ -2379,6 +2319,7 @@ func TestMapSubscribe_Streamless_RecoveryRedirectsToImmediateJoin(t *testing.T) 
 // Positioned mode: epoch mismatch during STREAM phase should return ErrorUnrecoverablePosition.
 func TestMapSubscribe_Positioned_StreamEpochMismatch(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 
 	channel := "test_stream_epoch_mismatch"
 	ctx := context.Background()
@@ -2386,10 +2327,7 @@ func TestMapSubscribe_Positioned_StreamEpochMismatch(t *testing.T) {
 	var epoch string
 	for i := 0; i < 5; i++ {
 		res, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 		epoch = res.Position.Epoch
@@ -2399,8 +2337,7 @@ func TestMapSubscribe_Positioned_StreamEpochMismatch(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -2436,16 +2373,14 @@ func TestMapSubscribe_Positioned_StreamEpochMismatch(t *testing.T) {
 // Positioned mode: concurrent pagination requests on the same channel should return ErrorConcurrentPagination.
 func TestMapSubscribe_ConcurrentPagination(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 
 	channel := "test_concurrent_pagination"
 	ctx := context.Background()
 
 	for i := 0; i < 20; i++ {
 		_, err := broker.Publish(ctx, channel, string(rune('a'+(i%26))), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 	}
@@ -2454,8 +2389,7 @@ func TestMapSubscribe_ConcurrentPagination(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -2498,6 +2432,13 @@ func TestMapSubscribe_RecoveryMaxPublicationLimit(t *testing.T) {
 		LogLevel:                       LogLevelTrace,
 		LogHandler:                     func(entry LogEntry) {},
 		MapRecoveryMaxPublicationLimit: 5, // Max 5 publications during recovery.
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
 	})
 	require.NoError(t, err)
 
@@ -2519,10 +2460,7 @@ func TestMapSubscribe_RecoveryMaxPublicationLimit(t *testing.T) {
 	var epoch string
 	for i := 0; i < 10; i++ {
 		res, pubErr := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, pubErr)
 		epoch = res.Position.Epoch
@@ -2532,8 +2470,7 @@ func TestMapSubscribe_RecoveryMaxPublicationLimit(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -2575,6 +2512,13 @@ func TestMapSubscribe_ImmediateJoin_StateTooLarge(t *testing.T) {
 		LogLevel:                    LogLevelTrace,
 		LogHandler:                  func(entry LogEntry) {},
 		MapMaxImmediateJoinStateSize: 3, // Max 3 entries for immediate join.
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
 	})
 	require.NoError(t, err)
 
@@ -2596,10 +2540,7 @@ func TestMapSubscribe_ImmediateJoin_StateTooLarge(t *testing.T) {
 	// Publish 5 entries (exceeds limit of 3).
 	for i := 0; i < 5; i++ {
 		_, pubErr := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, pubErr)
 	}
@@ -2608,8 +2549,7 @@ func TestMapSubscribe_ImmediateJoin_StateTooLarge(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -2634,6 +2574,7 @@ func TestMapSubscribe_ImmediateJoin_StateTooLarge(t *testing.T) {
 // during pagination should be filtered out from later pages to prevent duplicates.
 func TestMapSubscribe_Positioned_StateConsistencyFiltering(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 
 	channel := "test_state_consistency"
 	ctx := context.Background()
@@ -2641,10 +2582,7 @@ func TestMapSubscribe_Positioned_StateConsistencyFiltering(t *testing.T) {
 	// Pre-populate 10 entries.
 	for i := 0; i < 10; i++ {
 		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 	}
@@ -2653,8 +2591,7 @@ func TestMapSubscribe_Positioned_StateConsistencyFiltering(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -2678,10 +2615,7 @@ func TestMapSubscribe_Positioned_StateConsistencyFiltering(t *testing.T) {
 
 	// Now update a key that's on the second page — this bumps its offset past savedOffset.
 	_, err := broker.Publish(ctx, channel, "f", MapPublishOptions{
-		Data:       []byte(`{"v":"updated"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"v":"updated"}`),
 	})
 	require.NoError(t, err)
 
@@ -2709,6 +2643,7 @@ func TestMapSubscribe_Positioned_StateConsistencyFiltering(t *testing.T) {
 // Positioned mode: multi-page state pagination followed by STREAM and LIVE phases.
 func TestMapSubscribe_Positioned_FullThreePhaseFlow(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 
 	channel := "test_three_phase"
 	ctx := context.Background()
@@ -2718,10 +2653,7 @@ func TestMapSubscribe_Positioned_FullThreePhaseFlow(t *testing.T) {
 	var epoch string
 	for i := 0; i < 10; i++ {
 		res, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 1000,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 		lastOffset = res.Position.Offset
@@ -2732,8 +2664,7 @@ func TestMapSubscribe_Positioned_FullThreePhaseFlow(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -2768,10 +2699,7 @@ func TestMapSubscribe_Positioned_FullThreePhaseFlow(t *testing.T) {
 	// Add more entries between STATE and STREAM phase to create a gap.
 	for i := 0; i < 50; i++ {
 		res, err := broker.Publish(ctx, channel, "extra"+string(rune('a'+i%26)), MapPublishOptions{
-			Data:       []byte(`{"v":"extra"}`),
-			StreamSize: 1000,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"extra"}`),
 		})
 		require.NoError(t, err)
 		lastOffset = res.Position.Offset
@@ -2816,16 +2744,14 @@ func TestMapSubscribe_Positioned_FullThreePhaseFlow(t *testing.T) {
 // Positioned mode: LIVE recovery with epoch mismatch should return ErrorUnrecoverablePosition.
 func TestMapSubscribe_Positioned_LiveRecoveryEpochMismatch(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 
 	channel := "test_live_recovery_epoch_mismatch"
 	ctx := context.Background()
 
 	for i := 0; i < 5; i++ {
 		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 	}
@@ -2834,8 +2760,7 @@ func TestMapSubscribe_Positioned_LiveRecoveryEpochMismatch(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -2868,8 +2793,7 @@ func TestMapSubscribe_Streamless_ImmediateJoin(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
-			Data:   []byte(`{"v":"data"}`),
-			KeyTTL: 300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 	}
@@ -2902,16 +2826,14 @@ func TestMapSubscribe_Streamless_ImmediateJoin(t *testing.T) {
 // Positioned mode: immediate join returns full state and stream with recoverable=true.
 func TestMapSubscribe_Positioned_ImmediateJoin(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 
 	channel := "test_positioned_immediate"
 	ctx := context.Background()
 
 	for i := 0; i < 3; i++ {
 		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 	}
@@ -2920,8 +2842,7 @@ func TestMapSubscribe_Positioned_ImmediateJoin(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -2948,6 +2869,7 @@ func TestMapSubscribe_Positioned_ImmediateJoin(t *testing.T) {
 // from jumping ahead and skipping publications in multi-page STREAM scenarios.
 func TestMapSubscribe_StreamPhaseOffset(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 	channel := "test_stream_offset"
 	ctx := context.Background()
 
@@ -2955,8 +2877,7 @@ func TestMapSubscribe_StreamPhaseOffset(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -2965,10 +2886,7 @@ func TestMapSubscribe_StreamPhaseOffset(t *testing.T) {
 	// Publish 10 entries to create a stream.
 	for i := 0; i < 10; i++ {
 		_, err := broker.Publish(ctx, channel, "key"+string(rune('A'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 	}
@@ -2989,10 +2907,7 @@ func TestMapSubscribe_StreamPhaseOffset(t *testing.T) {
 	// Publish 5 MORE entries while paginating state — stream advances.
 	for i := 0; i < 5; i++ {
 		_, err := broker.Publish(ctx, channel, "extra"+string(rune('0'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"new"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"new"}`),
 		})
 		require.NoError(t, err)
 	}
@@ -3059,6 +2974,7 @@ func TestMapSubscribe_StreamPhaseOffset(t *testing.T) {
 // correctly on recovery join responses.
 func TestMapSubscribe_WasRecovering(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
 	channel := "test_was_recovering"
 	ctx := context.Background()
 
@@ -3066,8 +2982,7 @@ func TestMapSubscribe_WasRecovering(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:              SubscriptionTypeMap,
-					EnablePositioning: true,
+					Type: SubscriptionTypeMap,
 				},
 			}, nil)
 		})
@@ -3076,10 +2991,7 @@ func TestMapSubscribe_WasRecovering(t *testing.T) {
 	// Publish entries to create stream position.
 	for i := 0; i < 3; i++ {
 		_, err := broker.Publish(ctx, channel, "key"+string(rune('A'+i)), MapPublishOptions{
-			Data:       []byte(`{"v":"data"}`),
-			StreamSize: 100,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: []byte(`{"v":"data"}`),
 		})
 		require.NoError(t, err)
 	}
@@ -3104,10 +3016,7 @@ func TestMapSubscribe_WasRecovering(t *testing.T) {
 
 	// Publish more entries while disconnected.
 	_, err := broker.Publish(ctx, channel, "keyD", MapPublishOptions{
-		Data:       []byte(`{"v":"new"}`),
-		StreamSize: 100,
-		StreamTTL:  300 * time.Second,
-		KeyTTL:     300 * time.Second,
+		Data: []byte(`{"v":"new"}`),
 	})
 	require.NoError(t, err)
 

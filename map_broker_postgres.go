@@ -576,22 +576,19 @@ func parseSuppressReason(reason *string) SuppressReason {
 
 // Publish publishes data to a map channel using the cf_map_publish SQL function.
 func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
-	// Resolve channel options once for this operation.
-	resolved := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
+	// Resolve and validate channel options.
+	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	if err != nil {
+		return MapPublishResult{}, err
+	}
 
-	// Apply channel options defaults from node config.
-	chOpts := applyChannelOptionsDefaults(MapChannelOptions{
-		StreamSize: opts.StreamSize, StreamTTL: opts.StreamTTL, MetaTTL: opts.MetaTTL, KeyTTL: opts.KeyTTL,
-	}, resolved)
-	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL, chOpts.KeyTTL
-
-	// Reject CAS and Version in streamless mode.
-	if opts.StreamSize <= 0 || opts.StreamTTL <= 0 {
+	// Reject CAS and Version in ephemeral mode.
+	if chOpts.SyncMode == MapSyncEphemeral {
 		if opts.ExpectedPosition != nil {
-			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires stream (StreamSize > 0)")
+			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
 		}
 		if opts.Version > 0 {
-			return MapPublishResult{}, errors.New("version-based dedup requires stream (StreamSize > 0)")
+			return MapPublishResult{}, errors.New("version-based dedup requires SyncMode Converging")
 		}
 	}
 
@@ -626,20 +623,20 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 	}
 
 	// Prepare TTLs as interval strings.
-	// Go already applied applyChannelOptionsDefaults, so values are resolved:
+	// Channel options are already resolved, so values are final:
 	//   > 0: use as-is (send interval string)
 	//   = 0: disabled (send NULL — SQL treats NULL as "no TTL")
 	var keyTTL, streamTTL, metaTTL, idempotencyTTL *string
-	if opts.KeyTTL > 0 {
-		s := strconv.Itoa(int(opts.KeyTTL.Seconds())) + " seconds"
+	if chOpts.KeyTTL > 0 {
+		s := strconv.Itoa(int(chOpts.KeyTTL.Seconds())) + " seconds"
 		keyTTL = &s
 	}
-	if opts.StreamTTL > 0 {
-		s := strconv.Itoa(int(opts.StreamTTL.Seconds())) + " seconds"
+	if chOpts.StreamTTL > 0 {
+		s := strconv.Itoa(int(chOpts.StreamTTL.Seconds())) + " seconds"
 		streamTTL = &s
 	}
-	if opts.MetaTTL > 0 {
-		s := strconv.Itoa(int(opts.MetaTTL.Seconds())) + " seconds"
+	if chOpts.MetaTTL > 0 {
+		s := strconv.Itoa(int(chOpts.MetaTTL.Seconds())) + " seconds"
 		metaTTL = &s
 	}
 	idempotentResultTTL := opts.IdempotentResultTTL
@@ -660,7 +657,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 
 	// Prepare score
 	var score *int64
-	ordered := resolved.Ordered
+	ordered := chOpts.Ordered
 	if ordered || opts.Score != 0 {
 		score = &opts.Score
 	}
@@ -684,8 +681,8 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 
 	// Prepare stream size. NULL = no trimming, > 0 = trim to this size.
 	var streamSize *int
-	if opts.StreamSize > 0 {
-		streamSize = &opts.StreamSize
+	if chOpts.StreamSize > 0 {
+		streamSize = &chOpts.StreamSize
 	}
 
 	// Call cf_map_publish function
@@ -707,7 +704,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		streamData = opts.StreamData
 	}
 
-	err := e.pool.QueryRow(ctx, fmt.Sprintf(`
+	err = e.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset
 		FROM %s($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::interval, $12::interval, $13, $14::interval, $15, $16, $17, $18, $19, $20, $21, $22::interval, $23, $24, $25, $26)
 	`, e.names.publish),
@@ -752,31 +749,28 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 		return MapPublishResult{}, fmt.Errorf("key is required for remove")
 	}
 
-	// Resolve channel options once for this operation.
-	resolved := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
+	// Resolve and validate channel options.
+	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	if err != nil {
+		return MapPublishResult{}, err
+	}
 
-	// Apply channel options defaults from node config.
-	chOpts := applyChannelOptionsDefaults(MapChannelOptions{
-		StreamSize: opts.StreamSize, StreamTTL: opts.StreamTTL, MetaTTL: opts.MetaTTL,
-	}, resolved)
-	opts.StreamSize, opts.StreamTTL, opts.MetaTTL = chOpts.StreamSize, chOpts.StreamTTL, chOpts.MetaTTL
-
-	// Reject CAS in streamless mode.
-	if opts.StreamSize <= 0 || opts.StreamTTL <= 0 {
+	// Reject CAS in ephemeral mode.
+	if chOpts.SyncMode == MapSyncEphemeral {
 		if opts.ExpectedPosition != nil {
-			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires stream (StreamSize > 0)")
+			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
 		}
 	}
 
 	// Prepare TTLs as interval strings.
 	// NULL = no TTL, > 0 = use as-is.
 	var streamTTL, metaTTL, idempotencyTTL *string
-	if opts.StreamTTL > 0 {
-		s := strconv.Itoa(int(opts.StreamTTL.Seconds())) + " seconds"
+	if chOpts.StreamTTL > 0 {
+		s := strconv.Itoa(int(chOpts.StreamTTL.Seconds())) + " seconds"
 		streamTTL = &s
 	}
-	if opts.MetaTTL > 0 {
-		s := strconv.Itoa(int(opts.MetaTTL.Seconds())) + " seconds"
+	if chOpts.MetaTTL > 0 {
+		s := strconv.Itoa(int(chOpts.MetaTTL.Seconds())) + " seconds"
 		metaTTL = &s
 	}
 	idempotentResultTTL := opts.IdempotentResultTTL
@@ -814,7 +808,7 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 
 	// Client info is not available in remove options
 	var clientID, userID *string
-	err := e.pool.QueryRow(ctx, fmt.Sprintf(`
+	err = e.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset
 		FROM %s($1, $2, $3, $4, $5::interval, $6, $7::interval, $8::interval, $9, $10)
 	`, e.names.remove),
@@ -932,7 +926,11 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 	}
 
 	// Paginated state read using keyset pagination (no OFFSET).
-	ordered := e.node.ResolveMapChannelOptions(ch).Ordered
+	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	if err != nil {
+		return MapStateResult{}, err
+	}
+	ordered := chOpts.Ordered
 	asc := opts.Asc
 
 	limit := opts.Limit
@@ -1775,8 +1773,11 @@ func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 
 	// Process each channel with its own resolved options.
 	for _, ch := range channels {
-		resolved := resolveChannelOptions(e.node.ResolveMapChannelOptions, ch)
-		chOpts := applyChannelOptionsDefaults(resolved, resolved)
+		chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+		if err != nil {
+			e.node.logger.log(newErrorLogEntry(err, "error resolving channel options for key expiration", map[string]any{"channel": ch}))
+			continue
+		}
 		var streamTTL, metaTTL *string
 		if chOpts.StreamTTL > 0 {
 			s := strconv.Itoa(int(chOpts.StreamTTL.Seconds())) + " seconds"

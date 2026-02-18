@@ -36,9 +36,7 @@ func BenchmarkRedisMapBroker_PublishStreamOnly(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			data := []byte(fmt.Sprintf("message_%d", i))
 			_, err := broker.Publish(ctx, channel, "", MapPublishOptions{
-				Data:       data,
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
+				Data: data,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -65,10 +63,7 @@ func BenchmarkRedisMapBroker_PublishMapStateSimple(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-				Data:       data,
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
-				KeyTTL:     300 * time.Second,
+				Data: data,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -83,11 +78,13 @@ func BenchmarkRedisMapBroker_PublishMapStateOrdered(b *testing.B) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				Ordered:    true,
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     300 * time.Second,
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				Ordered:       true,
+				StreamSize:    10000,
+				StreamTTL:     300 * time.Second,
+				MetaTTL:       time.Hour,
+				KeyTTL:        300 * time.Second,
 			}
 		},
 	})
@@ -107,11 +104,8 @@ func BenchmarkRedisMapBroker_PublishMapStateOrdered(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-				Data:       data,
-				Score:      i,
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
-				KeyTTL:     300 * time.Second,
+				Data:  data,
+				Score: i,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -138,10 +132,7 @@ func BenchmarkRedisMapBroker_PublishCombined(b *testing.B) {
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-				Data:       data,
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
-				KeyTTL:     300 * time.Second,
+				Data: data,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -163,9 +154,7 @@ func BenchmarkRedisMapBroker_ReadStream(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		data := []byte(fmt.Sprintf("message_%d", i))
 		res, err := broker.Publish(ctx, channel, "", MapPublishOptions{
-			Data:       data,
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
+			Data: data,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -206,10 +195,7 @@ func BenchmarkRedisMapBroker_ReadStateFull(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       data,
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: data,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -222,8 +208,7 @@ func BenchmarkRedisMapBroker_ReadStateFull(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-				Limit:   -1, // Read all
-				MetaTTL: 300 * time.Second,
+				Limit: -1, // Read all
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -245,10 +230,7 @@ func BenchmarkRedisMapBroker_ReadStatePaginated(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       data,
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data: data,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -261,8 +243,7 @@ func BenchmarkRedisMapBroker_ReadStatePaginated(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-				Limit:   100, // Read 100 at a time
-				MetaTTL: 300 * time.Second,
+				Limit: 100, // Read 100 at a time
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -277,11 +258,13 @@ func BenchmarkRedisMapBroker_ReadStateOrdered(b *testing.B) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				Ordered:    true,
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     300 * time.Second,
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				Ordered:       true,
+				StreamSize:    10000,
+				StreamTTL:     300 * time.Second,
+				MetaTTL:       time.Hour,
+				KeyTTL:        300 * time.Second,
 			}
 		},
 	})
@@ -296,11 +279,8 @@ func BenchmarkRedisMapBroker_ReadStateOrdered(b *testing.B) {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       data,
-			Score:      int64(i),
-			StreamSize: 10000,
-			StreamTTL:  300 * time.Second,
-			KeyTTL:     300 * time.Second,
+			Data:  data,
+			Score: int64(i),
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -313,8 +293,7 @@ func BenchmarkRedisMapBroker_ReadStateOrdered(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := broker.ReadState(ctx, channel, MapReadStateOptions{
-				Limit:   100,
-				MetaTTL: 300 * time.Second,
+				Limit: 100,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -344,8 +323,6 @@ func BenchmarkRedisMapBroker_IdempotentPublish(b *testing.B) {
 				Data:                data,
 				IdempotencyKey:      idempotencyKey,
 				IdempotentResultTTL: 60 * time.Second,
-				StreamSize:          10000,
-				StreamTTL:           300 * time.Second,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -372,11 +349,8 @@ func BenchmarkRedisMapBroker_VersionedPublish(b *testing.B) {
 			key := fmt.Sprintf("key%d", i%100) // Reuse 100 keys
 			data := []byte(fmt.Sprintf("data_%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-				Data:       data,
-				Version:    uint64(i),
-				StreamSize: 10000,
-				StreamTTL:  300 * time.Second,
-				KeyTTL:     300 * time.Second,
+				Data:    data,
+				Version: uint64(i),
 			})
 			if err != nil {
 				b.Fatal(err)

@@ -271,13 +271,11 @@ func (n *Node) SetMapBroker(e MapBroker) {
 	n.mapBroker = e
 }
 
-// ResolveMapChannelOptions returns channel options for a map channel,
-// using the configured GetMapChannelOptions callback or defaults.
-func (n *Node) ResolveMapChannelOptions(channel string) MapChannelOptions {
-	if n.config.GetMapChannelOptions != nil {
-		return n.config.GetMapChannelOptions(channel)
-	}
-	return DefaultMapChannelOptions()
+// ResolveMapChannelOptions returns validated channel options for a map channel.
+// Returns an error if GetMapChannelOptions is not configured or the channel
+// options are invalid.
+func (n *Node) ResolveMapChannelOptions(channel string) (MapChannelOptions, error) {
+	return resolveAndValidateMapChannelOptions(n.config.GetMapChannelOptions, channel)
 }
 
 // Hub returns node's Hub.
@@ -1626,8 +1624,7 @@ func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMe
 		}
 		// Use ReadStream with Limit: 0 to only get stream top position.
 		streamResult, err := mapBroker.ReadStream(context.Background(), ch, MapReadStreamOptions{
-			Filter:  StreamFilter{Limit: 0},
-			MetaTTL: historyMetaTTL,
+			Filter: StreamFilter{Limit: 0},
 		})
 		if err != nil {
 			// Will be checked later.
@@ -1961,7 +1958,7 @@ func (n *Node) mapStreamKey(ch string, opts MapReadStreamOptions) string {
 
 // MapStreamPosition returns the current stream position for a map channel.
 // This is useful for capturing the stream top before starting stream pagination.
-func (n *Node) MapStreamPosition(ctx context.Context, ch string, metaTTL time.Duration) (StreamPosition, error) {
+func (n *Node) MapStreamPosition(ctx context.Context, ch string) (StreamPosition, error) {
 	mapBroker := n.getMapBroker(ch)
 	if mapBroker == nil {
 		return StreamPosition{}, ErrorNotAvailable
@@ -1969,8 +1966,7 @@ func (n *Node) MapStreamPosition(ctx context.Context, ch string, metaTTL time.Du
 	n.metrics.incActionCount("map_stream_position", ch)
 	// ReadStream with Limit=0 returns only the current stream position.
 	result, err := mapBroker.ReadStream(ctx, ch, MapReadStreamOptions{
-		Filter:  StreamFilter{Limit: 0},
-		MetaTTL: metaTTL,
+		Filter: StreamFilter{Limit: 0},
 	})
 	return result.Position, err
 }

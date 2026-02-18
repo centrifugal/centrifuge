@@ -41,62 +41,60 @@ func main() {
 		MapMaxImmediateJoinStateSize: 1000, // Max state entries for immediate join (Scenario B).
 		MapStateToLiveEnabled:        true,
 		// Configure channel options per channel.
-		// Most channels use streamless defaults (no stream history).
-		// Only inventory needs stream for CAS (Compare-And-Swap) operations.
+		// Each channel must specify SyncMode and RetentionMode explicitly.
 		GetMapChannelOptions: func(channel string) centrifuge.MapChannelOptions {
 			if channel == "inventory" || channel == "leaderboard" {
 				return centrifuge.MapChannelOptions{
-					StreamSize: 1000,
-					StreamTTL:  time.Hour,
-					MetaTTL:    24 * time.Hour,
+					SyncMode:      centrifuge.MapSyncConverging,
+					RetentionMode: centrifuge.MapRetentionPermanent,
 				}
 			}
 			if channel == "scoreboard" {
 				return centrifuge.MapChannelOptions{
-					StreamSize: 1000,
-					StreamTTL:  time.Hour,
-					MetaTTL:    time.Hour,
+					SyncMode:      centrifuge.MapSyncConverging,
+					RetentionMode: centrifuge.MapRetentionPermanent,
 				}
 			}
 			if channel == "board" {
 				return centrifuge.MapChannelOptions{
-					StreamSize: 1000,
-					Ordered:    true,
+					SyncMode:      centrifuge.MapSyncConverging,
+					RetentionMode: centrifuge.MapRetentionPermanent,
+					Ordered:       true,
 				}
 			}
 			// Poll channels need streams for proper state recovery after reconnect.
 			if strings.HasPrefix(channel, "poll:") {
 				return centrifuge.MapChannelOptions{
-					StreamSize: 100,
-					StreamTTL:  time.Hour,
-					MetaTTL:    time.Hour,
+					SyncMode:      centrifuge.MapSyncConverging,
+					RetentionMode: centrifuge.MapRetentionPermanent,
 				}
 			}
 			if channel == "visualizer" {
 				return centrifuge.MapChannelOptions{
-					StreamSize: 30,
-					StreamTTL:  time.Hour,
-					MetaTTL:    time.Hour,
+					SyncMode:      centrifuge.MapSyncConverging,
+					RetentionMode: centrifuge.MapRetentionPermanent,
 				}
 			}
 			if strings.HasPrefix(channel, "clients:") {
 				return centrifuge.MapChannelOptions{
-					//StreamSize: 100,
-					//StreamTTL:  300 * time.Second,
-					KeyTTL:  60 * time.Second,
-					MetaTTL: 60 * time.Second,
+					SyncMode:      centrifuge.MapSyncEphemeral,
+					RetentionMode: centrifuge.MapRetentionExpiring,
+					KeyTTL:        60 * time.Second,
 				}
 			}
 			if strings.HasPrefix(channel, "users:") {
 				return centrifuge.MapChannelOptions{
-					//StreamSize: 100,
-					//StreamTTL:  300 * time.Second,
-					KeyTTL:  60 * time.Second,
-					MetaTTL: 60 * time.Second,
+					SyncMode:      centrifuge.MapSyncEphemeral,
+					RetentionMode: centrifuge.MapRetentionExpiring,
+					KeyTTL:        60 * time.Second,
 				}
 			}
-			// Cursors, games — all streamless (default).
-			return centrifuge.DefaultMapChannelOptions()
+			// Cursors, games — all ephemeral with expiring keys (default).
+			return centrifuge.MapChannelOptions{
+				SyncMode:      centrifuge.MapSyncEphemeral,
+				RetentionMode: centrifuge.MapRetentionExpiring,
+				KeyTTL:        1 * time.Minute,
+			}
 		},
 	})
 	if err != nil {
@@ -159,19 +157,6 @@ func main() {
 				Type: e.Type,
 			}
 
-			// Inventory, leaderboard, poll, and scoreboard channels use streams — enable positioned mode with recovery.
-			if strings.HasPrefix(e.Channel, "XXclients:") ||
-				strings.HasPrefix(e.Channel, "XXusers:") ||
-				e.Channel == "inventory" ||
-				e.Channel == "leaderboard" ||
-				e.Channel == "board" ||
-				strings.HasPrefix(e.Channel, "poll:") ||
-				e.Channel == "scoreboard" ||
-				e.Channel == "visualizer" {
-				opts.EnablePositioning = true
-				opts.EnableRecovery = true
-			}
-
 			// Enable delta compression for scoreboard channel.
 			if e.Channel == "scoreboard" {
 				opts.AllowedDeltaTypes = []centrifuge.DeltaType{centrifuge.DeltaTypeFossil}
@@ -206,9 +191,6 @@ func main() {
 			if e.Channel == "cursors" {
 				cb(centrifuge.MapPublishReply{
 					Key: client.ID(),
-					Options: centrifuge.MapPublishOptions{
-						KeyTTL: 10 * time.Second,
-					},
 				}, nil)
 				return
 			}

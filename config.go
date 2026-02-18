@@ -6,34 +6,55 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// MapChannelOptions contains configuration for map channels.
+// MapSyncMode controls how client state stays in sync with server state after disconnections.
+type MapSyncMode int
+
+const (
+	// MapSyncEphemeral means no stream. Live updates via PUB/SUB only. Missed updates
+	// during disconnect are lost. Reconnect = full state resync.
+	MapSyncEphemeral MapSyncMode = iota + 1
+	// MapSyncConverging means stream-backed. Missed updates are recovered from stream
+	// on reconnect. Client state converges to server state via delta catch-up.
+	MapSyncConverging
+)
+
+// MapRetentionMode controls the data lifecycle of entries in the channel.
+type MapRetentionMode int
+
+const (
+	// MapRetentionExpiring means entries expire after KeyTTL. Cleanup worker removes
+	// expired entries and publishes removal events.
+	MapRetentionExpiring MapRetentionMode = iota + 1
+	// MapRetentionPermanent means entries live forever (until explicitly removed).
+	MapRetentionPermanent
+)
+
+// MapChannelOptions contains configuration for map channels. Every map channel
+// must have SyncMode and RetentionMode explicitly set — zero values are errors.
 type MapChannelOptions struct {
-	// MetaTTL is how long channel metadata (offset, epoch) is retained.
-	MetaTTL time.Duration
-	// StreamSize is the maximum number of entries in the stream.
-	StreamSize int
-	// StreamTTL is how long stream is retained.
-	StreamTTL time.Duration
-	// KeyTTL is the default TTL for keys in the channel.
+	// SyncMode controls client-server synchronization after disconnections.
+	// Required. Zero value = not configured = error.
+	SyncMode MapSyncMode
+	// RetentionMode controls the data lifecycle of entries.
+	// Required. Zero value = not configured = error.
+	RetentionMode MapRetentionMode
+	// KeyTTL sets automatic expiration for entries in this channel.
+	// Required when RetentionMode is Expiring (must be > 0).
+	// Must be 0 when RetentionMode is Permanent.
 	KeyTTL time.Duration
 	// Ordered enables score-based ordering in the state. When true, entries
 	// are returned sorted by Score (descending).
 	Ordered bool
-}
-
-// MapChannelOptionsResolver returns channel options for a channel.
-type MapChannelOptionsResolver func(channel string) MapChannelOptions
-
-// DefaultMapChannelOptions returns sensible defaults for map channel options.
-// By default, map channels are streamless (StreamSize=0, StreamTTL=0) — no stream
-// history is maintained. Applications that need stream-based recovery or CAS should
-// opt in via GetMapChannelOptions returning StreamSize > 0 and StreamTTL > 0, and
-// setting EnablePositioning=true or EnableRecovery=true in subscribe options.
-func DefaultMapChannelOptions() MapChannelOptions {
-	return MapChannelOptions{
-		MetaTTL: time.Hour,
-		KeyTTL:  time.Minute,
-	}
+	// StreamSize sets the maximum number of entries in the recovery stream.
+	// Zero = auto-derived (100) for Converging mode. Must be 0 for Ephemeral.
+	StreamSize int
+	// StreamTTL sets how long stream entries are retained.
+	// Zero = auto-derived (1 minute) for Converging mode. Must be 0 for Ephemeral.
+	StreamTTL time.Duration
+	// MetaTTL sets how long stream metadata (epoch, offset) is retained.
+	// Zero = auto-derived: Converging+Expiring: StreamTTL*10, Converging+Permanent: permanent (no expiry).
+	// Must be 0 for Ephemeral.
+	MetaTTL time.Duration
 }
 
 // Config contains Node configuration options.
@@ -196,7 +217,8 @@ type Config struct {
 	// pagination, server goes LIVE immediately, reducing round trips.
 	MapStateToLiveEnabled bool
 	// GetMapChannelOptions returns channel options for map channels.
-	// If nil, DefaultMapChannelOptions() is used for all channels.
+	// Required for map channel operations. If nil, any map operation returns an error.
+	// Each channel must have SyncMode and RetentionMode explicitly set.
 	GetMapChannelOptions func(channel string) MapChannelOptions
 }
 
