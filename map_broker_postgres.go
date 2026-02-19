@@ -1050,6 +1050,9 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 		}
 		pubs = append(pubs, p)
 	}
+	if err := rows.Err(); err != nil {
+		return MapStateResult{}, err
+	}
 
 	var nextCursor string
 	if len(pubs) > limit {
@@ -1211,6 +1214,9 @@ func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapR
 			}
 		}
 		pubs = append(pubs, p)
+	}
+	if err := rows.Err(); err != nil {
+		return MapStreamResult{}, err
 	}
 
 	return MapStreamResult{Publications: pubs, Position: streamPos}, nil
@@ -2000,6 +2006,15 @@ func (e *PostgresMapBroker) runOutboxWorkerForShard(shardID int) {
 func (e *PostgresMapBroker) processOutboxLoop(ctx context.Context, shardID int, conn *pgxpool.Conn, cursor int64) error {
 	pollInterval := e.conf.Outbox.PollInterval
 
+	// Pre-allocate reusable batch buffer — only metas (internal) is reused across batches.
+	allocHint := e.conf.Outbox.BatchSize
+	if allocHint > 1001 {
+		allocHint = 1001
+	}
+	buf := &outboxBatchBuf{
+		metas: make([]outboxMeta, 0, allocHint),
+	}
+
 	for {
 		select {
 		case <-e.closeCh:
@@ -2010,7 +2025,7 @@ func (e *PostgresMapBroker) processOutboxLoop(ctx context.Context, shardID int, 
 		}
 
 		// Process a batch of stream entries
-		processed, newCursor, err := e.processOutboxBatch(ctx, shardID, cursor)
+		processed, newCursor, err := e.processOutboxBatch(ctx, shardID, cursor, buf)
 		if err != nil {
 			return fmt.Errorf("process batch: %w", err)
 		}
@@ -2034,27 +2049,34 @@ func (e *PostgresMapBroker) processOutboxLoop(ctx context.Context, shardID int, 
 	}
 }
 
-// streamRow represents a row from cf_map_stream used for outbox delivery.
-type streamRow struct {
-	id            int64
-	shardID       int
-	channel       string
-	channelOffset int64
-	epoch         string
-	key           string
-	data          []byte
-	tags          map[string]string
-	removed       bool
-	score         *int64 // Nullable
-	clientID      *string
-	userID        *string
-	connInfo      []byte
-	chanInfo      []byte
-	previousData  []byte
+// outboxMeta holds per-row metadata not captured in Publication.
+// String/byte fields reference arena memory — no per-field heap allocation.
+type outboxMeta struct {
+	id           int64
+	channel      string
+	epoch        string
+	previousData []byte
+}
+
+// outboxBatchBuf holds reusable buffers for processOutboxBatch. Only metas
+// (internal metadata) is reused across batches. pubBacking and infoBacking are
+// allocated fresh each batch because handlers may retain *Publication pointers
+// asynchronously (e.g. cachedEventHandler.BufferPublication, channelMedium queue).
+type outboxBatchBuf struct {
+	metas []outboxMeta
+}
+
+// reset clears metas while retaining capacity.
+// clear() zeroes struct fields so old arena-backed strings/bytes don't pin memory.
+func (b *outboxBatchBuf) reset() {
+	clear(b.metas[:cap(b.metas)])
+	b.metas = b.metas[:0]
 }
 
 // processOutboxBatch fetches and processes a batch of stream entries using cursor-based delivery.
-func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int, cursor int64) (int, int64, error) {
+// Uses RawValues + byteArena to avoid per-row heap allocations from pgx Scan.
+// The buf parameter provides reusable backing slices — allocated once in processOutboxLoop.
+func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int, cursor int64, buf *outboxBatchBuf) (int, int64, error) {
 	batchSize := e.conf.Outbox.BatchSize
 
 	rows, err := e.pool.Query(ctx, fmt.Sprintf(`
@@ -2069,43 +2091,125 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int,
 		return 0, cursor, fmt.Errorf("query stream: %w", err)
 	}
 
-	var entries []streamRow
+	buf.reset()
+	arena := byteArena{}
+	// pubBacking and infoBacking are allocated fresh each batch (not reused) because
+	// handlers may retain *Publication pointers after HandlePublication returns
+	// (e.g. cachedEventHandler.BufferPublication, channelMedium async queue).
+	allocHint := batchSize
+	if allocHint > 1001 {
+		allocHint = 1001
+	}
+	pubBacking := make([]Publication, 0, allocHint)
+	infoBacking := make([]ClientInfo, 0, allocHint/4+1)
+
 	var maxID int64
+
+	// Use RawValues + arena to avoid per-row allocations (same pattern as ReadState/ReadStream).
+	// Column order: id(0), shard_id(1), channel(2), channel_offset(3), epoch(4),
+	//              key(5), data(6), tags(7), removed(8), score(9),
+	//              client_id(10), user_id(11), conn_info(12), chan_info(13), previous_data(14).
 	for rows.Next() {
-		var row streamRow
-		var tagsJSON []byte
-		err := rows.Scan(
-			&row.id, &row.shardID, &row.channel, &row.channelOffset, &row.epoch,
-			&row.key, &row.data, &tagsJSON, &row.removed, &row.score,
-			&row.clientID, &row.userID, &row.connInfo, &row.chanInfo, &row.previousData,
-		)
-		if err != nil {
-			rows.Close()
-			return 0, cursor, fmt.Errorf("scan row: %w", err)
+		raw := rows.RawValues()
+
+		// Parse id (int8, big-endian).
+		id := int64(binary.BigEndian.Uint64(raw[0]))
+		if id > maxID {
+			maxID = id
 		}
-		if len(tagsJSON) > 0 {
-			_ = json.Unmarshal(tagsJSON, &row.tags)
+
+		// Build Publication directly — no intermediate streamRow.
+		pubBacking = append(pubBacking, Publication{})
+		p := &pubBacking[len(pubBacking)-1]
+
+		// channel_offset (int8).
+		p.Offset = binary.BigEndian.Uint64(raw[3])
+		// key (text).
+		p.Key = arena.copyString(raw[5])
+		// data (bytea).
+		if raw[6] != nil {
+			p.Data = arena.copyBytes(raw[6])
 		}
-		entries = append(entries, row)
-		if row.id > maxID {
-			maxID = row.id
+		// tags (jsonb).
+		if raw[7] != nil {
+			pgxParseJSONB(raw[7], &p.Tags)
 		}
+		// removed (bool).
+		if raw[8] != nil && raw[8][0] == 1 {
+			p.Removed = true
+		}
+		// score (int8, nullable).
+		if raw[9] != nil {
+			p.Score = int64(binary.BigEndian.Uint64(raw[9]))
+		}
+		// client_id (text, nullable).
+		if raw[10] != nil {
+			infoBacking = append(infoBacking, ClientInfo{ClientID: arena.copyString(raw[10])})
+			p.Info = &infoBacking[len(infoBacking)-1]
+			if raw[11] != nil {
+				p.Info.UserID = arena.copyString(raw[11])
+			}
+			if raw[12] != nil {
+				p.Info.ConnInfo = arena.copyBytes(raw[12])
+			}
+			if raw[13] != nil {
+				p.Info.ChanInfo = arena.copyBytes(raw[13])
+			}
+		}
+
+		// Collect per-row metadata not part of Publication.
+		m := outboxMeta{
+			id:      id,
+			channel: arena.copyString(raw[2]),
+			epoch:   arena.copyString(raw[4]),
+		}
+		if raw[14] != nil {
+			m.previousData = arena.copyBytes(raw[14])
+		}
+		buf.metas = append(buf.metas, m)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, cursor, fmt.Errorf("iterate rows: %w", err)
+	}
 
-	if len(entries) == 0 {
+	if len(buf.metas) == 0 {
 		return 0, cursor, nil
 	}
 
-	// Process each entry (publish to broker/locally)
-	for _, entry := range entries {
-		if err := e.handleOutboxEntry(ctx, entry); err != nil {
-			e.logError("outbox worker: handle entry", err, shardID)
-			// Continue processing other entries
+	// Deliver each entry. Epoch is NOT set on Publication — it travels only in
+	// StreamPosition (passed to HandlePublication) and PublishOptions (for
+	// multi-node broker fan-out).
+	for i := range buf.metas {
+		m := &buf.metas[i]
+		pub := &pubBacking[i]
+		streamPos := StreamPosition{Offset: pub.Offset, Epoch: m.epoch}
+
+		var prevPub *Publication
+		useDelta := len(m.previousData) > 0
+		if useDelta {
+			prevPub = &Publication{Data: m.previousData}
+		}
+
+		if e.conf.Broker != nil {
+			_, err := e.conf.Broker.Publish(m.channel, pub.Data, PublishOptions{
+				ClientInfo: pub.Info,
+				Key:        pub.Key,
+				Removed:    pub.Removed,
+				Score:      pub.Score,
+				Tags:       pub.Tags,
+				Offset:     pub.Offset,
+				Epoch:      m.epoch,
+			})
+			if err != nil {
+				e.logError("outbox worker: broker publish", err, shardID)
+			}
+		} else if e.eventHandler != nil {
+			_ = e.eventHandler.HandlePublication(m.channel, pub, streamPos, useDelta, prevPub)
 		}
 	}
 
-	// Advance cursor
+	// Advance cursor.
 	_, err = e.pool.Exec(ctx, fmt.Sprintf(
 		`UPDATE %s SET last_processed_id = $1, updated_at = NOW()
 		 WHERE shard_id = $2`, e.names.outboxCursor), maxID, shardID)
@@ -2113,74 +2217,7 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int,
 		return 0, cursor, fmt.Errorf("advance cursor: %w", err)
 	}
 
-	return len(entries), maxID, nil
-}
-
-// handleOutboxEntry processes a single stream entry by publishing to broker/locally.
-// This shares the same delivery logic as the WAL reader.
-func (e *PostgresMapBroker) handleOutboxEntry(_ context.Context, entry streamRow) error {
-	// Handle nullable score
-	var score int64
-	if entry.score != nil {
-		score = *entry.score
-	}
-
-	// Create publication. Note: Epoch is NOT set on Publication — it travels
-	// only in StreamPosition (passed to HandlePublication) and PublishOptions
-	// (for multi-node broker fan-out). Setting Epoch on Publication would leak
-	// it to the client protocol via pubToProto.
-	pub := &Publication{
-		Offset:  uint64(entry.channelOffset),
-		Key:     entry.key,
-		Data:    entry.data,
-		Tags:    entry.tags,
-		Removed: entry.removed,
-		Score:   score,
-	}
-
-	// Add client info if present
-	if entry.clientID != nil || entry.userID != nil {
-		pub.Info = &ClientInfo{
-			ConnInfo: entry.connInfo,
-			ChanInfo: entry.chanInfo,
-		}
-		if entry.clientID != nil {
-			pub.Info.ClientID = *entry.clientID
-		}
-		if entry.userID != nil {
-			pub.Info.UserID = *entry.userID
-		}
-	}
-
-	streamPos := StreamPosition{Offset: uint64(entry.channelOffset), Epoch: entry.epoch}
-
-	// Construct prevPub for key-based delta if previous data available.
-	var prevPub *Publication
-	useDelta := len(entry.previousData) > 0
-	if useDelta {
-		prevPub = &Publication{Data: entry.previousData}
-	}
-
-	if e.conf.Broker != nil {
-		// Multi-node: publish to broker, which will deliver to all subscribed nodes (including this one)
-		_, err := e.conf.Broker.Publish(entry.channel, entry.data, PublishOptions{
-			ClientInfo: pub.Info,
-			Key:        entry.key,
-			Removed:    entry.removed,
-			Score:      score,
-			Tags:       entry.tags,
-			Offset:     uint64(entry.channelOffset),
-			Epoch:      entry.epoch,
-		})
-		if err != nil {
-			return fmt.Errorf("broker publish: %w", err)
-		}
-	} else if e.eventHandler != nil {
-		// Single-node: deliver locally only
-		_ = e.eventHandler.HandlePublication(entry.channel, pub, streamPos, useDelta, prevPub)
-	}
-
-	return nil
+	return len(buf.metas), maxID, nil
 }
 
 // pgxParseJSONB parses JSONB binary wire format (1-byte version header + JSON)
