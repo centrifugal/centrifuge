@@ -143,121 +143,139 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		codeStrings: codeStrings,
 	}
 
+	constLabels := prometheus.Labels(config.ConstLabels)
+
 	m.messagesSentCount = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "node",
-		Name:      "messages_sent_count",
-		Help:      "Number of messages sent by node to broker.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "node",
+		Name:        "messages_sent_count",
+		Help:        "Number of messages sent by node to broker.",
+		ConstLabels: constLabels,
 	}, []string{"type", "channel_namespace"})
 
 	m.messagesReceivedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "node",
-		Name:      "messages_received_count",
-		Help:      "Number of messages received from broker.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "node",
+		Name:        "messages_received_count",
+		Help:        "Number of messages received from broker.",
+		ConstLabels: constLabels,
 	}, []string{"type", "channel_namespace"})
 
 	m.actionCount = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "node",
-		Name:      "action_count",
-		Help:      "Number of various actions called.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "node",
+		Name:        "action_count",
+		Help:        "Number of various actions called.",
+		ConstLabels: constLabels,
 	}, []string{"action", "channel_namespace"})
 
 	m.numClientsGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "node",
-		Name:      "num_clients",
-		Help:      "Number of clients connected.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "node",
+		Name:        "num_clients",
+		Help:        "Number of clients connected.",
+		ConstLabels: constLabels,
 	})
 
 	m.numUsersGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "node",
-		Name:      "num_users",
-		Help:      "Number of unique users connected.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "node",
+		Name:        "num_users",
+		Help:        "Number of unique users connected.",
+		ConstLabels: constLabels,
 	})
 
 	m.numSubsGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "node",
-		Name:      "num_subscriptions",
-		Help:      "Number of subscriptions.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "node",
+		Name:        "num_subscriptions",
+		Help:        "Number of subscriptions.",
+		ConstLabels: constLabels,
 	})
 
 	m.numNodesGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "node",
-		Name:      "num_nodes",
-		Help:      "Number of nodes in the cluster.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "node",
+		Name:        "num_nodes",
+		Help:        "Number of nodes in the cluster.",
+		ConstLabels: constLabels,
 	})
 
 	m.buildInfoGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "node",
-		Name:      "build",
-		Help:      "Node build info.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "node",
+		Name:        "build",
+		Help:        "Node build info.",
+		ConstLabels: constLabels,
 	}, []string{"version"})
 
 	m.numChannelsGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "node",
-		Name:      "num_channels",
-		Help:      "Number of channels with one or more subscribers.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "node",
+		Name:        "num_channels",
+		Help:        "Number of channels with one or more subscribers.",
+		ConstLabels: constLabels,
 	})
 
 	m.surveyDurationSummary = prometheus.NewSummaryVec(prometheus.SummaryOpts{
-		Namespace:  metricsNamespace,
-		Subsystem:  "node",
-		Name:       "survey_duration_seconds",
-		Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
-		Help:       "Survey duration summary.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "node",
+		Name:        "survey_duration_seconds",
+		Objectives:  map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
+		Help:        "Survey duration summary.",
+		ConstLabels: constLabels,
 	}, []string{"op"})
 
 	m.commandDurationSummary = prometheus.NewSummaryVec(prometheus.SummaryOpts{
-		Namespace:  metricsNamespace,
-		Subsystem:  "client",
-		Name:       "command_duration_seconds",
-		Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
-		Help:       "Client command duration summary.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "client",
+		Name:        "command_duration_seconds",
+		Objectives:  map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
+		Help:        "Client command duration summary.",
+		ConstLabels: constLabels,
 	}, []string{"method", "channel_namespace"})
 
 	m.replyErrorCount = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "client",
-		Name:      "num_reply_errors",
-		Help:      "Number of errors in replies sent to clients.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "client",
+		Name:        "num_reply_errors",
+		Help:        "Number of errors in replies sent to clients.",
+		ConstLabels: constLabels,
 	}, []string{"method", "code", "channel_namespace"})
 
 	m.serverUnsubscribeCount = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "client",
-		Name:      "num_server_unsubscribes",
-		Help:      "Number of server initiated unsubscribes.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "client",
+		Name:        "num_server_unsubscribes",
+		Help:        "Number of server initiated unsubscribes.",
+		ConstLabels: constLabels,
 	}, []string{"code", "channel_namespace"})
 
 	m.serverDisconnectCount = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "client",
-		Name:      "num_server_disconnects",
-		Help:      "Number of server initiated disconnects.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "client",
+		Name:        "num_server_disconnects",
+		Help:        "Number of server initiated disconnects.",
+		ConstLabels: constLabels,
 	}, []string{"code"})
 
 	m.recoverCount = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "client",
-		Name:      "recover",
-		Help:      "Count of recover operations with success/fail resolution.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "client",
+		Name:        "recover",
+		Help:        "Count of recover operations with success/fail resolution.",
+		ConstLabels: constLabels,
 	}, []string{"recovered", "channel_namespace", "has_recovered_publications"})
 
 	if config.EnableRecoveredPublicationsHistogram {
 		m.recoveredPublications = prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
-				Namespace: metricsNamespace,
-				Subsystem: "client",
-				Name:      "recovered_publications",
-				Help:      "Number of publications recovered during subscription recovery.",
-				Buckets:   []float64{0, 1, 2, 3, 5, 10, 20, 50, 100, 250, 500, 1000, 2000, 5000, 10000},
+				Namespace:   metricsNamespace,
+				Subsystem:   "client",
+				Name:        "recovered_publications",
+				Help:        "Number of publications recovered during subscription recovery.",
+				Buckets:     []float64{0, 1, 2, 3, 5, 10, 20, 50, 100, 250, 500, 1000, 2000, 5000, 10000},
+				ConstLabels: constLabels,
 			},
 			[]string{"channel_namespace"},
 		)
@@ -272,77 +290,89 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			0.000100, 0.000250, 0.000500, // Microsecond resolution.
 			0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, // Millisecond resolution.
 			1.0, 2.5, 5.0, 10.0, // Second resolution.
-		}}, []string{"transport"})
+		},
+		ConstLabels: constLabels,
+	}, []string{"transport"})
 
 	m.connectionsAccepted = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "client",
-		Name:      "connections_accepted",
-		Help:      "Count of accepted transports.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "client",
+		Name:        "connections_accepted",
+		Help:        "Count of accepted transports.",
+		ConstLabels: constLabels,
 	}, []string{"transport", "accept_protocol", "client_name", "client_version"})
 
 	m.connectionsInflight = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "client",
-		Name:      "connections_inflight",
-		Help:      "Number of inflight client connections.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "client",
+		Name:        "connections_inflight",
+		Help:        "Number of inflight client connections.",
+		ConstLabels: constLabels,
 	}, []string{"transport", "accept_protocol", "client_name", "client_version"})
 
 	m.subscriptionsAccepted = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "client",
-		Name:      "subscriptions_accepted",
-		Help:      "Count of accepted client subscriptions.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "client",
+		Name:        "subscriptions_accepted",
+		Help:        "Count of accepted client subscriptions.",
+		ConstLabels: constLabels,
 	}, []string{"client_name", "channel_namespace"})
 
 	m.subscriptionsInflight = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "client",
-		Name:      "subscriptions_inflight",
-		Help:      "Number of inflight client subscriptions.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "client",
+		Name:        "subscriptions_inflight",
+		Help:        "Number of inflight client subscriptions.",
+		ConstLabels: constLabels,
 	}, []string{"client_name", "channel_namespace"})
 
 	m.transportMessagesSent = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "transport",
-		Name:      "messages_sent",
-		Help:      "Number of messages sent to client connections over specific transport.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "transport",
+		Name:        "messages_sent",
+		Help:        "Number of messages sent to client connections over specific transport.",
+		ConstLabels: constLabels,
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
 	m.transportMessagesSentSize = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "transport",
-		Name:      "messages_sent_size",
-		Help:      "MaxSize in bytes of messages sent to client connections over specific transport (uncompressed and does not include framing overhead).",
+		Namespace:   metricsNamespace,
+		Subsystem:   "transport",
+		Name:        "messages_sent_size",
+		Help:        "MaxSize in bytes of messages sent to client connections over specific transport (uncompressed and does not include framing overhead).",
+		ConstLabels: constLabels,
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
 	m.transportMessagesReceived = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "transport",
-		Name:      "messages_received",
-		Help:      "Number of messages received from client connections over specific transport.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "transport",
+		Name:        "messages_received",
+		Help:        "Number of messages received from client connections over specific transport.",
+		ConstLabels: constLabels,
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
 	m.transportMessagesReceivedSize = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "transport",
-		Name:      "messages_received_size",
-		Help:      "MaxSize in bytes of messages received from client connections over specific transport (uncompressed and does not include framing overhead).",
+		Namespace:   metricsNamespace,
+		Subsystem:   "transport",
+		Name:        "messages_received_size",
+		Help:        "MaxSize in bytes of messages received from client connections over specific transport (uncompressed and does not include framing overhead).",
+		ConstLabels: constLabels,
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
 	m.tagsFilterDroppedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "node",
-		Name:      "tags_filter_dropped_publications",
-		Help:      "Number of publications dropped due to tags filtering.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "node",
+		Name:        "tags_filter_dropped_publications",
+		Help:        "Number of publications dropped due to tags filtering.",
+		ConstLabels: constLabels,
 	}, []string{"channel_namespace"})
 
 	m.pubSubLagHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "node",
-		Name:      "pub_sub_lag_seconds",
-		Help:      "Pub sub lag in seconds",
-		Buckets:   []float64{0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.200, 0.500, 1.000, 2.000, 5.000, 10.000},
+		Namespace:   metricsNamespace,
+		Subsystem:   "node",
+		Name:        "pub_sub_lag_seconds",
+		Help:        "Pub sub lag in seconds",
+		Buckets:     []float64{0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.200, 0.500, 1.000, 2.000, 5.000, 10.000},
+		ConstLabels: constLabels,
 	})
 
 	m.broadcastDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -354,27 +384,32 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			0.000001, 0.000005, 0.000010, 0.000050, 0.000100, 0.000250, 0.000500, // Microsecond resolution.
 			0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, // Millisecond resolution.
 			1.0, 2.5, 5.0, 10.0, // Second resolution.
-		}}, []string{"type", "channel_namespace"})
+		},
+		ConstLabels: constLabels,
+	}, []string{"type", "channel_namespace"})
 
 	m.redisBrokerPubSubErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "broker",
-		Name:      "redis_pub_sub_errors",
-		Help:      "Number of times there was an error in Redis PUB/SUB connection.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "broker",
+		Name:        "redis_pub_sub_errors",
+		Help:        "Number of times there was an error in Redis PUB/SUB connection.",
+		ConstLabels: constLabels,
 	}, []string{"broker_name", "error"})
 
 	m.redisBrokerPubSubDroppedMessages = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "broker",
-		Name:      "redis_pub_sub_dropped_messages",
-		Help:      "Number of dropped messages on application level in Redis PUB/SUB.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "broker",
+		Name:        "redis_pub_sub_dropped_messages",
+		Help:        "Number of dropped messages on application level in Redis PUB/SUB.",
+		ConstLabels: constLabels,
 	}, []string{"broker_name", "channel_type"})
 
 	m.redisBrokerPubSubBufferedMessages = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "broker",
-		Name:      "redis_pub_sub_buffered_messages",
-		Help:      "Number of messages buffered in Redis PUB/SUB.",
+		Namespace:   metricsNamespace,
+		Subsystem:   "broker",
+		Name:        "redis_pub_sub_buffered_messages",
+		Help:        "Number of messages buffered in Redis PUB/SUB.",
+		ConstLabels: constLabels,
 	}, []string{"broker_name", "channel_type", "pub_sub_processor"})
 
 	m.redisBrokerPubSubDroppedMessages.WithLabelValues("", "control").Add(0)
