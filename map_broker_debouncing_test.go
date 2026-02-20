@@ -76,10 +76,10 @@ func (m *mockMapBroker) getRemoves() []mockRemove {
 
 func TestDebouncingMapBrokerPassthrough(t *testing.T) {
 	mock := &mockMapBroker{}
-	b := NewDebouncingMapBroker(mock, DebouncingMapBrokerConfig{
+	b := NewDebouncingMapBroker(nil, mock, DebouncingMapBrokerConfig{
 		Debounce: func(string) time.Duration { return 0 },
 	})
-	defer b.Close()
+	defer b.Close(context.Background())
 
 	ctx := context.Background()
 	_, err := b.Publish(ctx, "ch1", "key1", MapPublishOptions{Data: []byte("hello")})
@@ -94,8 +94,8 @@ func TestDebouncingMapBrokerPassthrough(t *testing.T) {
 
 func TestDebouncingMapBrokerPassthroughNilDebounce(t *testing.T) {
 	mock := &mockMapBroker{}
-	b := NewDebouncingMapBroker(mock, DebouncingMapBrokerConfig{})
-	defer b.Close()
+	b := NewDebouncingMapBroker(nil, mock, DebouncingMapBrokerConfig{})
+	defer b.Close(context.Background())
 
 	ctx := context.Background()
 	_, err := b.Publish(ctx, "ch1", "key1", MapPublishOptions{Data: []byte("hello")})
@@ -107,10 +107,10 @@ func TestDebouncingMapBrokerPassthroughNilDebounce(t *testing.T) {
 
 func TestDebouncingMapBrokerCoalesce(t *testing.T) {
 	mock := &mockMapBroker{}
-	b := NewDebouncingMapBroker(mock, DebouncingMapBrokerConfig{
+	b := NewDebouncingMapBroker(nil, mock, DebouncingMapBrokerConfig{
 		Debounce: func(string) time.Duration { return 50 * time.Millisecond },
 	})
-	defer b.Close()
+	defer b.Close(context.Background())
 
 	ctx := context.Background()
 
@@ -133,10 +133,10 @@ func TestDebouncingMapBrokerCoalesce(t *testing.T) {
 
 func TestDebouncingMapBrokerContinuousPublish(t *testing.T) {
 	mock := &mockMapBroker{}
-	b := NewDebouncingMapBroker(mock, DebouncingMapBrokerConfig{
+	b := NewDebouncingMapBroker(nil, mock, DebouncingMapBrokerConfig{
 		Debounce: func(string) time.Duration { return 50 * time.Millisecond },
 	})
-	defer b.Close()
+	defer b.Close(context.Background())
 
 	ctx := context.Background()
 
@@ -158,10 +158,10 @@ func TestDebouncingMapBrokerContinuousPublish(t *testing.T) {
 
 func TestDebouncingMapBrokerRemoveCancelsPending(t *testing.T) {
 	mock := &mockMapBroker{}
-	b := NewDebouncingMapBroker(mock, DebouncingMapBrokerConfig{
+	b := NewDebouncingMapBroker(nil, mock, DebouncingMapBrokerConfig{
 		Debounce: func(string) time.Duration { return 50 * time.Millisecond },
 	})
-	defer b.Close()
+	defer b.Close(context.Background())
 
 	ctx := context.Background()
 
@@ -183,10 +183,10 @@ func TestDebouncingMapBrokerRemoveCancelsPending(t *testing.T) {
 
 func TestDebouncingMapBrokerFlushThenRemove(t *testing.T) {
 	mock := &mockMapBroker{}
-	b := NewDebouncingMapBroker(mock, DebouncingMapBrokerConfig{
+	b := NewDebouncingMapBroker(nil, mock, DebouncingMapBrokerConfig{
 		Debounce: func(string) time.Duration { return 10 * time.Millisecond },
 	})
-	defer b.Close()
+	defer b.Close(context.Background())
 
 	ctx := context.Background()
 
@@ -210,10 +210,10 @@ func TestDebouncingMapBrokerFlushThenRemove(t *testing.T) {
 
 func TestDebouncingMapBrokerMultipleKeys(t *testing.T) {
 	mock := &mockMapBroker{}
-	b := NewDebouncingMapBroker(mock, DebouncingMapBrokerConfig{
+	b := NewDebouncingMapBroker(nil, mock, DebouncingMapBrokerConfig{
 		Debounce: func(string) time.Duration { return 50 * time.Millisecond },
 	})
-	defer b.Close()
+	defer b.Close(context.Background())
 
 	ctx := context.Background()
 
@@ -241,7 +241,7 @@ func TestDebouncingMapBrokerMultipleKeys(t *testing.T) {
 
 func TestDebouncingMapBrokerClose(t *testing.T) {
 	mock := &mockMapBroker{}
-	b := NewDebouncingMapBroker(mock, DebouncingMapBrokerConfig{
+	b := NewDebouncingMapBroker(nil, mock, DebouncingMapBrokerConfig{
 		Debounce: func(string) time.Duration { return 1 * time.Second },
 	})
 
@@ -253,7 +253,7 @@ func TestDebouncingMapBrokerClose(t *testing.T) {
 	require.NoError(t, err)
 
 	// Close should cancel all pending timers.
-	b.Close()
+	_ = b.Close(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -263,10 +263,10 @@ func TestDebouncingMapBrokerClose(t *testing.T) {
 
 func BenchmarkDebouncingMapBrokerPassthrough(b *testing.B) {
 	mock := &mockMapBroker{}
-	broker := NewDebouncingMapBroker(mock, DebouncingMapBrokerConfig{
+	broker := NewDebouncingMapBroker(nil, mock, DebouncingMapBrokerConfig{
 		Debounce: func(string) time.Duration { return 0 },
 	})
-	defer broker.Close()
+	defer broker.Close(context.Background())
 
 	ctx := context.Background()
 	opts := MapPublishOptions{Data: []byte("data")}
@@ -280,10 +280,10 @@ func BenchmarkDebouncingMapBrokerPassthrough(b *testing.B) {
 
 func BenchmarkDebouncingMapBrokerDebounce(b *testing.B) {
 	mock := &mockMapBroker{}
-	broker := NewDebouncingMapBroker(mock, DebouncingMapBrokerConfig{
+	broker := NewDebouncingMapBroker(nil, mock, DebouncingMapBrokerConfig{
 		Debounce: func(string) time.Duration { return 1 * time.Hour }, // never fires during bench
 	})
-	defer broker.Close()
+	defer broker.Close(context.Background())
 
 	ctx := context.Background()
 	opts := MapPublishOptions{Data: []byte("data")}
@@ -300,10 +300,10 @@ func BenchmarkDebouncingMapBrokerDebounce(b *testing.B) {
 
 func BenchmarkDebouncingMapBrokerDebounceParallel(b *testing.B) {
 	mock := &mockMapBroker{}
-	broker := NewDebouncingMapBroker(mock, DebouncingMapBrokerConfig{
+	broker := NewDebouncingMapBroker(nil, mock, DebouncingMapBrokerConfig{
 		Debounce: func(string) time.Duration { return 1 * time.Hour },
 	})
-	defer broker.Close()
+	defer broker.Close(context.Background())
 
 	ctx := context.Background()
 	opts := MapPublishOptions{Data: []byte("data")}

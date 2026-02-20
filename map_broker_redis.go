@@ -361,12 +361,8 @@ func (e *RedisMapBroker) cleanupRegistrationKeyForChannel(s *RedisShard, ch stri
 	if !s.isCluster {
 		return e.conf.Prefix + ":cleanup:channels"
 	}
-	if e.conf.NumShardedPubSubPartitions > 0 {
-		idx := consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
-		return e.conf.Prefix + ":cleanup:channels:{" + strconv.Itoa(idx) + "}"
-	}
-	// For non-sharded cluster, use channel-based hashtag.
-	return e.conf.Prefix + ":cleanup:channels:{" + ch + "}"
+	idx := consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
+	return e.conf.Prefix + ":cleanup:channels:{" + strconv.Itoa(idx) + "}"
 }
 
 func (e *RedisMapBroker) resultCacheKey(s *RedisShard, ch string, idempotencyKey string) string {
@@ -381,29 +377,19 @@ func (e *RedisMapBroker) resultCacheKey(s *RedisShard, ch string, idempotencyKey
 		return builder.String()
 	}
 
-	var builder strings.Builder
+	idx := consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
+	idxStr := strconv.Itoa(idx)
 
-	if e.conf.NumShardedPubSubPartitions > 0 {
-		idx := consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
-		idxStr := strconv.Itoa(idx)
-		capacity := len(e.conf.Prefix) + 9 + 1 + len(idxStr) + 2 + len(ch) + 1 + len(idempotencyKey)
-		builder.Grow(capacity)
-		builder.WriteString(e.conf.Prefix)
-		builder.WriteString(".result.{")
-		builder.WriteString(idxStr)
-		builder.WriteString("}.")
-		builder.WriteString(ch)
-		builder.WriteByte('.')
-		builder.WriteString(idempotencyKey)
-	} else {
-		capacity := len(e.conf.Prefix) + 9 + 1 + len(ch) + 2 + len(idempotencyKey)
-		builder.Grow(capacity)
-		builder.WriteString(e.conf.Prefix)
-		builder.WriteString(".result.{")
-		builder.WriteString(ch)
-		builder.WriteString("}.")
-		builder.WriteString(idempotencyKey)
-	}
+	var builder strings.Builder
+	capacity := len(e.conf.Prefix) + 9 + 1 + len(idxStr) + 2 + len(ch) + 1 + len(idempotencyKey)
+	builder.Grow(capacity)
+	builder.WriteString(e.conf.Prefix)
+	builder.WriteString(".result.{")
+	builder.WriteString(idxStr)
+	builder.WriteString("}.")
+	builder.WriteString(ch)
+	builder.WriteByte('.')
+	builder.WriteString(idempotencyKey)
 
 	return builder.String()
 }
@@ -419,43 +405,24 @@ func (e *RedisMapBroker) buildKey(s *RedisShard, ch string, infix string) string
 		return builder.String()
 	}
 
-	var builder strings.Builder
+	idx := consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
+	idxStr := strconv.Itoa(idx)
 
-	if e.conf.NumShardedPubSubPartitions > 0 {
-		idx := consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
-		idxStr := strconv.Itoa(idx)
-		capacity := len(e.conf.Prefix) + len(infix) + 1 + len(idxStr) + 2 + len(ch)
-		builder.Grow(capacity)
-		builder.WriteString(e.conf.Prefix)
-		builder.WriteString(infix)
-		builder.WriteByte('{')
-		builder.WriteString(idxStr)
-		builder.WriteString("}.")
-		builder.WriteString(ch)
-	} else {
-		capacity := len(e.conf.Prefix) + len(infix) + 1 + len(ch) + 1
-		builder.Grow(capacity)
-		builder.WriteString(e.conf.Prefix)
-		builder.WriteString(infix)
-		builder.WriteByte('{')
-		builder.WriteString(ch)
-		builder.WriteByte('}')
-	}
+	var builder strings.Builder
+	capacity := len(e.conf.Prefix) + len(infix) + 1 + len(idxStr) + 2 + len(ch)
+	builder.Grow(capacity)
+	builder.WriteString(e.conf.Prefix)
+	builder.WriteString(infix)
+	builder.WriteByte('{')
+	builder.WriteString(idxStr)
+	builder.WriteString("}.")
+	builder.WriteString(ch)
 
 	return builder.String()
 }
 
 func (e *RedisMapBroker) messageChannelID(s *RedisShard, ch string) string {
 	if !e.useShardedPubSub(s) {
-		if s.isCluster {
-			var builder strings.Builder
-			builder.Grow(len(e.messagePrefix) + 1 + len(ch) + 1)
-			builder.WriteString(e.messagePrefix)
-			builder.WriteByte('{')
-			builder.WriteString(ch)
-			builder.WriteByte('}')
-			return builder.String()
-		}
 		var builder strings.Builder
 		builder.Grow(len(e.messagePrefix) + len(ch))
 		builder.WriteString(e.messagePrefix)
@@ -556,15 +523,12 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		}
 		protoPub.Delta = opts.UseDelta
 
-		push := &protocol.Push{
-			Pub: protoPub,
-		}
-		pushBytes, err := push.MarshalVT()
+		pubBytes, err := protoPub.MarshalVT()
 		if err != nil {
 			return MapPublishResult{}, err
 		}
 
-		payload := "0::" + convert.BytesToString(pushBytes)
+		payload := "0::" + convert.BytesToString(pubBytes)
 
 		chID := e.messageChannelID(s.shard, ch)
 		if e.useShardedPubSub(s.shard) {
@@ -651,8 +615,6 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 	metaExpire := "0"
 	if chOpts.MetaTTL > 0 {
 		metaExpire = strconv.Itoa(int(chOpts.MetaTTL.Seconds()))
-	} else if e.node.config.HistoryMetaTTL > 0 {
-		metaExpire = strconv.Itoa(int(e.node.config.HistoryMetaTTL.Seconds()))
 	}
 
 	useDelta := "0"
@@ -808,8 +770,6 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 	metaExpire := "0"
 	if chOpts.MetaTTL > 0 {
 		metaExpire = strconv.Itoa(int(chOpts.MetaTTL.Seconds()))
-	} else if e.node.config.HistoryMetaTTL > 0 {
-		metaExpire = strconv.Itoa(int(e.node.config.HistoryMetaTTL.Seconds()))
 	}
 
 	publishCommand := "PUBLISH"
@@ -948,9 +908,9 @@ func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadS
 		return MapStateResult{Position: streamResult.Position}, nil
 	}
 	if chOpts.Ordered {
-		return e.readOrderedState(ctx, ch, opts)
+		return e.readOrderedState(ctx, ch, opts, chOpts)
 	}
-	return e.readUnorderedState(ctx, ch, opts)
+	return e.readUnorderedState(ctx, ch, opts, chOpts)
 }
 
 func (e *RedisMapBroker) ReadStateZero(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
@@ -975,9 +935,9 @@ func (e *RedisMapBroker) ReadStateZero(ctx context.Context, ch string, opts MapR
 		return MapStateResult{Position: streamResult.Position}, nil
 	}
 	if chOpts.Ordered {
-		return e.readOrderedState(ctx, ch, opts)
+		return e.readOrderedState(ctx, ch, opts, chOpts)
 	}
-	return e.readUnorderedStateZero(ctx, ch, opts)
+	return e.readUnorderedStateZero(ctx, ch, opts, chOpts)
 }
 
 // readSingleKeyWithOpts retrieves a single key from the state using HGET instead of HSCAN.
@@ -1072,14 +1032,9 @@ func (e *RedisMapBroker) readSingleKeyWithOpts(ctx context.Context, ch string, o
 	return MapStateResult{Publications: []*Publication{pub}, Position: streamPos}, nil
 }
 
-func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
+func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts MapReadStateOptions, chOpts MapChannelOptions) (MapStateResult, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
-
-	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
-	if err != nil {
-		return MapStateResult{}, err
-	}
 
 	stateTTL := "0"
 	if chOpts.MetaTTL > 0 {
@@ -1115,7 +1070,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 			cursor,
 			strconv.Itoa(luaLimit),
 			strconv.FormatInt(time.Now().Unix(), 10),
-			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10),
+			strconv.FormatInt(int64(chOpts.MetaTTL.Seconds()), 10),
 			stateTTL,
 			streamlessFlag,
 		},
@@ -1178,13 +1133,9 @@ func (e *RedisMapBroker) readUnorderedStateZero(
 	ctx context.Context,
 	ch string,
 	opts MapReadStateOptions,
+	chOpts MapChannelOptions,
 ) (MapStateResult, error) {
 	s := e.getShard(ch)
-
-	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
-	if err != nil {
-		return MapStateResult{}, err
-	}
 
 	stateTTL := "0"
 	if chOpts.MetaTTL > 0 {
@@ -1213,7 +1164,7 @@ func (e *RedisMapBroker) readUnorderedStateZero(
 		luaLimit = 0
 	}
 
-	err = e.readUnorderedScript.ExecWithReader(
+	err := e.readUnorderedScript.ExecWithReader(
 		ctx,
 		s.shard.client,
 		[]string{
@@ -1226,7 +1177,7 @@ func (e *RedisMapBroker) readUnorderedStateZero(
 			cursor,
 			strconv.Itoa(luaLimit),
 			strconv.FormatInt(time.Now().Unix(), 10),
-			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10),
+			strconv.FormatInt(int64(chOpts.MetaTTL.Seconds()), 10),
 			stateTTL,
 			streamlessFlag,
 		},
@@ -1330,14 +1281,9 @@ func (e *RedisMapBroker) readUnorderedStateZero(
 
 // readOrderedState uses key-based cursor pagination for continuity.
 // Cursor format: "score\x00key" to ensure no entries are skipped during concurrent modifications.
-func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
+func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts MapReadStateOptions, chOpts MapChannelOptions) (MapStateResult, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
-
-	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
-	if err != nil {
-		return MapStateResult{}, err
-	}
 
 	stateTTL := "0"
 	if chOpts.MetaTTL > 0 {
@@ -1380,7 +1326,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 			cursorScore,                              // ARGV[2] = cursor_score
 			cursorKey,                                // ARGV[3] = cursor_key
 			strconv.FormatInt(time.Now().Unix(), 10), // ARGV[4] = now
-			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10), // ARGV[5] = meta_ttl
+			strconv.FormatInt(int64(chOpts.MetaTTL.Seconds()), 10), // ARGV[5] = meta_ttl
 			stateTTL,       // ARGV[6] = state_ttl
 			streamlessFlag, // ARGV[7] = streamless
 			ascFlag,        // ARGV[8] = asc ("1" = ascending, "0" = descending)
@@ -1495,8 +1441,6 @@ func (e *RedisMapBroker) ReadStreamZero(
 	metaExpire := "0"
 	if chOpts.MetaTTL > 0 {
 		metaExpire = strconv.Itoa(int(chOpts.MetaTTL.Seconds()))
-	} else if e.node.config.HistoryMetaTTL > 0 {
-		metaExpire = strconv.Itoa(int(e.node.config.HistoryMetaTTL.Seconds()))
 	}
 
 	includePubsStr := "0"
@@ -1720,8 +1664,6 @@ func (e *RedisMapBroker) ReadStreamZero2(ctx context.Context, ch string, opts Ma
 	metaExpire := "0"
 	if chOpts.MetaTTL > 0 {
 		metaExpire = strconv.Itoa(int(chOpts.MetaTTL.Seconds()))
-	} else if e.node.config.HistoryMetaTTL > 0 {
-		metaExpire = strconv.Itoa(int(e.node.config.HistoryMetaTTL.Seconds()))
 	}
 
 	// 2. Call 1: Get metadata with ExecWithReader (zero-alloc)
@@ -1970,8 +1912,6 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 	metaExpire := "0"
 	if chOpts.MetaTTL > 0 {
 		metaExpire = strconv.Itoa(int(chOpts.MetaTTL.Seconds()))
-	} else if e.node.config.HistoryMetaTTL > 0 {
-		metaExpire = strconv.Itoa(int(e.node.config.HistoryMetaTTL.Seconds()))
 	}
 
 	includePubsStr := "0"
@@ -2131,8 +2071,6 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 	metaExpire := "0"
 	if chOpts.MetaTTL > 0 {
 		metaExpire = strconv.Itoa(int(chOpts.MetaTTL.Seconds()))
-	} else if e.node.config.HistoryMetaTTL > 0 {
-		metaExpire = strconv.Itoa(int(e.node.config.HistoryMetaTTL.Seconds()))
 	}
 
 	// 2. Call 1: Get metadata using new simpler Lua script
@@ -2580,10 +2518,8 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 			strconv.FormatInt(int64(chOpts.StreamTTL.Seconds()), 10), // ARGV[6]: stream_ttl
 			metaExpire,     // ARGV[7]: meta_expire
 			e.node.ID(),    // ARGV[8]: new_epoch_if_empty
-			"0",            // ARGV[9]: use_hexpire
-			ch,             // ARGV[10]: channel_for_cleanup
-			"1",            // ARGV[11]: force_consistency
-			streamlessFlag, // ARGV[12]: streamless ("1" = skip stream/meta, "0" = normal)
+			ch,             // ARGV[9]: channel_for_cleanup
+			streamlessFlag, // ARGV[10]: streamless ("1" = skip stream/meta, "0" = normal)
 		},
 	).ToArray()
 	return err
@@ -2651,7 +2587,7 @@ func (e *RedisMapBroker) pubSubShardChannelID(clusterShardIndex int, psShardInde
 	return builder.String()
 }
 
-func (e *RedisMapBroker) extractChannel(isCluster bool, chID string) string {
+func (e *RedisMapBroker) extractChannel(chID string) string {
 	ch := strings.TrimPrefix(chID, e.messagePrefix)
 
 	// Handle sharded PUB/SUB case: {idx}.channel
@@ -2666,15 +2602,6 @@ func (e *RedisMapBroker) extractChannel(isCluster bool, chID string) string {
 		return "" // Invalid: missing dot separator
 	}
 
-	// Handle cluster case: must have {channel} format
-	if isCluster {
-		channelLen := len(ch)
-		if channelLen < 2 || ch[0] != '{' || ch[channelLen-1] != '}' {
-			return ""
-		}
-		return ch[1 : channelLen-1]
-	}
-
 	// Non-cluster: plain channel name
 	return ch
 }
@@ -2686,7 +2613,7 @@ func (e *RedisMapBroker) handleRedisClientMessage(isCluster bool, eventHandler B
 		return fmt.Errorf("malformed pub/sub data: %w", err)
 	}
 
-	channel := e.extractChannel(isCluster, chID)
+	channel := e.extractChannel(chID)
 	if channel == "" {
 		return fmt.Errorf("unsupported channel: %s", chID)
 	}

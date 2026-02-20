@@ -224,6 +224,8 @@ type Config struct {
 	// GetMapChannelOptions returns channel options for map channels.
 	// Required for map channel operations. If nil, any map operation returns an error.
 	// Each channel must have SyncMode and RetentionMode explicitly set.
+	// NOTE: this callback is invoked on every broker operation (Publish, Remove,
+	// ReadState, ReadStream, etc.) — it must be fast and should not perform I/O.
 	GetMapChannelOptions func(channel string) MapChannelOptions
 }
 

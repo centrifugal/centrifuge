@@ -168,9 +168,6 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 		return result, nil
 	}
 
-	statePub.Offset = streamTop.Offset
-	streamPub.Offset = streamTop.Offset
-
 	if opts.IdempotencyKey != "" {
 		resultExpireSeconds := int64(defaultIdempotentResultExpireSeconds)
 		if opts.IdempotentResultTTL != 0 {
@@ -639,13 +636,24 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 
 		h.Lock()
 		channel, ok := h.channels[event.channel]
-		if ok && channel.stream != nil {
-			if event.streamSize > 0 {
-				offset, _ := channel.stream.Add(removePub, event.streamSize, 0, "")
-				removePub.Offset = offset
-				streamPos = StreamPosition{Offset: offset, Epoch: channel.stream.Epoch()}
-			} else {
-				streamPos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
+		if ok {
+			// Check if the key was re-added between Phase 1 and Phase 2.
+			// A concurrent Publish may have re-inserted the key into state.
+			if _, keyExists := channel.state[event.key]; keyExists {
+				h.Unlock()
+				if mu != nil {
+					mu.Unlock()
+				}
+				continue
+			}
+			if channel.stream != nil {
+				if event.streamSize > 0 {
+					offset, _ := channel.stream.Add(removePub, event.streamSize, 0, "")
+					removePub.Offset = offset
+					streamPos = StreamPosition{Offset: offset, Epoch: channel.stream.Epoch()}
+				} else {
+					streamPos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
+				}
 			}
 		}
 		h.Unlock()
@@ -698,6 +706,9 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 			scores:  make(map[string]int64),
 		}
 		h.channels[ch] = channel
+	} else if chOpts.Ordered && !channel.ordered {
+		channel.ordered = true
+		channel.sortedKeysDirty = true
 	}
 
 	// Check KeyMode condition before proceeding
@@ -1031,9 +1042,7 @@ func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) (MapStreamResul
 		}
 		pubs := make([]*Publication, len(items))
 		for i, item := range items {
-			pub := item.Value.(*Publication)
-			pub.Offset = item.Offset // Set offset from stream item
-			pubs[i] = pub
+			pubs[i] = item.Value.(*Publication)
 		}
 		h.RUnlock()
 		return MapStreamResult{Publications: pubs, Position: streamPosition}, nil
@@ -1067,9 +1076,7 @@ func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) (MapStreamResul
 
 	pubs := make([]*Publication, len(items))
 	for i, item := range items {
-		pub := item.Value.(*Publication)
-		pub.Offset = item.Offset // Set offset from stream item
-		pubs[i] = pub
+		pubs[i] = item.Value.(*Publication)
 	}
 	h.RUnlock()
 	return MapStreamResult{Publications: pubs, Position: streamPosition}, nil
@@ -1093,38 +1100,35 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) (MapStateResult, 
 		h.Unlock()
 	}
 
-	// Acquire read lock to get channel pointer.
-	// Use bounded retry loop to handle TOCTOU between RUnlock and Lock upgrade:
-	// if channel is created by another goroutine between our RUnlock and Lock,
-	// we retry under RLock instead of recursing (prevents theoretical infinite recursion).
-	var channel *mapChannel
-	for attempts := 0; ; attempts++ {
-		h.RLock()
-		var ok bool
-		channel, ok = h.channels[ch]
-		if ok {
-			break // Channel found — proceed with read under RLock.
-		}
+	// Acquire read lock to find the channel. If not found, upgrade to write lock
+	// to create stream position (establishing the epoch for consistency).
+	h.RLock()
+	channel, ok := h.channels[ch]
+	if !ok {
 		h.RUnlock()
 		// Channel not found — need write lock to create stream position.
 		h.Lock()
-		// Re-check after acquiring write lock (TOCTOU: another goroutine may have created it).
-		if _, exists := h.channels[ch]; exists {
-			h.Unlock()
-			if attempts >= 2 {
-				// Extremely unlikely: channel keeps getting created/deleted.
-				return MapStateResult{}, nil
+		if _, exists := h.channels[ch]; !exists {
+			// Still not found under write lock — create and return.
+			if opts.Revision != nil && opts.Revision.Epoch != "" {
+				pos := h.createStreamPosition(ch)
+				h.Unlock()
+				return MapStateResult{Position: pos}, ErrorUnrecoverablePosition
 			}
-			continue // Retry under RLock.
-		}
-		if opts.Revision != nil && opts.Revision.Epoch != "" {
 			pos := h.createStreamPosition(ch)
 			h.Unlock()
-			return MapStateResult{Position: pos}, ErrorUnrecoverablePosition
+			return MapStateResult{Position: pos}, nil
 		}
-		pos := h.createStreamPosition(ch)
+		// Channel was created by another goroutine between RUnlock and Lock.
+		// Release write lock and re-acquire read lock for the read path.
 		h.Unlock()
-		return MapStateResult{Position: pos}, nil
+		h.RLock()
+		channel, ok = h.channels[ch]
+		if !ok {
+			// Deleted in the tiny window between Unlock and RLock (virtually impossible).
+			h.RUnlock()
+			return MapStateResult{}, nil
+		}
 	}
 
 	// Channel found — hold RLock for reads, channel.mu for sorted keys.

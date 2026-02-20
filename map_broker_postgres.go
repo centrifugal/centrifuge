@@ -3,7 +3,6 @@ package centrifuge
 import (
 	"context"
 	_ "embed"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/epoch"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5"
@@ -68,6 +66,19 @@ func newPgNames(binary bool) pgNames {
 //
 // Use cases: collaborative boards, document editing, inventory/booking systems,
 // game lobbies with persistent state.
+
+// durationToIntervalString converts a time.Duration to a PostgreSQL interval string.
+// Uses milliseconds for sub-second precision, seconds otherwise.
+// Durations under 1 second are rounded up to 1 second.
+func durationToIntervalString(d time.Duration) string {
+	secs := int(d.Seconds())
+	if secs > 0 {
+		return strconv.Itoa(secs) + " seconds"
+	}
+	// Sub-second duration — round up to 1 second minimum.
+	return "1 seconds"
+}
+
 type PostgresMapBroker struct {
 	node         *Node
 	conf         PostgresMapBrokerConfig
@@ -81,8 +92,6 @@ type PostgresMapBroker struct {
 	cancelFunc   context.CancelFunc
 
 	// WAL reader state (used when WAL.Enabled = true)
-	walReaders        []*walShardReader
-	walReaderMu       sync.Mutex
 	walClaimedShards  map[int]bool
 	walClaimedShardMu sync.RWMutex
 
@@ -595,7 +604,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 	// Prepare client info fields
 	var clientID, userID *string
 	var connInfo, chanInfo []byte
-	var subscribedAt *time.Time
+	var publishedAt *time.Time
 	if opts.ClientInfo != nil {
 		if opts.ClientInfo.ClientID != "" {
 			clientID = &opts.ClientInfo.ClientID
@@ -606,7 +615,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		connInfo = opts.ClientInfo.ConnInfo
 		chanInfo = opts.ClientInfo.ChanInfo
 		now := time.Now()
-		subscribedAt = &now
+		publishedAt = &now
 	}
 
 	// Prepare tags JSON
@@ -628,15 +637,15 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 	//   = 0: disabled (send NULL — SQL treats NULL as "no TTL")
 	var keyTTL, streamTTL, metaTTL, idempotencyTTL *string
 	if chOpts.KeyTTL > 0 {
-		s := strconv.Itoa(int(chOpts.KeyTTL.Seconds())) + " seconds"
+		s := durationToIntervalString(chOpts.KeyTTL)
 		keyTTL = &s
 	}
 	if chOpts.StreamTTL > 0 {
-		s := strconv.Itoa(int(chOpts.StreamTTL.Seconds())) + " seconds"
+		s := durationToIntervalString(chOpts.StreamTTL)
 		streamTTL = &s
 	}
 	if chOpts.MetaTTL > 0 {
-		s := strconv.Itoa(int(chOpts.MetaTTL.Seconds())) + " seconds"
+		s := durationToIntervalString(chOpts.MetaTTL)
 		metaTTL = &s
 	}
 	idempotentResultTTL := opts.IdempotentResultTTL
@@ -644,7 +653,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		idempotentResultTTL = e.conf.IdempotentResultTTL
 	}
 	if opts.IdempotencyKey != "" && idempotentResultTTL > 0 {
-		s := strconv.Itoa(int(idempotentResultTTL.Seconds())) + " seconds"
+		s := durationToIntervalString(idempotentResultTTL)
 		idempotencyTTL = &s
 	}
 
@@ -709,7 +718,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		FROM %s($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::interval, $12::interval, $13, $14::interval, $15, $16, $17, $18, $19, $20, $21, $22::interval, $23, $24, $25, $26)
 	`, e.names.publish),
 		ch, key, opts.Data, tagsJSON,
-		clientID, userID, connInfo, chanInfo, subscribedAt,
+		clientID, userID, connInfo, chanInfo, publishedAt,
 		keyMode, keyTTL, streamTTL, streamSize, metaTTL,
 		expectedOffset, score, nil, nil, // p_version, p_version_epoch (unused, per-key version used instead)
 		keyVersion, keyVersionEpoch,
@@ -766,11 +775,11 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 	// NULL = no TTL, > 0 = use as-is.
 	var streamTTL, metaTTL, idempotencyTTL *string
 	if chOpts.StreamTTL > 0 {
-		s := strconv.Itoa(int(chOpts.StreamTTL.Seconds())) + " seconds"
+		s := durationToIntervalString(chOpts.StreamTTL)
 		streamTTL = &s
 	}
 	if chOpts.MetaTTL > 0 {
-		s := strconv.Itoa(int(chOpts.MetaTTL.Seconds())) + " seconds"
+		s := durationToIntervalString(chOpts.MetaTTL)
 		metaTTL = &s
 	}
 	idempotentResultTTL := opts.IdempotentResultTTL
@@ -778,7 +787,7 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 		idempotentResultTTL = e.conf.IdempotentResultTTL
 	}
 	if opts.IdempotencyKey != "" && idempotentResultTTL > 0 {
-		s := strconv.Itoa(int(idempotentResultTTL.Seconds())) + " seconds"
+		s := durationToIntervalString(idempotentResultTTL)
 		idempotencyTTL = &s
 	}
 
@@ -1023,29 +1032,17 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 		raw := rows.RawValues()
 		backing = append(backing, Publication{})
 		p := &backing[len(backing)-1]
-		p.Key = arena.copyString(raw[0])
-		if raw[1] != nil {
-			p.Data = arena.copyBytes(raw[1])
-		}
-		if raw[2] != nil {
-			pgxParseJSONB(raw[2], &p.Tags)
-		}
-		if raw[3] != nil {
-			p.Offset = binary.BigEndian.Uint64(raw[3])
-		}
-		if raw[4] != nil {
-			p.Score = int64(binary.BigEndian.Uint64(raw[4]))
-		}
+		p.Key = pgRawString(&arena, raw[0])
+		p.Data = pgRawBytes(&arena, raw[1])
+		p.Tags = pgRawJSONBMap(raw[2])
+		p.Offset = pgRawUint64(raw[3])
+		p.Score = pgRawInt64(raw[4])
 		if raw[5] != nil {
-			p.Info = &ClientInfo{ClientID: arena.copyString(raw[5])}
-			if raw[6] != nil {
-				p.Info.UserID = arena.copyString(raw[6])
-			}
-			if raw[7] != nil {
-				p.Info.ConnInfo = arena.copyBytes(raw[7])
-			}
-			if raw[8] != nil {
-				p.Info.ChanInfo = arena.copyBytes(raw[8])
+			p.Info = &ClientInfo{
+				ClientID: pgRawString(&arena, raw[5]),
+				UserID:   pgRawString(&arena, raw[6]),
+				ConnInfo: pgRawBytes(&arena, raw[7]),
+				ChanInfo: pgRawBytes(&arena, raw[8]),
 			}
 		}
 		pubs = append(pubs, p)
@@ -1185,32 +1182,18 @@ func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapR
 		raw := rows.RawValues()
 		backing = append(backing, Publication{})
 		p := &backing[len(backing)-1]
-		p.Key = arena.copyString(raw[0])
-		if raw[1] != nil {
-			p.Data = arena.copyBytes(raw[1])
-		}
-		if raw[2] != nil {
-			pgxParseJSONB(raw[2], &p.Tags)
-		}
-		if raw[3] != nil {
-			p.Offset = binary.BigEndian.Uint64(raw[3])
-		}
-		if raw[4] != nil && raw[4][0] == 1 {
-			p.Removed = true
-		}
-		if raw[5] != nil {
-			p.Score = int64(binary.BigEndian.Uint64(raw[5]))
-		}
+		p.Key = pgRawString(&arena, raw[0])
+		p.Data = pgRawBytes(&arena, raw[1])
+		p.Tags = pgRawJSONBMap(raw[2])
+		p.Offset = pgRawUint64(raw[3])
+		p.Removed = pgRawBool(raw[4])
+		p.Score = pgRawInt64(raw[5])
 		if raw[6] != nil {
-			p.Info = &ClientInfo{ClientID: arena.copyString(raw[6])}
-			if raw[7] != nil {
-				p.Info.UserID = arena.copyString(raw[7])
-			}
-			if raw[8] != nil {
-				p.Info.ConnInfo = arena.copyBytes(raw[8])
-			}
-			if raw[9] != nil {
-				p.Info.ChanInfo = arena.copyBytes(raw[9])
+			p.Info = &ClientInfo{
+				ClientID: pgRawString(&arena, raw[6]),
+				UserID:   pgRawString(&arena, raw[7]),
+				ConnInfo: pgRawBytes(&arena, raw[8]),
+				ChanInfo: pgRawBytes(&arena, raw[9]),
 			}
 		}
 		pubs = append(pubs, p)
@@ -1267,16 +1250,6 @@ func (e *PostgresMapBroker) Clear(ctx context.Context, ch string, _ MapClearOpti
 // ============================================================================
 // WAL Reader Implementation
 // ============================================================================
-
-// walShardReader represents a reader for a specific shard of the WAL stream.
-type walShardReader struct {
-	broker      *PostgresMapBroker
-	shardID     int
-	conn        *pgconn.PgConn
-	running     atomic.Bool
-	slotName    string
-	publication string
-}
 
 // runWALReaderForShard attempts to claim and read a shard using advisory locks.
 func (e *PostgresMapBroker) runWALReaderForShard(shardID int) {
@@ -1786,11 +1759,11 @@ func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 		}
 		var streamTTL, metaTTL *string
 		if chOpts.StreamTTL > 0 {
-			s := strconv.Itoa(int(chOpts.StreamTTL.Seconds())) + " seconds"
+			s := durationToIntervalString(chOpts.StreamTTL)
 			streamTTL = &s
 		}
 		if chOpts.MetaTTL > 0 {
-			s := strconv.Itoa(int(chOpts.MetaTTL.Seconds())) + " seconds"
+			s := durationToIntervalString(chOpts.MetaTTL)
 			metaTTL = &s
 		}
 
@@ -2112,59 +2085,35 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int,
 	for rows.Next() {
 		raw := rows.RawValues()
 
-		// Parse id (int8, big-endian).
-		id := int64(binary.BigEndian.Uint64(raw[0]))
+		id := pgRawInt64(raw[0])
 		if id > maxID {
 			maxID = id
 		}
 
-		// Build Publication directly — no intermediate streamRow.
 		pubBacking = append(pubBacking, Publication{})
 		p := &pubBacking[len(pubBacking)-1]
 
-		// channel_offset (int8).
-		p.Offset = binary.BigEndian.Uint64(raw[3])
-		// key (text).
-		p.Key = arena.copyString(raw[5])
-		// data (bytea).
-		if raw[6] != nil {
-			p.Data = arena.copyBytes(raw[6])
-		}
-		// tags (jsonb).
-		if raw[7] != nil {
-			pgxParseJSONB(raw[7], &p.Tags)
-		}
-		// removed (bool).
-		if raw[8] != nil && raw[8][0] == 1 {
-			p.Removed = true
-		}
-		// score (int8, nullable).
-		if raw[9] != nil {
-			p.Score = int64(binary.BigEndian.Uint64(raw[9]))
-		}
-		// client_id (text, nullable).
+		p.Offset = pgRawUint64(raw[3])
+		p.Key = pgRawString(&arena, raw[5])
+		p.Data = pgRawBytes(&arena, raw[6])
+		p.Tags = pgRawJSONBMap(raw[7])
+		p.Removed = pgRawBool(raw[8])
+		p.Score = pgRawInt64(raw[9])
 		if raw[10] != nil {
-			infoBacking = append(infoBacking, ClientInfo{ClientID: arena.copyString(raw[10])})
+			infoBacking = append(infoBacking, ClientInfo{
+				ClientID: pgRawString(&arena, raw[10]),
+				UserID:   pgRawString(&arena, raw[11]),
+				ConnInfo: pgRawBytes(&arena, raw[12]),
+				ChanInfo: pgRawBytes(&arena, raw[13]),
+			})
 			p.Info = &infoBacking[len(infoBacking)-1]
-			if raw[11] != nil {
-				p.Info.UserID = arena.copyString(raw[11])
-			}
-			if raw[12] != nil {
-				p.Info.ConnInfo = arena.copyBytes(raw[12])
-			}
-			if raw[13] != nil {
-				p.Info.ChanInfo = arena.copyBytes(raw[13])
-			}
 		}
 
-		// Collect per-row metadata not part of Publication.
 		m := outboxMeta{
-			id:      id,
-			channel: arena.copyString(raw[2]),
-			epoch:   arena.copyString(raw[4]),
-		}
-		if raw[14] != nil {
-			m.previousData = arena.copyBytes(raw[14])
+			id:           id,
+			channel:      pgRawString(&arena, raw[2]),
+			epoch:        pgRawString(&arena, raw[4]),
+			previousData: pgRawBytes(&arena, raw[14]),
 		}
 		buf.metas = append(buf.metas, m)
 	}
@@ -2220,49 +2169,3 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int,
 	return len(buf.metas), maxID, nil
 }
 
-// pgxParseJSONB parses JSONB binary wire format (1-byte version header + JSON)
-// into a map[string]string. Does nothing if b is nil or too short.
-func pgxParseJSONB(b []byte, dst *map[string]string) {
-	if len(b) > 1 {
-		_ = json.Unmarshal(b[1:], dst) // skip version byte
-	}
-}
-
-// byteArena is a chunked arena allocator for byte data. It copies incoming
-// slices into a contiguous buffer and hands back sub-slices (or strings via
-// unsafe conversion). When the current chunk is full a new one is allocated;
-// old chunks stay alive via the slices/strings already referencing them.
-type byteArena struct {
-	buf []byte
-}
-
-// copyBytes copies src into the arena and returns a sub-slice of the arena buffer.
-// The returned slice has cap==len (three-index slice) so that append on it
-// cannot silently overwrite adjacent arena data.
-func (a *byteArena) copyBytes(src []byte) []byte {
-	n := len(src)
-	if n == 0 {
-		return nil
-	}
-	if cap(a.buf)-len(a.buf) < n {
-		newCap := 2 * cap(a.buf)
-		if newCap < n {
-			newCap = n
-		}
-		if newCap < 4096 {
-			newCap = 4096
-		}
-		a.buf = make([]byte, 0, newCap)
-	}
-	start := len(a.buf)
-	a.buf = append(a.buf, src...)
-	return a.buf[start : start+n : start+n]
-}
-
-// copyString copies src into the arena and returns a string backed by arena memory.
-func (a *byteArena) copyString(src []byte) string {
-	if len(src) == 0 {
-		return ""
-	}
-	return convert.BytesToString(a.copyBytes(src))
-}

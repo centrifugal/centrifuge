@@ -32,10 +32,8 @@ Storage format in state hash: offset:epoch:publication_bytes
 -- ARGV[6]  = stream_ttl (seconds)
 -- ARGV[7]  = meta_expire (seconds, "0" to disable)
 -- ARGV[8]  = new_epoch_if_empty
--- ARGV[9]  = use_hexpire ("0" or "1")
--- ARGV[10] = channel_for_cleanup_zset (channel name to update in cleanup ZSET)
--- ARGV[11] = force_consistency ("0" or "1" - force epoch change on eviction)
--- ARGV[12] = streamless ("1" = skip stream/meta operations, "0" = normal streamed mode)
+-- ARGV[9]  = channel_for_cleanup_zset (channel name to update in cleanup ZSET)
+-- ARGV[10] = streamless ("1" = skip stream/meta operations, "0" = normal streamed mode)
 
 local state_hash_key = KEYS[1]
 local state_expire_key = KEYS[2]
@@ -53,8 +51,8 @@ local stream_size = ARGV[5]
 local stream_ttl = ARGV[6]
 local meta_expire = ARGV[7]
 local new_epoch_if_empty = ARGV[8]
-local channel_for_cleanup = ARGV[10]
-local streamless = ARGV[12] == "1"
+local channel_for_cleanup = ARGV[9]
+local streamless = ARGV[10] == "1"
 
 -- Helper: encode an integer as a protobuf varint
 local function encode_varint(value)

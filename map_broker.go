@@ -373,7 +373,7 @@ func resolveAndValidateMapChannelOptions(resolver func(channel string) MapChanne
 		}
 	}
 	if opts.RetentionMode == MapRetentionPermanent {
-		if opts.KeyTTL > 0 {
+		if opts.KeyTTL != 0 {
 			return MapChannelOptions{}, errors.New("KeyTTL must be 0 for RetentionMode Permanent (entries don't expire)")
 		}
 	}

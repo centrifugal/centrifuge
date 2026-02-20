@@ -109,7 +109,7 @@ func main() {
 	}
 	// Wrap with debouncing for cursors channel — coalesces rapid cursor updates
 	// on the server side before forwarding to the backend.
-	mapBroker = centrifuge.NewDebouncingMapBroker(mapBroker, centrifuge.DebouncingMapBrokerConfig{
+	mapBroker = centrifuge.NewDebouncingMapBroker(node, mapBroker, centrifuge.DebouncingMapBrokerConfig{
 		Debounce: func(channel string) time.Duration {
 			if channel == "cursors" {
 				return 200 * time.Millisecond

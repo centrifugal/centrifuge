@@ -3091,7 +3091,7 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 	// TODO: also, normal sub flow should look at len(c.mapSubscribing) also.
 
 	// Regular subscription validation.
-	numChannels := len(c.channels)
+	numChannels := len(c.channels) + len(c.mapSubscribing)
 	_, ok := c.channels[channel]
 	if ok {
 		c.mu.Unlock()
@@ -4057,7 +4057,7 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 				c.node.logger.log(newErrorLogEntry(err, "error removing channel presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			}
 		}
-		if channelHasFlag(chCtx.flags, flagEmitPresence) {
+		if !channelHasFlag(chCtx.flags, flagMap) && channelHasFlag(chCtx.flags, flagEmitPresence) {
 			err = c.node.removePresence(channel, c.uid, c.user)
 			if err != nil {
 				c.node.logger.log(newErrorLogEntry(err, "error removing channel presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))

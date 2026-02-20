@@ -16,27 +16,39 @@ type DebouncingMapBrokerConfig struct {
 // per (channel, key) pair. When debouncing is active, only the latest
 // Publish is forwarded to the backend after the debounce duration elapses.
 // Remove cancels any pending debounced Publish for the same (channel, key).
+//
+// When a Publish is debounced (not passed through), it returns a zero-value
+// MapPublishResult and nil error immediately. The actual backend Publish
+// happens asynchronously when the debounce timer fires. Callers should not
+// rely on MapPublishResult fields (like Position) for debounced calls.
 type DebouncingMapBroker struct {
 	MapBroker
+	node      *Node
 	conf      DebouncingMapBrokerConfig
 	debouncer *debouncer[mapDebounceValue]
 }
 
 type mapDebounceValue struct {
 	opts MapPublishOptions
-	ctx  context.Context
 }
 
 var _ MapBroker = (*DebouncingMapBroker)(nil)
 
 // NewDebouncingMapBroker creates a new DebouncingMapBroker wrapping the given backend.
-func NewDebouncingMapBroker(backend MapBroker, conf DebouncingMapBrokerConfig) *DebouncingMapBroker {
+func NewDebouncingMapBroker(node *Node, backend MapBroker, conf DebouncingMapBrokerConfig) *DebouncingMapBroker {
 	b := &DebouncingMapBroker{
 		MapBroker: backend,
+		node:      node,
 		conf:      conf,
 	}
 	b.debouncer = newDebouncer(func(channel, key string, v mapDebounceValue) {
-		_, _ = b.MapBroker.Publish(v.ctx, channel, key, v.opts)
+		_, err := b.MapBroker.Publish(context.Background(), channel, key, v.opts)
+		if err != nil && b.node != nil {
+			b.node.logger.log(newErrorLogEntry(err, "error in debounced publish", map[string]any{
+				"channel": channel,
+				"key":     key,
+			}))
+		}
 	})
 	return b
 }
@@ -50,7 +62,7 @@ func (b *DebouncingMapBroker) Publish(ctx context.Context, ch string, key string
 	if d == 0 {
 		return b.MapBroker.Publish(ctx, ch, key, opts)
 	}
-	b.debouncer.Debounce(ch, key, d, mapDebounceValue{opts: opts, ctx: ctx})
+	b.debouncer.Debounce(ch, key, d, mapDebounceValue{opts: opts})
 	return MapPublishResult{}, nil
 }
 
@@ -63,9 +75,10 @@ func (b *DebouncingMapBroker) Remove(ctx context.Context, ch string, key string,
 }
 
 // Close stops all pending debounce timers and releases resources.
-func (b *DebouncingMapBroker) Close() {
+func (b *DebouncingMapBroker) Close(ctx context.Context) error {
 	b.debouncer.Close()
 	if closer, ok := b.MapBroker.(Closer); ok {
-		defer func() { _ = closer.Close(context.Background()) }()
+		return closer.Close(ctx)
 	}
+	return nil
 }

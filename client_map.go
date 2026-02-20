@@ -414,6 +414,10 @@ func (c *Client) handleMapStatePhase(
 
 	// Check for direct STATE→LIVE transition on last page.
 	if nextCursor == "" {
+		if state == nil {
+			// Disconnect raced with MapStateRead — subscription is being cleaned up.
+			return nil
+		}
 		positioning := state.options.EnablePositioning || state.options.EnableRecovery
 
 		// Use frozen offset from first page when available (multi-page pagination).
@@ -473,21 +477,33 @@ func (c *Client) handleMapStatePhase(
 	return c.writeMapSubscribeReply(channel, cmd, res, started, rw)
 }
 
-// handleMapStateToLive handles direct transition from STATE to LIVE phase.
-// This is called on the last state page when stream is close enough to go LIVE directly.
-func (c *Client) handleMapStateToLive(
+// mapTransitionToLiveParams holds parameters that differ between the four
+// methods that transition a map subscription to the live phase. The shared
+// protocol (buffer -> subscribe -> stream-read -> merge -> respond -> finalize)
+// is implemented once in handleMapTransitionToLive.
+type mapTransitionToLiveParams struct {
+	sincePosition       StreamPosition // Stream position to read from
+	statePubs           []*Publication  // State publications for the response (nil when not applicable)
+	allowStreamless     bool           // Whether streamless mode is allowed
+	isRecovery          bool           // Whether this is a recovery (sets WasRecovering/Recovered)
+	tagsFilterFromState *tagsFilter    // Inherited tags filter from prior phase
+	metricsAction       string         // Metrics action string
+}
+
+// handleMapTransitionToLive implements the shared buffer-subscribe-read-merge protocol
+// used by all four methods that transition a map subscription to the live phase:
+// handleMapStateToLive, handleMapStreamToLive, handleMapImmediateJoin, handleMapRecoveryJoin.
+func (c *Client) handleMapTransitionToLive(
 	req *protocol.SubscribeRequest,
 	reply SubscribeReply,
-	state *mapSubscribeState,
+	opts SubscribeOptions,
+	isPresence bool,
 	cmd *protocol.Command,
 	started time.Time,
 	rw *replyWriter,
-	statePubs []*Publication,
-	statePos StreamPosition,
+	params mapTransitionToLiveParams,
 ) error {
 	channel := req.Channel
-	opts := state.options
-	isPresence := state.isPresence
 
 	// Build subscription info first, validate before subscribing.
 	useID := opts.AllowChannelCompaction && req.Flag&subscriptionFlagChannelCompression != 0
@@ -509,9 +525,9 @@ func (c *Client) handleMapStateToLive(
 			filter: req.Tf,
 			hash:   filter.Hash(req.Tf),
 		}
-	} else if state.tagsFilter != nil {
-		// Use tags filter from state pagination phase.
-		sub.tagsFilter = state.tagsFilter
+	} else if params.tagsFilterFromState != nil {
+		// Use tags filter from prior phase if not provided in this request.
+		sub.tagsFilter = params.tagsFilterFromState
 	}
 
 	// Negotiate delta type if requested.
@@ -545,10 +561,10 @@ func (c *Client) handleMapStateToLive(
 
 	var recoveredPubs []*protocol.Publication
 	var latestOffset uint64
-	streamPos := statePos
+	streamPos := params.sincePosition
 
 	if positioning {
-		// Positioned mode: read stream from statePos to catch any updates since state was read.
+		// Positioned mode: read stream from sincePosition to catch any updates.
 		streamLimit := -1 // No limit by default.
 		if c.node.config.MapRecoveryMaxPublicationLimit > 0 {
 			streamLimit = c.node.config.MapRecoveryMaxPublicationLimit
@@ -563,8 +579,8 @@ func (c *Client) handleMapStateToLive(
 		streamOpts := MapReadStreamOptions{
 			Filter: StreamFilter{
 				Since: &StreamPosition{
-					Offset: statePos.Offset,
-					Epoch:  statePos.Epoch,
+					Offset: params.sincePosition.Offset,
+					Epoch:  params.sincePosition.Epoch,
 				},
 				Limit: readLimit,
 			},
@@ -578,7 +594,7 @@ func (c *Client) handleMapStateToLive(
 			if errors.Is(err, ErrorUnrecoverablePosition) {
 				return ErrorUnrecoverablePosition
 			}
-			c.node.logger.log(newErrorLogEntry(err, "error reading stream for state-to-live phase", map[string]any{
+			c.node.logger.log(newErrorLogEntry(err, "error reading stream for live phase", map[string]any{
 				"channel": channel, "user": c.user, "client": c.uid,
 			}))
 			return ErrorInternal
@@ -641,7 +657,7 @@ func (c *Client) handleMapStateToLive(
 		if deltaEnabled && req.Delta == string(DeltaTypeFossil) {
 			recoveredPubs = c.makeRecoveredMapPubsDeltaFossil(recoveredPubs)
 		}
-	} else {
+	} else if params.allowStreamless {
 		// Streamless mode: use buffered publications directly (no stream read, no merge).
 		bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
 		recoveredPubs = bufferedPubs
@@ -659,30 +675,39 @@ func (c *Client) handleMapStateToLive(
 		}
 	}
 
-	// Convert state publications to protocol format.
+	// Convert state publications to protocol format (if any).
 	isJSON := c.transport.Protocol() == ProtocolTypeJSON
-	protoStatePubs := make([]*protocol.Publication, 0, len(statePubs))
-	for _, pub := range statePubs {
-		protoStatePubs = append(protoStatePubs, pubToProto(pub))
+	var protoStatePubs []*protocol.Publication
+	if len(params.statePubs) > 0 {
+		protoStatePubs = make([]*protocol.Publication, 0, len(params.statePubs))
+		for _, pub := range params.statePubs {
+			protoStatePubs = append(protoStatePubs, pubToProto(pub))
+		}
+		protoStatePubs = escapeStateForDelta(protoStatePubs, deltaEnabled, isJSON)
 	}
-	protoStatePubs = escapeStateForDelta(protoStatePubs, deltaEnabled, isJSON)
 
-	// Build response with phase=0 (LIVE), both state and stream publications.
+	// Build response with phase=0 (LIVE).
 	res := &protocol.SubscribeResult{
-		Type:   1, // MAP type
-		Phase:  MapPhaseLive,
-		Epoch:  streamPos.Epoch,
-		Offset: latestOffset,
-		Delta:  deltaEnabled,
+		Type:         1, // MAP type
+		Phase:        MapPhaseLive,
+		Epoch:        streamPos.Epoch,
+		Offset:       latestOffset,
+		Delta:        deltaEnabled,
+		State:        protoStatePubs,
+		Publications: recoveredPubs,
 	}
 	if positioning {
 		res.Recoverable = true
 	}
+	if params.isRecovery {
+		res.WasRecovering = req.Recover
+		if req.Recover {
+			res.Recovered = true
+		}
+	}
 	if chanID > 0 {
 		res.Id = chanID
 	}
-	res.State = protoStatePubs       // Last page state entries
-	res.Publications = recoveredPubs // Stream catch-up publications
 
 	// Write response before stopping buffer.
 	protoReply, err := c.getSubscribeCommandReply(res)
@@ -699,7 +724,11 @@ func (c *Client) handleMapStateToLive(
 	c.writeEncodedCommandReply(channel, protocol.FrameTypeSubscribe, cmd, protoReply, rw)
 	c.handleCommandFinished(cmd, protocol.FrameTypeSubscribe, nil, protoReply, started, "")
 	c.releaseSubscribeCommandReply(protoReply)
-	c.node.metrics.incActionCount("map_subscribe_state_to_live", channel)
+	c.node.metrics.incActionCount(params.metricsAction, channel)
+	if params.isRecovery && req.Recover {
+		c.node.metrics.incRecover(true, channel, len(recoveredPubs) > 0)
+		c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
+	}
 
 	// Build channel context with map flag.
 	channelFlags := c.buildMapChannelFlags(deltaEnabled, req.Delta, isPresence, opts, reply)
@@ -719,10 +748,12 @@ func (c *Client) handleMapStateToLive(
 		mapUserPresenceChannelPrefix:   opts.MapUserPresenceChannelPrefix,
 	}
 
-	// Move from mapSubscribing to channels.
+	// Move from mapSubscribing to channels. Always look up from the map under
+	// the lock to avoid closing a subscribingCh that was already closed by a
+	// concurrent disconnect handler (cleanupMapSubscribingAll).
 	c.mu.Lock()
-	if state.subscribingCh != nil {
-		close(state.subscribingCh)
+	if st, ok := c.mapSubscribing[channel]; ok && st.subscribingCh != nil {
+		close(st.subscribingCh)
 	}
 	delete(c.mapSubscribing, channel)
 	c.channels[channel] = channelContext
@@ -735,6 +766,28 @@ func (c *Client) handleMapStateToLive(
 	c.setupMapPresenceAndJoin(channel, opts)
 
 	return nil
+}
+
+// handleMapStateToLive handles direct transition from STATE to LIVE phase.
+// This is called on the last state page when stream is close enough to go LIVE directly.
+func (c *Client) handleMapStateToLive(
+	req *protocol.SubscribeRequest,
+	reply SubscribeReply,
+	state *mapSubscribeState,
+	cmd *protocol.Command,
+	started time.Time,
+	rw *replyWriter,
+	statePubs []*Publication,
+	statePos StreamPosition,
+) error {
+	return c.handleMapTransitionToLive(req, reply, state.options, state.isPresence, cmd, started, rw, mapTransitionToLiveParams{
+		sincePosition:       statePos,
+		statePubs:           statePubs,
+		allowStreamless:     true,
+		isRecovery:          false,
+		tagsFilterFromState: state.tagsFilter,
+		metricsAction:       "map_subscribe_state_to_live",
+	})
 }
 
 // handleMapStreamPhase handles stateless stream pagination (history catch-up).
@@ -933,277 +986,14 @@ func (c *Client) handleMapStreamToLive(
 	started time.Time,
 	rw *replyWriter,
 ) error {
-	channel := req.Channel
-	opts := state.options
-	isPresence := state.isPresence
-
-	// Build subscription info first, validate before subscribing.
-	useID := opts.AllowChannelCompaction && req.Flag&subscriptionFlagChannelCompression != 0
-	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, isMap: true}
-
-	// Process tags filter if provided.
-	if req.Tf != nil {
-		if !opts.AllowTagsFilter {
-			c.cleanupMapSubscribing(channel)
-			c.node.logger.log(newLogEntry(LogLevelInfo, "tags filter not allowed for map channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-			return ErrorBadRequest
-		}
-		if err := filter.Validate(req.Tf); err != nil {
-			c.cleanupMapSubscribing(channel)
-			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid tags filter for map channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-			return ErrorBadRequest
-		}
-		sub.tagsFilter = &tagsFilter{
-			filter: req.Tf,
-			hash:   filter.Hash(req.Tf),
-		}
-	} else if state.tagsFilter != nil {
-		// Use tags filter from state pagination phase if not provided in this request.
-		sub.tagsFilter = state.tagsFilter
-	}
-
-	// Negotiate delta type if requested.
-	var deltaEnabled bool
-	if req.Delta != "" {
-		dt := DeltaType(req.Delta)
-		if slices.Contains(opts.AllowedDeltaTypes, dt) {
-			deltaEnabled = true
-			sub.deltaType = dt
-		}
-	}
-
-	// Start coordination: buffer -> add subscription (which subscribes to map broker) -> read remaining -> merge.
-	c.pubSubSync.StartBuffering(channel)
-
-	chanID, err := c.node.addSubscription(channel, sub)
-	if err != nil {
-		c.pubSubSync.StopBuffering(channel)
-		c.cleanupMapSubscribing(channel)
-		c.node.logger.log(newErrorLogEntry(err, "error adding map subscription", map[string]any{
-			"channel": channel, "user": c.user, "client": c.uid,
-		}))
-		var clientErr *Error
-		if errors.As(err, &clientErr) && !errors.Is(clientErr, ErrorInternal) {
-			return clientErr
-		}
-		return ErrorInternal
-	}
-
-	// Read remaining stream publications since client's offset with limit.
-	streamLimit := -1 // No limit by default for final catch-up.
-	if c.node.config.MapRecoveryMaxPublicationLimit > 0 {
-		streamLimit = c.node.config.MapRecoveryMaxPublicationLimit
-	}
-
-	// Read limit+1 to distinguish "exactly at limit" from "too far behind".
-	readLimit := streamLimit
-	if readLimit > 0 {
-		readLimit = streamLimit + 1
-	}
-
-	var recoveredPubs []*protocol.Publication
-	streamOpts := MapReadStreamOptions{
-		Filter: StreamFilter{
-			Since: &StreamPosition{
-				Offset: req.Offset,
-				Epoch:  req.Epoch,
-			},
-			Limit: readLimit,
-		},
-	}
-
-	streamResult, err := c.node.MapStreamRead(c.ctx, channel, streamOpts)
-	if err != nil {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
-		c.cleanupMapSubscribing(channel)
-		if errors.Is(err, ErrorUnrecoverablePosition) {
-			return ErrorUnrecoverablePosition
-		}
-		c.node.logger.log(newErrorLogEntry(err, "error reading stream for live phase", map[string]any{
-			"channel": channel, "user": c.user, "client": c.uid,
-		}))
-		return ErrorInternal
-	}
-	pubs := streamResult.Publications
-	streamPos := streamResult.Position
-
-	// If we got more than the limit, client is too far behind.
-	if streamLimit > 0 && len(pubs) > streamLimit {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
-		c.cleanupMapSubscribing(channel)
-		return ErrorUnrecoverablePosition
-	}
-
-	// Convert to protocol publications.
-	for _, pub := range pubs {
-		recoveredPubs = append(recoveredPubs, pubToProto(pub))
-	}
-
-	// Lock buffer and read buffered publications.
-	bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
-
-	// Merge recovered and buffered publications.
-	var maxSeenOffset uint64
-	var okMerge bool
-	recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
-	if !okMerge {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
-		c.cleanupMapSubscribing(channel)
-		return &DisconnectInsufficientState
-	}
-
-	// Update offset if we saw higher.
-	latestOffset := streamPos.Offset
-	if maxSeenOffset > latestOffset {
-		latestOffset = maxSeenOffset
-	}
-	if len(recoveredPubs) > 0 {
-		lastPubOffset := recoveredPubs[len(recoveredPubs)-1].Offset
-		if lastPubOffset > latestOffset {
-			latestOffset = lastPubOffset
-		}
-	}
-
-	// Apply tags filter to stream publications (after offset calculation).
-	if sub.tagsFilter != nil {
-		filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
-		for _, pub := range recoveredPubs {
-			match, _ := filter.Match(sub.tagsFilter.filter, pub.Tags)
-			if match {
-				filteredPubs = append(filteredPubs, pub)
-			}
-		}
-		recoveredPubs = filteredPubs
-	}
-
-	// Apply delta compression to recovered publications if enabled.
-	if deltaEnabled && req.Delta == string(DeltaTypeFossil) {
-		recoveredPubs = c.makeRecoveredMapPubsDeltaFossil(recoveredPubs)
-	}
-
-	// Build response with phase=0 (LIVE).
-	res := &protocol.SubscribeResult{
-		Type:          1, // MAP type
-		Phase:         MapPhaseLive,
-		Epoch:         streamPos.Epoch,
-		Offset:        latestOffset,
-		Delta:         deltaEnabled,
-		Recoverable:   true,
-		WasRecovering: req.Recover,
-	}
-	if req.Recover {
-		res.Recovered = true
-	}
-	if chanID > 0 {
-		res.Id = chanID
-	}
-	res.Publications = recoveredPubs
-
-	// Write response before stopping buffer.
-	protoReply, err := c.getSubscribeCommandReply(res)
-	if err != nil {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
-		c.cleanupMapSubscribing(channel)
-		c.node.logger.log(newErrorLogEntry(err, "error encoding map subscribe reply", map[string]any{
-			"channel": channel, "user": c.user, "client": c.uid,
-		}))
-		return ErrorInternal
-	}
-
-	c.writeEncodedCommandReply(channel, protocol.FrameTypeSubscribe, cmd, protoReply, rw)
-	c.handleCommandFinished(cmd, protocol.FrameTypeSubscribe, nil, protoReply, started, "")
-	c.releaseSubscribeCommandReply(protoReply)
-	c.node.metrics.incActionCount("map_subscribe_stream_to_live", channel)
-	if req.Recover {
-		c.node.metrics.incRecover(true, channel, len(recoveredPubs) > 0)
-		c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
-	}
-
-	// Build channel context with map flag.
-	channelFlags := c.buildMapChannelFlags(deltaEnabled, req.Delta, isPresence, opts, reply)
-
-	channelContext := ChannelContext{
-		flags:    channelFlags,
-		expireAt: opts.ExpireAt,
-		info:     opts.ChannelInfo,
-		streamPosition: StreamPosition{
-			Offset: latestOffset,
-			Epoch:  streamPos.Epoch,
-		},
-		metaTTLSeconds:                 int64(opts.HistoryMetaTTL.Seconds()),
-		positionCheckTime:              time.Now().Unix(),
-		Source:                         opts.Source,
-		mapClientPresenceChannelPrefix: opts.MapClientPresenceChannelPrefix,
-		mapUserPresenceChannelPrefix:   opts.MapUserPresenceChannelPrefix,
-	}
-
-	// Move from mapSubscribing to channels.
-	c.mu.Lock()
-	if state.subscribingCh != nil {
-		close(state.subscribingCh)
-	}
-	delete(c.mapSubscribing, channel)
-	c.channels[channel] = channelContext
-	c.mu.Unlock()
-
-	// Stop buffering after response written.
-	c.pubSubSync.StopBuffering(channel)
-
-	// Add presence if enabled.
-	if opts.EmitPresence {
-		info := &ClientInfo{
-			ClientID: c.uid,
-			UserID:   c.user,
-			ConnInfo: c.info,
-			ChanInfo: opts.ChannelInfo,
-		}
-		if err = c.node.addPresence(channel, c.uid, info); err != nil {
-			c.node.logger.log(newErrorLogEntry(err, "error adding client presence", map[string]any{
-				"channel": channel, "user": c.user, "client": c.uid,
-			}))
-		}
-	}
-
-	// Add map client presence if prefix is configured.
-	if opts.MapClientPresenceChannelPrefix != "" {
-		info := &ClientInfo{
-			ClientID: c.uid,
-			UserID:   c.user,
-			ConnInfo: c.info,
-			ChanInfo: opts.ChannelInfo,
-		}
-		if err := c.addMapClientPresence(channel, opts.MapClientPresenceChannelPrefix, info); err != nil {
-			c.node.logger.log(newErrorLogEntry(err, "error adding map client presence", map[string]any{
-				"channel": channel, "user": c.user, "client": c.uid,
-			}))
-		}
-	}
-
-	// Add map user presence if prefix is configured.
-	if opts.MapUserPresenceChannelPrefix != "" {
-		if err := c.addMapUserPresence(channel, opts.MapUserPresenceChannelPrefix); err != nil {
-			c.node.logger.log(newErrorLogEntry(err, "error adding map user presence", map[string]any{
-				"channel": channel, "user": c.user, "client": c.uid,
-			}))
-		}
-	}
-
-	// Emit join event if enabled.
-	if opts.EmitJoinLeave {
-		info := &ClientInfo{
-			ClientID: c.uid,
-			UserID:   c.user,
-			ConnInfo: c.info,
-			ChanInfo: opts.ChannelInfo,
-		}
-		go func() { _ = c.node.publishJoin(channel, info) }()
-	}
-
-	return nil
+	return c.handleMapTransitionToLive(req, reply, state.options, state.isPresence, cmd, started, rw, mapTransitionToLiveParams{
+		sincePosition:       StreamPosition{Offset: req.Offset, Epoch: req.Epoch},
+		statePubs:           nil,
+		allowStreamless:     false,
+		isRecovery:          true,
+		tagsFilterFromState: state.tagsFilter,
+		metricsAction:       "map_subscribe_stream_to_live",
+	})
 }
 
 // handleMapLivePhase handles joining pub/sub with coordination.
@@ -1259,6 +1049,8 @@ func (c *Client) handleMapLivePhase(
 
 // handleMapImmediateJoin handles immediate join mode (Scenario B).
 // Returns full state + stream in one response.
+// State is read before calling the shared helper (reading state slightly earlier
+// is safe because the buffer-merge protocol covers any gap).
 func (c *Client) handleMapImmediateJoin(
 	req *protocol.SubscribeRequest,
 	reply SubscribeReply,
@@ -1270,11 +1062,8 @@ func (c *Client) handleMapImmediateJoin(
 ) error {
 	channel := req.Channel
 
-	// Build subscription info first, validate before subscribing.
-	useID := opts.AllowChannelCompaction && req.Flag&subscriptionFlagChannelCompression != 0
-	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, isMap: true}
-
-	// Process tags filter if provided.
+	// Validate tags filter early (before state read) to fail fast.
+	var tf *tagsFilter
 	if req.Tf != nil {
 		if !opts.AllowTagsFilter {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "tags filter not allowed for map channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
@@ -1284,36 +1073,10 @@ func (c *Client) handleMapImmediateJoin(
 			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid tags filter for map channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
 			return ErrorBadRequest
 		}
-		sub.tagsFilter = &tagsFilter{
+		tf = &tagsFilter{
 			filter: req.Tf,
 			hash:   filter.Hash(req.Tf),
 		}
-	}
-
-	// Negotiate delta type if requested.
-	var deltaEnabled bool
-	if req.Delta != "" {
-		dt := DeltaType(req.Delta)
-		if slices.Contains(opts.AllowedDeltaTypes, dt) {
-			deltaEnabled = true
-			sub.deltaType = dt
-		}
-	}
-
-	// Start coordination: buffer -> add subscription -> read state -> read stream -> merge.
-	c.pubSubSync.StartBuffering(channel)
-
-	chanID, err := c.node.addSubscription(channel, sub)
-	if err != nil {
-		c.pubSubSync.StopBuffering(channel)
-		c.node.logger.log(newErrorLogEntry(err, "error adding map subscription", map[string]any{
-			"channel": channel, "user": c.user, "client": c.uid,
-		}))
-		var clientErr *Error
-		if errors.As(err, &clientErr) && !errors.Is(clientErr, ErrorInternal) {
-			return clientErr
-		}
-		return ErrorInternal
 	}
 
 	// Read full state (no pagination, enforce size limit).
@@ -1328,8 +1091,6 @@ func (c *Client) handleMapImmediateJoin(
 		Asc:    req.Asc,
 	})
 	if err != nil {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
 		if errors.Is(err, ErrorUnrecoverablePosition) {
 			return ErrorUnrecoverablePosition
 		}
@@ -1341,8 +1102,6 @@ func (c *Client) handleMapImmediateJoin(
 
 	// Check if state is too large for immediate join.
 	if stateResult.Cursor != "" {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
 		return ErrorStateTooLarge
 	}
 
@@ -1350,10 +1109,10 @@ func (c *Client) handleMapImmediateJoin(
 	statePos := stateResult.Position
 
 	// Apply tags filter to state publications.
-	if sub.tagsFilter != nil {
+	if tf != nil {
 		filteredPubs := make([]*Publication, 0, len(statePubs))
 		for _, pub := range statePubs {
-			match, _ := filter.Match(sub.tagsFilter.filter, pub.Tags)
+			match, _ := filter.Match(tf.filter, pub.Tags)
 			if match {
 				filteredPubs = append(filteredPubs, pub)
 			}
@@ -1361,192 +1120,13 @@ func (c *Client) handleMapImmediateJoin(
 		statePubs = filteredPubs
 	}
 
-	positioning := opts.EnablePositioning || opts.EnableRecovery
-
-	var recoveredPubs []*protocol.Publication
-	var latestOffset uint64
-	streamPos := statePos
-
-	if positioning {
-		// Positioned mode: read stream from statePos to catch any updates during state read.
-		streamLimit := -1 // No limit by default.
-		if c.node.config.MapRecoveryMaxPublicationLimit > 0 {
-			streamLimit = c.node.config.MapRecoveryMaxPublicationLimit
-		}
-
-		// Read limit+1 to distinguish "exactly at limit" from "too far behind".
-		readLimit := streamLimit
-		if readLimit > 0 {
-			readLimit = streamLimit + 1
-		}
-
-		streamOpts := MapReadStreamOptions{
-			Filter: StreamFilter{
-				Since: &StreamPosition{
-					Offset: statePos.Offset,
-					Epoch:  statePos.Epoch,
-				},
-				Limit: readLimit,
-			},
-		}
-
-		streamResult, err := c.node.MapStreamRead(c.ctx, channel, streamOpts)
-		if err != nil {
-			c.pubSubSync.StopBuffering(channel)
-			_ = c.node.removeSubscription(channel, c)
-			if errors.Is(err, ErrorUnrecoverablePosition) {
-				return ErrorUnrecoverablePosition
-			}
-			c.node.logger.log(newErrorLogEntry(err, "error reading stream for immediate join", map[string]any{
-				"channel": channel, "user": c.user, "client": c.uid,
-			}))
-			return ErrorInternal
-		}
-		pubs := streamResult.Publications
-		streamPos = streamResult.Position
-
-		// If we got more than the limit, client is too far behind.
-		if streamLimit > 0 && len(pubs) > streamLimit {
-			c.pubSubSync.StopBuffering(channel)
-			_ = c.node.removeSubscription(channel, c)
-			return ErrorUnrecoverablePosition
-		}
-
-		// Convert to protocol publications.
-		for _, pub := range pubs {
-			recoveredPubs = append(recoveredPubs, pubToProto(pub))
-		}
-
-		// Lock buffer and read buffered publications.
-		bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
-
-		// Merge recovered and buffered publications.
-		var maxSeenOffset uint64
-		var okMerge bool
-		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
-		if !okMerge {
-			c.pubSubSync.StopBuffering(channel)
-			_ = c.node.removeSubscription(channel, c)
-			return &DisconnectInsufficientState
-		}
-
-		// Update offset if we saw higher.
-		latestOffset = streamPos.Offset
-		if maxSeenOffset > latestOffset {
-			latestOffset = maxSeenOffset
-		}
-		if len(recoveredPubs) > 0 {
-			lastPubOffset := recoveredPubs[len(recoveredPubs)-1].Offset
-			if lastPubOffset > latestOffset {
-				latestOffset = lastPubOffset
-			}
-		}
-
-		// Apply tags filter to stream publications (after offset calculation).
-		if sub.tagsFilter != nil {
-			filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
-			for _, pub := range recoveredPubs {
-				match, _ := filter.Match(sub.tagsFilter.filter, pub.Tags)
-				if match {
-					filteredPubs = append(filteredPubs, pub)
-				}
-			}
-			recoveredPubs = filteredPubs
-		}
-
-		// Apply delta compression to recovered publications if enabled.
-		if deltaEnabled && req.Delta == string(DeltaTypeFossil) {
-			recoveredPubs = c.makeRecoveredMapPubsDeltaFossil(recoveredPubs)
-		}
-	} else {
-		// Streamless mode: use buffered publications directly (no stream read, no merge).
-		bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
-		recoveredPubs = bufferedPubs
-
-		// Apply tags filter to buffered publications.
-		if sub.tagsFilter != nil {
-			filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
-			for _, pub := range recoveredPubs {
-				match, _ := filter.Match(sub.tagsFilter.filter, pub.Tags)
-				if match {
-					filteredPubs = append(filteredPubs, pub)
-				}
-			}
-			recoveredPubs = filteredPubs
-		}
-	}
-
-	// Convert state publications to protocol format.
-	isJSON := c.transport.Protocol() == ProtocolTypeJSON
-	stateProtos := make([]*protocol.Publication, 0, len(statePubs))
-	for _, pub := range statePubs {
-		stateProtos = append(stateProtos, pubToProto(pub))
-	}
-	stateProtos = escapeStateForDelta(stateProtos, deltaEnabled, isJSON)
-
-	// Build response with both state and stream.
-	res := &protocol.SubscribeResult{
-		Type:         1, // MAP type
-		Phase:        MapPhaseLive,
-		Epoch:        streamPos.Epoch,
-		Offset:       latestOffset,
-		Delta:        deltaEnabled,
-		State:        stateProtos,   // Full state for immediate join
-		Publications: recoveredPubs, // Stream publications
-	}
-	if positioning {
-		res.Recoverable = true
-	}
-	if chanID > 0 {
-		res.Id = chanID
-	}
-
-	// Write response before stopping buffer.
-	protoReply, err := c.getSubscribeCommandReply(res)
-	if err != nil {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
-		c.node.logger.log(newErrorLogEntry(err, "error encoding map subscribe reply", map[string]any{
-			"channel": channel, "user": c.user, "client": c.uid,
-		}))
-		return ErrorInternal
-	}
-
-	c.writeEncodedCommandReply(channel, protocol.FrameTypeSubscribe, cmd, protoReply, rw)
-	c.handleCommandFinished(cmd, protocol.FrameTypeSubscribe, nil, protoReply, started, "")
-	c.releaseSubscribeCommandReply(protoReply)
-	c.node.metrics.incActionCount("map_subscribe_immediate_join", channel)
-
-	// Build channel context with map flag.
-	channelFlags := c.buildMapChannelFlags(deltaEnabled, req.Delta, isPresence, opts, reply)
-
-	channelContext := ChannelContext{
-		flags:    channelFlags,
-		expireAt: opts.ExpireAt,
-		info:     opts.ChannelInfo,
-		streamPosition: StreamPosition{
-			Offset: latestOffset,
-			Epoch:  streamPos.Epoch,
-		},
-		metaTTLSeconds:                 int64(opts.HistoryMetaTTL.Seconds()),
-		positionCheckTime:              time.Now().Unix(),
-		Source:                         opts.Source,
-		mapClientPresenceChannelPrefix: opts.MapClientPresenceChannelPrefix,
-		mapUserPresenceChannelPrefix:   opts.MapUserPresenceChannelPrefix,
-	}
-
-	// Add to channels (no mapSubscribing state exists for immediate join).
-	c.mu.Lock()
-	c.channels[channel] = channelContext
-	c.mu.Unlock()
-
-	// Stop buffering after response written.
-	c.pubSubSync.StopBuffering(channel)
-
-	// Add presence and emit join events.
-	c.setupMapPresenceAndJoin(channel, opts)
-
-	return nil
+	return c.handleMapTransitionToLive(req, reply, opts, isPresence, cmd, started, rw, mapTransitionToLiveParams{
+		sincePosition:   statePos,
+		statePubs:       statePubs,
+		allowStreamless: true,
+		isRecovery:      false,
+		metricsAction:   "map_subscribe_immediate_join",
+	})
 }
 
 // handleMapRecoveryJoin handles recovery or paginated join (stream catch-up only).
@@ -1571,230 +1151,14 @@ func (c *Client) handleMapRecoveryJoin(
 		return c.handleMapImmediateJoin(req, reply, opts, isPresence, cmd, started, rw)
 	}
 
-	// Build subscription info first, validate before subscribing.
-	useID := opts.AllowChannelCompaction && req.Flag&subscriptionFlagChannelCompression != 0
-	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, isMap: true}
-
-	// Process tags filter if provided.
-	if req.Tf != nil {
-		if !opts.AllowTagsFilter {
-			c.cleanupMapSubscribing(channel)
-			c.node.logger.log(newLogEntry(LogLevelInfo, "tags filter not allowed for map channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-			return ErrorBadRequest
-		}
-		if err := filter.Validate(req.Tf); err != nil {
-			c.cleanupMapSubscribing(channel)
-			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid tags filter for map channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-			return ErrorBadRequest
-		}
-		sub.tagsFilter = &tagsFilter{
-			filter: req.Tf,
-			hash:   filter.Hash(req.Tf),
-		}
-	} else if tagsFilterFromState != nil {
-		// Use tags filter from state pagination phase if not provided in this request.
-		sub.tagsFilter = tagsFilterFromState
-	}
-
-	// Negotiate delta type if requested.
-	var deltaEnabled bool
-	if req.Delta != "" {
-		dt := DeltaType(req.Delta)
-		if slices.Contains(opts.AllowedDeltaTypes, dt) {
-			deltaEnabled = true
-			sub.deltaType = dt
-		}
-	}
-
-	// Start coordination: buffer -> add subscription (which subscribes to map broker) -> read remaining -> merge.
-	// IMPORTANT: addSubscription adds client to hub AND subscribes to map broker.
-	// This ensures the client is in hub before pub/sub messages arrive.
-	c.pubSubSync.StartBuffering(channel)
-
-	chanID, err := c.node.addSubscription(channel, sub)
-	if err != nil {
-		c.pubSubSync.StopBuffering(channel)
-		c.cleanupMapSubscribing(channel)
-		c.node.logger.log(newErrorLogEntry(err, "error adding map subscription", map[string]any{
-			"channel": channel, "user": c.user, "client": c.uid,
-		}))
-		var clientErr *Error
-		if errors.As(err, &clientErr) && !errors.Is(clientErr, ErrorInternal) {
-			return clientErr
-		}
-		return ErrorInternal
-	}
-
-	// Read remaining stream publications since client's offset.
-	streamLimit := -1 // No limit by default.
-	if c.node.config.MapRecoveryMaxPublicationLimit > 0 {
-		streamLimit = c.node.config.MapRecoveryMaxPublicationLimit
-	}
-
-	// Read limit+1 to distinguish "exactly at limit" from "too far behind".
-	readLimit := streamLimit
-	if readLimit > 0 {
-		readLimit = streamLimit + 1
-	}
-
-	var recoveredPubs []*protocol.Publication
-	streamOpts := MapReadStreamOptions{
-		Filter: StreamFilter{
-			Since: &StreamPosition{
-				Offset: req.Offset,
-				Epoch:  req.Epoch,
-			},
-			Limit: readLimit,
-		},
-	}
-
-	streamResult, err := c.node.MapStreamRead(c.ctx, channel, streamOpts)
-	if err != nil {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c) // This handles map broker unsubscribe.
-		c.cleanupMapSubscribing(channel)
-		if errors.Is(err, ErrorUnrecoverablePosition) {
-			return ErrorUnrecoverablePosition
-		}
-		c.node.logger.log(newErrorLogEntry(err, "error reading stream for live phase", map[string]any{
-			"channel": channel, "user": c.user, "client": c.uid,
-		}))
-		return ErrorInternal
-	}
-	pubs := streamResult.Publications
-	streamPos := streamResult.Position
-
-	// If we got more than the limit, client is too far behind.
-	if streamLimit > 0 && len(pubs) > streamLimit {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
-		c.cleanupMapSubscribing(channel)
-		return ErrorUnrecoverablePosition
-	}
-
-	// Convert to protocol publications.
-	for _, pub := range pubs {
-		recoveredPubs = append(recoveredPubs, pubToProto(pub))
-	}
-
-	// Lock buffer and read buffered publications.
-	bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
-
-	// Merge recovered and buffered publications.
-	var maxSeenOffset uint64
-	var okMerge bool
-	recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
-	if !okMerge {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c) // This handles map broker unsubscribe.
-		c.cleanupMapSubscribing(channel)
-		return &DisconnectInsufficientState
-	}
-
-	// Update offset if we saw higher.
-	latestOffset := streamPos.Offset
-	if maxSeenOffset > latestOffset {
-		latestOffset = maxSeenOffset
-	}
-	if len(recoveredPubs) > 0 {
-		lastPubOffset := recoveredPubs[len(recoveredPubs)-1].Offset
-		if lastPubOffset > latestOffset {
-			latestOffset = lastPubOffset
-		}
-	}
-
-	// Apply tags filter to stream publications (after offset calculation).
-	if sub.tagsFilter != nil {
-		filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
-		for _, pub := range recoveredPubs {
-			match, _ := filter.Match(sub.tagsFilter.filter, pub.Tags)
-			if match {
-				filteredPubs = append(filteredPubs, pub)
-			}
-		}
-		recoveredPubs = filteredPubs
-	}
-
-	// Apply delta compression to recovered publications if enabled.
-	// Unlike normal subs, we don't check for "Recovered" flag here because map subs
-	// always error out on failed recovery (never reach this point with failed recovery).
-	if deltaEnabled && req.Delta == string(DeltaTypeFossil) {
-		recoveredPubs = c.makeRecoveredMapPubsDeltaFossil(recoveredPubs)
-	}
-
-	// Build response.
-	res := &protocol.SubscribeResult{
-		Type:          1, // MAP type
-		Phase:         MapPhaseLive,
-		Epoch:         streamPos.Epoch,
-		Offset:        latestOffset,
-		Delta:         deltaEnabled,
-		Recoverable:   true,
-		WasRecovering: req.Recover,
-	}
-	if req.Recover {
-		res.Recovered = true
-	}
-	if chanID > 0 {
-		res.Id = chanID
-	}
-	res.Publications = recoveredPubs
-
-	// Write response before stopping buffer.
-	protoReply, err := c.getSubscribeCommandReply(res)
-	if err != nil {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c) // This handles map broker unsubscribe.
-		c.cleanupMapSubscribing(channel)
-		c.node.logger.log(newErrorLogEntry(err, "error encoding map subscribe reply", map[string]any{
-			"channel": channel, "user": c.user, "client": c.uid,
-		}))
-		return ErrorInternal
-	}
-
-	c.writeEncodedCommandReply(channel, protocol.FrameTypeSubscribe, cmd, protoReply, rw)
-	c.handleCommandFinished(cmd, protocol.FrameTypeSubscribe, nil, protoReply, started, "")
-	c.releaseSubscribeCommandReply(protoReply)
-	c.node.metrics.incActionCount("map_subscribe_recovery_join", channel)
-	if req.Recover {
-		c.node.metrics.incRecover(true, channel, len(recoveredPubs) > 0)
-		c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
-	}
-
-	// Build channel context with map flag.
-	channelFlags := c.buildMapChannelFlags(deltaEnabled, req.Delta, isPresence, opts, reply)
-
-	channelContext := ChannelContext{
-		flags:    channelFlags,
-		expireAt: opts.ExpireAt,
-		info:     opts.ChannelInfo,
-		streamPosition: StreamPosition{
-			Offset: latestOffset,
-			Epoch:  streamPos.Epoch,
-		},
-		metaTTLSeconds:                 int64(opts.HistoryMetaTTL.Seconds()),
-		positionCheckTime:              time.Now().Unix(),
-		Source:                         opts.Source,
-		mapClientPresenceChannelPrefix: opts.MapClientPresenceChannelPrefix,
-		mapUserPresenceChannelPrefix:   opts.MapUserPresenceChannelPrefix,
-	}
-
-	// Move from mapSubscribing to channels.
-	c.mu.Lock()
-	if state, ok := c.mapSubscribing[channel]; ok && state.subscribingCh != nil {
-		close(state.subscribingCh)
-	}
-	delete(c.mapSubscribing, channel)
-	c.channels[channel] = channelContext
-	c.mu.Unlock()
-
-	// Stop buffering after response written.
-	c.pubSubSync.StopBuffering(channel)
-
-	// Add presence and emit join events.
-	c.setupMapPresenceAndJoin(channel, opts)
-
-	return nil
+	return c.handleMapTransitionToLive(req, reply, opts, isPresence, cmd, started, rw, mapTransitionToLiveParams{
+		sincePosition:       StreamPosition{Offset: req.Offset, Epoch: req.Epoch},
+		statePubs:           nil,
+		allowStreamless:     false,
+		isRecovery:          true,
+		tagsFilterFromState: tagsFilterFromState,
+		metricsAction:       "map_subscribe_recovery_join",
+	})
 }
 
 // buildMapChannelFlags builds channel flags for map subscriptions.
