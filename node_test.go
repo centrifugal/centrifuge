@@ -1647,3 +1647,24 @@ func TestNode_MapStreamReadUnrecoverablePosition(t *testing.T) {
 	})
 	require.ErrorIs(t, err, ErrorUnrecoverablePosition)
 }
+
+func TestNode_MapRemoveEmptyKey(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			KeyTTL:        60 * time.Second,
+		}
+	}
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	_, err = node.MapRemove(context.Background(), "test_ch", "", MapRemoveOptions{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "key is required")
+}

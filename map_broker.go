@@ -250,6 +250,11 @@ type MapReadStateOptions struct {
 	//  -1 = no limit (return all entries in state)
 	//   0 = return only current stream position (no entries)
 	//  >0 = return at most this many entries
+	//
+	// Note: for unordered state in Redis, pagination uses HSCAN with COUNT hint.
+	// Redis may return more entries than Limit on some pages (especially for small
+	// hashes in listpack encoding). Callers should not rely on exact Limit enforcement
+	// for unordered reads. Ordered state uses ZRANGEBYSCORE with LIMIT — exact page sizes.
 	Limit int
 
 	// Key filters to a single entry by exact key match.
@@ -314,6 +319,8 @@ type MapPublishResult struct {
 	// CurrentPublication contains the current state when suppressed due to CAS mismatch.
 	// Allows immediate retry without extra ReadState call.
 	// Only set when SuppressReason is SuppressReasonPositionMismatch.
+	// NOTE: This points to an internal state entry. Do not modify the Publication
+	// or its fields (Data, Tags, etc.) — treat it as read-only.
 	CurrentPublication *Publication
 }
 

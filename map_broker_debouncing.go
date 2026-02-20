@@ -54,6 +54,17 @@ func NewDebouncingMapBroker(node *Node, backend MapBroker, conf DebouncingMapBro
 }
 
 // Publish debounces publish if configured, otherwise passes through.
+//
+// When debouncing is active, the call returns immediately with a zero-value
+// MapPublishResult. This means callers cannot rely on result fields (Position,
+// Suppressed, SuppressReason, CurrentPublication). In particular:
+//   - CAS (ExpectedPosition) cannot work because the caller never sees whether
+//     the operation was suppressed due to position mismatch.
+//   - Version-based ordering feedback is lost.
+//   - IdempotencyKey deduplication result is not reported to the caller.
+//
+// Only use debouncing for fire-and-forget writes (e.g., cursor positions,
+// heartbeats) where the caller does not need the result.
 func (b *DebouncingMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
 	if b.conf.Debounce == nil {
 		return b.MapBroker.Publish(ctx, ch, key, opts)

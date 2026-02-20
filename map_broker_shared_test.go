@@ -119,14 +119,15 @@ func testMapBrokerReadStateAllEntries(t *testing.T, factory mapBrokerFactory) {
 	})
 }
 
-// testMapBrokerRemoveEmptyKey verifies that Remove with empty key returns an error.
+// testMapBrokerRemoveEmptyKey verifies that Remove with empty key succeeds at broker level.
+// Empty key validation is done at the Node.MapRemove level.
 func testMapBrokerRemoveEmptyKey(t *testing.T, factory mapBrokerFactory) {
 	ctx := context.Background()
 
-	t.Run("Remove_empty_key_returns_error", func(t *testing.T) {
+	t.Run("Remove_empty_key_no_error_at_broker_level", func(t *testing.T) {
 		broker := factory(t)
 		_, err := broker.Remove(ctx, "some_ch", "", MapRemoveOptions{})
-		require.Error(t, err)
+		require.NoError(t, err)
 	})
 }
 

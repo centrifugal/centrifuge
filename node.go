@@ -1893,6 +1893,12 @@ func (n *Node) mapStateKey(ch string, opts MapReadStateOptions) string {
 	builder.WriteString(strconv.Itoa(opts.Limit))
 	builder.WriteString(",key:")
 	builder.WriteString(opts.Key)
+	if opts.Asc {
+		builder.WriteString(",asc:1")
+	}
+	if opts.Cached {
+		builder.WriteString(",cached:1")
+	}
 	if opts.Revision != nil {
 		builder.WriteString(",rev_offset:")
 		builder.WriteString(strconv.FormatUint(opts.Revision.Offset, 10))
@@ -2011,6 +2017,9 @@ func (n *Node) MapStats(ctx context.Context, ch string) (MapStatsResult, error) 
 // MapPublish publishes data to a map channel.
 // This updates the snapshot and optionally broadcasts to subscribers.
 func (n *Node) MapPublish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
+	if key == "" {
+		return MapPublishResult{}, errors.New("key is required for map publish")
+	}
 	mapBroker := n.getMapBroker(ch)
 	if mapBroker == nil {
 		return MapPublishResult{}, ErrorNotAvailable
@@ -2027,6 +2036,9 @@ func (n *Node) MapPublish(ctx context.Context, ch string, key string, opts MapPu
 // MapRemove removes a key from a map channel.
 // This removes the key from snapshot and optionally broadcasts removal to subscribers.
 func (n *Node) MapRemove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
+	if key == "" {
+		return MapPublishResult{}, errors.New("key is required for map remove")
+	}
 	mapBroker := n.getMapBroker(ch)
 	if mapBroker == nil {
 		return MapPublishResult{}, ErrorNotAvailable

@@ -68,15 +68,14 @@ func newPgNames(binary bool) pgNames {
 // game lobbies with persistent state.
 
 // durationToIntervalString converts a time.Duration to a PostgreSQL interval string.
-// Uses milliseconds for sub-second precision, seconds otherwise.
-// Durations under 1 second are rounded up to 1 second.
+// Uses milliseconds for precision.
 func durationToIntervalString(d time.Duration) string {
-	secs := int(d.Seconds())
-	if secs > 0 {
-		return strconv.Itoa(secs) + " seconds"
+	ms := d.Milliseconds()
+	if ms > 0 {
+		return strconv.FormatInt(ms, 10) + " milliseconds"
 	}
-	// Sub-second duration — round up to 1 second minimum.
-	return "1 seconds"
+	// Sub-millisecond duration — round up to 1 millisecond minimum.
+	return "1 milliseconds"
 }
 
 type PostgresMapBroker struct {
@@ -754,10 +753,6 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 
 // Remove removes a key from keyed state using the cf_map_remove SQL function.
 func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
-	if key == "" {
-		return MapPublishResult{}, fmt.Errorf("key is required for remove")
-	}
-
 	// Resolve and validate channel options.
 	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 	if err != nil {

@@ -76,6 +76,8 @@ func (c CachedMapBrokerConfig) setDefaults() CachedMapBrokerConfig {
 	return c
 }
 
+const numCachedBrokerLocks = 4096
+
 // CachedMapBroker wraps a MapBroker with an in-memory cache layer.
 // It provides:
 // - Read-your-own-writes consistency on the publishing node
@@ -97,9 +99,9 @@ type CachedMapBroker struct {
 	streamInitialized   map[string]bool
 	streamInitializedMu sync.RWMutex
 
-	// Per-channel locks for ordered cache updates
-	channelLocks   map[string]*sync.Mutex
-	channelLocksMu sync.Mutex
+	// Sharded locks for ordered cache updates per channel.
+	// Uses fixed-size pool to avoid race conditions with dynamic map deletion.
+	channelLocks [numCachedBrokerLocks]*sync.Mutex
 
 	// Worker pool for bounded concurrency (nil if unbounded)
 	syncWorkerCh chan string
@@ -135,9 +137,11 @@ func NewCachedMapBroker(n *Node, backend MapBroker, conf CachedMapBrokerConfig) 
 		cache:             cache,
 		conf:              conf,
 		syncState:         make(map[string]*channelSyncState),
-		channelLocks:      make(map[string]*sync.Mutex),
 		streamInitialized: make(map[string]bool),
 		closeCh:           make(chan struct{}),
+	}
+	for i := range e.channelLocks {
+		e.channelLocks[i] = &sync.Mutex{}
 	}
 
 	// Create worker channel if concurrency is bounded
@@ -167,7 +171,11 @@ func (h *cachedEventHandler) HandlePublication(ch string, pub *Publication, sp S
 		buffered = h.cache.BufferPublication(ch, pub, sp, pub.Removed)
 	}
 	if !buffered && h.cache.IsLoaded(ch) {
-		// Update cache if channel is loaded, using per-channel lock for ordering
+		// Detect gap under channel lock. If no gap, apply directly (fast path).
+		// If gap found, release lock to fill it via backend I/O, then re-acquire to apply.
+		var gapFrom StreamPosition
+		needGapFill := false
+
 		h.broker.withChannelLock(ch, func() {
 			cachedPos := h.cache.GetPosition(ch)
 
@@ -179,23 +187,48 @@ func (h *cachedEventHandler) HandlePublication(ch string, pub *Publication, sp S
 					h.cache.Evict(ch)
 					return
 				}
-				// Same epoch - fill the gap with ONE backend call
-				h.fillGap(ch, cachedPos, pub.Offset, sp.Epoch)
-			}
-
-			// Skip if this offset was already applied (can happen with concurrent local writes).
-			// For streamless channels (Offset=0), always apply — no offsets to compare.
-			if pub.Offset > 0 && pub.Offset <= h.cache.GetPosition(ch).Offset {
+				// Same epoch - need gap fill (done outside lock below)
+				gapFrom = cachedPos
+				needGapFill = true
 				return
 			}
 
-			// Now apply the incoming publication
+			// No gap — apply directly (fast path).
+			// Skip if this offset was already applied (can happen with concurrent local writes).
+			// For streamless channels (Offset=0), always apply — no offsets to compare.
+			if pub.Offset > 0 && pub.Offset <= cachedPos.Offset {
+				return
+			}
+
 			_, _ = h.cache.ApplyPublication(ch, pub, sp, pub.Removed)
 
 			// Update sync offset so syncChannel doesn't re-fetch publications
 			// already delivered via pub/sub, avoiding duplicate delivery.
 			h.broker.updateSyncOffset(ch, pub.Offset)
 		})
+
+		if needGapFill {
+			// Fill gap outside the channel lock to avoid blocking other publications
+			// during backend I/O.
+			gapPubs := h.fetchGapPubs(ch, gapFrom, pub.Offset)
+
+			// Re-acquire lock to apply gap publications + current publication.
+			// ApplyPublication uses offset-based dedup, so concurrent applies are safe.
+			h.broker.withChannelLock(ch, func() {
+				if !h.cache.IsLoaded(ch) {
+					return // Cache was evicted while filling gap.
+				}
+				for _, m := range gapPubs {
+					pubPos := StreamPosition{Offset: m.Offset, Epoch: sp.Epoch}
+					_, _ = h.cache.ApplyPublication(ch, m, pubPos, m.Removed)
+				}
+				if pub.Offset > 0 && pub.Offset <= h.cache.GetPosition(ch).Offset {
+					return
+				}
+				_, _ = h.cache.ApplyPublication(ch, pub, sp, pub.Removed)
+				h.broker.updateSyncOffset(ch, pub.Offset)
+			})
+		}
 	}
 	// Forward to original handler
 	if h.handler != nil {
@@ -204,30 +237,23 @@ func (h *cachedEventHandler) HandlePublication(ch string, pub *Publication, sp S
 	return nil
 }
 
-// fillGap fetches missing publications from backend and applies them to cache.
-// Must be called with channel lock held.
-func (h *cachedEventHandler) fillGap(ch string, cachedPos StreamPosition, incomingOffset uint64, epoch string) {
+// fetchGapPubs fetches missing publications from backend to fill a gap in the cache.
+// Returns nil and evicts the cache on error.
+func (h *cachedEventHandler) fetchGapPubs(ch string, cachedPos StreamPosition, incomingOffset uint64) []*Publication {
 	ctx, cancel := context.WithTimeout(context.Background(), h.conf.LoadTimeout)
 	defer cancel()
 
-	// Fetch missing publications (from cachedPos to incomingOffset-1)
 	missingResult, err := h.backend.ReadStream(ctx, ch, MapReadStreamOptions{
 		Filter: StreamFilter{
 			Since: &cachedPos,
-			Limit: int(incomingOffset - cachedPos.Offset - 1), // Only what's missing
+			Limit: int(incomingOffset - cachedPos.Offset - 1),
 		},
 	})
 	if err != nil {
-		// On error, evict cache to force reload on next read
 		h.cache.Evict(ch)
-		return
+		return nil
 	}
-
-	// Apply missing publications in order
-	for _, m := range missingResult.Publications {
-		pubPos := StreamPosition{Offset: m.Offset, Epoch: epoch}
-		_, _ = h.cache.ApplyPublication(ch, m, pubPos, m.Removed)
-	}
+	return missingResult.Publications
 }
 
 func (h *cachedEventHandler) HandleJoin(ch string, info *ClientInfo) error {
@@ -285,32 +311,23 @@ func (e *CachedMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 
 // Close shuts down the cached broker and the underlying backend (if it implements Closer).
 func (e *CachedMapBroker) Close(ctx context.Context) error {
+	var closeErr error
 	e.closeOnce.Do(func() {
 		close(e.closeCh)
 		// Wait for sync workers to finish
 		e.wg.Wait()
 		_ = e.cache.Close()
+		if closer, ok := e.backend.(Closer); ok {
+			closeErr = closer.Close(ctx)
+		}
 	})
-	type Closer interface {
-		Close(context.Context) error
-	}
-	if closer, ok := e.backend.(Closer); ok {
-		return closer.Close(ctx)
-	}
-	return nil
+	return closeErr
 }
 
-// withChannelLock executes fn while holding the per-channel lock.
+// withChannelLock executes fn while holding a sharded lock for the channel.
 // This ensures ordered cache updates for concurrent writes to the same channel.
 func (e *CachedMapBroker) withChannelLock(ch string, fn func()) {
-	e.channelLocksMu.Lock()
-	lock, ok := e.channelLocks[ch]
-	if !ok {
-		lock = &sync.Mutex{}
-		e.channelLocks[ch] = lock
-	}
-	e.channelLocksMu.Unlock()
-
+	lock := e.channelLocks[index(ch, numCachedBrokerLocks)]
 	lock.Lock()
 	defer lock.Unlock()
 	fn()
@@ -322,18 +339,18 @@ func (e *CachedMapBroker) Subscribe(ch string) error {
 	// to force a fresh load, catching any publications we might have missed.
 	wasLoaded := e.cache.IsLoaded(ch)
 	if wasLoaded {
-		// Evict before subscribing so the fresh load happens after pub/sub is active.
-		// This ensures we don't miss publications between the evict and subscribe.
-		e.cache.Evict(ch)
-		// Also clear stream initialized flag so ReadStream loads fresh from backend
+		// Atomically evict and mark as loading so there's no window where
+		// the channel is neither loaded nor loading (publications would be dropped).
+		e.cache.EvictAndMarkLoading(ch)
+		// Clear stream initialized flag so ReadStream loads fresh from backend
 		e.streamInitializedMu.Lock()
 		delete(e.streamInitialized, ch)
 		e.streamInitializedMu.Unlock()
+	} else {
+		// Mark as loading BEFORE subscribing to pub/sub, so any incoming
+		// publications are buffered rather than dropped.
+		e.cache.MarkLoading(ch)
 	}
-
-	// Mark as loading BEFORE subscribing to pub/sub, so any incoming
-	// publications are buffered rather than dropped.
-	e.cache.MarkLoading(ch)
 
 	// Subscribe to backend PUB/SUB - now we'll receive updates
 	if err := e.backend.Subscribe(ch); err != nil {
@@ -365,11 +382,6 @@ func (e *CachedMapBroker) Unsubscribe(ch string) error {
 	delete(e.streamInitialized, ch)
 	e.streamInitializedMu.Unlock()
 
-	// Clean up per-channel lock
-	e.channelLocksMu.Lock()
-	delete(e.channelLocks, ch)
-	e.channelLocksMu.Unlock()
-
 	return e.backend.Unsubscribe(ch)
 }
 
@@ -399,8 +411,8 @@ func (e *CachedMapBroker) ReadState(ctx context.Context, ch string, opts MapRead
 	}
 
 	// Cached path - only used by internal subscription flow for optimized delivery.
-	// Mark as loading BEFORE ensureLoaded to buffer any concurrent pub/sub messages.
-	// This handles the race where pub/sub starts delivering before cache is fully loaded.
+	// MarkLoading ensures any pub/sub messages arriving during cache load are
+	// buffered and replayed after the load completes, preventing data loss.
 	e.cache.MarkLoading(ch)
 
 	// Ensure channel is loaded into cache
@@ -481,11 +493,6 @@ func (e *CachedMapBroker) Clear(ctx context.Context, ch string, opts MapClearOpt
 	e.streamInitializedMu.Lock()
 	delete(e.streamInitialized, ch)
 	e.streamInitializedMu.Unlock()
-
-	// Clean up per-channel lock
-	e.channelLocksMu.Lock()
-	delete(e.channelLocks, ch)
-	e.channelLocksMu.Unlock()
 
 	// Clear from backend
 	return e.backend.Clear(ctx, ch, opts)
@@ -589,14 +596,6 @@ func (e *CachedMapBroker) cleanupStaleChannelState() {
 	for _, ch := range e.cache.LoadedChannels() {
 		loaded[ch] = struct{}{}
 	}
-
-	e.channelLocksMu.Lock()
-	for ch := range e.channelLocks {
-		if _, ok := loaded[ch]; !ok {
-			delete(e.channelLocks, ch)
-		}
-	}
-	e.channelLocksMu.Unlock()
 
 	e.syncStateMu.Lock()
 	for ch := range e.syncState {
@@ -773,11 +772,6 @@ func (e *CachedMapBroker) reloadChannel(ctx context.Context, ch string) {
 	e.streamInitializedMu.Lock()
 	delete(e.streamInitialized, ch)
 	e.streamInitializedMu.Unlock()
-
-	// Clean up per-channel lock
-	e.channelLocksMu.Lock()
-	delete(e.channelLocks, ch)
-	e.channelLocksMu.Unlock()
 
 	// Reload from backend
 	if err := e.ensureLoaded(ctx, ch); err != nil {

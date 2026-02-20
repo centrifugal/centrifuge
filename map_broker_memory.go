@@ -4,7 +4,6 @@ import (
 	"container/heap"
 	"context"
 	"errors"
-	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,10 +27,15 @@ type MemoryMapBroker struct {
 	closeOnce         sync.Once
 	closeCh           chan struct{}
 	pubLocks          map[int]*sync.Mutex
-	resultCache       map[string]map[string]StreamPosition // ch -> idempotencyKey -> position
+	resultCache       map[string]map[string]resultCacheEntry // ch -> idempotencyKey -> entry
 	resultCacheMu     sync.RWMutex
 	nextExpireCheck   int64
 	resultExpireQueue priority.Queue
+}
+
+type resultCacheEntry struct {
+	Position StreamPosition
+	ExpireAt int64 // UnixMilli
 }
 
 var _ MapBroker = (*MemoryMapBroker)(nil)
@@ -46,14 +50,14 @@ func NewMemoryMapBroker(n *Node, _ MemoryMapBrokerConfig) (*MemoryMapBroker, err
 		pubLocks[i] = &sync.Mutex{}
 	}
 	closeCh := make(chan struct{})
-	mapHub := newMapHub(n, n.config.HistoryMetaTTL, pubLocks, closeCh)
+	mapHub := newMapHub(n, pubLocks, closeCh)
 	mapHub.setChannelOptionsResolver(n.config.GetMapChannelOptions)
 	e := &MemoryMapBroker{
 		node:        n,
 		mapHub:      mapHub,
 		pubLocks:    pubLocks,
 		closeCh:     closeCh,
-		resultCache: make(map[string]map[string]StreamPosition),
+		resultCache: make(map[string]map[string]resultCacheEntry),
 	}
 	return e, nil
 }
@@ -169,11 +173,11 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 	}
 
 	if opts.IdempotencyKey != "" {
-		resultExpireSeconds := int64(defaultIdempotentResultExpireSeconds)
+		resultExpireMs := int64(defaultIdempotentResultExpireSeconds) * 1000
 		if opts.IdempotentResultTTL != 0 {
-			resultExpireSeconds = int64(opts.IdempotentResultTTL.Seconds())
+			resultExpireMs = opts.IdempotentResultTTL.Milliseconds()
 		}
-		e.saveResultToCache(ch, opts.IdempotencyKey, streamTop, resultExpireSeconds)
+		e.saveResultToCache(ch, opts.IdempotencyKey, streamTop, resultExpireMs)
 	}
 
 	if e.eventHandler != nil {
@@ -186,10 +190,6 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 
 // Remove removes a key from keyed state.
 func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
-	if key == "" {
-		return MapPublishResult{}, fmt.Errorf("key is required for remove")
-	}
-
 	mu := e.pubLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
@@ -227,11 +227,11 @@ func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opt
 	}
 
 	if opts.IdempotencyKey != "" {
-		resultExpireSeconds := int64(defaultIdempotentResultExpireSeconds)
+		resultExpireMs := int64(defaultIdempotentResultExpireSeconds) * 1000
 		if opts.IdempotentResultTTL != 0 {
-			resultExpireSeconds = int64(opts.IdempotentResultTTL.Seconds())
+			resultExpireMs = opts.IdempotentResultTTL.Milliseconds()
 		}
-		e.saveResultToCache(ch, opts.IdempotencyKey, streamTop, resultExpireSeconds)
+		e.saveResultToCache(ch, opts.IdempotencyKey, streamTop, resultExpireMs)
 	}
 
 	if e.eventHandler != nil {
@@ -263,21 +263,21 @@ func (e *MemoryMapBroker) getResultFromCache(ch string, key string) (StreamPosit
 	if !ok {
 		return StreamPosition{}, false
 	}
-	res, ok := chCache[key]
-	return res, ok
+	entry, ok := chCache[key]
+	return entry.Position, ok
 }
 
-func (e *MemoryMapBroker) saveResultToCache(ch string, key string, sp StreamPosition, resultExpireSeconds int64) {
+func (e *MemoryMapBroker) saveResultToCache(ch string, key string, sp StreamPosition, resultExpireMs int64) {
 	e.resultCacheMu.Lock()
 	defer e.resultCacheMu.Unlock()
 	chCache, ok := e.resultCache[ch]
 	if !ok {
-		chCache = make(map[string]StreamPosition)
+		chCache = make(map[string]resultCacheEntry)
 		e.resultCache[ch] = chCache
 	}
-	chCache[key] = sp
+	expireAt := time.Now().UnixMilli() + resultExpireMs
+	chCache[key] = resultCacheEntry{Position: sp, ExpireAt: expireAt}
 	cacheKey := ch + "\x00" + key
-	expireAt := time.Now().Unix() + resultExpireSeconds
 	heap.Push(&e.resultExpireQueue, &priority.Item{Value: cacheKey, Priority: expireAt})
 	if e.nextExpireCheck == 0 || e.nextExpireCheck > expireAt {
 		e.nextExpireCheck = expireAt
@@ -301,7 +301,7 @@ func (e *MemoryMapBroker) expireResultCache() {
 			return
 		}
 		e.resultCacheMu.Lock()
-		if e.nextExpireCheck == 0 || e.nextExpireCheck > time.Now().Unix() {
+		if e.nextExpireCheck == 0 || e.nextExpireCheck > time.Now().UnixMilli() {
 			e.resultCacheMu.Unlock()
 			timer.Reset(time.Second)
 			continue
@@ -310,7 +310,7 @@ func (e *MemoryMapBroker) expireResultCache() {
 		for e.resultExpireQueue.Len() > 0 {
 			item := heap.Pop(&e.resultExpireQueue).(*priority.Item)
 			expireAt := item.Priority
-			if expireAt > time.Now().Unix() {
+			if expireAt > time.Now().UnixMilli() {
 				heap.Push(&e.resultExpireQueue, item)
 				nextExpireCheck = expireAt
 				break
@@ -327,6 +327,23 @@ func (e *MemoryMapBroker) expireResultCache() {
 				}
 			}
 		}
+		// Compact heap when stale entries accumulate excessively.
+		var totalCacheEntries int
+		for _, chCache := range e.resultCache {
+			totalCacheEntries += len(chCache)
+		}
+		if e.resultExpireQueue.Len() > 2*totalCacheEntries+100 {
+			e.resultExpireQueue = priority.MakeQueue()
+			for ch, chCache := range e.resultCache {
+				for key, entry := range chCache {
+					cacheKey := ch + "\x00" + key
+					heap.Push(&e.resultExpireQueue, &priority.Item{Value: cacheKey, Priority: entry.ExpireAt})
+				}
+			}
+			if e.resultExpireQueue.Len() > 0 {
+				nextExpireCheck = e.resultExpireQueue[0].Priority
+			}
+		}
 		e.nextExpireCheck = nextExpireCheck
 		e.resultCacheMu.Unlock()
 		timer.Reset(time.Second)
@@ -334,6 +351,20 @@ func (e *MemoryMapBroker) expireResultCache() {
 }
 
 // mapHub manages keyed state for all channels.
+//
+// Lock ordering (acquire in this order to prevent deadlock):
+//
+//	pubLock(ch)  →  mapHub.Lock/RLock  →  mapChannel.mu
+//
+// pubLock: serializes Publish/Remove per channel (including stream.Add and HandlePublication).
+// mapHub.Lock: protects channels map, expiration queues, and channel creation/deletion.
+// mapHub.RLock: concurrent reads of channel state.
+// mapChannel.mu: protects sortedKeys rebuild during getState (held under mapHub.RLock).
+//
+// expireKeysIteration uses two phases to respect this ordering:
+//
+//	Phase 1: mapHub.Lock — collect expired keys, remove from state.
+//	Phase 2: pubLock → mapHub.Lock — add to stream, deliver events.
 type mapHub struct {
 	sync.RWMutex
 	node            *Node
@@ -341,7 +372,6 @@ type mapHub struct {
 	nextExpireCheck int64
 	expireQueue     priority.Queue
 	expires         map[string]int64
-	historyMetaTTL  time.Duration
 	nextRemoveCheck int64
 	removeQueue     priority.Queue
 	removes         map[string]int64
@@ -373,18 +403,17 @@ type stateEntry struct {
 	Revision     StreamPosition
 	Publication  *Publication
 	Score        int64  // For ordered state
-	ExpireAt     int64  // Unix timestamp for key TTL expiration (0 = no expiration)
+	ExpireAt     int64  // Millisecond timestamp (UnixMilli) for key TTL expiration (0 = no expiration)
 	Version      uint64 // Per-key version for ordering (0 = disabled)
 	VersionEpoch string // Per-key version epoch
 }
 
-func newMapHub(node *Node, historyMetaTTL time.Duration, pubLocks map[int]*sync.Mutex, closeCh chan struct{}) *mapHub {
+func newMapHub(node *Node, pubLocks map[int]*sync.Mutex, closeCh chan struct{}) *mapHub {
 	return &mapHub{
 		node:           node,
 		channels:       make(map[string]*mapChannel),
 		expireQueue:    priority.MakeQueue(),
 		expires:        make(map[string]int64),
-		historyMetaTTL: historyMetaTTL,
 		removeQueue:    priority.MakeQueue(),
 		removes:        make(map[string]int64),
 		closeCh:        closeCh,
@@ -423,7 +452,7 @@ func (h *mapHub) expireStreams() {
 			return
 		}
 		h.Lock()
-		if h.nextExpireCheck == 0 || h.nextExpireCheck > time.Now().Unix() {
+		if h.nextExpireCheck == 0 || h.nextExpireCheck > time.Now().UnixMilli() {
 			h.Unlock()
 			timer.Reset(time.Second)
 			continue
@@ -432,7 +461,7 @@ func (h *mapHub) expireStreams() {
 		for h.expireQueue.Len() > 0 {
 			item := heap.Pop(&h.expireQueue).(*priority.Item)
 			expireAt := item.Priority
-			if expireAt > time.Now().Unix() {
+			if expireAt > time.Now().UnixMilli() {
 				heap.Push(&h.expireQueue, item)
 				nextExpireCheck = expireAt
 				break
@@ -468,7 +497,7 @@ func (h *mapHub) removeChannels() {
 			return
 		}
 		h.Lock()
-		if h.nextRemoveCheck == 0 || h.nextRemoveCheck > time.Now().Unix() {
+		if h.nextRemoveCheck == 0 || h.nextRemoveCheck > time.Now().UnixMilli() {
 			h.Unlock()
 			timer.Reset(time.Second)
 			continue
@@ -477,7 +506,7 @@ func (h *mapHub) removeChannels() {
 		for h.removeQueue.Len() > 0 {
 			item := heap.Pop(&h.removeQueue).(*priority.Item)
 			expireAt := item.Priority
-			if expireAt > time.Now().Unix() {
+			if expireAt > time.Now().UnixMilli() {
 				heap.Push(&h.removeQueue, item)
 				nextRemoveCheck = expireAt
 				break
@@ -533,12 +562,12 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 	var eventHandler BrokerEventHandler
 
 	h.Lock()
-	if h.nextKeyExpireCheck == 0 || h.nextKeyExpireCheck > time.Now().Unix() {
+	if h.nextKeyExpireCheck == 0 || h.nextKeyExpireCheck > time.Now().UnixMilli() {
 		h.Unlock()
 		return
 	}
 	*nextKeyExpireCheck = 0
-	now := time.Now().Unix()
+	now := time.Now().UnixMilli()
 	eventHandler = h.eventHandler
 
 	for h.keyExpireQueue.Len() > 0 {
@@ -584,7 +613,7 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 
 		// Verify entry's expiration matches (wasn't refreshed)
 		if entry.ExpireAt != expireAt {
-			if entry.ExpireAt > now {
+			if entry.ExpireAt > now { // now is UnixMilli
 				// Entry was refreshed, re-queue
 				h.keyExpires[chKey] = entry.ExpireAt
 				heap.Push(&h.keyExpireQueue, &priority.Item{Value: chKey, Priority: entry.ExpireAt})
@@ -613,6 +642,23 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 				key:        key,
 				streamSize: streamSize,
 			})
+		}
+	}
+	// Compact heap when stale entries exceed 2x live entries.
+	// Stale entries accumulate from TTL refreshes that push new items without
+	// removing old ones. Periodic compaction rebuilds the queue from h.keyExpires,
+	// the source of truth for per-key deadlines. This is correct because every
+	// key insertion/refresh updates h.keyExpires with the latest deadline, and
+	// every key removal deletes from h.keyExpires. The queue may contain outdated
+	// entries (old deadlines for refreshed keys), but they are harmlessly skipped
+	// at pop time when the deadline doesn't match h.keyExpires.
+	if h.keyExpireQueue.Len() > 2*len(h.keyExpires)+100 {
+		h.keyExpireQueue = priority.MakeQueue()
+		for chKey, exp := range h.keyExpires {
+			heap.Push(&h.keyExpireQueue, &priority.Item{Value: chKey, Priority: exp})
+		}
+		if h.keyExpireQueue.Len() > 0 {
+			*nextKeyExpireCheck = h.keyExpireQueue[0].Priority
 		}
 	}
 	h.nextKeyExpireCheck = *nextKeyExpireCheck
@@ -718,7 +764,7 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 			// KeyModeIfNew but key already exists - suppress publish
 			// But optionally refresh TTL if RefreshTTLOnSuppress is set
 			if opts.RefreshTTLOnSuppress && chOpts.KeyTTL > 0 {
-				expireAt := time.Now().Unix() + int64(chOpts.KeyTTL.Seconds())
+				expireAt := time.Now().UnixMilli() + chOpts.KeyTTL.Milliseconds()
 				existingEntry.ExpireAt = expireAt
 				// Update TTL tracking
 				chKey := h.makeChKey(ch, key)
@@ -768,7 +814,7 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 
 	// Handle stream
 	if chOpts.SyncMode == MapSyncConverging {
-		expireAt := time.Now().Unix() + int64(chOpts.StreamTTL.Seconds())
+		expireAt := time.Now().UnixMilli() + chOpts.StreamTTL.Milliseconds()
 		if _, ok := h.expires[ch]; !ok {
 			heap.Push(&h.expireQueue, &priority.Item{Value: ch, Priority: expireAt})
 		}
@@ -777,13 +823,8 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 			h.nextExpireCheck = expireAt
 		}
 
-		historyMetaTTL := chOpts.MetaTTL
-		if historyMetaTTL == 0 {
-			historyMetaTTL = h.historyMetaTTL
-		}
-
-		if historyMetaTTL > 0 {
-			removeAt := time.Now().Unix() + int64(historyMetaTTL.Seconds())
+		if chOpts.MetaTTL > 0 {
+			removeAt := time.Now().UnixMilli() + chOpts.MetaTTL.Milliseconds()
 			if _, ok := h.removes[ch]; !ok {
 				heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
 			}
@@ -820,10 +861,10 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 
 	// Handle keyed state
 	if key != "" {
-		// Calculate expiration time
+		// Calculate expiration time (milliseconds for sub-second TTL precision).
 		var expireAt int64
 		if chOpts.KeyTTL > 0 {
-			expireAt = time.Now().Unix() + int64(chOpts.KeyTTL.Seconds())
+			expireAt = time.Now().UnixMilli() + chOpts.KeyTTL.Milliseconds()
 		}
 
 		// Store statePub in state (contains full state Data)
@@ -922,7 +963,7 @@ func (h *mapHub) remove(ch string, key string, chOpts MapChannelOptions, opts Ma
 
 	// Add to stream if converging mode
 	if chOpts.SyncMode == MapSyncConverging {
-		expireAt := time.Now().Unix() + int64(chOpts.StreamTTL.Seconds())
+		expireAt := time.Now().UnixMilli() + chOpts.StreamTTL.Milliseconds()
 		if _, ok := h.expires[ch]; !ok {
 			heap.Push(&h.expireQueue, &priority.Item{Value: ch, Priority: expireAt})
 		}
@@ -932,12 +973,8 @@ func (h *mapHub) remove(ch string, key string, chOpts MapChannelOptions, opts Ma
 		}
 
 		// Refresh MetaTTL so the channel isn't garbage-collected while active.
-		historyMetaTTL := chOpts.MetaTTL
-		if historyMetaTTL == 0 {
-			historyMetaTTL = h.historyMetaTTL
-		}
-		if historyMetaTTL > 0 {
-			removeAt := time.Now().Unix() + int64(historyMetaTTL.Seconds())
+		if chOpts.MetaTTL > 0 {
+			removeAt := time.Now().UnixMilli() + chOpts.MetaTTL.Milliseconds()
 			if _, ok := h.removes[ch]; !ok {
 				heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
 			}
@@ -986,20 +1023,17 @@ func (h *mapHub) clear(ch string) {
 
 func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 	// Resolve MetaTTL from channel config.
-	var historyMetaTTL time.Duration
+	var metaTTL time.Duration
 	if h.channelOptionsResolver != nil {
 		chOpts, err := resolveAndValidateMapChannelOptions(h.channelOptionsResolver, ch)
 		if err == nil {
-			historyMetaTTL = chOpts.MetaTTL
+			metaTTL = chOpts.MetaTTL
 		}
 	}
-	if historyMetaTTL == 0 {
-		historyMetaTTL = h.historyMetaTTL
-	}
 
-	if historyMetaTTL > 0 {
+	if metaTTL > 0 {
 		h.Lock()
-		h.updateMetaTTL(ch, historyMetaTTL)
+		h.updateMetaTTL(ch, metaTTL)
 		h.Unlock()
 	}
 
@@ -1008,10 +1042,27 @@ func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) (MapStreamResul
 	channel, ok := h.channels[ch]
 	if !ok {
 		h.RUnlock()
+		// Channel not found — need write lock to create stream position.
 		h.Lock()
-		streamPos := h.createStreamPosition(ch)
+		if _, exists := h.channels[ch]; !exists {
+			// Still not found under write lock — create and return.
+			streamPos := h.createStreamPosition(ch)
+			h.Unlock()
+			return MapStreamResult{Position: streamPos}, nil
+		}
+		// Channel was created by another goroutine between RUnlock and Lock.
+		// Release write lock and re-acquire read lock for the read path.
 		h.Unlock()
-		return MapStreamResult{Position: streamPos}, nil
+		h.RLock()
+		channel, ok = h.channels[ch]
+		if !ok {
+			// Deleted in the tiny window between Unlock and RLock.
+			h.RUnlock()
+			h.Lock()
+			streamPos := h.createStreamPosition(ch)
+			h.Unlock()
+			return MapStreamResult{Position: streamPos}, nil
+		}
 	}
 
 	filter := opts.Filter
@@ -1091,9 +1142,6 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) (MapStateResult, 
 			metaTTL = chOpts.MetaTTL
 		}
 	}
-	if metaTTL == 0 {
-		metaTTL = h.historyMetaTTL
-	}
 	if metaTTL > 0 {
 		h.Lock()
 		h.updateMetaTTL(ch, metaTTL)
@@ -1125,9 +1173,12 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) (MapStateResult, 
 		h.RLock()
 		channel, ok = h.channels[ch]
 		if !ok {
-			// Deleted in the tiny window between Unlock and RLock (virtually impossible).
+			// Deleted in the tiny window between Unlock and RLock.
 			h.RUnlock()
-			return MapStateResult{}, nil
+			h.Lock()
+			streamPos := h.createStreamPosition(ch)
+			h.Unlock()
+			return MapStateResult{Position: streamPos}, nil
 		}
 	}
 
@@ -1305,7 +1356,7 @@ func (h *mapHub) createStreamPosition(ch string) StreamPosition {
 }
 
 func (h *mapHub) updateMetaTTL(ch string, metaTTL time.Duration) {
-	removeAt := time.Now().Unix() + int64(metaTTL.Seconds())
+	removeAt := time.Now().UnixMilli() + metaTTL.Milliseconds()
 	if _, ok := h.removes[ch]; !ok {
 		heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
 	}

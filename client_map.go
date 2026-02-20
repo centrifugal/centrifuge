@@ -97,6 +97,33 @@ const (
 	MapPhaseState  int32 = 2 // Paginating over state (map state)
 )
 
+// subscribeResultTypeMap is the Type value for map subscriptions in protocol.SubscribeResult.
+const subscribeResultTypeMap = 1
+
+// validateAndCreateTagsFilter validates the tags filter from the request and creates a tagsFilter.
+// Returns (nil, nil) if req.Tf is nil. Returns (nil, error) if validation fails.
+func (c *Client) validateAndCreateTagsFilter(req *protocol.SubscribeRequest, allowTagsFilter bool, channel string) (*tagsFilter, error) {
+	if req.Tf == nil {
+		return nil, nil
+	}
+	if !allowTagsFilter {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "tags filter not allowed for map channel", map[string]any{
+			"channel": channel, "user": c.user, "client": c.uid,
+		}))
+		return nil, ErrorBadRequest
+	}
+	if err := filter.Validate(req.Tf); err != nil {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid tags filter for map channel", map[string]any{
+			"channel": channel, "user": c.user, "client": c.uid,
+		}))
+		return nil, ErrorBadRequest
+	}
+	return &tagsFilter{
+		filter: req.Tf,
+		hash:   filter.Hash(req.Tf),
+	}, nil
+}
+
 // escapeStateForDelta JSON-escapes Data in state publications for delta-enabled JSON
 // transport. This ensures the client receives data as JSON strings (matching the format
 // used for real-time and recovered publications), so it can store exact bytes for delta.
@@ -281,24 +308,9 @@ func (c *Client) handleMapStatePhase(
 	// Track map subscription state on first state request (no cursor).
 	if req.Cursor == "" {
 		// Validate and store tags filter on first request.
-		var tf *tagsFilter
-		if req.Tf != nil {
-			if !reply.Options.AllowTagsFilter {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "tags filter not allowed for map channel", map[string]any{
-					"channel": channel, "user": c.user, "client": c.uid,
-				}))
-				return ErrorBadRequest
-			}
-			if err := filter.Validate(req.Tf); err != nil {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid tags filter for map channel", map[string]any{
-					"channel": channel, "user": c.user, "client": c.uid,
-				}))
-				return ErrorBadRequest
-			}
-			tf = &tagsFilter{
-				filter: req.Tf,
-				hash:   filter.Hash(req.Tf),
-			}
+		tf, err := c.validateAndCreateTagsFilter(req, reply.Options.AllowTagsFilter, channel)
+		if err != nil {
+			return err
 		}
 		c.mu.Lock()
 		if c.mapSubscribing == nil {
@@ -307,7 +319,7 @@ func (c *Client) handleMapStatePhase(
 		c.mapSubscribing[channel] = &mapSubscribeState{
 			options:       reply.Options,
 			startedAt:     time.Now().UnixNano(),
-			isPresence:    reply.Options.Type == SubscriptionTypeMapClients || reply.Options.Type == SubscriptionTypeMapUsers,
+			isPresence:    reply.Options.Type.IsMapPresence(),
 			subscribingCh: make(chan struct{}),
 			tagsFilter:    tf,
 		}
@@ -457,7 +469,7 @@ func (c *Client) handleMapStatePhase(
 
 	// Build response.
 	res := &protocol.SubscribeResult{
-		Type:   1, // MAP type
+		Type:   subscribeResultTypeMap,
 		Phase:  MapPhaseState,
 		Cursor: nextCursor,
 		Epoch:  streamPos.Epoch,
@@ -511,20 +523,12 @@ func (c *Client) handleMapTransitionToLive(
 
 	// Process tags filter if provided.
 	if req.Tf != nil {
-		if !opts.AllowTagsFilter {
+		tf, err := c.validateAndCreateTagsFilter(req, opts.AllowTagsFilter, channel)
+		if err != nil {
 			c.cleanupMapSubscribing(channel)
-			c.node.logger.log(newLogEntry(LogLevelInfo, "tags filter not allowed for map channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-			return ErrorBadRequest
+			return err
 		}
-		if err := filter.Validate(req.Tf); err != nil {
-			c.cleanupMapSubscribing(channel)
-			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid tags filter for map channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-			return ErrorBadRequest
-		}
-		sub.tagsFilter = &tagsFilter{
-			filter: req.Tf,
-			hash:   filter.Hash(req.Tf),
-		}
+		sub.tagsFilter = tf
 	} else if params.tagsFilterFromState != nil {
 		// Use tags filter from prior phase if not provided in this request.
 		sub.tagsFilter = params.tagsFilterFromState
@@ -688,7 +692,7 @@ func (c *Client) handleMapTransitionToLive(
 
 	// Build response with phase=0 (LIVE).
 	res := &protocol.SubscribeResult{
-		Type:         1, // MAP type
+		Type:         subscribeResultTypeMap,
 		Phase:        MapPhaseLive,
 		Epoch:        streamPos.Epoch,
 		Offset:       latestOffset,
@@ -825,29 +829,16 @@ func (c *Client) handleMapStreamPhase(
 		state = &mapSubscribeState{
 			options:       reply.Options,
 			startedAt:     time.Now().UnixNano(),
-			isPresence:    reply.Options.Type == SubscriptionTypeMapClients || reply.Options.Type == SubscriptionTypeMapUsers,
+			isPresence:    reply.Options.Type.IsMapPresence(),
 			subscribingCh: make(chan struct{}),
 			epoch:         req.Epoch,
 		}
 		// Process tags filter for recovery subscriptions (same as state phase).
-		if req.Tf != nil {
-			if !reply.Options.AllowTagsFilter {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "tags filter not allowed for map channel", map[string]any{
-					"channel": channel, "user": c.user, "client": c.uid,
-				}))
-				return ErrorBadRequest
-			}
-			if err := filter.Validate(req.Tf); err != nil {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid tags filter for map channel", map[string]any{
-					"channel": channel, "user": c.user, "client": c.uid,
-				}))
-				return ErrorBadRequest
-			}
-			state.tagsFilter = &tagsFilter{
-				filter: req.Tf,
-				hash:   filter.Hash(req.Tf),
-			}
+		tf, err := c.validateAndCreateTagsFilter(req, reply.Options.AllowTagsFilter, channel)
+		if err != nil {
+			return err
 		}
+		state.tagsFilter = tf
 		c.mu.Lock()
 		if c.mapSubscribing == nil {
 			c.mapSubscribing = make(map[string]*mapSubscribeState)
@@ -957,7 +948,7 @@ func (c *Client) handleMapStreamPhase(
 
 	// Build response.
 	res := &protocol.SubscribeResult{
-		Type:   1, // MAP type
+		Type:   subscribeResultTypeMap,
 		Phase:  MapPhaseStream,
 		Epoch:  streamPos.Epoch,
 		Offset: responseOffset,
@@ -1033,7 +1024,7 @@ func (c *Client) handleMapLivePhase(
 	} else {
 		// Direct live subscription (no prior pagination).
 		opts = reply.Options
-		isPresence = opts.Type == SubscriptionTypeMapClients || opts.Type == SubscriptionTypeMapUsers
+		isPresence = opts.Type.IsMapPresence()
 	}
 
 	// Immediate join: Fresh subscription (not recovering) without prior pagination.
@@ -1063,20 +1054,9 @@ func (c *Client) handleMapImmediateJoin(
 	channel := req.Channel
 
 	// Validate tags filter early (before state read) to fail fast.
-	var tf *tagsFilter
-	if req.Tf != nil {
-		if !opts.AllowTagsFilter {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "tags filter not allowed for map channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-			return ErrorBadRequest
-		}
-		if err := filter.Validate(req.Tf); err != nil {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid tags filter for map channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-			return ErrorBadRequest
-		}
-		tf = &tagsFilter{
-			filter: req.Tf,
-			hash:   filter.Hash(req.Tf),
-		}
+	tf, err := c.validateAndCreateTagsFilter(req, opts.AllowTagsFilter, channel)
+	if err != nil {
+		return err
 	}
 
 	// Read full state (no pagination, enforce size limit).
@@ -1121,11 +1101,12 @@ func (c *Client) handleMapImmediateJoin(
 	}
 
 	return c.handleMapTransitionToLive(req, reply, opts, isPresence, cmd, started, rw, mapTransitionToLiveParams{
-		sincePosition:   statePos,
-		statePubs:       statePubs,
-		allowStreamless: true,
-		isRecovery:      false,
-		metricsAction:   "map_subscribe_immediate_join",
+		sincePosition:       statePos,
+		statePubs:           statePubs,
+		allowStreamless:     true,
+		isRecovery:          false,
+		tagsFilterFromState: tf,
+		metricsAction:       "map_subscribe_immediate_join",
 	})
 }
 

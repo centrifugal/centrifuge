@@ -31,6 +31,14 @@ const (
 
 // MapChannelOptions contains configuration for map channels. Every map channel
 // must have SyncMode and RetentionMode explicitly set — zero values are errors.
+//
+// Note on Ephemeral + Expiring combination: when SyncMode is Ephemeral and
+// RetentionMode is Expiring, TTL removal events are delivered via pub/sub but
+// NOT logged to a stream (there is no stream in Ephemeral mode). If a client
+// misses the removal pub/sub message (e.g., during a brief disconnect), it will
+// retain stale entries until the next full state resync. This is expected behavior
+// for ephemeral use cases like cursor tracking, but may be surprising for data
+// that requires strict consistency — use Converging mode for those cases.
 type MapChannelOptions struct {
 	// SyncMode controls client-server synchronization after disconnections.
 	// Required. Zero value = not configured = error.

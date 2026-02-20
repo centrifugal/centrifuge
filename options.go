@@ -103,6 +103,12 @@ const (
 	SubscriptionTypeMapUsers SubscriptionType = 3
 )
 
+// IsMapPresence reports whether t is a map presence subscription type
+// (SubscriptionTypeMapClients or SubscriptionTypeMapUsers).
+func (t SubscriptionType) IsMapPresence() bool {
+	return t == SubscriptionTypeMapClients || t == SubscriptionTypeMapUsers
+}
+
 func (t SubscriptionType) String() string {
 	switch t {
 	case SubscriptionTypeStream:
