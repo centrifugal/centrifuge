@@ -6,8 +6,8 @@
 -- ARGV[1] = cursor (use "0" to start, returned cursor for next page)
 -- ARGV[2] = limit (0 = return all via HGETALL, >0 = use HSCAN)
 -- ARGV[3] = now (current timestamp)
--- ARGV[4] = meta_ttl (seconds, 0 to disable)
--- ARGV[5] = state_ttl (seconds, 0 to disable - refreshes TTL on read)
+-- ARGV[4] = meta_ttl (milliseconds, 0 to disable)
+-- ARGV[5] = state_ttl (milliseconds, 0 to disable - refreshes TTL on read)
 -- ARGV[6] = streamless ("1" = skip meta/epoch logic, "0" = normal streamed mode)
 
 local hash_key = KEYS[1]
@@ -41,7 +41,7 @@ if not streamless then
         end
 
         if meta_ttl > 0 then
-            redis.call("expire", meta_key, meta_ttl)
+            redis.call("pexpire", meta_key, meta_ttl)
         end
     end
 
@@ -68,12 +68,12 @@ end
 
 -- Refresh state TTL on read (LRU behavior)
 if state_ttl > 0 then
-    redis.call("expire", hash_key, state_ttl)
+    redis.call("pexpire", hash_key, state_ttl)
     if expire_key ~= '' then
-        redis.call("expire", expire_key, state_ttl)
+        redis.call("pexpire", expire_key, state_ttl)
     end
     if not streamless and state_meta_key ~= '' then
-        redis.call("expire", state_meta_key, state_ttl)
+        redis.call("pexpire", state_meta_key, state_ttl)
     end
 end
 

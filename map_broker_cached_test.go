@@ -73,7 +73,7 @@ func TestMapCache_EnsureLoaded(t *testing.T) {
 	require.False(t, cached.cache.IsLoaded(channel))
 
 	// Read state - should trigger load
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 100})
 	pubs, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -104,7 +104,7 @@ func TestMapCache_EnsureLoaded_Singleflight(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+			_, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 100})
 			require.NoError(t, err)
 		}()
 	}
@@ -128,7 +128,7 @@ func TestMapCache_Evict(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	_, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 100})
 	require.NoError(t, err)
 	require.True(t, cached.cache.IsLoaded(channel))
 
@@ -189,7 +189,7 @@ func TestMapCache_ApplyPublication(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read to load into cache
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 100})
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -201,7 +201,7 @@ func TestMapCache_ApplyPublication(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should have both keys in cache (read-your-own-writes)
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 100})
 	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 2)
@@ -227,7 +227,7 @@ func TestMapCache_ApplyPublication_Remove(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify both exist
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 100})
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 2)
@@ -237,7 +237,7 @@ func TestMapCache_ApplyPublication_Remove(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should only have key2
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 100})
 	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -283,7 +283,7 @@ func TestCachedMapBroker_Publish_ReadYourOwnWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	// Immediately read - should see the data (read-your-own-write)
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 100})
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -315,7 +315,7 @@ func TestCachedMapBroker_Publish_Suppressed(t *testing.T) {
 	require.Equal(t, SuppressReasonKeyExists, result.SuppressReason)
 
 	// Data should still be original
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 100})
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -340,7 +340,7 @@ func TestCachedMapBroker_ReadState_LazyLoad(t *testing.T) {
 	require.False(t, cached.cache.IsLoaded(channel))
 
 	// Read through cached broker - triggers load
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 100})
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -366,7 +366,7 @@ func TestCachedMapBroker_ReadState_Cached(t *testing.T) {
 	require.NoError(t, err)
 
 	// First read - loads from backend
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 100})
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -379,7 +379,7 @@ func TestCachedMapBroker_ReadState_Cached(t *testing.T) {
 	require.NoError(t, err)
 
 	// Immediate read - cache was updated via event handler
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 100})
 	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 2) // Both keys visible immediately
@@ -402,7 +402,7 @@ func TestCachedMapBroker_ReadState_Pagination(t *testing.T) {
 	}
 
 	// Read with limit
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 3})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 3})
 	pubs, _, cursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 3)
@@ -410,9 +410,9 @@ func TestCachedMapBroker_ReadState_Pagination(t *testing.T) {
 
 	// Read next page
 	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{
-		Cached: true,
-		Limit:  3,
-		Cursor: cursor,
+		AllowCached: true,
+		Limit:       3,
+		Cursor:      cursor,
 	})
 	pubs2, cursor2 := stateRes.Publications, stateRes.Cursor
 	require.NoError(t, err)
@@ -464,7 +464,7 @@ func TestCachedMapBroker_Remove(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read to load into cache (cache is lazy-loaded on read)
-	_, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	_, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 100})
 	require.NoError(t, err)
 	require.True(t, cached.cache.IsLoaded(channel))
 
@@ -503,7 +503,7 @@ func TestCachedMapBroker_Sync_NewPublications(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 
 	// Should see both keys
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 100})
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 2)
@@ -528,7 +528,7 @@ func TestCachedMapBroker_Sync_ReappliesOwnWrites(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 
 	// Should still have correct data (re-applying same data is idempotent)
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 100})
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -569,7 +569,7 @@ func TestCachedMapBroker_ConcurrentReadWrite(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				_, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: 100})
+				_, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: 100})
 				if err == nil {
 					readCount.Add(1)
 				}
@@ -599,7 +599,7 @@ func TestCachedMapBroker_CAS_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read current state
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Key: "counter"})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Key: "counter"})
 	pubs, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -633,7 +633,7 @@ func TestCachedMapBroker_CAS_Conflict(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read current state
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Key: "counter"})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Key: "counter"})
 	pubs, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
@@ -684,7 +684,7 @@ func TestCachedMapBroker_KeyMode_IfNew(t *testing.T) {
 	require.Equal(t, SuppressReasonKeyExists, result.SuppressReason)
 
 	// Verify original data preserved
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Key: "slot"})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Key: "slot"})
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -723,7 +723,7 @@ func TestCachedMapBroker_KeyMode_IfExists(t *testing.T) {
 	require.False(t, result.Suppressed)
 
 	// Verify updated data
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Key: "heartbeat"})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Key: "heartbeat"})
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Equal(t, []byte("ping2"), pubs[0].Data)
@@ -783,7 +783,7 @@ func TestCachedMapBroker_EpochConsistency(t *testing.T) {
 	require.NotEmpty(t, backendPos.Epoch, "backend should have an epoch")
 
 	// Read state through cache (triggers lazy load)
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	_, statePos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
@@ -810,7 +810,7 @@ func TestCachedMapBroker_SubscriptionPhaseFlow(t *testing.T) {
 	channel := "test_subscription_flow"
 
 	// Phase 0: No data yet - empty channel
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	state, statePos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Empty(t, state)
@@ -824,7 +824,7 @@ func TestCachedMapBroker_SubscriptionPhaseFlow(t *testing.T) {
 	}
 
 	// Phase 1: Client requests state (map_phase=0)
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	state, statePos, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, state, 5)
@@ -893,7 +893,7 @@ func TestCachedMapBroker_CrossNodeEpochConsistency(t *testing.T) {
 	require.NoError(t, err)
 
 	// This node's client subscribes - cache loads from backend
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	state, cacheSnapshotPos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, state, 3)
@@ -924,7 +924,7 @@ func TestCachedMapBroker_Sync_GapDetection(t *testing.T) {
 	}
 
 	// Read to ensure cache is loaded
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	pubs, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 3)
@@ -943,7 +943,7 @@ func TestCachedMapBroker_Sync_GapDetection(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// After reload, cache should have current state
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	pubs, pos, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	// Should have all 10 keys in state (gap detection reloads full state)
@@ -986,7 +986,7 @@ func TestCachedMapBroker_HandlePublication_GapFilling(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read to ensure cache is loaded
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	pubs, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -1030,7 +1030,7 @@ func TestCachedMapBroker_HandlePublication_GapFilling(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 4: Verify cache now has all 5 keys (gap was filled)
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	pubs, finalPos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 5, "cache should have all 5 keys after gap filling")
@@ -1081,7 +1081,7 @@ func TestCachedMapBroker_HandlePublication_EpochMismatch(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	_, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.True(t, cached.cache.IsLoaded(channel))
@@ -1145,7 +1145,7 @@ func TestCachedMapBroker_HandlePublication_NoGap(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read to ensure cache is loaded
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	pubs, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -1172,7 +1172,7 @@ func TestCachedMapBroker_HandlePublication_NoGap(t *testing.T) {
 	require.NoError(t, err)
 
 	// Cache should have both keys
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	pubs, finalPos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 2)
@@ -1195,7 +1195,7 @@ func TestCachedMapBroker_PositionAfterPublish(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read position
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	_, pos1, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Equal(t, result1.Position.Offset, pos1.Offset)
@@ -1209,7 +1209,7 @@ func TestCachedMapBroker_PositionAfterPublish(t *testing.T) {
 	require.Greater(t, result2.Position.Offset, result1.Position.Offset)
 
 	// Position should advance
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	_, pos2, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Equal(t, result2.Position.Offset, pos2.Offset)
@@ -1277,7 +1277,7 @@ func TestCachedMapBroker_SnapshotAndStreamRecovery(t *testing.T) {
 	require.False(t, cached.cache.IsLoaded(channel))
 
 	// Step 3: First client subscribes - triggers cache load (state + stream)
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	state, statePos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, state, 10, "state should have all 10 keys")
@@ -1358,7 +1358,7 @@ func TestCachedMapBroker_StreamRecoveryAfterNewPublications(t *testing.T) {
 	}
 
 	// Load cache
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	_, pos5, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Equal(t, uint64(5), pos5.Offset)
@@ -1410,7 +1410,7 @@ func TestCachedMapBroker_StreamRecoveryWithRemovals(t *testing.T) {
 	}
 
 	// Load cache and get position
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	_, pos5, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	clientPos := pos5
@@ -1453,7 +1453,7 @@ func TestCachedMapBroker_StreamRecoveryWithRemovals(t *testing.T) {
 	require.False(t, recoveredResult.Publications[2].Removed)
 
 	// Step 4: Verify state reflects final state (4 keys: 1,2,4,5,6,7 minus 3)
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	state, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, state, 6) // 5 original - 1 removed + 2 added = 6
@@ -1625,7 +1625,7 @@ func TestCachedMapBroker_OptionsFromBackendLoad(t *testing.T) {
 	defer func() { _ = cached.Close(context.Background()) }()
 
 	// Load cache by reading state
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	_, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Equal(t, uint64(10), pos.Offset)
@@ -1661,7 +1661,7 @@ func TestCachedMapBroker_ConcurrentWriteOrdering(t *testing.T) {
 	require.NoError(t, err)
 
 	// Load cache
-	_, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	_, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	require.NoError(t, err)
 
 	// Concurrent writes
@@ -1688,7 +1688,7 @@ func TestCachedMapBroker_ConcurrentWriteOrdering(t *testing.T) {
 	wg.Wait()
 
 	// Verify all writes are in cache
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	state, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
@@ -1774,7 +1774,7 @@ func TestCachedMapBroker_HandlePublication_LoadingRace(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify initial data is loaded
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 3)
@@ -1800,7 +1800,7 @@ func TestCachedMapBroker_HandlePublication_LoadingRace(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify all publications made it to the cache
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 3+publishCount, "all publications should be in cache")
@@ -1849,7 +1849,7 @@ func TestCachedMapBroker_ResubscribeFreshData(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify we see 3 entries
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 3)
@@ -1872,7 +1872,7 @@ func TestCachedMapBroker_ResubscribeFreshData(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify we see all 6 entries (not stale 3)
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 6, "re-subscribe should load fresh data from backend")
@@ -1941,7 +1941,7 @@ func TestCachedMapBroker_ConcurrentPresenceScenario(t *testing.T) {
 			require.NoError(t, err)
 
 			// Read state
-			stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+			stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 			pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 			require.NoError(t, err)
 			results[clientIdx] = len(pubs)
@@ -1953,7 +1953,7 @@ func TestCachedMapBroker_ConcurrentPresenceScenario(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Final read should show all clients
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, numClients, "final state should have all %d clients", numClients)
@@ -2006,7 +2006,7 @@ func TestCachedMapBroker_SubscribeAlreadyLoadedChannel(t *testing.T) {
 	err = cached.Subscribe(channel)
 	require.NoError(t, err)
 
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -2019,7 +2019,7 @@ func TestCachedMapBroker_SubscribeAlreadyLoadedChannel(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify cache was updated via pub/sub
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 2)
@@ -2037,7 +2037,7 @@ func TestCachedMapBroker_SubscribeAlreadyLoadedChannel(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify all 3 entries are visible
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 3, "all entries should be visible after re-subscribe")
@@ -2182,7 +2182,7 @@ func TestCachedMapBroker_Streamless(t *testing.T) {
 	require.NoError(t, err)
 
 	// Load cache and verify the key is visible.
-	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 1, "streamless publish should be visible in cache")
 	require.Equal(t, "key1", stateRes.Publications[0].Key)
@@ -2194,7 +2194,7 @@ func TestCachedMapBroker_Streamless(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 1)
 	require.Equal(t, []byte(`{"v":2}`), stateRes.Publications[0].Data, "cache should reflect updated value")
@@ -2205,7 +2205,7 @@ func TestCachedMapBroker_Streamless(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 2, "both keys should be in cache")
 
@@ -2213,7 +2213,7 @@ func TestCachedMapBroker_Streamless(t *testing.T) {
 	_, err = cached.Remove(ctx, channel, "key1", MapRemoveOptions{})
 	require.NoError(t, err)
 
-	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{Cached: true, Limit: -1})
+	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{AllowCached: true, Limit: -1})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 1, "removed key should be gone from cache")
 	require.Equal(t, "key2", stateRes.Publications[0].Key)
@@ -2260,7 +2260,7 @@ func TestCachedMapBroker_OrderedStateAsc(t *testing.T) {
 
 	// ASC: lowest score first.
 	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{
-		Cached: true, Limit: 100, Asc: true,
+		AllowCached: true, Limit: 100, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 5)
@@ -2272,7 +2272,7 @@ func TestCachedMapBroker_OrderedStateAsc(t *testing.T) {
 
 	// DESC (default): highest score first.
 	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{
-		Cached: true, Limit: 100,
+		AllowCached: true, Limit: 100,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 5)
@@ -2313,7 +2313,7 @@ func TestCachedMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 
 	// Page 1.
 	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{
-		Cached: true, Limit: 3, Asc: true,
+		AllowCached: true, Limit: 3, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 3)
@@ -2324,7 +2324,7 @@ func TestCachedMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 
 	// Page 2.
 	stateRes2, err := cached.ReadState(ctx, channel, MapReadStateOptions{
-		Cached: true, Cursor: stateRes.Cursor, Limit: 3, Asc: true,
+		AllowCached: true, Cursor: stateRes.Cursor, Limit: 3, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes2.Publications, 3)
@@ -2335,7 +2335,7 @@ func TestCachedMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 
 	// Page 3.
 	stateRes3, err := cached.ReadState(ctx, channel, MapReadStateOptions{
-		Cached: true, Cursor: stateRes2.Cursor, Limit: 3, Asc: true,
+		AllowCached: true, Cursor: stateRes2.Cursor, Limit: 3, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes3.Publications, 3)
@@ -2346,7 +2346,7 @@ func TestCachedMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 
 	// Page 4: last entry.
 	stateRes4, err := cached.ReadState(ctx, channel, MapReadStateOptions{
-		Cached: true, Cursor: stateRes3.Cursor, Limit: 3, Asc: true,
+		AllowCached: true, Cursor: stateRes3.Cursor, Limit: 3, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes4.Publications, 1)
@@ -2384,7 +2384,7 @@ func TestCachedMapBroker_OrderedStateAscSameScores(t *testing.T) {
 
 	// ASC with same scores → key ASC.
 	stateRes, err := cached.ReadState(ctx, channel, MapReadStateOptions{
-		Cached: true, Limit: 100, Asc: true,
+		AllowCached: true, Limit: 100, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 4)
@@ -2395,7 +2395,7 @@ func TestCachedMapBroker_OrderedStateAscSameScores(t *testing.T) {
 
 	// DESC with same scores → key DESC.
 	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{
-		Cached: true, Limit: 100,
+		AllowCached: true, Limit: 100,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 4)
@@ -2406,7 +2406,7 @@ func TestCachedMapBroker_OrderedStateAscSameScores(t *testing.T) {
 
 	// Paginate ASC with limit=2.
 	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{
-		Cached: true, Limit: 2, Asc: true,
+		AllowCached: true, Limit: 2, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 2)
@@ -2415,7 +2415,7 @@ func TestCachedMapBroker_OrderedStateAscSameScores(t *testing.T) {
 	require.Equal(t, "banana", stateRes.Publications[1].Key)
 
 	stateRes, err = cached.ReadState(ctx, channel, MapReadStateOptions{
-		Cached: true, Cursor: stateRes.Cursor, Limit: 2, Asc: true,
+		AllowCached: true, Cursor: stateRes.Cursor, Limit: 2, Asc: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 2)

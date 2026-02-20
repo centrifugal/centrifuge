@@ -402,15 +402,15 @@ func (e *CachedMapBroker) Remove(ctx context.Context, ch string, key string, opt
 
 // ReadState retrieves the current key-value state for a channel.
 // By default, reads from backend for consistency (safe for CAS operations).
-// If opts.Cached is true (internal subscription flow), reads from cache for performance.
+// If opts.AllowCached is true (internal subscription flow), reads from cache for performance.
 func (e *CachedMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
 	// Default: read from backend for consistency (safe for CAS, always fresh).
 	// Application code should always get fresh data.
-	if !opts.Cached {
+	if !opts.AllowCached {
 		return e.backend.ReadState(ctx, ch, opts)
 	}
 
-	// Cached path - only used by internal subscription flow for optimized delivery.
+	// AllowCached path - only used by internal subscription flow for optimized delivery.
 	// MarkLoading ensures any pub/sub messages arriving during cache load are
 	// buffered and replayed after the load completes, preventing data loss.
 	e.cache.MarkLoading(ch)

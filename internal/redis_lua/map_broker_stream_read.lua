@@ -5,7 +5,7 @@
 -- ARGV[2] = since_offset
 -- ARGV[3] = limit (0 = no limit)
 -- ARGV[4] = reverse ("0" or "1")
--- ARGV[5] = meta_expire (seconds, 0 to disable)
+-- ARGV[5] = meta_expire (milliseconds, 0 to disable)
 -- ARGV[6] = new_epoch_if_empty
 
 local stream_key = KEYS[1]
@@ -32,7 +32,7 @@ if top_offset == false then
 end
 
 if meta_expire ~= '0' then
-    redis.call("expire", meta_key, meta_expire)
+    redis.call("pexpire", meta_key, meta_expire)
 end
 
 local pubs = {}

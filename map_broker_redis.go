@@ -489,13 +489,13 @@ func boolToStr(b bool) string {
 	return "0"
 }
 
-// ceilSeconds converts a duration to seconds string, rounding up.
-// Sub-second positive durations become "1". Zero/negative returns "0".
-func ceilSeconds(d time.Duration) string {
+// millis converts a duration to a milliseconds string.
+// Zero/negative returns "0".
+func millis(d time.Duration) string {
 	if d <= 0 {
 		return "0"
 	}
-	return strconv.FormatInt(int64((d + time.Second - 1) / time.Second), 10)
+	return strconv.FormatInt(d.Milliseconds(), 10)
 }
 
 // Publish publishes data to a stateful channel with optional keyed state.
@@ -592,9 +592,9 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 	if opts.IdempotencyKey != "" {
 		resultKey = e.resultCacheKey(s.shard, ch, opts.IdempotencyKey)
 		if opts.IdempotentResultTTL > 0 {
-			resultExpire = ceilSeconds(opts.IdempotentResultTTL)
+			resultExpire = millis(opts.IdempotentResultTTL)
 		} else {
-			resultExpire = ceilSeconds(e.conf.IdempotentResultTTL)
+			resultExpire = millis(e.conf.IdempotentResultTTL)
 		}
 	}
 
@@ -621,7 +621,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		stateExpireKey = e.stateExpireKey(s.shard, ch)
 	}
 
-	metaExpire := ceilSeconds(chOpts.MetaTTL)
+	metaExpire := millis(chOpts.MetaTTL)
 
 	useDelta := "0"
 	if opts.UseDelta && len(opts.StreamData) == 0 {
@@ -709,7 +709,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 			key,                                // message_key
 			convert.BytesToString(streamBytes), // message_payload (Publication - for stream and publishing)
 			strconv.Itoa(chOpts.StreamSize),
-			ceilSeconds(chOpts.StreamTTL),
+			millis(chOpts.StreamTTL),
 			chID, // channel (for Lua to publish)
 			metaExpire,
 			epoch.Generate(), // new_epoch_if_empty
@@ -720,8 +720,8 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 			opts.VersionEpoch,
 			"0", // is_remove
 			strconv.FormatInt(opts.Score, 10),
-			ceilSeconds(chOpts.KeyTTL),
-			"0",                                  // use_hexpire
+			millis(chOpts.KeyTTL),
+			"0",                                  // use_hpexpire
 			ch,                                   // channel_for_cleanup (for cleanup registration)
 			string(opts.KeyMode),                 // key_mode
 			boolToStr(opts.RefreshTTLOnSuppress), // refresh_ttl_on_suppress
@@ -731,6 +731,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 			nilKey,                               // nil_key (slot-aligned placeholder for unused KEYS)
 			versionField,                         // version_field (pre-computed "v:KEY" or "")
 			versionEpochField,                    // version_epoch_field (pre-computed "ve:KEY" or "")
+			strconv.FormatInt(now, 10),           // now (current time in milliseconds)
 		},
 	).ToArray()
 	if err != nil {
@@ -776,7 +777,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 		stateMetaKey = e.stateMetaKey(s.shard, ch)
 	}
 
-	metaExpire := ceilSeconds(chOpts.MetaTTL)
+	metaExpire := millis(chOpts.MetaTTL)
 
 	publishCommand := "PUBLISH"
 	if e.useShardedPubSub(s.shard) {
@@ -788,11 +789,13 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 		chID = ""
 	}
 
+	now := time.Now().UnixMilli()
+
 	// Create a Publication with key and removed=true to signal removal
 	protoPub := &protocol.Publication{
 		Key:     key,
 		Removed: true,
-		Time:    time.Now().UnixMilli(),
+		Time:    now,
 	}
 	pubBytes, err := protoPub.MarshalVT()
 	if err != nil {
@@ -805,9 +808,9 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 	if opts.IdempotencyKey != "" {
 		resultKey = e.resultCacheKey(s.shard, ch, opts.IdempotencyKey)
 		if opts.IdempotentResultTTL > 0 {
-			resultExpire = ceilSeconds(opts.IdempotentResultTTL)
+			resultExpire = millis(opts.IdempotentResultTTL)
 		} else {
-			resultExpire = ceilSeconds(e.conf.IdempotentResultTTL)
+			resultExpire = millis(e.conf.IdempotentResultTTL)
 		}
 	}
 
@@ -861,7 +864,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 			key,                             // message_key
 			convert.BytesToString(pubBytes), // message_payload (Publication with Removed=true for stream)
 			strconv.Itoa(chOpts.StreamSize),
-			ceilSeconds(chOpts.StreamTTL),
+			millis(chOpts.StreamTTL),
 			chID, // channel (for Lua to publish)
 			metaExpire,
 			epoch.Generate(), // new_epoch_if_empty
@@ -871,7 +874,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 			"1",              // is_leave (this triggers removal)
 			"0",              // score
 			"0",              // map_member_ttl
-			"0",              // use_hexpire
+			"0",              // use_hpexpire
 			"",               // channel_for_cleanup (not used for unpublish)
 			"",               // key_mode (not used for unpublish)
 			"0",              // refresh_ttl_on_suppress (not used for unpublish)
@@ -880,7 +883,8 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 			"",               // state_payload (not used for unpublish)
 			nilKey,           // nil_key (slot-aligned placeholder for unused KEYS)
 			versionField,     // version_field (pre-computed "v:KEY" or "")
-			versionEpochField, // version_epoch_field (pre-computed "ve:KEY" or "")
+			versionEpochField,                 // version_epoch_field (pre-computed "ve:KEY" or "")
+			strconv.FormatInt(now, 10),        // now (current time in milliseconds)
 		},
 	).ToArray()
 	if err != nil {
@@ -1047,7 +1051,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 
 	stateTTL := "0"
 	if chOpts.MetaTTL > 0 {
-		stateTTL = ceilSeconds(chOpts.MetaTTL)
+		stateTTL = millis(chOpts.MetaTTL)
 	}
 
 	// Cursor must be "0" to start for Redis HSCAN
@@ -1078,8 +1082,8 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 		[]string{
 			cursor,
 			strconv.Itoa(luaLimit),
-			strconv.FormatInt(time.Now().Unix(), 10),
-			ceilSeconds(chOpts.MetaTTL),
+			strconv.FormatInt(time.Now().UnixMilli(), 10),
+			millis(chOpts.MetaTTL),
 			stateTTL,
 			streamlessFlag,
 		},
@@ -1148,7 +1152,7 @@ func (e *RedisMapBroker) readUnorderedStateZero(
 
 	stateTTL := "0"
 	if chOpts.MetaTTL > 0 {
-		stateTTL = ceilSeconds(chOpts.MetaTTL)
+		stateTTL = millis(chOpts.MetaTTL)
 	}
 
 	cursor := opts.Cursor
@@ -1185,8 +1189,8 @@ func (e *RedisMapBroker) readUnorderedStateZero(
 		[]string{
 			cursor,
 			strconv.Itoa(luaLimit),
-			strconv.FormatInt(time.Now().Unix(), 10),
-			ceilSeconds(chOpts.MetaTTL),
+			strconv.FormatInt(time.Now().UnixMilli(), 10),
+			millis(chOpts.MetaTTL),
 			stateTTL,
 			streamlessFlag,
 		},
@@ -1296,7 +1300,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 
 	stateTTL := "0"
 	if chOpts.MetaTTL > 0 {
-		stateTTL = ceilSeconds(chOpts.MetaTTL)
+		stateTTL = millis(chOpts.MetaTTL)
 	}
 
 	// Parse cursor: "score\x00key" format
@@ -1334,8 +1338,8 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 			strconv.Itoa(luaLimit),                   // ARGV[1] = limit
 			cursorScore,                              // ARGV[2] = cursor_score
 			cursorKey,                                // ARGV[3] = cursor_key
-			strconv.FormatInt(time.Now().Unix(), 10), // ARGV[4] = now
-			ceilSeconds(chOpts.MetaTTL), // ARGV[5] = meta_ttl
+			strconv.FormatInt(time.Now().UnixMilli(), 10), // ARGV[4] = now
+			millis(chOpts.MetaTTL), // ARGV[5] = meta_ttl
 			stateTTL,       // ARGV[6] = state_ttl
 			streamlessFlag, // ARGV[7] = streamless
 			ascFlag,        // ARGV[8] = asc ("1" = ascending, "0" = descending)
@@ -1449,7 +1453,7 @@ func (e *RedisMapBroker) ReadStreamZero(
 
 	metaExpire := "0"
 	if chOpts.MetaTTL > 0 {
-		metaExpire = ceilSeconds(chOpts.MetaTTL)
+		metaExpire = millis(chOpts.MetaTTL)
 	}
 
 	includePubsStr := "0"
@@ -1672,7 +1676,7 @@ func (e *RedisMapBroker) ReadStreamZero2(ctx context.Context, ch string, opts Ma
 
 	metaExpire := "0"
 	if chOpts.MetaTTL > 0 {
-		metaExpire = ceilSeconds(chOpts.MetaTTL)
+		metaExpire = millis(chOpts.MetaTTL)
 	}
 
 	// 2. Call 1: Get metadata with ExecWithReader (zero-alloc)
@@ -1920,7 +1924,7 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 
 	metaExpire := "0"
 	if chOpts.MetaTTL > 0 {
-		metaExpire = ceilSeconds(chOpts.MetaTTL)
+		metaExpire = millis(chOpts.MetaTTL)
 	}
 
 	includePubsStr := "0"
@@ -2079,7 +2083,7 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 
 	metaExpire := "0"
 	if chOpts.MetaTTL > 0 {
-		metaExpire = ceilSeconds(chOpts.MetaTTL)
+		metaExpire = millis(chOpts.MetaTTL)
 	}
 
 	// 2. Call 1: Get metadata using new simpler Lua script
@@ -2373,7 +2377,7 @@ func (e *RedisMapBroker) runCleanupWorker(ctx context.Context) {
 
 // runCleanupCycle processes all shards in parallel and cleans up expired entries.
 func (e *RedisMapBroker) runCleanupCycle(ctx context.Context) {
-	now := time.Now().Unix()
+	now := time.Now().UnixMilli()
 
 	var wg sync.WaitGroup
 	for _, wrapper := range e.shards {
@@ -2498,7 +2502,7 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 
 	metaExpire := "0"
 	if chOpts.MetaTTL > 0 {
-		metaExpire = ceilSeconds(chOpts.MetaTTL)
+		metaExpire = millis(chOpts.MetaTTL)
 	}
 
 	// Determine streamless mode — all KEYS are always real (slot-aligned) keys,
@@ -2524,7 +2528,7 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 			chID,                                  // ARGV[3]: channel (for PUBLISH)
 			publishCommand,                        // ARGV[4]: publish_command
 			strconv.Itoa(chOpts.StreamSize),       // ARGV[5]: stream_size
-			ceilSeconds(chOpts.StreamTTL), // ARGV[6]: stream_ttl
+			millis(chOpts.StreamTTL), // ARGV[6]: stream_ttl
 			metaExpire,     // ARGV[7]: meta_expire
 			e.node.ID(),    // ARGV[8]: new_epoch_if_empty
 			ch,             // ARGV[9]: channel_for_cleanup

@@ -1896,7 +1896,7 @@ func (n *Node) mapStateKey(ch string, opts MapReadStateOptions) string {
 	if opts.Asc {
 		builder.WriteString(",asc:1")
 	}
-	if opts.Cached {
+	if opts.AllowCached {
 		builder.WriteString(",cached:1")
 	}
 	if opts.Revision != nil {

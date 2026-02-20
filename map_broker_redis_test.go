@@ -851,7 +851,7 @@ func TestRedisMapBroker_CleanupGeneratesRemovalEvents(t *testing.T) {
 	// Simulate TTL expiry by calling cleanupChannel with a future "now".
 	shardWrapper := broker.shards[0]
 	cleanupKey := broker.cleanupRegistrationKeyForChannel(shardWrapper.shard, channel)
-	futureNow := time.Now().Unix() + 31
+	futureNow := time.Now().UnixMilli() + 31_000
 
 	err = broker.cleanupChannel(ctx, shardWrapper.shard, channel, cleanupKey, futureNow)
 	require.NoError(t, err)
@@ -953,7 +953,7 @@ func TestRedisMapBroker_CleanupExpiry(t *testing.T) {
 
 	// Simulate time passing: 15 seconds.
 	shardWrapper := broker.shards[0]
-	futureNow := time.Now().Unix() + 15
+	futureNow := time.Now().UnixMilli() + 15_000
 
 	// Cleanup both channels.
 	shortCleanupKey := broker.cleanupRegistrationKeyForChannel(shardWrapper.shard, shortChannel)
@@ -1032,7 +1032,7 @@ func TestRedisMapBroker_CleanupRefreshedTTL(t *testing.T) {
 	// but the refreshed 600s TTL should keep the key alive.
 	shardWrapper := broker.shards[0]
 	cleanupKey := broker.cleanupRegistrationKeyForChannel(shardWrapper.shard, channel)
-	futureNow := time.Now().Unix() + 15
+	futureNow := time.Now().UnixMilli() + 15_000
 
 	err = broker.cleanupChannel(ctx, shardWrapper.shard, channel, cleanupKey, futureNow)
 	require.NoError(t, err)
@@ -1112,7 +1112,7 @@ func TestRedisMapBroker_CleanupRegistration(t *testing.T) {
 	require.Greater(t, score, float64(0), "Channel should have an expiry score in cleanup ZSET")
 
 	// Run cleanup with future time to expire the entry.
-	futureNow := time.Now().Unix() + 31
+	futureNow := time.Now().UnixMilli() + 31_000
 	err = broker.cleanupChannel(ctx, shardWrapper.shard, channel, cleanupKey, futureNow)
 	require.NoError(t, err)
 

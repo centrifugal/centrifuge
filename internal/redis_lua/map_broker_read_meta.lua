@@ -1,6 +1,6 @@
 -- Get or create stream metadata (epoch, top_offset)
 -- KEYS[1] = meta key
--- ARGV[1] = meta_expire (seconds, 0 to disable)
+-- ARGV[1] = meta_expire (milliseconds, 0 to disable)
 -- ARGV[2] = new_epoch_if_empty
 
 local meta_key = KEYS[1]
@@ -20,7 +20,7 @@ if top_offset == false then
 end
 
 if meta_expire ~= '0' then
-    redis.call("expire", meta_key, meta_expire)
+    redis.call("pexpire", meta_key, meta_expire)
 end
 
 return { top_offset, current_epoch }

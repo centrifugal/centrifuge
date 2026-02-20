@@ -24,13 +24,13 @@ Storage format in state hash: offset:epoch:publication_bytes
 -- KEYS[7] = state meta key (for per-key version cleanup)
 
 -- ==== ARGV ====
--- ARGV[1]  = now (unix timestamp)
+-- ARGV[1]  = now (unix timestamp milliseconds)
 -- ARGV[2]  = batch_size (max entries to process)
 -- ARGV[3]  = channel (for PUBLISH)
 -- ARGV[4]  = publish_command ("PUBLISH" or "SPUBLISH", empty to disable)
 -- ARGV[5]  = stream_size (MAXLEN for stream)
--- ARGV[6]  = stream_ttl (seconds)
--- ARGV[7]  = meta_expire (seconds, "0" to disable)
+-- ARGV[6]  = stream_ttl (milliseconds)
+-- ARGV[7]  = meta_expire (milliseconds, "0" to disable)
 -- ARGV[8]  = new_epoch_if_empty
 -- ARGV[9]  = channel_for_cleanup_zset (channel name to update in cleanup ZSET)
 -- ARGV[10] = streamless ("1" = skip stream/meta operations, "0" = normal streamed mode)
@@ -66,7 +66,7 @@ local function encode_varint(value)
 end
 
 -- Helper function to construct minimal LEAVE Publication protobuf
-local function construct_minimal_leave(key, timestamp_seconds)
+local function construct_minimal_leave(key, timestamp_ms)
     local parts = {}
 
     -- Field 11: key (string), wire type 2
@@ -82,7 +82,7 @@ local function construct_minimal_leave(key, timestamp_seconds)
     -- Field 9: time (int64, Unix ms), wire type 0
     -- tag = (9 << 3) | 0 = 0x48
     parts[#parts+1] = string.char(0x48)
-    parts[#parts+1] = encode_varint(timestamp_seconds * 1000)
+    parts[#parts+1] = encode_varint(timestamp_ms)
 
     return table.concat(parts)
 end
@@ -140,13 +140,13 @@ for _, entry_key in ipairs(expired) do
 
             -- Set meta TTL if needed
             if meta_expire ~= '0' then
-                redis.call("expire", meta_key, meta_expire)
+                redis.call("pexpire", meta_key, meta_expire)
             end
 
             -- Write removal event to stream
             redis.call("xadd", stream_key, "MAXLEN", "~", stream_size, top_offset, "e", current_epoch, "d", removal_payload)
             if tonumber(stream_ttl) > 0 then
-                redis.call("expire", stream_key, tonumber(stream_ttl))
+                redis.call("pexpire", stream_key, tonumber(stream_ttl))
             end
         end
 

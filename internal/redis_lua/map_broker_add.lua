@@ -26,9 +26,9 @@ Publishing format (via PUBLISH/SPUBLISH):
 -- ARGV[1]  = message_key (Key for state field - Client ID for presence, state key for keyed state)
 -- ARGV[2]  = message_payload (protocol.Publication for stream and publishing)
 -- ARGV[3]  = stream_size (MAXLEN)
--- ARGV[4]  = stream_ttl (seconds)
+-- ARGV[4]  = stream_ttl (milliseconds)
 -- ARGV[5]  = channel (for PUBLISH, empty '' to disable)
--- ARGV[6]  = meta_expire (seconds, "0" to disable)
+-- ARGV[6]  = meta_expire (milliseconds, "0" to disable)
 -- ARGV[7]  = new_epoch_if_empty
 -- ARGV[8]  = publish_command (e.g., "PUBLISH" or "SPUBLISH", empty '' to disable)
 -- ARGV[9]  = result_key_expire (for idempotency, empty '' to disable)
@@ -37,8 +37,8 @@ Publishing format (via PUBLISH/SPUBLISH):
 -- ARGV[12] = version_epoch
 -- ARGV[13] = is_leave ("0" or "1")
 -- ARGV[14] = score (for ordered keyed state)
--- ARGV[15] = keyed_member_ttl (seconds for keyed state TTL)
--- ARGV[16] = use_hexpire ("0" or "1" - Redis 7.4+ per-field TTL)
+-- ARGV[15] = keyed_member_ttl (milliseconds for keyed state TTL)
+-- ARGV[16] = use_hpexpire ("0" or "1" - Redis 7.4+ per-field TTL)
 -- ARGV[17] = channel_for_cleanup (channel name for cleanup registration, empty '' to disable)
 -- ARGV[18] = key_mode ("" for replace/always, "if_new" only if key doesn't exist, "if_exists" only if key exists)
 -- ARGV[19] = refresh_ttl_on_suppress ("0" or "1" - refresh TTL even when suppressed by key_mode)
@@ -48,6 +48,7 @@ Publishing format (via PUBLISH/SPUBLISH):
 -- ARGV[23] = nil_key (slot-aligned placeholder for unused KEYS in cluster mode, empty '' to disable)
 -- ARGV[24] = version_field (pre-computed "v:KEY" for per-key version, empty '' to disable)
 -- ARGV[25] = version_epoch_field (pre-computed "ve:KEY" for per-key version epoch, empty '' to disable)
+-- ARGV[26] = now (current time in milliseconds, from Go)
 
 -- Local variables from KEYS
 local stream_key = KEYS[1]
@@ -75,7 +76,7 @@ local version_epoch = ARGV[12]
 local is_leave = ARGV[13]
 local score = ARGV[14]
 local keyed_member_ttl = ARGV[15]
-local use_hexpire = ARGV[16]
+local use_hpexpire = ARGV[16]
 local channel_for_cleanup = ARGV[17]
 local key_mode = ARGV[18] or ""
 local refresh_ttl_on_suppress = ARGV[19] or "0"
@@ -89,6 +90,7 @@ local state_payload_arg = ARGV[22] or ""
 local nil_key = ARGV[23] or ""
 local version_field = ARGV[24] or ""
 local version_epoch_field = ARGV[25] or ""
+local now = tonumber(ARGV[26])
 if nil_key ~= "" then
     if stream_key == nil_key then stream_key = '' end
     if meta_key == nil_key then meta_key = '' end
@@ -167,7 +169,6 @@ if meta_key ~= '' then
             -- KeyModeIfNew but key already exists - suppress
             -- But optionally refresh TTL if refresh_ttl_on_suppress is set
             if refresh_ttl_on_suppress == "1" and tonumber(keyed_member_ttl) > 0 then
-                local now = tonumber(redis.call("time")[1])
                 local expire_at = now + tonumber(keyed_member_ttl)
                 local ttl = tonumber(keyed_member_ttl)
 
@@ -184,18 +185,18 @@ if meta_key ~= '' then
                     end
                 end
 
-                -- Refresh per-field TTL if using HEXPIRE
-                if use_hexpire == "1" then
-                    redis.call("hexpire", state_hash_key, ttl, "FIELDS", "1", message_key)
+                -- Refresh per-field TTL if using HPEXPIRE
+                if use_hpexpire == "1" then
+                    redis.call("hpexpire", state_hash_key, ttl, "FIELDS", "1", message_key)
                 end
                 -- Container-level safety net EXPIRE using MetaTTL (not per-key TTL)
                 if meta_expire ~= '0' then
                     local me = tonumber(meta_expire)
                     if state_expire_key ~= '' then
-                        redis.call("expire", state_expire_key, me)
+                        redis.call("pexpire", state_expire_key, me)
                     end
-                    if use_hexpire ~= "1" then
-                        redis.call("expire", state_hash_key, me)
+                    if use_hpexpire ~= "1" then
+                        redis.call("pexpire", state_hash_key, me)
                     end
                 end
             end
@@ -255,7 +256,7 @@ if meta_key ~= '' then
 
     -- Set meta TTL if needed
     if meta_expire ~= '0' then
-        redis.call("expire", meta_key, meta_expire)
+        redis.call("pexpire", meta_key, meta_expire)
     end
 
     -- Update per-key version tracking in state_meta_key (tied to state lifecycle)
@@ -324,7 +325,6 @@ end
 if state_hash_key ~= '' and is_leave ~= "1" then
     -- Epoch change check already done in Step 2 (moved there for version check correctness)
 
-    local now = tonumber(redis.call("time")[1])
     local expire_at = now + tonumber(keyed_member_ttl)
     local ttl = tonumber(keyed_member_ttl)
 
@@ -340,9 +340,9 @@ if state_hash_key ~= '' and is_leave ~= "1" then
         -- Container-level safety net EXPIRE using MetaTTL (not per-key TTL)
         if meta_expire ~= '0' then
             local me = tonumber(meta_expire)
-            redis.call("expire", state_hash_key, me)
-            redis.call("expire", state_order_key, me)
-            redis.call("expire", state_expire_key, me)
+            redis.call("pexpire", state_hash_key, me)
+            redis.call("pexpire", state_order_key, me)
+            redis.call("pexpire", state_expire_key, me)
         end
     else
         -- Simple HASH keyed state (unordered)
@@ -351,24 +351,24 @@ if state_hash_key ~= '' and is_leave ~= "1" then
         redis.call("hset", state_hash_key, message_key, state_value)
         if ttl > 0 then
             -- Always populate expire ZSET for cleanup script to discover expirations
-            -- This enables guaranteed LEAVE events even when using HEXPIRE
+            -- This enables guaranteed LEAVE events even when using HPEXPIRE
             if state_expire_key ~= '' then
                 redis.call("zadd", state_expire_key, expire_at, message_key)
             end
 
-            if use_hexpire == "1" then
-                -- Redis 7.4+ HEXPIRE per-field TTL (defense in depth)
-                redis.call("hexpire", state_hash_key, ttl, "FIELDS", "1", message_key)
+            if use_hpexpire == "1" then
+                -- Redis 7.4+ HPEXPIRE per-field TTL (defense in depth)
+                redis.call("hpexpire", state_hash_key, ttl, "FIELDS", "1", message_key)
             end
         end
         -- Container-level safety net EXPIRE using MetaTTL (not per-key TTL)
         if meta_expire ~= '0' then
             local me = tonumber(meta_expire)
             if state_expire_key ~= '' then
-                redis.call("expire", state_expire_key, me)
+                redis.call("pexpire", state_expire_key, me)
             end
-            if use_hexpire ~= "1" then
-                redis.call("expire", state_hash_key, me)
+            if use_hpexpire ~= "1" then
+                redis.call("pexpire", state_hash_key, me)
             end
         end
     end
@@ -390,7 +390,7 @@ if state_hash_key ~= '' and is_leave ~= "1" then
         -- Do NOT fall back to keyed_member_ttl - it's per-key TTL (e.g. 30s for
         -- presence) which is too short and causes premature epoch invalidation.
         if meta_expire ~= '0' then
-            redis.call("expire", state_meta_key, tonumber(meta_expire))
+            redis.call("pexpire", state_meta_key, tonumber(meta_expire))
         end
     end
 end
@@ -406,7 +406,7 @@ if stream_key ~= '' and meta_key ~= '' then
     local xadd_args = { stream_key, "MAXLEN", "~", stream_size, top_offset, "e", current_epoch, "d", message_payload }
     redis.call("xadd", unpack(xadd_args))
     if tonumber(stream_ttl) > 0 then
-        redis.call("expire", stream_key, tonumber(stream_ttl))
+        redis.call("pexpire", stream_key, tonumber(stream_ttl))
     end
 end
 
@@ -427,7 +427,7 @@ end
 -- ==== Step 8: Store result key for idempotency ====
 if result_key_expire ~= '' and result_key ~= '' then
     redis.call("hset", result_key, "e", current_epoch, "s", top_offset)
-    redis.call("expire", result_key, result_key_expire)
+    redis.call("pexpire", result_key, result_key_expire)
 end
 
 -- ==== Step 9: Return top_offset and epoch ====

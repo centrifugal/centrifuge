@@ -262,18 +262,19 @@ type MapReadStateOptions struct {
 	// Cursor/Limit are ignored when Key is set.
 	Key string
 
-	// Cached allows reading from cache instead of primary storage.
-	// This is an internal option used by the subscription flow for optimized delivery.
-	// Application code should NOT set this - leave it false to always read fresh data
-	// from the backend (safe for CAS operations, always consistent).
-	// Only affects CachedMapBroker; other brokers ignore this option.
-	Cached bool
-
 	// Asc requests ascending sort direction for ordered channels.
-	// When false (default), ordered state is sorted by (score DESC, key DESC).
-	// When true, ordered state is sorted by (score ASC, key ASC).
+	// When false (default), ordered state is sorted by score DESC.
+	// When true, ordered state is sorted by score ASC.
 	// Ignored for unordered channels.
 	Asc bool
+
+	// AllowCached allows reading from cache instead of primary storage if
+	// available. This option is always set by the subscriptions flow for
+	// optimized delivery.
+	// Application code should NOT set this if consistent results are important
+	// (for example, when making CAS operations).
+	// Broker can theoretically not provide this functionality.
+	AllowCached bool
 }
 
 // MapStats provides statistics about a channel's state.

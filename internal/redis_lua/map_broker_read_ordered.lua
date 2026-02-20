@@ -15,8 +15,8 @@
 -- ARGV[2] = cursor_score (empty string for first page, score part of cursor)
 -- ARGV[3] = cursor_key (empty string for first page, key part of cursor)
 -- ARGV[4] = now (current timestamp for expiration cleanup)
--- ARGV[5] = meta_ttl (seconds, 0 to disable)
--- ARGV[6] = state_ttl (seconds, 0 to disable - refreshes TTL on read)
+-- ARGV[5] = meta_ttl (milliseconds, 0 to disable)
+-- ARGV[6] = state_ttl (milliseconds, 0 to disable - refreshes TTL on read)
 -- ARGV[7] = streamless ("1" = skip meta/epoch logic, "0" = normal streamed mode)
 -- ARGV[8] = asc ("1" = ascending order, "0" or absent = descending order)
 
@@ -53,7 +53,7 @@ if not streamless then
         end
 
         if meta_ttl > 0 then
-            redis.call("expire", meta_key, meta_ttl)
+            redis.call("pexpire", meta_key, meta_ttl)
         end
     end
 
@@ -73,11 +73,11 @@ end
 
 -- Refresh state TTL on read (LRU behavior)
 if state_ttl > 0 then
-    redis.call("expire", hash_key, state_ttl)
-    redis.call("expire", order_key, state_ttl)
-    redis.call("expire", expire_key, state_ttl)
+    redis.call("pexpire", hash_key, state_ttl)
+    redis.call("pexpire", order_key, state_ttl)
+    redis.call("pexpire", expire_key, state_ttl)
     if not streamless and state_meta_key ~= '' then
-        redis.call("expire", state_meta_key, state_ttl)
+        redis.call("pexpire", state_meta_key, state_ttl)
     end
 end
 

@@ -426,7 +426,7 @@ func BenchmarkReadState_Direct_vs_Cached(b *testing.B) {
 		}
 	})
 
-	b.Run("Cached", func(b *testing.B) {
+	b.Run("AllowCached", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			_, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: -1})
@@ -471,7 +471,7 @@ func BenchmarkPublish_Direct_vs_Cached(b *testing.B) {
 		}
 	})
 
-	b.Run("Cached", func(b *testing.B) {
+	b.Run("AllowCached", func(b *testing.B) {
 		channel := "bench_cached_write"
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
@@ -649,7 +649,7 @@ func BenchmarkMapReadState_Postgres_Direct_vs_Cached(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: -1, Cached: true})
+			_, _ = cached.ReadState(ctx, channel, MapReadStateOptions{Limit: -1, AllowCached: true})
 		}
 	})
 
