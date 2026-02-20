@@ -2016,13 +2016,13 @@ func (n *Node) MapStats(ctx context.Context, ch string) (MapStatsResult, error) 
 
 // MapPublish publishes data to a map channel.
 // This updates the snapshot and optionally broadcasts to subscribers.
-func (n *Node) MapPublish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
+func (n *Node) MapPublish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapUpdateResult, error) {
 	if key == "" {
-		return MapPublishResult{}, errors.New("key is required for map publish")
+		return MapUpdateResult{}, errors.New("key is required for map publish")
 	}
 	mapBroker := n.getMapBroker(ch)
 	if mapBroker == nil {
-		return MapPublishResult{}, ErrorNotAvailable
+		return MapUpdateResult{}, ErrorNotAvailable
 	}
 	n.metrics.incActionCount("map_publish", ch)
 	n.metrics.incMessagesSent("map_publication", ch)
@@ -2035,13 +2035,13 @@ func (n *Node) MapPublish(ctx context.Context, ch string, key string, opts MapPu
 
 // MapRemove removes a key from a map channel.
 // This removes the key from snapshot and optionally broadcasts removal to subscribers.
-func (n *Node) MapRemove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
+func (n *Node) MapRemove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapUpdateResult, error) {
 	if key == "" {
-		return MapPublishResult{}, errors.New("key is required for map remove")
+		return MapUpdateResult{}, errors.New("key is required for map remove")
 	}
 	mapBroker := n.getMapBroker(ch)
 	if mapBroker == nil {
-		return MapPublishResult{}, ErrorNotAvailable
+		return MapUpdateResult{}, ErrorNotAvailable
 	}
 	n.metrics.incActionCount("map_remove", ch)
 	n.metrics.incMessagesSent("map_removal", ch)

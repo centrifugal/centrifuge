@@ -18,9 +18,9 @@ type DebouncingMapBrokerConfig struct {
 // Remove cancels any pending debounced Publish for the same (channel, key).
 //
 // When a Publish is debounced (not passed through), it returns a zero-value
-// MapPublishResult and nil error immediately. The actual backend Publish
+// MapUpdateResult and nil error immediately. The actual backend Publish
 // happens asynchronously when the debounce timer fires. Callers should not
-// rely on MapPublishResult fields (like Position) for debounced calls.
+// rely on MapUpdateResult fields (like Position) for debounced calls.
 type DebouncingMapBroker struct {
 	MapBroker
 	node      *Node
@@ -56,7 +56,7 @@ func NewDebouncingMapBroker(node *Node, backend MapBroker, conf DebouncingMapBro
 // Publish debounces publish if configured, otherwise passes through.
 //
 // When debouncing is active, the call returns immediately with a zero-value
-// MapPublishResult. This means callers cannot rely on result fields (Position,
+// MapUpdateResult. This means callers cannot rely on result fields (Position,
 // Suppressed, SuppressReason, CurrentPublication). In particular:
 //   - CAS (ExpectedPosition) cannot work because the caller never sees whether
 //     the operation was suppressed due to position mismatch.
@@ -65,7 +65,7 @@ func NewDebouncingMapBroker(node *Node, backend MapBroker, conf DebouncingMapBro
 //
 // Only use debouncing for fire-and-forget writes (e.g., cursor positions,
 // heartbeats) where the caller does not need the result.
-func (b *DebouncingMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
+func (b *DebouncingMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapUpdateResult, error) {
 	if b.conf.Debounce == nil {
 		return b.MapBroker.Publish(ctx, ch, key, opts)
 	}
@@ -74,11 +74,11 @@ func (b *DebouncingMapBroker) Publish(ctx context.Context, ch string, key string
 		return b.MapBroker.Publish(ctx, ch, key, opts)
 	}
 	b.debouncer.Debounce(ch, key, d, mapDebounceValue{opts: opts})
-	return MapPublishResult{}, nil
+	return MapUpdateResult{}, nil
 }
 
 // Remove cancels any pending debounced Publish and forwards to backend.
-func (b *DebouncingMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
+func (b *DebouncingMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapUpdateResult, error) {
 	if b.conf.Debounce != nil && b.conf.Debounce(ch) > 0 {
 		b.debouncer.Cancel(ch, key)
 	}

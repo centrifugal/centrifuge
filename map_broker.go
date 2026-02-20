@@ -99,10 +99,10 @@ type MapBroker interface {
 	//  2. Appends the publication to the stream (if StreamSize > 0)
 	//  3. Broadcasts to pub/sub subscribers
 	//
-	// Returns MapPublishResult with Suppressed=false when the state was changed.
+	// Returns MapUpdateResult with Suppressed=false when the state was changed.
 	// When Suppressed=true (idempotency, version conflict, or KeyMode condition),
 	// no stream entry is created and no pub/sub broadcast occurs.
-	Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error)
+	Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapUpdateResult, error)
 
 	// Remove removes a key from the state and notifies subscribers.
 	//
@@ -111,9 +111,9 @@ type MapBroker interface {
 	//  2. Appends a removal publication to the stream (if StreamSize > 0)
 	//  3. Broadcasts removal to pub/sub subscribers
 	//
-	// Returns MapPublishResult with Suppressed=false when the key was removed.
+	// Returns MapUpdateResult with Suppressed=false when the key was removed.
 	// When Suppressed=true (key not found or idempotency), no stream entry or broadcast occurs.
-	Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error)
+	Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapUpdateResult, error)
 
 	// ReadStream retrieves publications from the channel's history stream.
 	//
@@ -307,8 +307,8 @@ const (
 	SuppressReasonPositionMismatch SuppressReason = "position_mismatch"
 )
 
-// MapPublishResult contains the result of Publish or Remove operation.
-type MapPublishResult struct {
+// MapUpdateResult contains the result of Publish operation.
+type MapUpdateResult struct {
 	// Position is the current stream position after the operation.
 	Position StreamPosition
 	// Suppressed is true when the operation did NOT change the state.

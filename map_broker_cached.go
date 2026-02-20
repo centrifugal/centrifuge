@@ -388,7 +388,7 @@ func (e *CachedMapBroker) Unsubscribe(ch string) error {
 // Publish updates the state and broadcasts the change to subscribers.
 // Write path: backend first, then update local cache for read-your-own-writes.
 // Uses per-channel lock to ensure serialized cache updates under concurrency.
-func (e *CachedMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
+func (e *CachedMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapUpdateResult, error) {
 	// Write to backend (source of truth).
 	// Backend calls HandlePublication which updates the cache with proper gap detection.
 	return e.backend.Publish(ctx, ch, key, opts)
@@ -396,7 +396,7 @@ func (e *CachedMapBroker) Publish(ctx context.Context, ch string, key string, op
 
 // Remove removes a key from the state and notifies subscribers.
 // Backend calls HandlePublication which updates the cache with proper gap detection.
-func (e *CachedMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
+func (e *CachedMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapUpdateResult, error) {
 	return e.backend.Remove(ctx, ch, key, opts)
 }
 

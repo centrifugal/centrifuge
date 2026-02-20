@@ -499,30 +499,30 @@ func millis(d time.Duration) string {
 }
 
 // Publish publishes data to a stateful channel with optional keyed state.
-func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
+func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapUpdateResult, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
 	// Resolve channel options once for this operation.
 	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 	if err != nil {
-		return MapPublishResult{}, err
+		return MapUpdateResult{}, err
 	}
 
 	// Reject CAS and Version in ephemeral mode.
 	if chOpts.SyncMode == MapSyncEphemeral {
 		if opts.ExpectedPosition != nil {
-			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
+			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
 		}
 		if opts.Version > 0 {
-			return MapPublishResult{}, errors.New("version-based dedup requires SyncMode Converging")
+			return MapUpdateResult{}, errors.New("version-based dedup requires SyncMode Converging")
 		}
 	}
 
 	// Fast path for non-history, non-idempotent, non-keyed publications.
 	if chOpts.SyncMode == MapSyncEphemeral && opts.IdempotencyKey == "" && key == "" {
 		if e.conf.SkipPubSub {
-			return MapPublishResult{}, nil
+			return MapUpdateResult{}, nil
 		}
 		protoPub := &protocol.Publication{
 			Data: opts.Data,
@@ -534,7 +534,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 
 		pubBytes, err := protoPub.MarshalVT()
 		if err != nil {
-			return MapPublishResult{}, err
+			return MapUpdateResult{}, err
 		}
 
 		payload := "0::" + convert.BytesToString(pubBytes)
@@ -542,10 +542,10 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		chID := e.messageChannelID(s.shard, ch)
 		if e.useShardedPubSub(s.shard) {
 			cmd := shardClient.B().Spublish().Channel(chID).Message(payload).Build()
-			return MapPublishResult{}, shardClient.Do(ctx, cmd).Error()
+			return MapUpdateResult{}, shardClient.Do(ctx, cmd).Error()
 		}
 		cmd := shardClient.B().Publish().Channel(chID).Message(payload).Build()
-		return MapPublishResult{}, shardClient.Do(ctx, cmd).Error()
+		return MapUpdateResult{}, shardClient.Do(ctx, cmd).Error()
 	}
 
 	now := time.Now().UnixMilli()
@@ -565,7 +565,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 	}
 	streamBytes, err := streamProtoPub.MarshalVT()
 	if err != nil {
-		return MapPublishResult{}, err
+		return MapUpdateResult{}, err
 	}
 
 	// State publication (used for state storage) - always uses full state Data.
@@ -582,7 +582,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		}
 		stateBytes, err = stateProtoPub.MarshalVT()
 		if err != nil {
-			return MapPublishResult{}, err
+			return MapUpdateResult{}, err
 		}
 	}
 	// If stateBytes is nil, Lua will use streamBytes for both.
@@ -735,27 +735,27 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		},
 	).ToArray()
 	if err != nil {
-		return MapPublishResult{}, err
+		return MapUpdateResult{}, err
 	}
 
 	return parseAddScriptResult(replies)
 }
 
 // Remove removes a key from keyed state state.
-func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
+func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapUpdateResult, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
 	// Resolve channel options once for this operation.
 	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 	if err != nil {
-		return MapPublishResult{}, err
+		return MapUpdateResult{}, err
 	}
 
 	// Reject CAS in ephemeral mode.
 	if chOpts.SyncMode == MapSyncEphemeral {
 		if opts.ExpectedPosition != nil {
-			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
+			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
 		}
 	}
 
@@ -799,7 +799,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 	}
 	pubBytes, err := protoPub.MarshalVT()
 	if err != nil {
-		return MapPublishResult{}, err
+		return MapUpdateResult{}, err
 	}
 
 	// Handle idempotency key for remove operations.
@@ -871,24 +871,24 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 			publishCommand,
 			resultExpire, // result_key_expire
 			"0", "0", "", // use_delta, version, version_epoch
-			"1",              // is_leave (this triggers removal)
-			"0",              // score
-			"0",              // map_member_ttl
-			"0",              // use_hpexpire
-			"",               // channel_for_cleanup (not used for unpublish)
-			"",               // key_mode (not used for unpublish)
-			"0",              // refresh_ttl_on_suppress (not used for unpublish)
-			expectedOffset,   // expected_offset (for CAS)
-			expectedEpoch,    // expected_epoch (for CAS)
-			"",               // state_payload (not used for unpublish)
-			nilKey,           // nil_key (slot-aligned placeholder for unused KEYS)
-			versionField,     // version_field (pre-computed "v:KEY" or "")
-			versionEpochField,                 // version_epoch_field (pre-computed "ve:KEY" or "")
-			strconv.FormatInt(now, 10),        // now (current time in milliseconds)
+			"1",                        // is_leave (this triggers removal)
+			"0",                        // score
+			"0",                        // map_member_ttl
+			"0",                        // use_hpexpire
+			"",                         // channel_for_cleanup (not used for unpublish)
+			"",                         // key_mode (not used for unpublish)
+			"0",                        // refresh_ttl_on_suppress (not used for unpublish)
+			expectedOffset,             // expected_offset (for CAS)
+			expectedEpoch,              // expected_epoch (for CAS)
+			"",                         // state_payload (not used for unpublish)
+			nilKey,                     // nil_key (slot-aligned placeholder for unused KEYS)
+			versionField,               // version_field (pre-computed "v:KEY" or "")
+			versionEpochField,          // version_epoch_field (pre-computed "ve:KEY" or "")
+			strconv.FormatInt(now, 10), // now (current time in milliseconds)
 		},
 	).ToArray()
 	if err != nil {
-		return MapPublishResult{}, err
+		return MapUpdateResult{}, err
 	}
 
 	return parseAddScriptResult(replies)
@@ -1335,14 +1335,14 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 			e.stateMetaKey(s.shard, ch),
 		},
 		[]string{
-			strconv.Itoa(luaLimit),                   // ARGV[1] = limit
-			cursorScore,                              // ARGV[2] = cursor_score
-			cursorKey,                                // ARGV[3] = cursor_key
+			strconv.Itoa(luaLimit), // ARGV[1] = limit
+			cursorScore,            // ARGV[2] = cursor_score
+			cursorKey,              // ARGV[3] = cursor_key
 			strconv.FormatInt(time.Now().UnixMilli(), 10), // ARGV[4] = now
-			millis(chOpts.MetaTTL), // ARGV[5] = meta_ttl
-			stateTTL,       // ARGV[6] = state_ttl
-			streamlessFlag, // ARGV[7] = streamless
-			ascFlag,        // ARGV[8] = asc ("1" = ascending, "0" = descending)
+			millis(chOpts.MetaTTL),                        // ARGV[5] = meta_ttl
+			stateTTL,                                      // ARGV[6] = state_ttl
+			streamlessFlag,                                // ARGV[7] = streamless
+			ascFlag,                                       // ARGV[8] = asc ("1" = ascending, "0" = descending)
 		},
 	).ToArray()
 	if err != nil {
@@ -1404,7 +1404,6 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 
 	return MapStateResult{Publications: pubs, Position: streamPos, Cursor: cursor}, nil
 }
-
 
 func (e *RedisMapBroker) ReadStreamZero(
 	ctx context.Context,
@@ -2528,11 +2527,11 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 			chID,                                  // ARGV[3]: channel (for PUBLISH)
 			publishCommand,                        // ARGV[4]: publish_command
 			strconv.Itoa(chOpts.StreamSize),       // ARGV[5]: stream_size
-			millis(chOpts.StreamTTL), // ARGV[6]: stream_ttl
-			metaExpire,     // ARGV[7]: meta_expire
-			e.node.ID(),    // ARGV[8]: new_epoch_if_empty
-			ch,             // ARGV[9]: channel_for_cleanup
-			streamlessFlag, // ARGV[10]: streamless ("1" = skip stream/meta, "0" = normal)
+			millis(chOpts.StreamTTL),              // ARGV[6]: stream_ttl
+			metaExpire,                            // ARGV[7]: meta_expire
+			e.node.ID(),                           // ARGV[8]: new_epoch_if_empty
+			ch,                                    // ARGV[9]: channel_for_cleanup
+			streamlessFlag,                        // ARGV[10]: streamless ("1" = skip stream/meta, "0" = normal)
 		},
 	).ToArray()
 	return err
@@ -2844,17 +2843,17 @@ func parseDeltaMessage(data []byte) (uint64, string, []byte, bool, []byte, error
 }
 
 // parseAddScriptResult parses the result from the add script.
-func parseAddScriptResult(replies []rueidis.RedisMessage) (MapPublishResult, error) {
+func parseAddScriptResult(replies []rueidis.RedisMessage) (MapUpdateResult, error) {
 	if len(replies) < 2 {
-		return MapPublishResult{}, fmt.Errorf("wrong number of replies from script: %d", len(replies))
+		return MapUpdateResult{}, fmt.Errorf("wrong number of replies from script: %d", len(replies))
 	}
 	offset, err := replies[0].AsUint64()
 	if err != nil && !rueidis.IsRedisNil(err) {
-		return MapPublishResult{}, fmt.Errorf("could not parse offset: %w", err)
+		return MapUpdateResult{}, fmt.Errorf("could not parse offset: %w", err)
 	}
 	epoch, err := replies[1].ToString()
 	if err != nil {
-		return MapPublishResult{}, fmt.Errorf("could not parse epoch: %w", err)
+		return MapUpdateResult{}, fmt.Errorf("could not parse epoch: %w", err)
 	}
 
 	// Check for suppression reason (3rd value is the reason string, empty means not suppressed)
@@ -2866,7 +2865,7 @@ func parseAddScriptResult(replies []rueidis.RedisMessage) (MapPublishResult, err
 		}
 	}
 
-	result := MapPublishResult{
+	result := MapUpdateResult{
 		Position: StreamPosition{Offset: offset, Epoch: epoch},
 	}
 	if suppressReason != SuppressReasonNone {

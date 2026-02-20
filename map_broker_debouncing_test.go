@@ -44,18 +44,18 @@ func (m *mockMapBroker) Stats(context.Context, string) (MapStats, error) {
 }
 func (m *mockMapBroker) Clear(context.Context, string, MapClearOptions) error { return nil }
 
-func (m *mockMapBroker) Publish(_ context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
+func (m *mockMapBroker) Publish(_ context.Context, ch string, key string, opts MapPublishOptions) (MapUpdateResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.publishes = append(m.publishes, mockPublish{ch: ch, key: key, opts: opts})
-	return MapPublishResult{}, m.publishErr
+	return MapUpdateResult{}, m.publishErr
 }
 
-func (m *mockMapBroker) Remove(_ context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
+func (m *mockMapBroker) Remove(_ context.Context, ch string, key string, opts MapRemoveOptions) (MapUpdateResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.removes = append(m.removes, mockRemove{ch: ch, key: key, opts: opts})
-	return MapPublishResult{}, m.removeErr
+	return MapUpdateResult{}, m.removeErr
 }
 
 func (m *mockMapBroker) getPublishes() []mockPublish {

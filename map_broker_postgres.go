@@ -82,7 +82,7 @@ type PostgresMapBroker struct {
 	node         *Node
 	conf         PostgresMapBrokerConfig
 	names        pgNames
-	pool *pgxpool.Pool // Primary pool for writes
+	pool         *pgxpool.Pool // Primary pool for writes
 	eventHandler BrokerEventHandler
 	closeCh      chan struct{}
 	closeOnce    sync.Once
@@ -583,20 +583,20 @@ func parseSuppressReason(reason *string) SuppressReason {
 }
 
 // Publish publishes data to a map channel using the cf_map_publish SQL function.
-func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
+func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapUpdateResult, error) {
 	// Resolve and validate channel options.
 	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 	if err != nil {
-		return MapPublishResult{}, err
+		return MapUpdateResult{}, err
 	}
 
 	// Reject CAS and Version in ephemeral mode.
 	if chOpts.SyncMode == MapSyncEphemeral {
 		if opts.ExpectedPosition != nil {
-			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
+			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
 		}
 		if opts.Version > 0 {
-			return MapPublishResult{}, errors.New("version-based dedup requires SyncMode Converging")
+			return MapUpdateResult{}, errors.New("version-based dedup requires SyncMode Converging")
 		}
 	}
 
@@ -726,13 +726,13 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 	).Scan(&id, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset)
 
 	if err != nil {
-		return MapPublishResult{}, err
+		return MapUpdateResult{}, err
 	}
 
 	newPos := StreamPosition{Offset: uint64(channelOffset), Epoch: epoch}
 
 	if suppressed {
-		result := MapPublishResult{
+		result := MapUpdateResult{
 			Position:       newPos,
 			Suppressed:     true,
 			SuppressReason: parseSuppressReason(suppressReason),
@@ -748,21 +748,21 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		return result, nil
 	}
 
-	return MapPublishResult{Position: newPos}, nil
+	return MapUpdateResult{Position: newPos}, nil
 }
 
 // Remove removes a key from keyed state using the cf_map_remove SQL function.
-func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
+func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapUpdateResult, error) {
 	// Resolve and validate channel options.
 	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 	if err != nil {
-		return MapPublishResult{}, err
+		return MapUpdateResult{}, err
 	}
 
 	// Reject CAS in ephemeral mode.
 	if chOpts.SyncMode == MapSyncEphemeral {
 		if opts.ExpectedPosition != nil {
-			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
+			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
 		}
 	}
 
@@ -821,13 +821,13 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 	).Scan(&id, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset)
 
 	if err != nil {
-		return MapPublishResult{}, err
+		return MapUpdateResult{}, err
 	}
 
 	newPos := StreamPosition{Offset: uint64(channelOffset), Epoch: epoch}
 
 	if suppressed {
-		result := MapPublishResult{
+		result := MapUpdateResult{
 			Position:       newPos,
 			Suppressed:     true,
 			SuppressReason: parseSuppressReason(suppressReason),
@@ -842,7 +842,7 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 		return result, nil
 	}
 
-	return MapPublishResult{Position: newPos}, nil
+	return MapUpdateResult{Position: newPos}, nil
 }
 
 // ReadState retrieves keyed state with revisions.
@@ -1647,7 +1647,6 @@ func decodePgBytea(data []byte) []byte {
 	return data
 }
 
-
 func (e *PostgresMapBroker) logError(msg string, err error, shardID int) {
 	if e.node != nil {
 		e.node.logger.log(newErrorLogEntry(err, msg, map[string]any{"shard": shardID}))
@@ -2163,4 +2162,3 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int,
 
 	return len(buf.metas), maxID, nil
 }
-

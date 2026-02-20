@@ -103,7 +103,7 @@ func (e *MemoryMapBroker) Unsubscribe(_ string) error {
 }
 
 // Publish publishes data to channel with optional key for keyed state.
-func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapPublishResult, error) {
+func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapUpdateResult, error) {
 	mu := e.pubLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
@@ -111,22 +111,22 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 	// Resolve and validate channel options.
 	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 	if err != nil {
-		return MapPublishResult{}, err
+		return MapUpdateResult{}, err
 	}
 
 	// Reject CAS and Version in ephemeral mode.
 	if chOpts.SyncMode == MapSyncEphemeral {
 		if opts.ExpectedPosition != nil {
-			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
+			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
 		}
 		if opts.Version > 0 {
-			return MapPublishResult{}, errors.New("version-based dedup requires SyncMode Converging")
+			return MapUpdateResult{}, errors.New("version-based dedup requires SyncMode Converging")
 		}
 	}
 
 	if opts.IdempotencyKey != "" {
 		if res, ok := e.getResultFromCache(ch, opts.IdempotencyKey); ok {
-			return MapPublishResult{Position: res, Suppressed: true, SuppressReason: SuppressReasonIdempotency}, nil
+			return MapUpdateResult{Position: res, Suppressed: true, SuppressReason: SuppressReasonIdempotency}, nil
 		}
 	}
 
@@ -160,10 +160,10 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 	var prevPub *Publication
 	streamTop, prevPub, suppressReason, err := e.mapHub.add(ch, key, statePub, streamPub, chOpts, opts)
 	if err != nil {
-		return MapPublishResult{}, err
+		return MapUpdateResult{}, err
 	}
 	if suppressReason != "" {
-		result := MapPublishResult{Position: streamTop, Suppressed: true, SuppressReason: suppressReason}
+		result := MapUpdateResult{Position: streamTop, Suppressed: true, SuppressReason: suppressReason}
 		// For CAS mismatch, include current publication for immediate retry.
 		// Client uses: CurrentPublication.Offset + Position.Epoch for next CAS attempt.
 		if suppressReason == SuppressReasonPositionMismatch {
@@ -182,14 +182,14 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 
 	if e.eventHandler != nil {
 		// Publish streamPub (with StreamData if set) to subscribers.
-		return MapPublishResult{Position: streamTop}, e.eventHandler.HandlePublication(ch, streamPub, streamTop, opts.UseDelta, prevPub)
+		return MapUpdateResult{Position: streamTop}, e.eventHandler.HandlePublication(ch, streamPub, streamTop, opts.UseDelta, prevPub)
 	}
 
-	return MapPublishResult{Position: streamTop}, nil
+	return MapUpdateResult{Position: streamTop}, nil
 }
 
 // Remove removes a key from keyed state.
-func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapPublishResult, error) {
+func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapUpdateResult, error) {
 	mu := e.pubLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
@@ -197,29 +197,29 @@ func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opt
 	// Resolve and validate channel options.
 	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 	if err != nil {
-		return MapPublishResult{}, err
+		return MapUpdateResult{}, err
 	}
 
 	// Reject CAS in ephemeral mode.
 	if chOpts.SyncMode == MapSyncEphemeral {
 		if opts.ExpectedPosition != nil {
-			return MapPublishResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
+			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
 		}
 	}
 
 	if opts.IdempotencyKey != "" {
 		if res, ok := e.getResultFromCache(ch, opts.IdempotencyKey); ok {
-			return MapPublishResult{Position: res, Suppressed: true, SuppressReason: SuppressReasonIdempotency}, nil
+			return MapUpdateResult{Position: res, Suppressed: true, SuppressReason: SuppressReasonIdempotency}, nil
 		}
 	}
 
 	streamTop, removePub, suppressReason, err := e.mapHub.remove(ch, key, chOpts, opts)
 	if err != nil {
-		return MapPublishResult{}, err
+		return MapUpdateResult{}, err
 	}
 
 	if suppressReason != "" {
-		result := MapPublishResult{Position: streamTop, Suppressed: true, SuppressReason: suppressReason}
+		result := MapUpdateResult{Position: streamTop, Suppressed: true, SuppressReason: suppressReason}
 		if suppressReason == SuppressReasonPositionMismatch {
 			result.CurrentPublication = removePub
 		}
@@ -235,10 +235,10 @@ func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opt
 	}
 
 	if e.eventHandler != nil {
-		return MapPublishResult{Position: streamTop}, e.eventHandler.HandlePublication(ch, removePub, streamTop, false, nil)
+		return MapUpdateResult{Position: streamTop}, e.eventHandler.HandlePublication(ch, removePub, streamTop, false, nil)
 	}
 
-	return MapPublishResult{Position: streamTop}, nil
+	return MapUpdateResult{Position: streamTop}, nil
 }
 
 // ReadStream retrieves publications from stream.
@@ -378,8 +378,8 @@ type mapHub struct {
 	closeCh         chan struct{}
 	// Key TTL tracking
 	nextKeyExpireCheck     int64
-	keyExpireQueue         priority.Queue                          // priority queue of {ch:key, expireAt}
-	keyExpires             map[string]int64                        // "ch:key" -> expireAt
+	keyExpireQueue         priority.Queue                         // priority queue of {ch:key, expireAt}
+	keyExpires             map[string]int64                       // "ch:key" -> expireAt
 	eventHandler           BrokerEventHandler                     // for publishing removal events
 	channelOptionsResolver func(channel string) MapChannelOptions // for key expiration events
 	pubLocks               map[int]*sync.Mutex                    // for ordering HandlePublication calls
@@ -387,7 +387,7 @@ type mapHub struct {
 
 // mapChannel represents keyed state for a single channel.
 type mapChannel struct {
-	mu              sync.Mutex       // protects sortedKeys rebuild in getState
+	mu              sync.Mutex // protects sortedKeys rebuild in getState
 	stream          *memstream.Stream
 	state           map[string]*stateEntry // key -> entry
 	ordered         bool
@@ -1311,7 +1311,6 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) (MapStateResult, 
 
 	return MapStateResult{Publications: pubs, Position: streamPosition, Cursor: cursor}, nil
 }
-
 
 func (h *mapHub) getStats(ch string) (MapStats, error) {
 	h.RLock()

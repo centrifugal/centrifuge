@@ -275,7 +275,7 @@ type MapPublishReply struct {
 	// Result if set will tell Centrifuge that message already published to
 	// channel by handler code. In this case Centrifuge won't try to publish
 	// into channel again after handler returned MapPublishReply.
-	Result *MapPublishResult
+	Result *MapUpdateResult
 }
 
 // MapPublishCallback should be called with MapPublishReply or error.
@@ -302,7 +302,7 @@ type MapRemoveReply struct {
 	Options MapRemoveOptions
 	// Result if set will tell Centrifuge that removal already performed
 	// by handler code. In this case Centrifuge won't try to remove again.
-	Result *MapPublishResult
+	Result *MapUpdateResult
 }
 
 // MapRemoveCallback should be called with MapRemoveReply or error.
