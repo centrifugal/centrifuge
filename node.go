@@ -1027,8 +1027,10 @@ func (n *Node) addClient(c *Client) {
 	if n.config.Metrics.ExposeTransportAcceptProtocol {
 		acceptProtocol = c.transport.AcceptProtocol()
 	}
-	n.metrics.connectionsAccepted.WithLabelValues(c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion).Inc()
-	n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion).Inc()
+	baseLabels := []string{c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion}
+
+	n.metrics.connectionsAccepted.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Inc()
+	n.metrics.connectionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Inc()
 	n.hub.add(c)
 }
 
@@ -1041,7 +1043,8 @@ func (n *Node) removeClient(c *Client) {
 		if n.config.Metrics.ExposeTransportAcceptProtocol {
 			acceptProtocol = c.transport.AcceptProtocol()
 		}
-		n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion).Dec()
+		baseLabels := []string{c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion}
+		n.metrics.connectionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Dec()
 	}
 }
 
@@ -1049,7 +1052,8 @@ func (n *Node) removeClient(c *Client) {
 // Hub and Broker.
 func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 	n.metrics.incActionCount("add_subscription", ch)
-	n.metrics.subscriptionsInflight.WithLabelValues(sub.client.metricName, n.metrics.getChannelNamespaceLabel(ch)).Inc()
+	baseLabels := []string{sub.client.metricName, n.metrics.getChannelNamespaceLabel(ch)}
+	n.metrics.subscriptionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, sub.client)...).Inc()
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
@@ -1102,7 +1106,8 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 	defer mu.Unlock()
 	empty, wasRemoved := n.hub.removeSub(ch, c)
 	if wasRemoved {
-		n.metrics.subscriptionsInflight.WithLabelValues(c.metricName, n.metrics.getChannelNamespaceLabel(ch)).Dec()
+		baseLabels := []string{c.metricName, n.metrics.getChannelNamespaceLabel(ch)}
+		n.metrics.subscriptionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Dec()
 	}
 	if empty {
 		submittedAt := time.Now()

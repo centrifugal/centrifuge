@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +16,64 @@ import (
 var defaultMetricsNamespace = "centrifuge"
 
 var registryMu sync.RWMutex
+
+// clientMetricDef defines a Prometheus metric with its subsystem and name.
+type clientMetricDef struct {
+	Subsystem string
+	Name      string
+}
+
+// Client metric definitions.
+var (
+	metricClientConnectionsAccepted = clientMetricDef{
+		Subsystem: "client",
+		Name:      "connections_accepted",
+	}
+	metricClientConnectionsInflight = clientMetricDef{
+		Subsystem: "client",
+		Name:      "connections_inflight",
+	}
+	metricClientSubscriptionsAccepted = clientMetricDef{
+		Subsystem: "client",
+		Name:      "subscriptions_accepted",
+	}
+	metricClientSubscriptionsInflight = clientMetricDef{
+		Subsystem: "client",
+		Name:      "subscriptions_inflight",
+	}
+	metricClientCommandDuration = clientMetricDef{
+		Subsystem: "client",
+		Name:      "command_duration_seconds",
+	}
+	metricClientNumReplyErrors = clientMetricDef{
+		Subsystem: "client",
+		Name:      "num_reply_errors",
+	}
+	metricClientNumServerUnsubscribes = clientMetricDef{
+		Subsystem: "client",
+		Name:      "num_server_unsubscribes",
+	}
+	metricClientNumServerDisconnects = clientMetricDef{
+		Subsystem: "client",
+		Name:      "num_server_disconnects",
+	}
+	metricTransportMessagesSent = clientMetricDef{
+		Subsystem: "transport",
+		Name:      "messages_sent",
+	}
+	metricTransportMessagesSentSize = clientMetricDef{
+		Subsystem: "transport",
+		Name:      "messages_sent_size",
+	}
+	metricTransportMessagesReceived = clientMetricDef{
+		Subsystem: "transport",
+		Name:      "messages_received",
+	}
+	metricTransportMessagesReceivedSize = clientMetricDef{
+		Subsystem: "transport",
+		Name:      "messages_received_size",
+	}
+)
 
 type metrics struct {
 	messagesSentCount             *prometheus.CounterVec
@@ -89,6 +148,16 @@ type metrics struct {
 	tagsFilterDroppedCache         sync.Map
 	nsCache                        *otter.Cache[string, string]
 	codeStrings                    map[uint32]string
+
+	// Cache for client label combinations: maps cache key -> {labelValues, cacheKey}
+	// This allows sharing pre-computed label data across all clients with the same label values
+	clientLabelCombinationsCache sync.Map // map[string]*clientLabelCombination
+}
+
+// clientLabelCombination holds pre-computed label values and cache key for a unique combination
+type clientLabelCombination struct {
+	labelValues []string
+	cacheKey    string
 }
 
 func getMetricsNamespace(config MetricsConfig) string {
@@ -96,6 +165,161 @@ func getMetricsNamespace(config MetricsConfig) string {
 		return defaultMetricsNamespace
 	}
 	return config.MetricsNamespace
+}
+
+// buildMetricLabels creates a label slice, optionally appending client labels if enabled.
+func (m *metrics) buildMetricLabels(baseLabels []string) []string {
+	if len(m.config.ClientLabels) == 0 {
+		return baseLabels
+	}
+	labels := make([]string, 0, len(baseLabels)+len(m.config.ClientLabels))
+	labels = append(labels, baseLabels...)
+	labels = append(labels, m.config.ClientLabels...)
+	return labels
+}
+
+// appendClientLabels appends client label values to base labels if client labels are enabled.
+// Returns a new slice with client labels appended, or the original base labels if disabled.
+func (m *metrics) appendClientLabels(baseLabels []string, c *Client) []string {
+	if len(m.config.ClientLabels) == 0 {
+		return baseLabels
+	}
+	clientLabelValues := m.extractClientLabelValues(c)
+	if clientLabelValues != nil {
+		result := make([]string, len(baseLabels)+len(clientLabelValues))
+		copy(result, baseLabels)
+		copy(result[len(baseLabels):], clientLabelValues)
+		return result
+	}
+	// Append empty strings for missing client labels to match metric definition
+	result := make([]string, len(baseLabels)+len(m.config.ClientLabels))
+	copy(result, baseLabels)
+	return result
+}
+
+// getOrCreateClientLabelCombinationFromLabels returns a cached combination for the given labels map.
+// This is used during client connect to precompute and cache the combination.
+func (m *metrics) getOrCreateClientLabelCombinationFromLabels(labels map[string]string) *clientLabelCombination {
+	if len(m.config.ClientLabels) == 0 {
+		return nil
+	}
+
+	// Build cache key directly from the map to check if it's already cached
+	cacheKey := buildClientLabelsCacheKeyFromMap(m.config.ClientLabels, labels)
+
+	// Try to load existing combination from global cache
+	if combo, ok := m.clientLabelCombinationsCache.Load(cacheKey); ok {
+		return combo.(*clientLabelCombination)
+	}
+
+	// Not cached - now build the values slice (only done once per unique combination)
+	labelValues := make([]string, len(m.config.ClientLabels))
+	if labels != nil {
+		for i, label := range m.config.ClientLabels {
+			labelValues[i] = labels[label]
+		}
+	}
+
+	// Create new combination
+	combo := &clientLabelCombination{
+		labelValues: labelValues,
+		cacheKey:    cacheKey,
+	}
+
+	// Store in global cache (even if another goroutine stored it first, we'll use theirs)
+	actual, _ := m.clientLabelCombinationsCache.LoadOrStore(cacheKey, combo)
+	return actual.(*clientLabelCombination)
+}
+
+// getCachedClientLabelCombination returns the cached combination for the given client.
+// The combination is pre-cached during client connect. This is used only in non-hot paths
+// and for tests. Hot paths should call c.labelCombinationCached.Load() directly.
+func (m *metrics) getCachedClientLabelCombination(c *Client) *clientLabelCombination {
+	if len(m.config.ClientLabels) == 0 || c == nil {
+		return nil
+	}
+
+	// Load pre-cached combination from client (set during connect)
+	if cached := c.labelCombinationCached.Load(); cached != nil {
+		return cached
+	}
+
+	// Fallback: shouldn't happen in normal flow, but handle gracefully
+	// This can happen if metrics are recorded before client is fully connected or in tests
+	return nil
+}
+
+// extractClientLabelValues extracts client label values from a client, returning empty strings for missing labels.
+// This is a helper for non-hot-path uses. For hot paths, call c.labelCombinationCached.Load() directly.
+func (m *metrics) extractClientLabelValues(c *Client) []string {
+	if len(m.config.ClientLabels) == 0 || c == nil {
+		return nil
+	}
+
+	// Try to get the cached combination first
+	combo := m.getCachedClientLabelCombination(c)
+	if combo != nil {
+		return combo.labelValues
+	}
+
+	// Fallback: client doesn't have combination cached (e.g., in tests)
+	// Build label values directly from client.labels map
+	// Note: c.labels is set once during connect and never modified, so safe to read without lock
+	values := make([]string, len(m.config.ClientLabels))
+	if c.labels != nil {
+		for i, label := range m.config.ClientLabels {
+			values[i] = c.labels[label]
+		}
+	}
+	return values
+}
+
+// buildClientLabelsCacheKey builds a cache key from client label values without allocations.
+// Uses strings.Builder with pre-sized buffer to minimize allocations.
+func buildClientLabelsCacheKey(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	// Pre-calculate size to avoid Builder growth allocations
+	size := 0
+	for _, v := range values {
+		size += len(v) + 1 // +1 for separator
+	}
+	var b strings.Builder
+	b.Grow(size)
+	for i, val := range values {
+		if i > 0 {
+			b.WriteByte(0) // Use null byte as separator
+		}
+		b.WriteString(val)
+	}
+	return b.String()
+}
+
+// buildClientLabelsCacheKeyFromMap builds a cache key directly from a labels map.
+// This avoids allocating the intermediate values slice.
+func buildClientLabelsCacheKeyFromMap(labelNames []string, labelsMap map[string]string) string {
+	if len(labelNames) == 0 {
+		return ""
+	}
+	// Pre-calculate size to avoid Builder growth allocations
+	size := len(labelNames) - 1 // separators
+	if labelsMap != nil {
+		for _, name := range labelNames {
+			size += len(labelsMap[name])
+		}
+	}
+	var b strings.Builder
+	b.Grow(size)
+	for i, name := range labelNames {
+		if i > 0 {
+			b.WriteByte(0) // Use null byte as separator
+		}
+		if labelsMap != nil {
+			b.WriteString(labelsMap[name])
+		}
+	}
+	return b.String()
 }
 
 func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
@@ -142,20 +366,6 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		nsCache:     nsCache,
 		codeStrings: codeStrings,
 	}
-
-	m.messagesSentCount = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "node",
-		Name:      "messages_sent_count",
-		Help:      "Number of messages sent by node to broker.",
-	}, []string{"type", "channel_namespace"})
-
-	m.messagesReceivedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "node",
-		Name:      "messages_received_count",
-		Help:      "Number of messages received from broker.",
-	}, []string{"type", "channel_namespace"})
 
 	m.actionCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
@@ -214,41 +424,55 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:       "Survey duration summary.",
 	}, []string{"op"})
 
+	m.messagesSentCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "node",
+		Name:      "messages_sent_count",
+		Help:      "Number of messages sent by node to broker.",
+	}, []string{"type", "channel_namespace"})
+
+	m.messagesReceivedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "node",
+		Name:      "messages_received_count",
+		Help:      "Number of messages received from broker.",
+	}, []string{"type", "channel_namespace"})
+
 	m.commandDurationSummary = prometheus.NewSummaryVec(prometheus.SummaryOpts{
 		Namespace:  metricsNamespace,
-		Subsystem:  "client",
-		Name:       "command_duration_seconds",
+		Subsystem:  metricClientCommandDuration.Subsystem,
+		Name:       metricClientCommandDuration.Name,
 		Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
 		Help:       "Client command duration summary.",
-	}, []string{"method", "channel_namespace"})
+	}, m.buildMetricLabels([]string{"method", "channel_namespace"}))
 
 	m.replyErrorCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
-		Subsystem: "client",
-		Name:      "num_reply_errors",
+		Subsystem: metricClientNumReplyErrors.Subsystem,
+		Name:      metricClientNumReplyErrors.Name,
 		Help:      "Number of errors in replies sent to clients.",
-	}, []string{"method", "code", "channel_namespace"})
+	}, m.buildMetricLabels([]string{"method", "code", "channel_namespace"}))
 
 	m.serverUnsubscribeCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
-		Subsystem: "client",
-		Name:      "num_server_unsubscribes",
+		Subsystem: metricClientNumServerUnsubscribes.Subsystem,
+		Name:      metricClientNumServerUnsubscribes.Name,
 		Help:      "Number of server initiated unsubscribes.",
-	}, []string{"code", "channel_namespace"})
+	}, m.buildMetricLabels([]string{"code", "channel_namespace"}))
 
 	m.serverDisconnectCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
-		Subsystem: "client",
-		Name:      "num_server_disconnects",
+		Subsystem: metricClientNumServerDisconnects.Subsystem,
+		Name:      metricClientNumServerDisconnects.Name,
 		Help:      "Number of server initiated disconnects.",
-	}, []string{"code"})
+	}, m.buildMetricLabels([]string{"code"}))
 
 	m.recoverCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "client",
 		Name:      "recover",
 		Help:      "Count of recover operations with success/fail resolution.",
-	}, []string{"recovered", "channel_namespace", "has_recovered_publications"})
+	}, m.buildMetricLabels([]string{"recovered", "channel_namespace", "has_recovered_publications"}))
 
 	if config.EnableRecoveredPublicationsHistogram {
 		m.recoveredPublications = prometheus.NewHistogramVec(
@@ -259,7 +483,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 				Help:      "Number of publications recovered during subscription recovery.",
 				Buckets:   []float64{0, 1, 2, 3, 5, 10, 20, 50, 100, 250, 500, 1000, 2000, 5000, 10000},
 			},
-			[]string{"channel_namespace"},
+			m.buildMetricLabels([]string{"channel_namespace"}),
 		)
 	}
 
@@ -272,63 +496,63 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			0.000100, 0.000250, 0.000500, // Microsecond resolution.
 			0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, // Millisecond resolution.
 			1.0, 2.5, 5.0, 10.0, // Second resolution.
-		}}, []string{"transport"})
+		}}, m.buildMetricLabels([]string{"transport"}))
 
 	m.connectionsAccepted = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
-		Subsystem: "client",
-		Name:      "connections_accepted",
+		Subsystem: metricClientConnectionsAccepted.Subsystem,
+		Name:      metricClientConnectionsAccepted.Name,
 		Help:      "Count of accepted transports.",
-	}, []string{"transport", "accept_protocol", "client_name", "client_version"})
+	}, m.buildMetricLabels([]string{"transport", "accept_protocol", "client_name", "client_version"}))
 
 	m.connectionsInflight = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: metricsNamespace,
-		Subsystem: "client",
-		Name:      "connections_inflight",
+		Subsystem: metricClientConnectionsInflight.Subsystem,
+		Name:      metricClientConnectionsInflight.Name,
 		Help:      "Number of inflight client connections.",
-	}, []string{"transport", "accept_protocol", "client_name", "client_version"})
+	}, m.buildMetricLabels([]string{"transport", "accept_protocol", "client_name", "client_version"}))
 
 	m.subscriptionsAccepted = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
-		Subsystem: "client",
-		Name:      "subscriptions_accepted",
+		Subsystem: metricClientSubscriptionsAccepted.Subsystem,
+		Name:      metricClientSubscriptionsAccepted.Name,
 		Help:      "Count of accepted client subscriptions.",
-	}, []string{"client_name", "channel_namespace"})
+	}, m.buildMetricLabels([]string{"client_name", "channel_namespace"}))
 
 	m.subscriptionsInflight = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: metricsNamespace,
-		Subsystem: "client",
-		Name:      "subscriptions_inflight",
+		Subsystem: metricClientSubscriptionsInflight.Subsystem,
+		Name:      metricClientSubscriptionsInflight.Name,
 		Help:      "Number of inflight client subscriptions.",
-	}, []string{"client_name", "channel_namespace"})
+	}, m.buildMetricLabels([]string{"client_name", "channel_namespace"}))
 
 	m.transportMessagesSent = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
-		Subsystem: "transport",
-		Name:      "messages_sent",
+		Subsystem: metricTransportMessagesSent.Subsystem,
+		Name:      metricTransportMessagesSent.Name,
 		Help:      "Number of messages sent to client connections over specific transport.",
-	}, []string{"transport", "frame_type", "channel_namespace"})
+	}, m.buildMetricLabels([]string{"transport", "frame_type", "channel_namespace"}))
 
 	m.transportMessagesSentSize = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
-		Subsystem: "transport",
-		Name:      "messages_sent_size",
+		Subsystem: metricTransportMessagesSentSize.Subsystem,
+		Name:      metricTransportMessagesSentSize.Name,
 		Help:      "MaxSize in bytes of messages sent to client connections over specific transport (uncompressed and does not include framing overhead).",
-	}, []string{"transport", "frame_type", "channel_namespace"})
+	}, m.buildMetricLabels([]string{"transport", "frame_type", "channel_namespace"}))
 
 	m.transportMessagesReceived = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
-		Subsystem: "transport",
-		Name:      "messages_received",
+		Subsystem: metricTransportMessagesReceived.Subsystem,
+		Name:      metricTransportMessagesReceived.Name,
 		Help:      "Number of messages received from client connections over specific transport.",
-	}, []string{"transport", "frame_type", "channel_namespace"})
+	}, m.buildMetricLabels([]string{"transport", "frame_type", "channel_namespace"}))
 
 	m.transportMessagesReceivedSize = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
-		Subsystem: "transport",
-		Name:      "messages_received_size",
+		Subsystem: metricTransportMessagesReceivedSize.Subsystem,
+		Name:      metricTransportMessagesReceivedSize.Name,
 		Help:      "MaxSize in bytes of messages received from client connections over specific transport (uncompressed and does not include framing overhead).",
-	}, []string{"transport", "frame_type", "channel_namespace"})
+	}, m.buildMetricLabels([]string{"transport", "frame_type", "channel_namespace"}))
 
 	m.tagsFilterDroppedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
@@ -380,32 +604,50 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	m.redisBrokerPubSubDroppedMessages.WithLabelValues("", "control").Add(0)
 	m.redisBrokerPubSubDroppedMessages.WithLabelValues("", "client").Add(0)
 
-	m.messagesReceivedCountPublication = m.messagesReceivedCount.WithLabelValues("publication", "")
-	m.messagesReceivedCountJoin = m.messagesReceivedCount.WithLabelValues("join", "")
-	m.messagesReceivedCountLeave = m.messagesReceivedCount.WithLabelValues("leave", "")
-	m.messagesReceivedCountControl = m.messagesReceivedCount.WithLabelValues("control", "")
+	// Helper to build message labels for node-level broker message metrics
+	// These metrics don't support client labels as they track node-to-broker communication
+	buildMessageLabels := func(msgType string) []string {
+		return []string{msgType, ""}
+	}
 
-	m.messagesSentCountPublication = m.messagesSentCount.WithLabelValues("publication", "")
-	m.messagesSentCountJoin = m.messagesSentCount.WithLabelValues("join", "")
-	m.messagesSentCountLeave = m.messagesSentCount.WithLabelValues("leave", "")
-	m.messagesSentCountControl = m.messagesSentCount.WithLabelValues("control", "")
+	m.messagesReceivedCountPublication = m.messagesReceivedCount.WithLabelValues(buildMessageLabels("publication")...)
+	m.messagesReceivedCountJoin = m.messagesReceivedCount.WithLabelValues(buildMessageLabels("join")...)
+	m.messagesReceivedCountLeave = m.messagesReceivedCount.WithLabelValues(buildMessageLabels("leave")...)
+	m.messagesReceivedCountControl = m.messagesReceivedCount.WithLabelValues(buildMessageLabels("control")...)
+
+	m.messagesSentCountPublication = m.messagesSentCount.WithLabelValues(buildMessageLabels("publication")...)
+	m.messagesSentCountJoin = m.messagesSentCount.WithLabelValues(buildMessageLabels("join")...)
+	m.messagesSentCountLeave = m.messagesSentCount.WithLabelValues(buildMessageLabels("leave")...)
+	m.messagesSentCountControl = m.messagesSentCount.WithLabelValues(buildMessageLabels("control")...)
 
 	labelForMethod := func(frameType protocol.FrameType) string {
 		return frameType.String()
 	}
 
-	m.commandDurationConnect = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeConnect), "")
-	m.commandDurationSubscribe = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeSubscribe), "")
-	m.commandDurationUnsubscribe = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeUnsubscribe), "")
-	m.commandDurationPublish = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypePublish), "")
-	m.commandDurationPresence = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypePresence), "")
-	m.commandDurationPresenceStats = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypePresenceStats), "")
-	m.commandDurationHistory = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeHistory), "")
-	m.commandDurationSend = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeSend), "")
-	m.commandDurationRPC = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeRPC), "")
-	m.commandDurationRefresh = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeRefresh), "")
-	m.commandDurationSubRefresh = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeSubRefresh), "")
-	m.commandDurationUnknown = m.commandDurationSummary.WithLabelValues("unknown", "")
+	// Helper to build initial label values with empty client labels if configured
+	buildCommandLabels := func(method string) []string {
+		labels := []string{method, ""}
+		if len(m.config.ClientLabels) > 0 {
+			// Append empty strings for each client label
+			for range m.config.ClientLabels {
+				labels = append(labels, "")
+			}
+		}
+		return labels
+	}
+
+	m.commandDurationConnect = m.commandDurationSummary.WithLabelValues(buildCommandLabels(labelForMethod(protocol.FrameTypeConnect))...)
+	m.commandDurationSubscribe = m.commandDurationSummary.WithLabelValues(buildCommandLabels(labelForMethod(protocol.FrameTypeSubscribe))...)
+	m.commandDurationUnsubscribe = m.commandDurationSummary.WithLabelValues(buildCommandLabels(labelForMethod(protocol.FrameTypeUnsubscribe))...)
+	m.commandDurationPublish = m.commandDurationSummary.WithLabelValues(buildCommandLabels(labelForMethod(protocol.FrameTypePublish))...)
+	m.commandDurationPresence = m.commandDurationSummary.WithLabelValues(buildCommandLabels(labelForMethod(protocol.FrameTypePresence))...)
+	m.commandDurationPresenceStats = m.commandDurationSummary.WithLabelValues(buildCommandLabels(labelForMethod(protocol.FrameTypePresenceStats))...)
+	m.commandDurationHistory = m.commandDurationSummary.WithLabelValues(buildCommandLabels(labelForMethod(protocol.FrameTypeHistory))...)
+	m.commandDurationSend = m.commandDurationSummary.WithLabelValues(buildCommandLabels(labelForMethod(protocol.FrameTypeSend))...)
+	m.commandDurationRPC = m.commandDurationSummary.WithLabelValues(buildCommandLabels(labelForMethod(protocol.FrameTypeRPC))...)
+	m.commandDurationRefresh = m.commandDurationSummary.WithLabelValues(buildCommandLabels(labelForMethod(protocol.FrameTypeRefresh))...)
+	m.commandDurationSubRefresh = m.commandDurationSummary.WithLabelValues(buildCommandLabels(labelForMethod(protocol.FrameTypeSubRefresh))...)
+	m.commandDurationUnknown = m.commandDurationSummary.WithLabelValues(buildCommandLabels("unknown")...)
 
 	var alreadyRegistered prometheus.AlreadyRegisteredError
 
@@ -484,16 +726,19 @@ type commandDurationLabels struct {
 	FrameType        protocol.FrameType
 }
 
-func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Duration, ch string) {
-	if ch != "" && m.config.GetChannelNamespaceLabel != nil {
-		channelNamespace := m.getChannelNamespaceLabel(ch)
+func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Duration, ch string, c *Client) {
+	channelNamespace := m.getChannelNamespaceLabel(ch)
+
+	if (ch != "" && m.config.GetChannelNamespaceLabel != nil) || len(m.config.ClientLabels) > 0 {
 		labels := commandDurationLabels{
 			ChannelNamespace: channelNamespace,
 			FrameType:        frameType,
 		}
 		summary, ok := m.commandDurationCache.Load(labels)
 		if !ok {
-			summary = m.commandDurationSummary.WithLabelValues(frameType.String(), channelNamespace)
+			baseLabels := []string{frameType.String(), channelNamespace}
+			labelValues := m.appendClientLabels(baseLabels, c)
+			summary = m.commandDurationSummary.WithLabelValues(labelValues...)
 			m.commandDurationCache.Store(labels, summary)
 		}
 		summary.(prometheus.Observer).Observe(d.Seconds())
@@ -580,7 +825,7 @@ type replyErrorLabels struct {
 	Code             string
 }
 
-func (m *metrics) incReplyError(frameType protocol.FrameType, code uint32, ch string) {
+func (m *metrics) incReplyError(frameType protocol.FrameType, code uint32, ch string, c *Client) {
 	channelNamespace := m.getChannelNamespaceLabel(ch)
 	labels := replyErrorLabels{
 		ChannelNamespace: channelNamespace,
@@ -589,7 +834,9 @@ func (m *metrics) incReplyError(frameType protocol.FrameType, code uint32, ch st
 	}
 	counter, ok := m.replyErrorCache.Load(labels)
 	if !ok {
-		counter = m.replyErrorCount.WithLabelValues(frameType.String(), labels.Code, channelNamespace)
+		baseLabels := []string{frameType.String(), labels.Code, channelNamespace}
+		labelValues := m.appendClientLabels(baseLabels, c)
+		counter = m.replyErrorCount.WithLabelValues(labelValues...)
 		m.replyErrorCache.Store(labels, counter)
 	}
 	counter.(prometheus.Counter).Inc()
@@ -639,6 +886,7 @@ type transportMessageLabels struct {
 	Transport        string
 	ChannelNamespace string
 	FrameType        string
+	ClientLabels     string // Concatenated client label values for cache key
 }
 
 type transportMessagesSent struct {
@@ -651,16 +899,39 @@ type transportMessagesReceived struct {
 	counterReceivedSize prometheus.Counter
 }
 
-func (m *metrics) getTransportMessagesSentCounters(transport string, frameType string, namespace string) transportMessagesSent {
+func (m *metrics) getTransportMessagesSentCounters(transport string, frameType string, namespace string, clientLabelValues []string, clientLabelCacheKey string) transportMessagesSent {
+	// Apply client labels if they are configured
+	useClientLabels := len(m.config.ClientLabels) > 0
+	if useClientLabels {
+		if clientLabelValues == nil {
+			// Create empty strings for missing client labels
+			clientLabelValues = make([]string, len(m.config.ClientLabels))
+			clientLabelCacheKey = buildClientLabelsCacheKey(clientLabelValues)
+		}
+	} else {
+		// Client labels not configured - don't use them even if provided
+		clientLabelValues = nil
+		clientLabelCacheKey = ""
+	}
+
+	// Use pre-computed cache key - no allocation here
 	labels := transportMessageLabels{
 		Transport:        transport,
 		ChannelNamespace: namespace,
 		FrameType:        frameType,
+		ClientLabels:     clientLabelCacheKey,
 	}
 	counters, ok := m.transportMessagesSentCache.Load(labels)
 	if !ok {
-		counterSent := m.transportMessagesSent.WithLabelValues(transport, frameType, namespace)
-		counterSentSize := m.transportMessagesSentSize.WithLabelValues(transport, frameType, namespace)
+		// Pre-allocate labelValues with exact capacity to avoid append reallocation
+		labelValues := make([]string, 0, 3+len(clientLabelValues))
+		labelValues = append(labelValues, transport, frameType, namespace)
+		if useClientLabels {
+			labelValues = append(labelValues, clientLabelValues...)
+		}
+
+		counterSent := m.transportMessagesSent.WithLabelValues(labelValues...)
+		counterSentSize := m.transportMessagesSentSize.WithLabelValues(labelValues...)
 		counters = transportMessagesSent{
 			counterSent:     counterSent,
 			counterSentSize: counterSentSize,
@@ -670,24 +941,56 @@ func (m *metrics) getTransportMessagesSentCounters(transport string, frameType s
 	return counters.(transportMessagesSent)
 }
 
-func (m *metrics) incTransportMessagesSent(transport string, frameType protocol.FrameType, channel string, size int) {
+func (m *metrics) incTransportMessagesSent(transport string, frameType protocol.FrameType, channel string, size int, c *Client) {
 	channelNamespace := m.getChannelNamespaceLabel(channel)
-	counters := m.getTransportMessagesSentCounters(transport, frameType.String(), channelNamespace)
+
+	// Use pre-cached combination from client (set during connect)
+	var clientLabelValues []string
+	var clientLabelCacheKey string
+	if c != nil {
+		if combo := c.labelCombinationCached.Load(); combo != nil {
+			clientLabelValues = combo.labelValues
+			clientLabelCacheKey = combo.cacheKey
+		}
+	}
+
+	counters := m.getTransportMessagesSentCounters(transport, frameType.String(), channelNamespace, clientLabelValues, clientLabelCacheKey)
 	counters.counterSent.Inc()
 	counters.counterSentSize.Add(float64(size))
 }
 
-func (m *metrics) incTransportMessagesReceived(transport string, frameType protocol.FrameType, channel string, size int) {
+func (m *metrics) incTransportMessagesReceived(transport string, frameType protocol.FrameType, channel string, size int, c *Client) {
 	channelNamespace := m.getChannelNamespaceLabel(channel)
+	clientLabelValues := m.extractClientLabelValues(c)
+
+	// Apply client labels if they are configured
+	useClientLabels := len(m.config.ClientLabels) > 0
+	if useClientLabels {
+		if clientLabelValues == nil {
+			clientLabelValues = make([]string, len(m.config.ClientLabels))
+		}
+	} else {
+		// Client labels not configured - don't use them even if provided
+		clientLabelValues = nil
+	}
+
+	// Build cache key including client labels
+	clientLabelsKey := buildClientLabelsCacheKey(clientLabelValues)
+
 	labels := transportMessageLabels{
 		Transport:        transport,
 		ChannelNamespace: channelNamespace,
 		FrameType:        frameType.String(),
+		ClientLabels:     clientLabelsKey,
 	}
 	counters, ok := m.transportMessagesReceivedCache.Load(labels)
 	if !ok {
-		counterReceived := m.transportMessagesReceived.WithLabelValues(transport, labels.FrameType, channelNamespace)
-		counterReceivedSize := m.transportMessagesReceivedSize.WithLabelValues(transport, labels.FrameType, channelNamespace)
+		labelValues := []string{transport, labels.FrameType, channelNamespace}
+		if useClientLabels && len(clientLabelValues) > 0 {
+			labelValues = append(labelValues, clientLabelValues...)
+		}
+		counterReceived := m.transportMessagesReceived.WithLabelValues(labelValues...)
+		counterReceivedSize := m.transportMessagesReceivedSize.WithLabelValues(labelValues...)
 		counters = transportMessagesReceived{
 			counterReceived:     counterReceived,
 			counterReceivedSize: counterReceivedSize,
@@ -710,13 +1013,15 @@ type disconnectLabels struct {
 	Code string
 }
 
-func (m *metrics) incServerDisconnect(code uint32) {
+func (m *metrics) incServerDisconnect(code uint32, c *Client) {
 	labels := disconnectLabels{
 		Code: m.getCodeLabel(code),
 	}
 	counter, ok := m.disconnectCache.Load(labels)
 	if !ok {
-		counter = m.serverDisconnectCount.WithLabelValues(labels.Code)
+		baseLabels := []string{labels.Code}
+		labelValues := m.appendClientLabels(baseLabels, c)
+		counter = m.serverDisconnectCount.WithLabelValues(labelValues...)
 		m.disconnectCache.Store(labels, counter)
 	}
 	counter.(prometheus.Counter).Inc()
@@ -727,14 +1032,16 @@ type unsubscribeLabels struct {
 	ChannelNamespace string
 }
 
-func (m *metrics) incServerUnsubscribe(code uint32, ch string) {
+func (m *metrics) incServerUnsubscribe(code uint32, ch string, c *Client) {
 	labels := unsubscribeLabels{
 		Code:             m.getCodeLabel(code),
 		ChannelNamespace: m.getChannelNamespaceLabel(ch),
 	}
 	counter, ok := m.unsubscribeCache.Load(labels)
 	if !ok {
-		counter = m.serverUnsubscribeCount.WithLabelValues(labels.Code, labels.ChannelNamespace)
+		baseLabels := []string{labels.Code, labels.ChannelNamespace}
+		labelValues := m.appendClientLabels(baseLabels, c)
+		counter = m.serverUnsubscribeCount.WithLabelValues(labelValues...)
 		m.unsubscribeCache.Store(labels, counter)
 	}
 	counter.(prometheus.Counter).Inc()

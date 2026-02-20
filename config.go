@@ -196,6 +196,15 @@ type MetricsConfig struct {
 	// ExposeTransportAcceptProtocol enables exposing in labels the accept protocol used by client's transport.
 	// If not enabled - empty string will be used as a label value.
 	ExposeTransportAcceptProtocol bool
+
+	// ClientLabels defines custom label names to be added to client metrics.
+	// Label values are extracted from ConnectReply.Labels set in node.OnConnecting handler.
+	// If a label is not found in the client's label map, an empty string is used.
+	// Warning: each unique combination of label values creates a new time series in Prometheus.
+	// It's IMPORTANT to keep cardinality low (!) by using controlled finite value sets
+	// for exported labels. Do not allow arbitrary values to be exported.
+	// If empty - client labels are disabled and there is no overhead.
+	ClientLabels []string
 }
 
 // PingPongConfig allows configuring application level ping-pong behavior.
