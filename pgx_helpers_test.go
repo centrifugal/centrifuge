@@ -8,6 +8,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	fmtText   int16 = 0
+	fmtBinary int16 = 1
+)
+
 func TestByteArena_CopyBytes(t *testing.T) {
 	a := byteArena{}
 
@@ -73,31 +78,54 @@ func putUint32(v uint32) []byte {
 }
 
 func TestPgRawInt64(t *testing.T) {
-	require.Equal(t, int64(0), pgRawInt64(nil))
-	require.Equal(t, int64(0), pgRawInt64(putUint64(0)))
-	require.Equal(t, int64(42), pgRawInt64(putUint64(42)))
-	require.Equal(t, int64(-1), pgRawInt64(putUint64(math.MaxUint64)))
-	require.Equal(t, int64(math.MinInt64), pgRawInt64(putUint64(1<<63)))
+	// Binary format.
+	require.Equal(t, int64(0), pgRawInt64(nil, fmtBinary))
+	require.Equal(t, int64(0), pgRawInt64(putUint64(0), fmtBinary))
+	require.Equal(t, int64(42), pgRawInt64(putUint64(42), fmtBinary))
+	require.Equal(t, int64(-1), pgRawInt64(putUint64(math.MaxUint64), fmtBinary))
+	require.Equal(t, int64(math.MinInt64), pgRawInt64(putUint64(1<<63), fmtBinary))
+	// Text format.
+	require.Equal(t, int64(0), pgRawInt64(nil, fmtText))
+	require.Equal(t, int64(0), pgRawInt64([]byte("0"), fmtText))
+	require.Equal(t, int64(42), pgRawInt64([]byte("42"), fmtText))
+	require.Equal(t, int64(-1), pgRawInt64([]byte("-1"), fmtText))
+	require.Equal(t, int64(12345678), pgRawInt64([]byte("12345678"), fmtText))
+	require.Equal(t, int64(math.MaxInt64), pgRawInt64([]byte("9223372036854775807"), fmtText))
 }
 
 func TestPgRawUint64(t *testing.T) {
-	require.Equal(t, uint64(0), pgRawUint64(nil))
-	require.Equal(t, uint64(0), pgRawUint64(putUint64(0)))
-	require.Equal(t, uint64(123456789), pgRawUint64(putUint64(123456789)))
-	require.Equal(t, uint64(math.MaxUint64), pgRawUint64(putUint64(math.MaxUint64)))
+	// Binary format.
+	require.Equal(t, uint64(0), pgRawUint64(nil, fmtBinary))
+	require.Equal(t, uint64(0), pgRawUint64(putUint64(0), fmtBinary))
+	require.Equal(t, uint64(123456789), pgRawUint64(putUint64(123456789), fmtBinary))
+	require.Equal(t, uint64(math.MaxUint64), pgRawUint64(putUint64(math.MaxUint64), fmtBinary))
+	// Text format.
+	require.Equal(t, uint64(0), pgRawUint64(nil, fmtText))
+	require.Equal(t, uint64(0), pgRawUint64([]byte("0"), fmtText))
+	require.Equal(t, uint64(123456789), pgRawUint64([]byte("123456789"), fmtText))
 }
 
 func TestPgRawInt32(t *testing.T) {
-	require.Equal(t, int32(0), pgRawInt32(nil))
-	require.Equal(t, int32(0), pgRawInt32(putUint32(0)))
-	require.Equal(t, int32(100), pgRawInt32(putUint32(100)))
-	require.Equal(t, int32(-1), pgRawInt32(putUint32(math.MaxUint32)))
+	// Binary format.
+	require.Equal(t, int32(0), pgRawInt32(nil, fmtBinary))
+	require.Equal(t, int32(0), pgRawInt32(putUint32(0), fmtBinary))
+	require.Equal(t, int32(100), pgRawInt32(putUint32(100), fmtBinary))
+	require.Equal(t, int32(-1), pgRawInt32(putUint32(math.MaxUint32), fmtBinary))
+	// Text format.
+	require.Equal(t, int32(0), pgRawInt32(nil, fmtText))
+	require.Equal(t, int32(100), pgRawInt32([]byte("100"), fmtText))
+	require.Equal(t, int32(-1), pgRawInt32([]byte("-1"), fmtText))
 }
 
 func TestPgRawBool(t *testing.T) {
-	require.False(t, pgRawBool(nil))
-	require.True(t, pgRawBool([]byte{1}))
-	require.False(t, pgRawBool([]byte{0}))
+	// Binary format.
+	require.False(t, pgRawBool(nil, fmtBinary))
+	require.True(t, pgRawBool([]byte{1}, fmtBinary))
+	require.False(t, pgRawBool([]byte{0}, fmtBinary))
+	// Text format.
+	require.False(t, pgRawBool(nil, fmtText))
+	require.True(t, pgRawBool([]byte("t"), fmtText))
+	require.False(t, pgRawBool([]byte("f"), fmtText))
 }
 
 func TestPgRawString(t *testing.T) {
@@ -107,28 +135,62 @@ func TestPgRawString(t *testing.T) {
 }
 
 func TestPgRawBytes(t *testing.T) {
+	// Binary format: raw bytes.
 	a := byteArena{}
-	require.Nil(t, pgRawBytes(&a, nil))
-	require.Equal(t, []byte{0xde, 0xad}, pgRawBytes(&a, []byte{0xde, 0xad}))
+	require.Nil(t, pgRawBytes(&a, nil, fmtBinary))
+	require.Equal(t, []byte{0xde, 0xad}, pgRawBytes(&a, []byte{0xde, 0xad}, fmtBinary))
+	// Text format: hex-encoded \xDEAD.
+	a2 := byteArena{}
+	require.Equal(t, []byte{0xde, 0xad}, pgRawBytes(&a2, []byte(`\xdead`), fmtText))
+	// Text format: non-hex passthrough.
+	a3 := byteArena{}
+	require.Equal(t, []byte("hello"), pgRawBytes(&a3, []byte("hello"), fmtText))
+}
+
+func TestPgRawJSONBBytes(t *testing.T) {
+	// Binary format: strip version byte.
+	a := byteArena{}
+	require.Nil(t, pgRawJSONBBytes(&a, nil, fmtBinary))
+	b := append([]byte{1}, []byte(`{"foo":"bar"}`)...)
+	require.Equal(t, []byte(`{"foo":"bar"}`), pgRawJSONBBytes(&a, b, fmtBinary))
+	// Text format: plain JSON.
+	a2 := byteArena{}
+	require.Equal(t, []byte(`{"foo":"bar"}`), pgRawJSONBBytes(&a2, []byte(`{"foo":"bar"}`), fmtText))
 }
 
 func TestPgRawJSONBMap(t *testing.T) {
 	t.Run("nil", func(t *testing.T) {
 		require.Nil(t, pgRawJSONBMap(nil))
 	})
-	t.Run("too_short", func(t *testing.T) {
-		require.Nil(t, pgRawJSONBMap([]byte{1}))
+	t.Run("empty", func(t *testing.T) {
+		require.Nil(t, pgRawJSONBMap([]byte{}))
 	})
-	t.Run("empty_object", func(t *testing.T) {
-		// Version byte (1) + empty JSON object.
+	t.Run("binary_empty_object", func(t *testing.T) {
+		// Binary wire format: version byte (1) + empty JSON object.
 		b := append([]byte{1}, []byte("{}")...)
 		got := pgRawJSONBMap(b)
 		require.NotNil(t, got)
 		require.Empty(t, got)
 	})
-	t.Run("valid_map", func(t *testing.T) {
+	t.Run("binary_valid_map", func(t *testing.T) {
+		// Binary wire format: version byte (1) + JSON.
 		b := append([]byte{1}, []byte(`{"a":"1","b":"2"}`)...)
 		got := pgRawJSONBMap(b)
 		require.Equal(t, map[string]string{"a": "1", "b": "2"}, got)
+	})
+	t.Run("text_empty_object", func(t *testing.T) {
+		// Text wire format: plain JSON (no version byte).
+		got := pgRawJSONBMap([]byte("{}"))
+		require.NotNil(t, got)
+		require.Empty(t, got)
+	})
+	t.Run("text_valid_map", func(t *testing.T) {
+		// Text wire format: plain JSON (no version byte).
+		got := pgRawJSONBMap([]byte(`{"sector":"tech"}`))
+		require.Equal(t, map[string]string{"sector": "tech"}, got)
+	})
+	t.Run("text_null", func(t *testing.T) {
+		// Text wire format: JSON null.
+		require.Nil(t, pgRawJSONBMap([]byte("null")))
 	})
 }

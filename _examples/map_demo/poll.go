@@ -241,16 +241,11 @@ func cleanupStalePollData(ctx context.Context, currentPollID string, currentOpti
 
 // Poll manager — PG-native goroutine using cf_map_publish directly.
 // Uses three channels: poll:meta (question/timing), poll:results (scores), poll:votes (dedup).
-func runPollManager() {
-	if pgPool == nil {
-		log.Println("Polls demo requires -postgres flag, skipping poll manager")
-		return
-	}
-
-	ctx := context.Background()
+// Only one instance runs this at a time (leader election via runAsLeader).
+func runPollManager(ctx context.Context) {
 	questionIdx := 0
 
-	for {
+	for ctx.Err() == nil {
 		q := pollQuestions[questionIdx%len(pollQuestions)]
 		questionIdx++
 
@@ -272,7 +267,11 @@ func runPollManager() {
 		metaData, _ := json.Marshal(meta)
 		if err := pgPublish(ctx, "poll:meta", pollID, metaData, nil); err != nil {
 			log.Printf("poll meta publish error: %v", err)
-			time.Sleep(3 * time.Second)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(3 * time.Second):
+			}
 			continue
 		}
 
@@ -298,6 +297,9 @@ func runPollManager() {
 	active:
 		for {
 			select {
+			case <-ctx.Done():
+				botTick.Stop()
+				break active
 			case <-deadline:
 				botTick.Stop()
 				break active
@@ -307,6 +309,9 @@ func runPollManager() {
 				botTick.Reset(time.Duration(2000+rand.Intn(2000)) * time.Millisecond)
 			}
 		}
+		if ctx.Err() != nil {
+			return
+		}
 
 		// Close poll.
 		meta.Status = "closed"
@@ -315,7 +320,11 @@ func runPollManager() {
 		log.Printf("Poll closed: %s", pollID)
 
 		// Display results.
-		time.Sleep(5 * time.Second)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
 
 		// Cleanup: remove options, votes, and metadata.
 		for _, opt := range q.Options {
@@ -325,7 +334,11 @@ func runPollManager() {
 		_ = pgRemove(ctx, "poll:meta", pollID)
 
 		// Gap before next poll.
-		time.Sleep(3 * time.Second)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(3 * time.Second):
+		}
 	}
 }
 

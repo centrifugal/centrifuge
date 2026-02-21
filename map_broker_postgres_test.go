@@ -2011,5 +2011,172 @@ func TestPostgresMapBroker_ClientInfoDelivery_Outbox(t *testing.T) {
 	}
 }
 
+// TestPostgresMapBroker_AllColumnTypes verifies that every Publication field
+// is correctly parsed from PostgreSQL across all three read paths: ReadState,
+// ReadStream, and outbox delivery (HandlePublication). This catches wire-format
+// mismatches (binary vs text) for all column types.
+func TestPostgresMapBroker_AllColumnTypes(t *testing.T) {
+	connString := getPostgresConnString(t)
+	node, err := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+				Ordered:       true,
+			}
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
 
+	type pubEvent struct {
+		ch  string
+		pub *Publication
+	}
+	eventCh := make(chan pubEvent, 10)
 
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			eventCh <- pubEvent{ch: ch, pub: pub}
+			return nil
+		},
+	}
+
+	e, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		ConnString: connString,
+		BinaryData: true,
+		NumShards:  4,
+		Outbox: OutboxConfig{
+			PollInterval: 10 * time.Millisecond,
+			BatchSize:    100,
+		},
+	})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	require.NoError(t, e.EnsureSchema(ctx))
+	cleanupTestTables(ctx, e)
+
+	err = e.RegisterEventHandler(handler)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = e.Close(context.Background())
+		_ = node.Shutdown(context.Background())
+	})
+
+	time.Sleep(50 * time.Millisecond)
+
+	channel := fmt.Sprintf("test_all_cols_%d", time.Now().UnixNano())
+
+	info := &ClientInfo{
+		ClientID: "client1",
+		UserID:   "user1",
+		ConnInfo: []byte(`{"ip":"1.2.3.4"}`),
+		ChanInfo: []byte(`{"role":"admin"}`),
+	}
+	tags := map[string]string{"sector": "tech", "region": "us"}
+
+	// Publish with all fields populated.
+	_, err = e.Publish(ctx, channel, "k1", MapPublishOptions{
+		Data:       []byte(`{"price":100}`),
+		Tags:       tags,
+		Score:      42,
+		ClientInfo: info,
+	})
+	require.NoError(t, err)
+
+	// Also publish a removal to test Removed flag.
+	_, err = e.Remove(ctx, channel, "k1", MapRemoveOptions{})
+	require.NoError(t, err)
+
+	// --- Verify ReadStream (has both publish and remove entries) ---
+	streamResult, err := e.ReadStream(ctx, channel, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	require.Len(t, streamResult.Publications, 2)
+
+	// First stream entry: the publish.
+	sp := streamResult.Publications[0]
+	require.Equal(t, "k1", sp.Key)
+	require.Equal(t, []byte(`{"price":100}`), sp.Data)
+	require.Equal(t, tags, sp.Tags)
+	require.Equal(t, int64(42), sp.Score)
+	require.False(t, sp.Removed)
+	require.NotZero(t, sp.Offset)
+	require.NotNil(t, sp.Info, "ClientInfo must be present in stream")
+	require.Equal(t, "client1", sp.Info.ClientID)
+	require.Equal(t, "user1", sp.Info.UserID)
+	require.Equal(t, []byte(`{"ip":"1.2.3.4"}`), sp.Info.ConnInfo)
+	require.Equal(t, []byte(`{"role":"admin"}`), sp.Info.ChanInfo)
+
+	// Second stream entry: the removal.
+	sr := streamResult.Publications[1]
+	require.Equal(t, "k1", sr.Key)
+	require.True(t, sr.Removed)
+	require.NotZero(t, sr.Offset)
+
+	// --- Verify outbox delivery ---
+	// Collect outbox events for our channel.
+	var outboxPubs []*Publication
+	deadline := time.After(10 * time.Second)
+	for len(outboxPubs) < 2 {
+		select {
+		case ev := <-eventCh:
+			if ev.ch == channel {
+				outboxPubs = append(outboxPubs, ev.pub)
+			}
+		case <-deadline:
+			t.Fatalf("timeout waiting for outbox events, got %d", len(outboxPubs))
+		}
+	}
+
+	// First outbox event: the publish.
+	op := outboxPubs[0]
+	require.Equal(t, "k1", op.Key)
+	require.Equal(t, []byte(`{"price":100}`), op.Data)
+	require.Equal(t, tags, op.Tags)
+	require.Equal(t, int64(42), op.Score)
+	require.False(t, op.Removed)
+	require.NotZero(t, op.Offset)
+	require.NotNil(t, op.Info, "ClientInfo must be present in outbox delivery")
+	require.Equal(t, "client1", op.Info.ClientID)
+	require.Equal(t, "user1", op.Info.UserID)
+	require.Equal(t, []byte(`{"ip":"1.2.3.4"}`), op.Info.ConnInfo)
+	require.Equal(t, []byte(`{"role":"admin"}`), op.Info.ChanInfo)
+
+	// Second outbox event: the removal.
+	or := outboxPubs[1]
+	require.Equal(t, "k1", or.Key)
+	require.True(t, or.Removed)
+
+	// --- Verify ReadState (key was removed, so state should be empty) ---
+	// Publish again to have a key in state for verification.
+	_, err = e.Publish(ctx, channel, "k2", MapPublishOptions{
+		Data:       []byte(`{"price":200}`),
+		Tags:       map[string]string{"sector": "finance"},
+		Score:      99,
+		ClientInfo: info,
+	})
+	require.NoError(t, err)
+
+	stateResult, err := e.ReadState(ctx, channel, MapReadStateOptions{
+		Limit: -1,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateResult.Publications, 1)
+
+	sk := stateResult.Publications[0]
+	require.Equal(t, "k2", sk.Key)
+	require.Equal(t, []byte(`{"price":200}`), sk.Data)
+	require.Equal(t, map[string]string{"sector": "finance"}, sk.Tags)
+	require.Equal(t, int64(99), sk.Score)
+	require.NotZero(t, sk.Offset)
+	require.NotNil(t, sk.Info, "ClientInfo must be present in state")
+	require.Equal(t, "client1", sk.Info.ClientID)
+	require.Equal(t, "user1", sk.Info.UserID)
+	require.Equal(t, []byte(`{"ip":"1.2.3.4"}`), sk.Info.ConnInfo)
+	require.Equal(t, []byte(`{"role":"admin"}`), sk.Info.ChanInfo)
+}

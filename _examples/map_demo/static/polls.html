@@ -390,16 +390,17 @@
         const metaSub = centrifuge.newMapSubscription('poll:meta', { limit: 10 });
         const resultsSub = centrifuge.newMapSubscription('poll:results', { limit: 50 });
 
-        metaSub.on('subscribed', (ctx) => {
-            // Only rebuild state when the server provides a state snapshot.
-            // On reconnect (phase 2) with no missed publications, ctx.state
-            // is undefined — keep the cached state to avoid a loader flash.
-            if (ctx.state) {
-                currentMeta = null;
-                for (const pub of ctx.state) {
-                    if (pub.key && pub.data) {
-                        currentMeta = pub.data;
-                    }
+        // Use sync/update events (like board.html) instead of subscribed/publication.
+        // sync fires only when full state rebuild is needed (initial subscribe or
+        // recovery requiring state snapshot). On successful recovery with no missed
+        // publications, neither sync nor update fires — cached state is preserved,
+        // avoiding a loader flash.
+
+        metaSub.on('sync', (ctx) => {
+            currentMeta = null;
+            for (const pub of ctx.entries) {
+                if (pub.key && pub.data) {
+                    currentMeta = pub.data;
                 }
             }
             render();
@@ -416,7 +417,7 @@
             }
         }
 
-        metaSub.on('publication', (ctx) => {
+        metaSub.on('update', (ctx) => {
             if (ctx.removed) {
                 // Only clear if the removed key is the current poll's key.
                 // Stale keys from previous runs may be cleaned up without
@@ -430,19 +431,17 @@
             scheduleRender();
         });
 
-        resultsSub.on('subscribed', (ctx) => {
-            if (ctx.state) {
-                results.clear();
-                for (const pub of ctx.state) {
-                    if (pub.key && pub.data) {
-                        results.set(pub.key, { data: pub.data, score: pub.score });
-                    }
+        resultsSub.on('sync', (ctx) => {
+            results.clear();
+            for (const pub of ctx.entries) {
+                if (pub.key && pub.data) {
+                    results.set(pub.key, { data: pub.data, score: pub.score });
                 }
             }
             render();
         });
 
-        resultsSub.on('publication', (ctx) => {
+        resultsSub.on('update', (ctx) => {
             if (!ctx.key) return;
             if (ctx.removed) {
                 results.delete(ctx.key);
@@ -450,15 +449,6 @@
                 results.set(ctx.key, { data: ctx.data, score: ctx.score });
             }
             scheduleRender();
-        });
-
-        metaSub.on('unsubscribed', () => {
-            currentMeta = null;
-            render();
-        });
-        resultsSub.on('unsubscribed', () => {
-            results.clear();
-            render();
         });
 
         let currentPollId = null;

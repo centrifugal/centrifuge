@@ -608,8 +608,9 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		publishedAt = &now
 	}
 
-	// Prepare tags JSON
-	var tagsJSON []byte
+	// Prepare tags as json.RawMessage so pgx encodes it as JSON (not hex bytea)
+	// in both extended and simple protocol modes.
+	var tagsJSON json.RawMessage
 	if opts.Tags != nil {
 		tagsJSON, _ = json.Marshal(opts.Tags)
 	}
@@ -694,13 +695,13 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset
 		FROM %s($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::interval, $12::interval, $13, $14, $15, $16, $17, $18, $19, $20::interval, $21, $22, $23, $24, $25)
 	`, e.names.publish),
-		ch, key, opts.Data, tagsJSON,
-		clientID, userID, connInfo, chanInfo, publishedAt,
+		ch, key, e.dataParam(opts.Data), tagsJSON,
+		clientID, userID, e.dataParam(connInfo), e.dataParam(chanInfo), publishedAt,
 		keyMode, keyTTL, metaTTL,
 		expectedOffset, score, nil, nil, // p_version, p_version_epoch (unused, per-key version used instead)
 		keyVersion, keyVersionEpoch,
 		idempotencyKey, idempotencyTTL, opts.RefreshTTLOnSuppress,
-		useDelta, numShards, streamData, e.conf.SkipShardLock,
+		useDelta, numShards, e.dataParam(streamData), e.conf.SkipShardLock,
 	).Scan(&id, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset)
 
 	if err != nil {
@@ -972,21 +973,25 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 	// Use RawValues + arena to avoid per-row allocations.
 	// Column order: key(0), data(1), tags(2), key_offset(3), score(4),
 	//               client_id(5), user_id(6), conn_info(7), chan_info(8).
+	var fmts pgColFormats
 	for rows.Next() {
+		if fmts == nil {
+			fmts = pgColFormatsFromRows(rows)
+		}
 		raw := rows.RawValues()
 		backing = append(backing, Publication{})
 		p := &backing[len(backing)-1]
 		p.Key = pgRawString(&arena, raw[0])
-		p.Data = pgRawBytes(&arena, raw[1])
+		p.Data = e.rawDataBytes(&arena, raw[1], fmts[1])
 		p.Tags = pgRawJSONBMap(raw[2])
-		p.Offset = pgRawUint64(raw[3])
-		p.Score = pgRawInt64(raw[4])
+		p.Offset = pgRawUint64(raw[3], fmts[3])
+		p.Score = pgRawInt64(raw[4], fmts[4])
 		if raw[5] != nil {
 			p.Info = &ClientInfo{
 				ClientID: pgRawString(&arena, raw[5]),
 				UserID:   pgRawString(&arena, raw[6]),
-				ConnInfo: pgRawBytes(&arena, raw[7]),
-				ChanInfo: pgRawBytes(&arena, raw[8]),
+				ConnInfo: e.rawDataBytes(&arena, raw[7], fmts[7]),
+				ChanInfo: e.rawDataBytes(&arena, raw[8], fmts[8]),
 			}
 		}
 		pubs = append(pubs, p)
@@ -1243,22 +1248,26 @@ func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapR
 	pubs := make([]*Publication, 0, allocHint)
 	// Column order: key(0), data(1), tags(2), channel_offset(3), removed(4),
 	//               score(5), client_id(6), user_id(7), conn_info(8), chan_info(9).
+	var fmts pgColFormats
 	for rows.Next() {
+		if fmts == nil {
+			fmts = pgColFormatsFromRows(rows)
+		}
 		raw := rows.RawValues()
 		backing = append(backing, Publication{})
 		p := &backing[len(backing)-1]
 		p.Key = pgRawString(&arena, raw[0])
-		p.Data = pgRawBytes(&arena, raw[1])
+		p.Data = e.rawDataBytes(&arena, raw[1], fmts[1])
 		p.Tags = pgRawJSONBMap(raw[2])
-		p.Offset = pgRawUint64(raw[3])
-		p.Removed = pgRawBool(raw[4])
-		p.Score = pgRawInt64(raw[5])
+		p.Offset = pgRawUint64(raw[3], fmts[3])
+		p.Removed = pgRawBool(raw[4], fmts[4])
+		p.Score = pgRawInt64(raw[5], fmts[5])
 		if raw[6] != nil {
 			p.Info = &ClientInfo{
 				ClientID: pgRawString(&arena, raw[6]),
 				UserID:   pgRawString(&arena, raw[7]),
-				ConnInfo: pgRawBytes(&arena, raw[8]),
-				ChanInfo: pgRawBytes(&arena, raw[9]),
+				ConnInfo: e.rawDataBytes(&arena, raw[8], fmts[8]),
+				ChanInfo: e.rawDataBytes(&arena, raw[9], fmts[9]),
 			}
 		}
 		pubs = append(pubs, p)
@@ -1318,22 +1327,26 @@ func (e *PostgresMapBroker) readStreamTx(ctx context.Context, pool *pgxpool.Pool
 	arena := byteArena{buf: make([]byte, 0, allocHint*64)}
 	backing := make([]Publication, 0, allocHint)
 	pubs := make([]*Publication, 0, allocHint)
+	var fmts pgColFormats
 	for rows.Next() {
+		if fmts == nil {
+			fmts = pgColFormatsFromRows(rows)
+		}
 		raw := rows.RawValues()
 		backing = append(backing, Publication{})
 		p := &backing[len(backing)-1]
 		p.Key = pgRawString(&arena, raw[0])
-		p.Data = pgRawBytes(&arena, raw[1])
+		p.Data = e.rawDataBytes(&arena, raw[1], fmts[1])
 		p.Tags = pgRawJSONBMap(raw[2])
-		p.Offset = pgRawUint64(raw[3])
-		p.Removed = pgRawBool(raw[4])
-		p.Score = pgRawInt64(raw[5])
+		p.Offset = pgRawUint64(raw[3], fmts[3])
+		p.Removed = pgRawBool(raw[4], fmts[4])
+		p.Score = pgRawInt64(raw[5], fmts[5])
 		if raw[6] != nil {
 			p.Info = &ClientInfo{
 				ClientID: pgRawString(&arena, raw[6]),
 				UserID:   pgRawString(&arena, raw[7]),
-				ConnInfo: pgRawBytes(&arena, raw[8]),
-				ChanInfo: pgRawBytes(&arena, raw[9]),
+				ConnInfo: e.rawDataBytes(&arena, raw[8], fmts[8]),
+				ChanInfo: e.rawDataBytes(&arena, raw[9], fmts[9]),
 			}
 		}
 		pubs = append(pubs, p)
@@ -1638,10 +1651,14 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, pool *pgxpoo
 	// Column order: id(0), shard_id(1), channel(2), channel_offset(3), epoch(4),
 	//              key(5), data(6), tags(7), removed(8), score(9),
 	//              client_id(10), user_id(11), conn_info(12), chan_info(13), previous_data(14).
+	var fmts pgColFormats
 	for rows.Next() {
+		if fmts == nil {
+			fmts = pgColFormatsFromRows(rows)
+		}
 		raw := rows.RawValues()
 
-		id := pgRawInt64(raw[0])
+		id := pgRawInt64(raw[0], fmts[0])
 		if id > maxID {
 			maxID = id
 		}
@@ -1649,18 +1666,18 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, pool *pgxpoo
 		pubBacking = append(pubBacking, Publication{})
 		p := &pubBacking[len(pubBacking)-1]
 
-		p.Offset = pgRawUint64(raw[3])
+		p.Offset = pgRawUint64(raw[3], fmts[3])
 		p.Key = pgRawString(&arena, raw[5])
-		p.Data = pgRawBytes(&arena, raw[6])
+		p.Data = e.rawDataBytes(&arena, raw[6], fmts[6])
 		p.Tags = pgRawJSONBMap(raw[7])
-		p.Removed = pgRawBool(raw[8])
-		p.Score = pgRawInt64(raw[9])
+		p.Removed = pgRawBool(raw[8], fmts[8])
+		p.Score = pgRawInt64(raw[9], fmts[9])
 		if raw[10] != nil {
 			infoBacking = append(infoBacking, ClientInfo{
 				ClientID: pgRawString(&arena, raw[10]),
 				UserID:   pgRawString(&arena, raw[11]),
-				ConnInfo: pgRawBytes(&arena, raw[12]),
-				ChanInfo: pgRawBytes(&arena, raw[13]),
+				ConnInfo: e.rawDataBytes(&arena, raw[12], fmts[12]),
+				ChanInfo: e.rawDataBytes(&arena, raw[13], fmts[13]),
 			})
 			p.Info = &infoBacking[len(infoBacking)-1]
 		}
@@ -1669,7 +1686,7 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, pool *pgxpoo
 			id:           id,
 			channel:      pgRawString(&arena, raw[2]),
 			epoch:        pgRawString(&arena, raw[4]),
-			previousData: pgRawBytes(&arena, raw[14]),
+			previousData: e.rawDataBytes(&arena, raw[14], fmts[14]),
 		}
 		buf.metas = append(buf.metas, m)
 	}
@@ -1928,6 +1945,39 @@ func (e *PostgresMapBroker) ensurePartitionedStream(ctx context.Context) error {
 
 	// Ensure lookahead partitions exist
 	return e.ensureLookaheadPartitions(ctx)
+}
+
+// pgColFormatsFromRows extracts per-column wire format codes from pgx rows.
+func pgColFormatsFromRows(rows pgx.Rows) pgColFormats {
+	descs := rows.FieldDescriptions()
+	fmts := make(pgColFormats, len(descs))
+	for i, d := range descs {
+		fmts[i] = d.Format
+	}
+	return fmts
+}
+
+// rawDataBytes reads a data column (JSONB or BYTEA depending on BinaryData config)
+// using the correct format-aware parser.
+func (e *PostgresMapBroker) rawDataBytes(a *byteArena, b []byte, format int16) []byte {
+	if e.conf.BinaryData {
+		return pgRawBytes(a, b, format)
+	}
+	return pgRawJSONBBytes(a, b, format)
+}
+
+// dataParam wraps a []byte for use as a SQL parameter.
+// When BinaryData is false, data columns are JSONB — wrap as json.RawMessage
+// so pgx encodes it as JSON text (not hex bytea) in simple-protocol mode.
+// When BinaryData is true, data columns are BYTEA — pass as plain []byte.
+func (e *PostgresMapBroker) dataParam(b []byte) any {
+	if b == nil {
+		return nil
+	}
+	if !e.conf.BinaryData {
+		return json.RawMessage(b)
+	}
+	return b
 }
 
 func (e *PostgresMapBroker) dataType() string {

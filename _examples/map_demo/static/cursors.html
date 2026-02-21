@@ -226,21 +226,22 @@
             limit: 50
         });
 
-        sub.on('subscribed', (ctx) => {
-            console.log('Subscribed to cursors channel');
-            console.log('Snapshot:', ctx.state);
+        sub.on('sync', (ctx) => {
+            console.log('Synced cursors channel');
 
-            // Process snapshot - show all existing cursors (excluding our own).
-            if (ctx.state) {
-                for (const pub of ctx.state) {
-                    if (pub.key && pub.key !== myClientId && pub.data) {
-                        updateCursor(pub.key, pub.data);
-                    }
+            // Remove all existing cursor elements and rebuild from snapshot.
+            for (const [key] of cursors) {
+                removeCursor(key);
+            }
+
+            for (const pub of ctx.entries) {
+                if (pub.key && pub.key !== myClientId && pub.data) {
+                    updateCursor(pub.key, pub.data);
                 }
             }
         });
 
-        sub.on('publication', (ctx) => {
+        sub.on('update', (ctx) => {
             // Skip if no key or if it's our own cursor.
             if (!ctx.key || ctx.key === myClientId) return;
 

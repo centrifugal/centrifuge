@@ -455,25 +455,26 @@
             limit: 100,
         });
 
-        sub.on('subscribed', (ctx) => {
-            console.log('Subscribed to leaderboard');
+        sub.on('sync', (ctx) => {
+            console.log('Synced leaderboard');
+            entries.clear();
+            prevRanks.clear();
+            prevScores.clear();
+            myEntry = null;
 
-            // Process snapshot (persistent data from PostgreSQL).
-            if (ctx.state) {
-                for (const pub of ctx.state) {
-                    if (pub.key && pub.data) {
-                        entries.set(pub.key, pub.data);
-                        if (pub.data.userId === userId) {
-                            myEntry = pub.data;
-                            showGameSection();
-                        }
+            for (const pub of ctx.entries) {
+                if (pub.key && pub.data) {
+                    entries.set(pub.key, pub.data);
+                    if (pub.data.userId === userId) {
+                        myEntry = pub.data;
+                        showGameSection();
                     }
                 }
             }
             renderLeaderboard();
         });
 
-        sub.on('publication', (ctx) => {
+        sub.on('update', (ctx) => {
             if (!ctx.key) return;
 
             if (ctx.removed) {

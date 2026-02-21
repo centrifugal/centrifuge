@@ -232,7 +232,7 @@ func (m *matchSim) tick() {
 	}
 }
 
-func publishScoreboardData(node *centrifuge.Node) {
+func publishScoreboardData(ctx context.Context, node *centrifuge.Node) {
 	matches := make([]*matchSim, len(matchConfigs))
 	for i, cfg := range matchConfigs {
 		matches[i] = newMatch(cfg.id, cfg.home, cfg.away)
@@ -252,40 +252,48 @@ func publishScoreboardData(node *centrifuge.Node) {
 	// Track pause timers for HT/FT per match.
 	pauseUntil := make([]time.Time, len(matches))
 
-	for now := range tc.C {
-		for i, m := range matches {
-			// Handle paused states.
-			if !pauseUntil[i].IsZero() && now.Before(pauseUntil[i]) {
-				continue
-			}
-			pauseUntil[i] = time.Time{}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-tc.C:
+			for i, m := range matches {
+				// Handle paused states.
+				if !pauseUntil[i].IsZero() && now.Before(pauseUntil[i]) {
+					continue
+				}
+				pauseUntil[i] = time.Time{}
 
-			switch m.data.Status {
-			case "HT":
-				// Resume into second half after 5s pause.
-				m.data.Status = "2H"
-				pauseUntil[i] = now.Add(5 * time.Second)
-				continue
-			case "FT":
-				// Restart match after 10s pause.
-				m.reset()
-				pauseUntil[i] = now.Add(2 * time.Second)
-				continue
-			}
+				switch m.data.Status {
+				case "HT":
+					// Resume into second half after 5s pause.
+					m.data.Status = "2H"
+					pauseUntil[i] = now.Add(5 * time.Second)
+					continue
+				case "FT":
+					// Restart match after 10s pause.
+					m.reset()
+					pauseUntil[i] = now.Add(2 * time.Second)
+					continue
+				}
 
-			m.tick()
+				m.tick()
 
-			jsonData, err := json.Marshal(m.data)
-			if err != nil {
-				log.Printf("Failed to marshal match %s: %v", m.id, err)
-				continue
-			}
-			_, err = node.MapPublish(context.Background(), "scoreboard", m.id, centrifuge.MapPublishOptions{
-				Data:     jsonData,
-				UseDelta: true,
-			})
-			if err != nil {
-				log.Printf("Failed to publish match %s: %v", m.id, err)
+				jsonData, err := json.Marshal(m.data)
+				if err != nil {
+					log.Printf("Failed to marshal match %s: %v", m.id, err)
+					continue
+				}
+				_, err = node.MapPublish(ctx, "scoreboard", m.id, centrifuge.MapPublishOptions{
+					Data:     jsonData,
+					UseDelta: true,
+				})
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					log.Printf("Failed to publish match %s: %v", m.id, err)
+				}
 			}
 		}
 	}

@@ -508,19 +508,17 @@
 
         const sub = centrifuge.newMapSubscription('scoreboard', { delta: 'fossil' });
 
-        sub.on('subscribed', (ctx) => {
-            console.log('Subscribed to scoreboard');
+        sub.on('sync', (ctx) => {
+            console.log('Synced scoreboard');
             matchState.clear();
             prevScores.clear();
             prevStatus.clear();
             renderedEvents.clear();
-            if (ctx.state) {
-                for (const pub of ctx.state) {
-                    if (pub.key && pub.data) {
-                        matchState.set(pub.key, pub.data);
-                        prevScores.set(pub.key, { home: pub.data.home_score, away: pub.data.away_score });
-                        prevStatus.set(pub.key, pub.data.status);
-                    }
+            for (const pub of ctx.entries) {
+                if (pub.key && pub.data) {
+                    matchState.set(pub.key, pub.data);
+                    prevScores.set(pub.key, { home: pub.data.home_score, away: pub.data.away_score });
+                    prevStatus.set(pub.key, pub.data.status);
                 }
             }
             renderAllCards();
@@ -530,7 +528,7 @@
         const pendingGoals = new Set(); // matchIDs with goals this frame
         const pendingStatusChanges = new Set();
 
-        sub.on('publication', (ctx) => {
+        sub.on('update', (ctx) => {
             if (!ctx.key || !ctx.data) return;
             if (ctx.removed) {
                 matchState.delete(ctx.key);

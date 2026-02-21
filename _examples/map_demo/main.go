@@ -233,14 +233,23 @@ func main() {
 	// Initialize inventory items on startup.
 	initInventory(node)
 
+	// App context — cancelled on shutdown signal to stop background goroutines.
+	appCtx, appCancel := context.WithCancel(context.Background())
+
 	// Start publishing ticker data every second.
 	go publishTickerData(node)
 
 	// Start publishing scoreboard data (6 live matches with delta compression).
-	go publishScoreboardData(node)
+	// Uses advisory lock so only one instance runs this when scaling horizontally.
+	go runAsLeader(appCtx, pgPool, 1, "scoreboard", func(ctx context.Context) {
+		publishScoreboardData(ctx, node)
+	})
 
 	// Start poll manager goroutine.
-	go runPollManager()
+	// Uses advisory lock so only one instance runs this when scaling horizontally.
+	go runAsLeader(appCtx, pgPool, 2, "poll-manager", func(ctx context.Context) {
+		runPollManager(ctx)
+	})
 
 	// Serve static files.
 	http.Handle("/", http.FileServer(http.Dir("./static")))
@@ -286,6 +295,9 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
+
+	// Stop leader-elected goroutines (scoreboard, polls) so another node can take over.
+	appCancel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
