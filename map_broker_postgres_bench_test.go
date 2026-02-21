@@ -598,10 +598,11 @@ func BenchmarkPostgresMapBroker_OutboxPublish(b *testing.B) {
 	})
 }
 
-// BenchmarkPostgresMapBroker_OutboxThroughput measures outbox delivery throughput.
+// BenchmarkPostgresMapBroker_OutboxThroughput measures outbox delivery throughput
+// with parallel publishing across multiple channels (utilizes all shard workers).
 func BenchmarkPostgresMapBroker_OutboxThroughput(b *testing.B) {
 	ctx := context.Background()
-	channel := fmt.Sprintf("bench_outbox_throughput_%d", time.Now().UnixNano())
+	prefix := fmt.Sprintf("bench_outbox_%d_", time.Now().UnixNano())
 
 	// Track deliveries
 	var delivered int64
@@ -609,9 +610,6 @@ func BenchmarkPostgresMapBroker_OutboxThroughput(b *testing.B) {
 
 	broker, cleanup := setupPostgresMapBrokerOutboxBenchWithHandler(b, &testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
-			if ch != channel {
-				return nil
-			}
 			if atomic.AddInt64(&delivered, 1) >= int64(b.N) {
 				select {
 				case <-doneCh:
@@ -624,23 +622,44 @@ func BenchmarkPostgresMapBroker_OutboxThroughput(b *testing.B) {
 	})
 	defer cleanup()
 
-	// Give outbox worker a moment to start polling.
+	// Give outbox workers a moment to start polling.
 	time.Sleep(100 * time.Millisecond)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 
-	// Publish all messages first
-	for i := 0; i < b.N; i++ {
-		key := fmt.Sprintf("key%d", i)
-		data := []byte(fmt.Sprintf("data%d", i))
-		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data: data,
-		})
-		if err != nil {
-			b.Fatal(err)
+	// Publish messages in parallel across multiple channels.
+	var counter int64
+	var wg sync.WaitGroup
+	numPublishers := 8
+	perPublisher := b.N / numPublishers
+	remainder := b.N % numPublishers
+	for p := 0; p < numPublishers; p++ {
+		n := perPublisher
+		if p < remainder {
+			n++
 		}
+		if n == 0 {
+			continue
+		}
+		wg.Add(1)
+		go func(count int) {
+			defer wg.Done()
+			for j := 0; j < count; j++ {
+				i := atomic.AddInt64(&counter, 1)
+				ch := fmt.Sprintf("%sch%d", prefix, i%100)
+				key := fmt.Sprintf("key%d", i)
+				_, err := broker.Publish(ctx, ch, key, MapPublishOptions{
+					Data: []byte("x"),
+				})
+				if err != nil {
+					b.Error(err)
+					return
+				}
+			}
+		}(n)
 	}
+	wg.Wait()
 
 	// Wait for all deliveries
 	select {

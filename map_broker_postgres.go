@@ -330,8 +330,12 @@ func (e *PostgresMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 		go e.runNotificationListener()
 	}
 
-	// Start outbox workers: one per replica (or one for primary)
-	numWorkers := max(len(e.readPools), 1)
+	// Start outbox workers: one per shard (or per replica if replicas configured).
+	// Each worker handles its subset of shards for parallel delivery.
+	numWorkers := e.conf.NumShards
+	if len(e.readPools) > 0 {
+		numWorkers = len(e.readPools)
+	}
 	for i := 0; i < numWorkers; i++ {
 		go e.runOutboxWorker(i)
 	}
@@ -1360,19 +1364,22 @@ func (e *PostgresMapBroker) runNotificationListener() {
 // ============================================================================
 
 // outboxWorkerConfig returns (pool, shardIDs) for outbox worker #i.
-// With N replicas: worker i handles shards where shard_id % N == i.
-func (e *PostgresMapBroker) outboxWorkerConfig(replicaIdx int) (*pgxpool.Pool, []int) {
-	n := len(e.readPools)
-	if n == 0 {
-		return e.pool, nil // nil = all shards (no filter)
+// Without replicas: NumShards workers, each handles shards where shard_id % NumShards == i.
+// With replicas: one worker per replica, each handles shards where shard_id % len(replicas) == i.
+func (e *PostgresMapBroker) outboxWorkerConfig(workerIdx int) (*pgxpool.Pool, []int) {
+	pool := e.pool
+	numWorkers := e.conf.NumShards
+	if len(e.readPools) > 0 {
+		numWorkers = len(e.readPools)
+		pool = e.readPools[workerIdx]
 	}
 	var shards []int
 	for s := 0; s < e.conf.NumShards; s++ {
-		if s%n == replicaIdx {
+		if s%numWorkers == workerIdx {
 			shards = append(shards, s)
 		}
 	}
-	return e.readPools[replicaIdx], shards
+	return pool, shards
 }
 
 // runOutboxWorker polls the stream table for new entries and delivers them.
@@ -1415,7 +1422,8 @@ func (e *PostgresMapBroker) runOutboxWorker(replicaIdx int) {
 		default:
 		}
 
-		// Inner loop: process batches until less than full batch
+		// Inner loop: process batches until no data found.
+		idle := true
 		for {
 			processed, newCursor, err := e.processOutboxBatch(ctx, pool, cursor, shards, buf)
 			if err != nil {
@@ -1428,12 +1436,16 @@ func (e *PostgresMapBroker) runOutboxWorker(replicaIdx int) {
 			if newCursor > cursor {
 				cursor = newCursor
 			}
-			if processed < e.conf.Outbox.BatchSize {
+			if processed == 0 {
 				break
 			}
+			idle = false
 		}
 
-		// Wait for notification or poll interval
+		// Wait for notification or poll interval (only when idle).
+		if !idle {
+			continue
+		}
 		if e.notifyCh != nil {
 			select {
 			case <-e.closeCh:
