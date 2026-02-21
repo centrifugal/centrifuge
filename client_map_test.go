@@ -3256,3 +3256,334 @@ func TestMapSubscribe_WasRecovering(t *testing.T) {
 	require.True(t, result.Recovered, "successful recovery should have Recovered")
 	require.Len(t, result.Publications, 1, "should recover 1 missed publication")
 }
+
+// TestMapSubscribe_EmptyEpochAdoption verifies that a map channel client with
+// epoch="" (subscribed when no data existed, e.g. via PG broker) correctly adopts
+// the real epoch from the first incoming publication without triggering
+// handleInsufficientState. This is map-specific behavior — non-map channels with
+// epoch="" still trigger insufficient state on epoch mismatch
+// (tested in TestClientUnexpectedOffsetEpochClientV2 and below).
+func TestMapSubscribe_EmptyEpochAdoption(t *testing.T) {
+	node, _ := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_epoch_adoption"
+
+	insufficientCh := make(chan struct{}, 1)
+	pubDelivered := make(chan struct{}, 1)
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+		client.OnUnsubscribe(func(e UnsubscribeEvent) {
+			if e.Code == UnsubscribeCodeInsufficient {
+				select {
+				case insufficientCh <- struct{}{}:
+				default:
+				}
+			}
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Subscribe — MemoryMapBroker creates an epoch even for empty channels.
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+	})
+	require.Equal(t, MapPhaseLive, result.Phase)
+
+	// Simulate the PG broker scenario: client subscribed when no data existed,
+	// so epoch="" was returned. Manually set epoch="" in the channel context.
+	client.mu.Lock()
+	chCtx := client.channels[channel]
+	require.True(t, channelHasFlag(chCtx.flags, flagMap))
+	require.True(t, channelHasFlag(chCtx.flags, flagPositioning))
+	chCtx.streamPosition.Epoch = ""
+	chCtx.streamPosition.Offset = 0
+	client.channels[channel] = chCtx
+	client.mu.Unlock()
+
+	// Deliver a publication with a real epoch via node.handlePublication.
+	// For a map channel with epoch="", this should adopt the epoch, not trigger insufficient state.
+	go func() {
+		_ = node.handlePublication(channel, StreamPosition{1, "real-epoch-abc"}, &Publication{
+			Offset: 1,
+			Data:   []byte(`{"key":"val"}`),
+			Key:    "key1",
+		}, nil, nil)
+		select {
+		case pubDelivered <- struct{}{}:
+		default:
+		}
+	}()
+
+	// Wait for publication to be processed.
+	select {
+	case <-pubDelivered:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for publication delivery")
+	}
+
+	// Give some time for any async handleInsufficientState to fire.
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify no insufficient state was triggered.
+	select {
+	case <-insufficientCh:
+		require.Fail(t, "map channel with empty epoch should not trigger insufficient state")
+	default:
+		// Good — no insufficient state.
+	}
+
+	// Verify client adopted the epoch.
+	client.mu.Lock()
+	chCtx = client.channels[channel]
+	require.Equal(t, "real-epoch-abc", chCtx.streamPosition.Epoch, "client should adopt the real epoch")
+	require.Equal(t, uint64(1), chCtx.streamPosition.Offset, "client offset should advance")
+	client.mu.Unlock()
+}
+
+// TestMapSubscribe_EmptyEpochAdoption_NonMapNotAffected verifies that the epoch
+// adoption logic is map-specific: a non-map (regular) channel with epoch="" still
+// triggers handleInsufficientState when a publication arrives with a real epoch.
+func TestMapSubscribe_EmptyEpochAdoption_NonMapNotAffected(t *testing.T) {
+	t.Parallel()
+	broker := NewTestBroker()
+	node := nodeWithBroker(broker)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true}}, nil)
+		})
+		client.OnUnsubscribe(func(event UnsubscribeEvent) {
+			require.Equal(t, UnsubscribeCodeInsufficient, event.Code)
+			close(done)
+		})
+	})
+
+	client := newTestClientV2(t, node, "42")
+	connectClientV2(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test",
+		Recover: true,
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	// Non-map channel with epoch="" receiving a pub with real epoch — should trigger insufficient state.
+	err = node.handlePublication("test", StreamPosition{1, "xyz"}, &Publication{
+		Offset: 1,
+		Data:   []byte(`{}`),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for insufficient state on non-map channel")
+	case <-done:
+	}
+}
+
+// TestMapSubscribe_RealEpochMismatch verifies that a map channel client with a
+// real (non-empty) epoch triggers handleInsufficientState when a publication
+// arrives with a different epoch. The epoch adoption only applies to epoch="".
+func TestMapSubscribe_RealEpochMismatch(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_epoch_mismatch"
+	ctx := context.Background()
+
+	// Publish some data to establish a real epoch.
+	res, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"v":"data"}`),
+	})
+	require.NoError(t, err)
+	realEpoch := res.Position.Epoch
+	require.NotEmpty(t, realEpoch)
+
+	done := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+		client.OnUnsubscribe(func(e UnsubscribeEvent) {
+			if e.Code == UnsubscribeCodeInsufficient {
+				close(done)
+			}
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Subscribe — client will get the real epoch from ReadState.
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+	})
+	require.Equal(t, realEpoch, result.Epoch)
+
+	// Deliver publication with a DIFFERENT epoch — should trigger insufficient state.
+	err = node.handlePublication(channel, StreamPosition{2, "different-epoch"}, &Publication{
+		Offset: 2,
+		Data:   []byte(`{"v":"data2"}`),
+		Key:    "key2",
+	}, nil, nil)
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for insufficient state on epoch mismatch")
+	case <-done:
+	}
+}
+
+// TestMapSubscribe_RecoveryEmptyEpochGuard verifies that recovering with epoch=""
+// when the server has a real epoch returns ErrorUnrecoverablePosition. This guards
+// against stale state after a Clear event: the client SDK stores the epoch from
+// the subscribe response and never updates it from publication deliveries.
+func TestMapSubscribe_RecoveryEmptyEpochGuard(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_recovery_empty_epoch"
+	ctx := context.Background()
+
+	// Publish data to create a real epoch.
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"v":"data"}`),
+	})
+	require.NoError(t, err)
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Attempt recovery with epoch="" — server has real epoch → unrecoverable.
+	rwWrapper := testReplyWriterWrapper()
+	err = client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+		Offset:  0,
+		Epoch:   "", // Empty epoch from original subscription when no data existed.
+		Recover: true,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.NotNil(t, rwWrapper.replies[0].Error, "should get error for empty epoch recovery")
+	require.Equal(t, ErrorUnrecoverablePosition.Code, rwWrapper.replies[0].Error.Code)
+}
+
+// TestMapSubscribe_RecoveryEmptyEpochGuard_StreamPhase tests the same guard
+// via STREAM phase recovery (the default SDK recovery path).
+func TestMapSubscribe_RecoveryEmptyEpochGuard_StreamPhase(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_recovery_empty_epoch_stream"
+	ctx := context.Background()
+
+	// Publish data to create a real epoch.
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"v":"data"}`),
+	})
+	require.NoError(t, err)
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Attempt STREAM phase recovery with epoch="" — server has real epoch → unrecoverable.
+	rwWrapper := testReplyWriterWrapper()
+	err = client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseStream,
+		Offset:  0,
+		Epoch:   "", // Empty epoch.
+		Limit:   100,
+		Recover: true,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.NotNil(t, rwWrapper.replies[0].Error, "should get error for empty epoch recovery via stream phase")
+	require.Equal(t, ErrorUnrecoverablePosition.Code, rwWrapper.replies[0].Error.Code)
+}
+
+// TestMapSubscribe_RecoveryMatchingEpoch verifies that recovery with a real
+// (non-empty) matching epoch succeeds normally — the empty-epoch guard only
+// triggers when the client sends epoch="" but the server has a real epoch.
+func TestMapSubscribe_RecoveryMatchingEpoch(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_recovery_matching_epoch"
+	ctx := context.Background()
+
+	// Publish data to establish a real epoch.
+	res, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"v":"data"}`),
+	})
+	require.NoError(t, err)
+	epoch := res.Position.Epoch
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Recovery with matching epoch — should succeed.
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+		Offset:  res.Position.Offset,
+		Epoch:   epoch,
+		Recover: true,
+	})
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.Equal(t, epoch, result.Epoch)
+	require.True(t, result.Recovered)
+}

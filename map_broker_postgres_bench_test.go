@@ -496,7 +496,6 @@ func setupPostgresMapBrokerOutboxBench(b *testing.B) (*PostgresMapBroker, func()
 		},
 	})
 	// Use fewer shards than pool size to leave connections available for Publish calls.
-	// Each outbox worker holds a connection for its advisory lock.
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		BinaryData: true,
@@ -541,7 +540,6 @@ func setupPostgresMapBrokerOutboxBenchWithHandler(b *testing.B, handler BrokerEv
 		},
 	})
 	// Use fewer shards than pool size to leave connections available for Publish calls.
-	// Each outbox worker holds a connection for its advisory lock.
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
 		ConnString: connString,
 		BinaryData: true,
@@ -626,17 +624,8 @@ func BenchmarkPostgresMapBroker_OutboxThroughput(b *testing.B) {
 	})
 	defer cleanup()
 
-	// Wait for at least one outbox worker to claim a shard
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(broker.OutboxClaimedShards()) > 0 {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if len(broker.OutboxClaimedShards()) == 0 {
-		b.Fatal("no outbox worker claimed any shards")
-	}
+	// Give outbox worker a moment to start polling.
+	time.Sleep(100 * time.Millisecond)
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -663,59 +652,30 @@ func BenchmarkPostgresMapBroker_OutboxThroughput(b *testing.B) {
 	b.StopTimer()
 }
 
-// BenchmarkPostgresMapBroker_PublishWithStreamTrim benchmarks publish with stream_size trimming.
-// This measures the overhead of the DELETE subquery that trims old stream entries.
-// Runs sub-benchmarks with different stream sizes to show how OFFSET cost scales.
-func BenchmarkPostgresMapBroker_PublishWithStreamTrim(b *testing.B) {
+// BenchmarkPostgresMapBroker_PublishHighVolume benchmarks publish into a channel with a large stream.
+func BenchmarkPostgresMapBroker_PublishHighVolume(b *testing.B) {
 	broker, cleanup := setupPostgresMapBrokerBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
+	channel := fmt.Sprintf("bench_highvol_%d", time.Now().UnixNano())
 
-	for _, streamSize := range []int{100, 1000, 10000} {
-		b.Run(fmt.Sprintf("StreamSize_%d", streamSize), func(b *testing.B) {
-			channel := fmt.Sprintf("bench_trim_%d_%d", streamSize, time.Now().UnixNano())
-
-			// Pre-fill stream to stream_size so trim runs on every publish.
-			for i := 0; i < streamSize; i++ {
-				_, err := broker.Publish(ctx, channel, fmt.Sprintf("prefill_%d", i), MapPublishOptions{
-					Data: []byte("data"),
-				})
-				if err != nil {
-					b.Fatal(err)
-				}
-			}
-
-			b.ReportAllocs()
-			b.ResetTimer()
-
-			for i := 0; i < b.N; i++ {
-				key := fmt.Sprintf("key_%d", i%1000)
-				_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-					Data: []byte("x"),
-				})
-				if err != nil {
-					b.Fatal(err)
-				}
-			}
+	// Pre-fill stream with 10000 entries.
+	for i := 0; i < 10000; i++ {
+		_, err := broker.Publish(ctx, channel, fmt.Sprintf("prefill_%d", i), MapPublishOptions{
+			Data: []byte("data"),
 		})
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
-}
-
-// BenchmarkPostgresMapBroker_PublishNoTrim benchmarks publish without trimming for comparison.
-func BenchmarkPostgresMapBroker_PublishNoTrim(b *testing.B) {
-	broker, cleanup := setupPostgresMapBrokerBench(b)
-	defer cleanup()
-
-	ctx := context.Background()
 
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		ch := fmt.Sprintf("bench_notrim_%d", i%1000)
 		key := fmt.Sprintf("key_%d", i%1000)
-		_, err := broker.Publish(ctx, ch, key, MapPublishOptions{
+		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data: []byte("x"),
 		})
 		if err != nil {
@@ -753,17 +713,8 @@ func BenchmarkPostgresMapBroker_OutboxLatency(b *testing.B) {
 	})
 	defer cleanup()
 
-	// Wait for at least one outbox worker to claim a shard
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(broker.OutboxClaimedShards()) > 0 {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if len(broker.OutboxClaimedShards()) == 0 {
-		b.Fatal("no outbox worker claimed any shards")
-	}
+	// Give outbox worker a moment to start polling.
+	time.Sleep(100 * time.Millisecond)
 
 	b.ReportAllocs()
 	b.ResetTimer()

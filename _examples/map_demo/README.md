@@ -1,20 +1,18 @@
-# Keyed Subscriptions Demo
+# Map Subscriptions Demo
 
-This demo showcases Centrifuge's map subscriptions feature with PostgreSQL as the persistent backend. It includes several interactive examples: collaborative cursors, game lobby, leaderboard, and inventory management.
+This demo showcases Centrifuge's map subscriptions feature with multiple backend options. It includes several interactive examples: collaborative cursors, game lobby, leaderboard, inventory management, live polls, scoreboard, and more.
 
 ## Prerequisites
 
 - Go 1.21+
 - Docker and Docker Compose (for quick start)
-- PostgreSQL 14+ with logical replication enabled (for manual setup)
-- Redis (optional, for multi-node fan-out)
+- PostgreSQL 14+ (for persistent backend)
+- Redis (optional, alternative backend)
 
 ## Quick Start with Docker Compose
 
-The easiest way to run the demo:
-
 ```bash
-# Start PostgreSQL and Redis
+# Start PostgreSQL (and Redis if needed)
 docker-compose up -d
 
 # Wait for PostgreSQL to be ready
@@ -28,225 +26,94 @@ Open http://localhost:3000 in your browser.
 
 ## PostgreSQL Configuration
 
-### Required Settings
-
-PostgreSQL must be configured for logical replication. These settings are required:
-
-```
-wal_level = logical
-max_replication_slots = 20   # At least num_shards + buffer
-max_wal_senders = 20         # At least num_shards + buffer
-```
-
-For Docker, these are set via command arguments in `docker-compose.yml`.
-
-For a standalone PostgreSQL installation, edit `postgresql.conf`:
-
-```bash
-# Find your postgresql.conf location
-psql -U postgres -c "SHOW config_file"
-
-# Edit and add/modify these lines
-wal_level = logical
-max_replication_slots = 20
-max_wal_senders = 20
-
-# Restart PostgreSQL
-sudo systemctl restart postgresql
-```
+No special PostgreSQL configuration is required. The broker uses standard SQL polling — no logical replication, no WAL-level settings, no replication slots needed.
 
 ### Schema Setup
 
 The schema is created automatically via `EnsureSchema()` on application startup — no manual SQL scripts needed.
 
-### Verify Setup
-
-Check that logical replication is properly configured:
-
-```sql
--- Check WAL level
-SHOW wal_level;  -- Should be 'logical'
-
--- Check publications exist
-SELECT * FROM pg_publication WHERE pubname LIKE 'cf_keyed%';
-
--- Check replication slots (created dynamically by Centrifuge)
-SELECT slot_name, plugin, slot_type, active
-FROM pg_replication_slots
-WHERE slot_name LIKE 'cf_keyed%';
-```
-
-## Running the Demo
-
-### Single-Node Mode (PostgreSQL only)
-
-```bash
-./map_demo -postgres "postgres://centrifuge:centrifuge@localhost:5432/centrifuge?sslmode=disable"
-```
-
-In this mode:
-- WAL reader delivers publications directly to local subscribers
-- No Redis required
-- Suitable for single-server deployments
-
-### Multi-Node Mode (PostgreSQL + Redis)
-
-```bash
-./map_demo \
-  -postgres "postgres://centrifuge:centrifuge@localhost:5432/centrifuge?sslmode=disable" \
-  -redis "localhost:6379"
-```
-
-In this mode:
-- WAL reader publishes to Redis broker for fan-out
-- All Centrifuge nodes receive publications via Redis PUB/SUB
-- Suitable for horizontally scaled deployments
-
-### With Memory Cache
-
-Add `-cache` flag for read-your-own-writes consistency:
-
-```bash
-./map_demo -postgres "..." -cache
-```
-
-## Monitoring
-
-### Check WAL Reader Status
-
-The WAL reader uses PostgreSQL's logical replication. Monitor it with:
-
-```sql
--- Active replication slots and their lag
-SELECT
-    slot_name,
-    active,
-    pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS lag,
-    pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)) AS pending
-FROM pg_replication_slots
-WHERE slot_name LIKE 'cf_keyed%'
-ORDER BY slot_name;
-
--- Replication connections
-SELECT
-    pid, usename, application_name, client_addr, state,
-    pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), sent_lsn)) AS send_lag,
-    pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), flush_lsn)) AS flush_lag
-FROM pg_stat_replication
-WHERE application_name LIKE 'cf_keyed%';
-```
-
-### Check Stream and Snapshot Data
+### Verify Data
 
 ```sql
 -- Recent stream entries
 SELECT channel, channel_offset, key, removed, created_at
-FROM cf_keyed_stream
+FROM cf_map_stream
 ORDER BY id DESC
 LIMIT 20;
 
--- Snapshot state
+-- Current state
 SELECT channel, key, score, updated_at
-FROM cf_keyed_snapshot
+FROM cf_map_state
 WHERE channel = 'leaderboard'
 ORDER BY score DESC
 LIMIT 10;
 
 -- Channel metadata
-SELECT channel, top_offset, epoch, updated_at
-FROM cf_keyed_meta;
+SELECT channel, top_offset, epoch
+FROM cf_map_meta;
 ```
 
-### Cleanup Stale Replication Slots
+## Running the Demo
 
-If slots become orphaned (e.g., after crashes), clean them up:
+### PostgreSQL Backend
 
-```sql
--- List inactive slots
-SELECT slot_name, active, restart_lsn
-FROM pg_replication_slots
-WHERE NOT active AND slot_name LIKE 'cf_keyed%';
-
--- Drop a specific slot
-SELECT pg_drop_replication_slot('cf_keyed_shard_0');
-
--- Drop all inactive keyed slots
-SELECT pg_drop_replication_slot(slot_name)
-FROM pg_replication_slots
-WHERE NOT active AND slot_name LIKE 'cf_keyed%';
+```bash
+./map_demo -postgres "postgres://centrifuge:centrifuge@localhost:5432/centrifuge?sslmode=disable"
 ```
+
+Every node independently polls `cf_map_stream` for new entries — no special coordination needed for multi-node deployments.
+
+### PostgreSQL with Read Replicas
+
+```bash
+./map_demo \
+  -postgres "postgres://centrifuge:centrifuge@localhost:5432/centrifuge?sslmode=disable" \
+  -replicas "postgres://centrifuge:centrifuge@localhost:5433/centrifuge?sslmode=disable"
+```
+
+Read replicas offload ReadState and ReadStream queries from the primary. Reads are routed using shard-based routing: `hash(channel) % NumShards % len(replicas)`. Writes always go to the primary.
+
+### Redis Backend
+
+```bash
+./map_demo -redis "localhost:6379"
+```
+
+### With Memory Cache
+
+Add `-cache` flag for read-your-own-writes consistency and low-latency reads:
+
+```bash
+./map_demo -postgres "..." -cache
+```
+
+### In-Memory Backend (default)
+
+```bash
+./map_demo
+```
+
+No external dependencies. Data is lost on restart.
 
 ## Architecture
 
-### Sharded WAL Reading
+### Outbox-Based Delivery
 
-The demo uses 16 shards by default. Channels are assigned to shards based on hash:
+The PostgreSQL broker uses outbox-based delivery:
 
-```
-shard = abs(hashtext(channel)) % 16
-```
+1. **Publish**: `cf_map_publish()` SQL function atomically updates state and appends to `cf_map_stream`
+2. **Poll**: Each node's outbox worker polls `cf_map_stream` for new entries (default: every 50ms)
+3. **Deliver**: Worker calls `HandlePublication()` to deliver to local subscribers
 
-Each shard:
-- Has its own publication (`cf_keyed_stream_shard_N`)
-- Has its own replication slot (`cf_keyed_shard_N`)
-- Can be claimed by any Centrifuge node via advisory locks
-- Processes WAL changes independently
+With `UseNotify: true`, PostgreSQL `LISTEN/NOTIFY` wakes the outbox worker immediately on new entries, reducing delivery latency to near-zero.
 
-Benefits:
-- **Multi-node scaling**: Different nodes claim different shards
-- **Fault isolation**: Slow channels don't block others
-- **Parallel processing**: Multiple goroutines handle different channels
+### Sharding
 
-### Data Flow
+Every stream row gets `shard_id = abs(hashtext(channel)) % NumShards`. When read replicas are configured, each outbox worker handles a subset of shards, routing reads to the same replica for consistency.
 
-1. **Publish**: Client calls HTTP endpoint → `cf_keyed_publish()` SQL function
-2. **WAL Capture**: PostgreSQL writes to WAL → Logical replication streams to Centrifuge
-3. **Fan-out**:
-   - Single-node: WAL reader delivers directly to subscribers
-   - Multi-node: WAL reader publishes to Redis → All nodes receive via PUB/SUB
-4. **Delivery**: Subscribers receive real-time updates
+### Stream Cleanup
 
-## Troubleshooting
-
-### "max_replication_slots" exceeded
-
-Increase `max_replication_slots` in PostgreSQL config and restart.
-
-### WAL reader not claiming shards
-
-Check if another process holds the advisory locks:
-
-```sql
-SELECT classid, objid, mode, granted, pid
-FROM pg_locks
-WHERE locktype = 'advisory' AND classid = 1735289160;
-```
-
-### Publications not delivered (multi-node mode)
-
-1. Ensure Redis is running and accessible
-2. Check that both `-postgres` and `-redis` flags are provided
-3. Verify broker subscription in Redis:
-
-```bash
-redis-cli PUBSUB CHANNELS "map_demo*"
-```
-
-### High replication lag
-
-```sql
--- Check which slot is lagging
-SELECT slot_name,
-       pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS lag
-FROM pg_replication_slots
-WHERE slot_name LIKE 'cf_keyed%'
-ORDER BY pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) DESC;
-```
-
-Possible causes:
-- Network latency to PostgreSQL
-- Slow publication processing
-- Too many channels on one shard
+Stream entries are retained for `StreamRetention` (default: 24h) and cleaned up by a periodic worker. For high-throughput deployments, `Partitioning: true` uses daily PostgreSQL table partitions with instant `DROP TABLE` cleanup instead of `DELETE + VACUUM`.
 
 ## Configuration Reference
 
@@ -256,20 +123,25 @@ Possible causes:
 |-------------|--------------------------------------|---------|
 | `-port`     | HTTP server port                     | `3000`  |
 | `-postgres` | PostgreSQL connection string         | (none)  |
-| `-redis`    | Redis address for multi-node fan-out | (none)  |
+| `-redis`    | Redis address                        | (none)  |
+| `-replicas` | Comma-separated PG replica conn strings | (none)  |
 | `-cache`    | Enable memory cache layer            | `false` |
 
 ### PostgreSQL Broker Options
 
 When using `PostgresMapBrokerConfig`:
 
-| Option               | Description                          | Default    |
-|----------------------|--------------------------------------|------------|
-| `ConnString`         | PostgreSQL connection string         | (required) |
-| `NumShards`          | Number of WAL reader shards          | `16`       |
-| `ShardIDs`           | Specific shards to claim (nil = all) | `nil`      |
-| `WALReaderHeartbeat` | Standby status interval              | `10s`      |
-| `Broker`             | Redis broker for multi-node fan-out  | `nil`      |
+| Option                   | Description                              | Default    |
+|--------------------------|------------------------------------------|------------|
+| `ConnString`             | PostgreSQL connection string             | (required) |
+| `PoolSize`               | Max connections in pool                  | `32`       |
+| `NumShards`              | Shards for parallel delivery             | `16`       |
+| `StreamRetention`        | How long to keep stream entries          | `24h`      |
+| `UseNotify`              | LISTEN/NOTIFY for low-latency wakeup    | `false`    |
+| `ReadReplicaConnStrings` | Read replica connection strings          | (none)     |
+| `Partitioning`           | Daily table partitioning for cleanup     | `false`    |
+| `Outbox.PollInterval`    | How often to poll for new entries        | `50ms`     |
+| `Outbox.BatchSize`       | Max rows per outbox batch                | `1000`     |
 
 ## License
 

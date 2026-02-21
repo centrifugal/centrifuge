@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/centrifugal/centrifuge"
@@ -12,35 +13,18 @@ import (
 // setupMapBroker creates either a memory, Redis, or PostgreSQL map broker.
 // When enableCache is true, wraps Redis/Postgres brokers with CachedMapBroker
 // for read-your-own-writes consistency and low-latency reads.
-func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr string, enableCache bool) (centrifuge.MapBroker, error) {
+func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr, replicaAddrs string, enableCache bool) (centrifuge.MapBroker, error) {
 	var backend centrifuge.MapBroker
 
 	// PostgreSQL takes priority if specified
 	if postgresAddr != "" {
+		log.Printf("Using PostgreSQL map broker")
 		pgConfig := centrifuge.PostgresMapBrokerConfig{
 			ConnString: postgresAddr,
 		}
-
-		// If Redis is also specified, use it as broker for multi-node fan-out
-		if redisAddr != "" {
-			log.Printf("Using PostgreSQL map broker with Redis broker for fan-out")
-			redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
-				Address: redisAddr,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("error creating Redis shard for broker: %w", err)
-			}
-
-			broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
-				Shards: []*centrifuge.RedisShard{redisShard},
-				Prefix: "map_demo",
-			})
-			if err != nil {
-				return nil, fmt.Errorf("error creating Redis broker: %w", err)
-			}
-			pgConfig.Broker = broker
-		} else {
-			log.Printf("Using PostgreSQL map broker (single-node, local delivery only)")
+		if replicaAddrs != "" {
+			pgConfig.ReadReplicaConnStrings = strings.Split(replicaAddrs, ",")
+			log.Printf("Configured %d read replica(s)", len(pgConfig.ReadReplicaConnStrings))
 		}
 
 		broker, err := centrifuge.NewPostgresMapBroker(node, pgConfig)

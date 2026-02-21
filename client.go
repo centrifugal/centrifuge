@@ -3773,18 +3773,22 @@ func (c *Client) writePublicationUpdatePosition(
 		return nil
 	}
 	if pubEpoch != channelContext.streamPosition.Epoch {
-		// Wrong stream epoch is always a signal of insufficient state.
-		// We can introduce an option to mark connection with insufficient state flag instead
-		// of disconnecting it immediately. In that case connection will eventually reconnect
-		// due to periodic sync. While connection channel is in the insufficient state we must
-		// skip publications coming to it. This mode may be useful to spread the resubscribe load.
-		if c.node.logger.enabled(LogLevelDebug) {
-			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state (epoch)", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "epoch": pubEpoch, "expectedEpoch": channelContext.streamPosition.Epoch}))
+		if channelContext.streamPosition.Epoch == "" && channelHasFlag(channelContext.flags, flagMap) {
+			// Map channel subscribed when no data existed (empty epoch). The first
+			// publication carries the real epoch — adopt it. This avoids a needless
+			// re-subscribe and is safe: the only way to have epoch="" is "no data
+			// existed at subscribe time", so there is no stale state to protect.
+			channelContext.streamPosition.Epoch = pubEpoch
+			c.channels[ch] = channelContext
+		} else {
+			// Real epoch mismatch (e.g. after Clear) — insufficient state.
+			if c.node.logger.enabled(LogLevelDebug) {
+				c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state (epoch)", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "epoch": pubEpoch, "expectedEpoch": channelContext.streamPosition.Epoch}))
+			}
+			go func() { c.handleInsufficientState(ch, serverSide) }()
+			c.mu.Unlock()
+			return nil
 		}
-		// Tell client about insufficient state, can reconnect/resubscribe to recover the state.
-		go func() { c.handleInsufficientState(ch, serverSide) }()
-		c.mu.Unlock()
-		return nil
 	}
 	if pubOffset > nextExpectedOffset {
 		// Missed message detected.

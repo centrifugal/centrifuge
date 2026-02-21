@@ -286,6 +286,7 @@ Triggered when:
 - Stream epoch mismatch (server restarted, stream reset)
 - Client position too old (stream entries already expired)
 - Stream read exceeds `MapRecoveryMaxPublicationLimit`
+- Recovery with `epoch=""` when server has a real epoch (PG broker empty epoch guard — see [Empty Epoch Handling](draft_map_postgres.md#empty-epoch-handling))
 
 **Client behavior** depends on `unrecoverableStrategy` option:
 
@@ -391,6 +392,20 @@ The JS client validates epoch consistency between phases. If the epoch changes b
 - **During LIVE transition:** Same check — if epoch changed, restarts from STATE (or retries immediate join)
 
 This handles the case where the server's stream was reset (e.g., server restart) during multi-phase subscription. The client detects the inconsistency and starts over rather than merging data from different epochs.
+
+---
+
+## Server-Side Epoch Adoption (Map Channels)
+
+When using the PostgreSQL broker, map channels may have `epoch=""` at subscribe time (no data has been published yet). The server handles this via epoch adoption in the publication delivery path:
+
+- **Map channel with `epoch=""`**: When the first publication arrives with a real epoch, the server adopts it — updates the channel context epoch without triggering insufficient state. Subsequent publications use the adopted epoch for normal offset/epoch validation.
+- **Non-map channels**: Epoch adoption is **not** applied. A non-map channel with `epoch=""` receiving a publication with a real epoch triggers `handleInsufficientState` as before.
+- **Map channel with real epoch**: Normal epoch mismatch handling applies — triggers `handleInsufficientState`.
+
+The adoption is safe because `epoch=""` only means "no data existed at subscribe time" — there is no stale state to protect.
+
+**Important limitation:** The client SDK stores the epoch from the subscribe response and never updates it from publication deliveries. So after epoch adoption on the server, the SDK still has `epoch=""`. On reconnect, the SDK sends `epoch=""` in the recovery request. The server's [empty epoch recovery guard](draft_map_postgres.md#recovery-guard-for-empty-epoch) detects this and returns `ErrorUnrecoverablePosition`, forcing a clean re-subscribe.
 
 ---
 

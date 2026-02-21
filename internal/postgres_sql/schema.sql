@@ -24,28 +24,14 @@ CREATE TABLE IF NOT EXISTS __PREFIX__stream (
     removed         BOOLEAN DEFAULT FALSE,
     score           BIGINT,
     previous_data   __DATA_TYPE__,
-    expires_at      TIMESTAMPTZ,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     shard_id        SMALLINT NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS __PREFIX__stream_channel_offset_idx ON __PREFIX__stream (channel, channel_offset);
 CREATE INDEX IF NOT EXISTS __PREFIX__stream_channel_id_idx ON __PREFIX__stream (channel, id DESC);
-CREATE INDEX IF NOT EXISTS __PREFIX__stream_expires_idx ON __PREFIX__stream (expires_at) WHERE expires_at IS NOT NULL;
-CREATE INDEX IF NOT EXISTS __PREFIX__stream_shard_cursor_idx ON __PREFIX__stream (shard_id, id);
-
--- Note: REPLICA IDENTITY FULL is NOT needed. Publications use
--- WITH (publish = 'insert') so DELETE/UPDATE old-row logging is skipped.
-
--- ============================================================================
--- Outbox Cursor Table
--- ============================================================================
-
-CREATE TABLE IF NOT EXISTS __PREFIX__outbox_cursor (
-    shard_id          INTEGER PRIMARY KEY,
-    last_processed_id BIGINT NOT NULL DEFAULT 0,
-    updated_at        TIMESTAMPTZ DEFAULT NOW()
-);
+CREATE INDEX IF NOT EXISTS __PREFIX__stream_shard_id_idx ON __PREFIX__stream (shard_id, id);
+CREATE INDEX IF NOT EXISTS __PREFIX__stream_created_at_idx ON __PREFIX__stream (created_at);
 
 -- ============================================================================
 -- Snapshot Table (Current State)
@@ -128,8 +114,6 @@ CREATE OR REPLACE FUNCTION __PREFIX__publish(
     p_subscribed_at TIMESTAMPTZ DEFAULT NULL,
     p_key_mode TEXT DEFAULT NULL,
     p_key_ttl INTERVAL DEFAULT NULL,
-    p_stream_ttl INTERVAL DEFAULT NULL,
-    p_stream_size INT DEFAULT NULL,
     p_meta_ttl INTERVAL DEFAULT NULL,
     p_expected_offset BIGINT DEFAULT NULL,
     p_score BIGINT DEFAULT NULL,
@@ -263,34 +247,21 @@ BEGIN
 
     -- 8. Insert into stream (include epoch, shard_id, and previous_data for delta)
     INSERT INTO __PREFIX__stream (
-        channel, channel_offset, epoch, key, data, tags, client_id, user_id, conn_info, chan_info, subscribed_at, score, previous_data, expires_at, shard_id
+        channel, channel_offset, epoch, key, data, tags, client_id, user_id, conn_info, chan_info, subscribed_at, score, previous_data, shard_id
     ) VALUES (
         p_channel, v_offset, v_epoch, p_key, COALESCE(p_stream_data, p_data), p_tags, p_client_id, p_user_id, p_conn_info, p_chan_info, p_subscribed_at, p_score, v_previous_data,
-        CASE WHEN p_stream_ttl IS NOT NULL THEN NOW() + p_stream_ttl ELSE NULL END,
         v_shard_id
     ) RETURNING __PREFIX__stream.id INTO v_id;
 
-    -- 9. Trim stream if needed (cursor-aware: never trim undelivered rows).
-    -- Uses channel_offset arithmetic instead of OFFSET scan: O(1) vs O(stream_size).
-    IF p_stream_size IS NOT NULL AND p_stream_size > 0 AND v_offset > p_stream_size THEN
-        DELETE FROM __PREFIX__stream
-        WHERE __PREFIX__stream.channel = p_channel
-          AND __PREFIX__stream.channel_offset <= v_offset - p_stream_size
-          AND (
-              NOT EXISTS (SELECT 1 FROM __PREFIX__outbox_cursor)
-              OR __PREFIX__stream.id <= (
-                  SELECT c.last_processed_id FROM __PREFIX__outbox_cursor c
-                  WHERE c.shard_id = __PREFIX__stream.shard_id
-              )
-          );
-    END IF;
-
-    -- 10. Save idempotency key
+    -- 9. Save idempotency key
     IF p_idempotency_key IS NOT NULL THEN
         INSERT INTO __PREFIX__idempotency (channel, idempotency_key, result_offset, result_id, expires_at)
         VALUES (p_channel, p_idempotency_key, v_offset, v_id, NOW() + COALESCE(p_idempotency_ttl, INTERVAL '5 minutes'))
         ON CONFLICT DO NOTHING;
     END IF;
+
+    -- 10. Notify outbox workers
+    PERFORM pg_notify('__PREFIX__stream_notify', '');
 
     RETURN QUERY SELECT v_id, v_offset, v_epoch, FALSE, NULL::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
 END;
@@ -309,8 +280,6 @@ CREATE OR REPLACE FUNCTION __PREFIX__publish_strict(
     p_subscribed_at TIMESTAMPTZ DEFAULT NULL,
     p_key_mode TEXT DEFAULT NULL,
     p_key_ttl INTERVAL DEFAULT NULL,
-    p_stream_ttl INTERVAL DEFAULT NULL,
-    p_stream_size INT DEFAULT NULL,
     p_meta_ttl INTERVAL DEFAULT NULL,
     p_expected_offset BIGINT DEFAULT NULL,
     p_score BIGINT DEFAULT NULL,
@@ -336,7 +305,7 @@ BEGIN
     FROM __PREFIX__publish(
         p_channel, p_key, p_data, p_tags,
         p_client_id, p_user_id, p_conn_info, p_chan_info, p_subscribed_at,
-        p_key_mode, p_key_ttl, p_stream_ttl, p_stream_size, p_meta_ttl,
+        p_key_mode, p_key_ttl, p_meta_ttl,
         p_expected_offset, p_score, p_version, p_version_epoch,
         p_key_version, p_key_version_epoch,
         p_idempotency_key, p_idempotency_ttl, p_refresh_ttl_on_suppress,
@@ -377,7 +346,6 @@ CREATE OR REPLACE FUNCTION __PREFIX__remove(
     p_key TEXT,
     p_client_id TEXT DEFAULT NULL,
     p_user_id TEXT DEFAULT NULL,
-    p_stream_ttl INTERVAL DEFAULT NULL,
     p_idempotency_key TEXT DEFAULT NULL,
     p_idempotency_ttl INTERVAL DEFAULT NULL,
     p_meta_ttl INTERVAL DEFAULT NULL,
@@ -455,10 +423,9 @@ BEGIN
     DELETE FROM __PREFIX__state WHERE channel = p_channel AND key = p_key;
 
     -- 7. Insert removal into stream (include epoch and shard_id)
-    INSERT INTO __PREFIX__stream (channel, channel_offset, epoch, key, removed, client_id, user_id, expires_at, shard_id)
+    INSERT INTO __PREFIX__stream (channel, channel_offset, epoch, key, removed, client_id, user_id, shard_id)
     VALUES (
         p_channel, v_offset, v_epoch, p_key, TRUE, p_client_id, p_user_id,
-        CASE WHEN p_stream_ttl IS NOT NULL THEN NOW() + p_stream_ttl ELSE NULL END,
         v_shard_id
     ) RETURNING __PREFIX__stream.id INTO v_id;
 
@@ -468,6 +435,9 @@ BEGIN
         VALUES (p_channel, p_idempotency_key, v_offset, v_id, NOW() + COALESCE(p_idempotency_ttl, INTERVAL '5 minutes'))
         ON CONFLICT DO NOTHING;
     END IF;
+
+    -- 9. Notify outbox workers
+    PERFORM pg_notify('__PREFIX__stream_notify', '');
 
     RETURN QUERY SELECT v_id, v_offset, v_epoch, FALSE, NULL::TEXT, NULL::__DATA_TYPE__, NULL::BIGINT;
 END;
@@ -479,7 +449,6 @@ CREATE OR REPLACE FUNCTION __PREFIX__remove_strict(
     p_key TEXT,
     p_client_id TEXT DEFAULT NULL,
     p_user_id TEXT DEFAULT NULL,
-    p_stream_ttl INTERVAL DEFAULT NULL,
     p_idempotency_key TEXT DEFAULT NULL,
     p_idempotency_ttl INTERVAL DEFAULT NULL,
     p_meta_ttl INTERVAL DEFAULT NULL,
@@ -495,7 +464,7 @@ DECLARE
 BEGIN
     SELECT * INTO v_result FROM __PREFIX__remove(
         p_channel, p_key, p_client_id, p_user_id,
-        p_stream_ttl, p_idempotency_key, p_idempotency_ttl, p_meta_ttl,
+        p_idempotency_key, p_idempotency_ttl, p_meta_ttl,
         p_num_shards, p_expected_offset
     );
 
@@ -514,7 +483,6 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION __PREFIX__expire_keys(
     p_batch_size INT DEFAULT 1000,
     p_num_shards INTEGER DEFAULT 16,
-    p_stream_ttl INTERVAL DEFAULT NULL,
     p_meta_ttl INTERVAL DEFAULT NULL,
     p_channel TEXT DEFAULT NULL
 ) RETURNS TABLE(
@@ -530,6 +498,7 @@ DECLARE
     v_epoch TEXT;
     v_shard_id INTEGER;
     v_processed INT := 0;
+    v_notified BOOLEAN := FALSE;
 BEGIN
     -- Process one channel at a time to maintain meta→state lock ordering.
     FOR v_channel IN
@@ -577,12 +546,13 @@ BEGIN
             DELETE FROM __PREFIX__state WHERE channel = v_channel AND key = rec.key;
 
             -- Insert removal into stream.
-            INSERT INTO __PREFIX__stream (channel, channel_offset, epoch, key, removed, expires_at, shard_id)
+            INSERT INTO __PREFIX__stream (channel, channel_offset, epoch, key, removed, shard_id)
             VALUES (
                 v_channel, v_offset, v_epoch, rec.key, TRUE,
-                CASE WHEN p_stream_ttl IS NOT NULL THEN NOW() + p_stream_ttl ELSE NULL END,
                 v_shard_id
             );
+
+            v_notified := TRUE;
 
             out_channel := v_channel;
             out_key := rec.key;
@@ -592,9 +562,17 @@ BEGIN
 
             v_processed := v_processed + 1;
             IF v_processed >= p_batch_size THEN
+                IF v_notified THEN
+                    PERFORM pg_notify('__PREFIX__stream_notify', '');
+                END IF;
                 RETURN;
             END IF;
         END LOOP;
     END LOOP;
+
+    -- Notify outbox workers if any entries were expired.
+    IF v_notified THEN
+        PERFORM pg_notify('__PREFIX__stream_notify', '');
+    END IF;
 END;
 $$ LANGUAGE plpgsql;

@@ -28,6 +28,7 @@ var (
 	redisAddr    = flag.String("redis", "", "Redis address (e.g., localhost:6379). If empty, uses in-memory broker.")
 	postgresAddr = flag.String("postgres", "", "PostgreSQL connection string (e.g., postgres://user:pass@localhost:5432/db?sslmode=disable)")
 	enableCache  = flag.Bool("cache", false, "Enable memory cache layer for Redis/Postgres brokers (provides read-your-own-writes and low-latency reads)")
+	replicas     = flag.String("replicas", "", "Comma-separated PostgreSQL read replica connection strings")
 )
 
 func main() {
@@ -103,7 +104,7 @@ func main() {
 
 	// Set up map broker (memory, Redis, or PostgreSQL based on flags).
 	// When -cache flag is set, wraps Redis/Postgres brokers with CachedMapBroker.
-	mapBroker, err := setupMapBroker(node, *redisAddr, *postgresAddr, *enableCache)
+	mapBroker, err := setupMapBroker(node, *redisAddr, *postgresAddr, *replicas, *enableCache)
 	if err != nil {
 		log.Fatal(err)
 	}

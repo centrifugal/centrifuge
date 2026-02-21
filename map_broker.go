@@ -233,6 +233,10 @@ type StreamFilter struct {
 type MapReadStreamOptions struct {
 	// Filter controls which publications are returned (position, limit, direction).
 	Filter StreamFilter
+	// AllowCached allows reading from a read replica or cache instead of primary
+	// storage. When false (default), reads always go to the primary for strong
+	// consistency. Position checks must NOT set this flag.
+	AllowCached bool
 }
 
 // MapReadStateOptions defines options for reading a channel's state.

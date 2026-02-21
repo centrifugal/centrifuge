@@ -25,12 +25,6 @@ services:
       - map_broker_data:/var/lib/postgresql/data
     command:
       - "postgres"
-      - "-c"
-      - "wal_level=logical"
-      - "-c"
-      - "max_replication_slots=20"
-      - "-c"
-      - "max_wal_senders=20"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U centrifuge -d centrifuge"]
       interval: 5s

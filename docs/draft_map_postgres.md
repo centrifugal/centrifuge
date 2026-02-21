@@ -2,14 +2,9 @@
 
 ## Overview
 
-`PostgresMapBroker` is a `MapBroker` implementation backed by PostgreSQL. All writes go through SQL functions (`cf_map_publish`, `cf_map_remove`) that atomically update state and append to a stream table within a single transaction. A background worker detects new stream entries and delivers them to subscribers — either locally (single-node) or via a broker like Redis (multi-node).
+`PostgresMapBroker` is a `MapBroker` implementation backed by PostgreSQL. All writes go through SQL functions (`cf_map_publish`, `cf_map_remove`) that atomically update state and append to a stream table within a single transaction.
 
-Two delivery modes are supported:
-
-1. **Outbox (default)** — cursor-based polling of `cf_map_stream`. No special PG setup.
-2. **WAL (opt-in)** — logical replication streaming. Requires `wal_level = logical`.
-
-Both modes use the same tables. The only difference is how workers discover new rows.
+Every node independently polls the stream table for new entries — SQL SELECT is reliable, unlike lossy pub/sub mechanisms. This eliminates the need for advisory locks, cursor persistence, shard claiming, or an external broker (Redis) for multi-node fan-out. Optionally, PostgreSQL `LISTEN/NOTIFY` can be used for low-latency wakeup of outbox workers.
 
 ## Tables
 
@@ -17,7 +12,7 @@ All tables use prefix `cf_map_` (JSONB mode) or `cf_binary_map_` (BYTEA mode). S
 
 ### cf_map_stream — Change log
 
-Append-only log. Every publish and remove appends a row. Workers read from here.
+Append-only log. Every publish and remove appends a row. Outbox workers poll this table.
 
 | Column | Type | Purpose |
 |--------|------|---------|
@@ -35,10 +30,9 @@ Append-only log. Every publish and remove appends a row. Workers read from here.
 | `client_id`, `user_id` | TEXT | Client metadata |
 | `conn_info`, `chan_info` | JSONB/BYTEA | Connection/channel info |
 | `subscribed_at` | TIMESTAMPTZ | Subscription timestamp |
-| `expires_at` | TIMESTAMPTZ | Row TTL (for stream cleanup) |
 | `created_at` | TIMESTAMPTZ | Insert time |
 
-Key indexes: `(channel, channel_offset)`, `(channel, id DESC)`, `(shard_id, id)` for cursor polling, `(expires_at)` for cleanup.
+Key indexes: `(channel, channel_offset)`, `(channel, id DESC)`, `(shard_id, id)` for outbox polling, `(created_at)` for time-based cleanup.
 
 ### cf_map_state — Current snapshot
 
@@ -70,14 +64,7 @@ One row per channel. Holds the current top offset and epoch.
 | `version`, `version_epoch` | BIGINT, TEXT | Stream-level version for optimistic concurrency |
 | `expires_at` | TIMESTAMPTZ | Meta TTL (for channel cleanup) |
 
-### cf_map_outbox_cursor — Delivery progress (outbox mode only)
-
-One row per shard. Tracks the last delivered `stream.id` for each shard.
-
-| Column | Type |
-|--------|------|
-| `shard_id` | INTEGER PK |
-| `last_processed_id` | BIGINT |
+**Note:** The meta row is created lazily on the first publish (by `cf_map_publish`). Read operations (ReadState, ReadStream) do **not** create meta rows — they return zero-value results `(offset=0, epoch="")` when no meta exists. See [Empty Epoch Handling](#empty-epoch-handling) for details.
 
 ### cf_map_idempotency — Deduplication
 
@@ -104,7 +91,7 @@ Atomic publish within a single SQL call. Steps:
 7. **Fetch previous data** — for delta compression (if `p_use_delta`)
 8. **Upsert state** — INSERT ... ON CONFLICT DO UPDATE into `cf_map_state`
 9. **Append to stream** — INSERT into `cf_map_stream` with `shard_id`
-10. **Trim stream** — if `p_stream_size` set, delete old entries (cursor-aware: only rows already delivered)
+10. **Notify** — `PERFORM pg_notify(...)` to wake outbox workers (when `UseNotify` enabled)
 11. **Save idempotency** — if key provided
 
 Returns: `(result_id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset)`.
@@ -123,61 +110,44 @@ Removes a key. Similar flow to publish but simpler:
 3. CAS check (`p_expected_offset`)
 4. Check key exists in state
 5. Increment offset, delete from state, append removal to stream
+6. Notify outbox workers
 
 ### cf_map_expire_keys
 
-Called by the TTL worker. Finds keys where `expires_at <= NOW()`, removes them, and emits removal events to the stream. Lock ordering matches publish (meta `FOR UPDATE` first, then state `FOR UPDATE SKIP LOCKED`) to prevent deadlocks.
+Called by the TTL worker. Finds keys where `expires_at <= NOW()`, removes them, and emits removal events to the stream. Lock ordering matches publish (meta `FOR UPDATE` first, then state `FOR UPDATE SKIP LOCKED`) to prevent deadlocks. Notifies outbox workers after each removal.
 
 ## Delivery
 
 ### Sharding
 
-Every stream row gets `shard_id = abs(hashtext(channel)) % NumShards`. Workers claim individual shards, so all events for a channel are processed in order by a single worker.
+Every stream row gets `shard_id = abs(hashtext(channel)) % NumShards`. This determines which outbox worker (when using replicas) handles the entry.
 
-### Advisory Locks
+### Outbox Worker
 
-Both delivery modes use `pg_try_advisory_lock(baseID + shardID)` for leader election. Only one worker (across all nodes) processes each shard at a time. If a worker dies, the lock is released and another worker picks up the shard.
+Every node runs outbox workers that independently poll the stream table. No leader election or advisory locks are needed — every node sees every event.
 
-Outbox and WAL use different `baseID` values (72616653 vs 72616654) to avoid conflicts when switching modes.
-
-### Outbox Mode
-
-Each worker:
-1. Acquires advisory lock for its shard (non-blocking, retries with backoff)
-2. UPSERTs a cursor row in `cf_map_outbox_cursor`
-3. Polls: `SELECT ... FROM cf_map_stream WHERE shard_id = $1 AND id > $2 ORDER BY id LIMIT $3`
-4. Delivers each entry (see below)
-5. Advances cursor: `UPDATE cf_map_outbox_cursor SET last_processed_id = $1`
-6. If no rows, sleeps for `PollInterval` (default 50ms)
-
-The worker holds its advisory lock connection for the entire lifetime. This is why `PoolSize` must exceed `NumShards`.
-
-### WAL Mode
-
-`EnsureSchema()` creates per-shard publications:
+**Without replicas (default):** one outbox worker per node, polling all shards:
 ```sql
-CREATE PUBLICATION cf_map_stream_shard_0
-  FOR TABLE cf_map_stream WHERE (shard_id = 0)
-  WITH (publish = 'insert')
+SELECT ... FROM cf_map_stream WHERE id > $1 ORDER BY id LIMIT $2
 ```
 
-Each WAL reader:
-1. Acquires advisory lock for its shard
-2. Opens a replication connection (`replication=database`)
-3. Creates or reuses a replication slot (`cf_map_shard_N`)
-4. Starts streaming: `START_REPLICATION SLOT ... PUBLICATION ...`
-5. Processes `InsertMessage` WAL events, parses column data
-6. Sends standby heartbeats every `HeartbeatInterval`
-
-### Single-Node vs Multi-Node
-
-- **Single-node (no Broker configured):** worker calls `eventHandler.HandlePublication()` directly
-- **Multi-node (Broker configured):** worker calls `broker.Publish()` which fans out to all nodes via pub/sub (e.g., Redis)
-
+**With replicas:** one outbox worker per replica, each filtering by assigned shards:
+```sql
+SELECT ... FROM cf_map_stream WHERE id > $1 AND shard_id = ANY($2) ORDER BY id LIMIT $3
 ```
-Publish → cf_map_stream → Worker → eventHandler.HandlePublication  (single-node)
-Publish → cf_map_stream → Worker → broker.Publish → All Nodes      (multi-node)
-```
+
+Worker lifecycle:
+1. Startup: `SELECT COALESCE(MAX(id), 0) FROM cf_map_stream` → initial in-memory cursor
+2. Main loop: waits on `LISTEN/NOTIFY` notification (if `UseNotify=true`) OR poll interval ticker
+3. Inner loop: fetch batch → deliver via `eventHandler.HandlePublication()` → advance cursor → repeat until batch < BatchSize
+
+No persistent cursor, no advisory locks.
+
+### LISTEN/NOTIFY (optional)
+
+When `UseNotify=true`, a dedicated goroutine runs `LISTEN {prefix}stream_notify` on the primary. On notification, it wakes the outbox workers for immediate processing. This reduces delivery latency from `PollInterval` (default 50ms) to near-zero when the system is idle.
+
+Falls back to poll interval on notification listener failure (auto-reconnect with backoff).
 
 ## Background Workers
 
@@ -185,44 +155,183 @@ Publish → cf_map_stream → Worker → broker.Publish → All Nodes      (mult
 
 Runs every `TTLCheckInterval` (default 1s). Queries for channels with expired keys, calls `cf_map_expire_keys()`, and delivers the resulting removal events.
 
-### Stream Cleanup Worker
+### Cleanup Worker
 
-Runs every `CleanupInterval` (default 1m). Four cleanup paths:
+Runs every `CleanupInterval` (default 1m). Time-based cleanup:
 
-1. **Expired stream entries** — `DELETE ... WHERE expires_at < NOW()` but only rows already delivered (`id <= last_processed_id`)
-2. **Orphaned stream entries** — entries from channels with no meta row, already delivered, no explicit TTL
-3. **Expired meta** — `DELETE FROM cf_map_meta WHERE expires_at < NOW()`
-4. **Expired idempotency keys** — `DELETE FROM cf_map_idempotency WHERE expires_at < NOW()`
+1. **Stream entries** — `DELETE FROM cf_map_stream WHERE created_at < NOW() - $retention`
+2. **Expired meta** — `DELETE FROM cf_map_meta WHERE expires_at IS NOT NULL AND expires_at < NOW()`
+3. **Expired idempotency keys** — `DELETE FROM cf_map_idempotency WHERE expires_at < NOW()`
 
-All stream deletions are cursor-aware: in outbox mode, only rows below the shard's cursor are deleted. In WAL mode (no cursor rows), all expired entries are deleted freely.
+### Partition Worker (optional)
+
+When `Partitioning=true`, manages daily partitions of the stream table:
+1. **Ensure lookahead partitions** — create partitions for the next N days
+2. **Drop old partitions** — `DROP TABLE` for partitions older than `PartitionRetentionDays`
+
+This is purely an optimization — `DROP TABLE` is instant vs `DELETE + VACUUM`.
+
+## Read Path
+
+### Pure Reads (No Writes)
+
+Read operations (ReadState, ReadStream) are pure reads — they never write to the database. When a channel has no meta row (never published to), reads return zero-value results: `offset=0, epoch=""`. This is critical for replica compatibility — reads can be routed to read replicas without risking write conflicts.
+
+### ReadState
+
+Reads current snapshot from `cf_map_state`. Uses pgx Batch pipelining to execute `BEGIN REPEATABLE READ` + meta query + data query + `COMMIT` in a single TCP round trip. Supports:
+- Single key lookup (CAS reads)
+- Paginated reads with keyset pagination (no OFFSET)
+- Ordered channels (by `score DESC, key`)
+- Filters expired keys (`expires_at IS NULL OR expires_at > NOW()`)
+
+### ReadStream
+
+Reads change history from `cf_map_stream`. Uses pgx Batch pipelining with `REPEATABLE READ` isolation. Supports:
+- Filter by `Since` position (channel_offset-based)
+- Forward and reverse order
+- Pagination with limit
+
+## Read Replica Support
+
+### Configuration
+
+```go
+PostgresMapBrokerConfig{
+    ReadReplicaConnStrings: []string{"postgres://replica1:5432/db", "postgres://replica2:5432/db"},
+    ReadReplicaPoolSize:    16,
+}
+```
+
+### Routing
+
+Reads route to replicas **only when `AllowCached=true`** in read options — same semantics as `CachedMapBroker`. Without `AllowCached`, reads always go to the primary for strong consistency.
+
+```go
+func (e *PostgresMapBroker) getReadPool(channel string, allowCached bool) *pgxpool.Pool {
+    if !allowCached || len(e.readPools) == 0 {
+        return e.pool  // primary
+    }
+    shardID := abs(hashtext(channel)) % e.conf.NumShards
+    replicaIdx := shardID % len(e.readPools)
+    return e.readPools[replicaIdx]
+}
+```
+
+Shard-based routing ensures that outbox worker and client reads for the same channel always hit the same replica, providing a consistent view.
+
+### What uses AllowCached
+
+| Operation | AllowCached | Why |
+|-----------|-------------|-----|
+| Client ReadState (subscription) | true | State reads during subscribe |
+| Client ReadStream (subscription) | true | Stream catch-up during subscribe |
+| Position checks (`ReadStream(Limit:0)`) | false | Must see latest position from primary |
+| `CachedMapBroker` internal reads | false | Gap-fill and sync always hit primary |
+
+### Outbox Workers with Replicas
+
+With N replicas, N outbox workers run — one per replica. Each worker handles shards where `shard_id % N == workerIdx`. This ensures the outbox worker and `AllowCached` reads for the same channel hit the same replica.
+
+## Empty Epoch Handling
+
+The PostgreSQL broker returns `epoch=""` for channels that have never been published to (no meta row exists). This is different from the MemoryMapBroker which always creates an epoch, even for empty channels. The empty epoch requires special handling in the client protocol.
+
+### Problem
+
+When a client subscribes to a channel with no data, it receives `epoch=""`. When the first publication arrives (via outbox), it carries a real epoch (created by `cf_map_publish`). Without special handling, this epoch mismatch triggers `handleInsufficientState`, causing a needless re-subscribe.
+
+### Solution: Epoch Adoption (Map Channels Only)
+
+In the publication delivery path (`client.go`), when a **map channel** client has `epoch=""` and receives a publication with a real epoch, the client **adopts the real epoch** instead of triggering insufficient state:
+
+```go
+if pubEpoch != channelContext.streamPosition.Epoch {
+    if channelContext.streamPosition.Epoch == "" && channelHasFlag(channelContext.flags, flagMap) {
+        // Adopt the real epoch — safe because epoch="" means "no data existed at subscribe time"
+        channelContext.streamPosition.Epoch = pubEpoch
+        c.channels[ch] = channelContext
+    } else {
+        // Real epoch mismatch — insufficient state
+        go func() { c.handleInsufficientState(ch, serverSide) }()
+    }
+}
+```
+
+This is **map-specific** — non-map (regular) channels with `epoch=""` still trigger insufficient state on epoch mismatch. The `flagMap` guard ensures the behavior only applies to map subscriptions.
+
+### Recovery Guard for Empty Epoch
+
+The client SDK stores the epoch from the subscribe response and never updates it from publication deliveries. When the client reconnects after a disconnect, it sends the original `epoch=""` in the recovery request — even though the server-side epoch was adopted.
+
+This creates a correctness problem: if a `Clear` event happened between subscribe and reconnect, the channel gets a new epoch. A recovery request with `epoch=""` would bypass epoch validation (since `epoch=""` matches nothing) and could return stale state.
+
+The recovery guard in `handleMapTransitionToLive` prevents this:
+
+```go
+if params.isRecovery && params.sincePosition.Epoch == "" && streamPos.Epoch != "" {
+    return ErrorUnrecoverablePosition
+}
+```
+
+When recovery fails with `ErrorUnrecoverablePosition`, the client SDK performs a fresh re-subscribe from scratch, which correctly gets the new state.
+
+### Scenario Walkthrough
+
+1. **Subscribe to empty channel** → client gets `epoch=""`, offset=0
+2. **First publish** → outbox delivers with `epoch="abc"` → client adopts epoch
+3. **More publishes** → normal delivery, offsets advance
+4. **Client disconnects and reconnects** → sends `Recover=true, epoch="", offset=N`
+5. **Server has `epoch="abc"`** → `sinceEpoch="" && serverEpoch!=""` → `ErrorUnrecoverablePosition`
+6. **Client re-subscribes from scratch** → gets full state with `epoch="abc"`
+
+After step 6, the client has a real epoch and future recoveries work normally.
+
+### Edge Case: Clear Between Subscribe and Reconnect
+
+1. Subscribe to empty channel → `epoch=""`
+2. Publish data → epoch="abc" adopted by client
+3. Clear channel → epoch changes to "xyz"
+4. Publish new data
+5. Client reconnects with `epoch=""` → guard fires → `ErrorUnrecoverablePosition`
+6. Client re-subscribes → gets correct new state
+
+Without the guard, step 5 would succeed with stale state (pre-Clear data missing).
+
+## Position Checks
+
+Position checks (`ReadStream(Limit:0)`) run periodically (every ~40s) to detect missed publications from the outbox. This is important for the PG broker because BIGSERIAL id gaps can cause outbox polling to miss entries: if TX1 gets id=100 and TX2 gets id=101, but TX2 commits first, the outbox cursor advances past 100 before TX1 commits.
+
+Position checks always use the primary connection (never `AllowCached`) to see the latest stream position. When a position mismatch is detected, it triggers `handleInsufficientState` which causes the client to re-subscribe and recover.
 
 ## Configuration
 
 ```go
 PostgresMapBrokerConfig{
     ConnString:          "postgres://...",
-    PoolSize:            32,              // default; must be > NumShards in outbox mode
+    PoolSize:            32,              // default
     NumShards:           16,              // default
     TTLCheckInterval:    time.Second,     // default
     CleanupInterval:     time.Minute,     // default
     IdempotentResultTTL: 5 * time.Minute, // default
     BinaryData:          false,           // true → BYTEA columns, "cf_binary_map_" prefix
 
+    StreamRetention:     24 * time.Hour,  // how long stream entries are kept
+    UseNotify:           false,           // LISTEN/NOTIFY for low-latency wakeup
+
     Outbox: OutboxConfig{
-        PollInterval:       50 * time.Millisecond,
-        BatchSize:          1000,
-        AdvisoryLockBaseID: 72616653,     // default
+        PollInterval: 50 * time.Millisecond,
+        BatchSize:    1000,
     },
 
-    // OR (mutually exclusive with Outbox usage):
-    WAL: WALConfig{
-        Enabled:            true,
-        HeartbeatInterval:  10 * time.Second,
-        AdvisoryLockBaseID: 72616654,     // default
-        ShardIDs:           nil,          // nil = claim all shards
-    },
+    // Optional: read replica support
+    ReadReplicaConnStrings: []string{"postgres://replica1/db"},
+    ReadReplicaPoolSize:    16,
 
-    Broker: redisBroker, // nil for single-node
+    // Optional: stream table partitioning
+    Partitioning:           false,
+    PartitionRetentionDays: 3,
+    PartitionLookaheadDays: 2,
 }
 ```
 
@@ -236,20 +345,3 @@ Two table sets can coexist in the same database:
 | Binary | `cf_binary_map_` | `BYTEA` | Protobuf / binary payloads |
 
 Set `BinaryData: true` in config to use binary mode. Schema template generates both variants via `make pg-schemas`.
-
-## Read Path
-
-### ReadState
-
-Reads current snapshot from `cf_map_state`. Uses `REPEATABLE READ` isolation. Supports:
-- Single key lookup
-- Paginated reads with keyset pagination (no OFFSET)
-- Ordered channels (by `score DESC, key`)
-- Filters expired keys (`expires_at IS NULL OR expires_at > NOW()`)
-
-### ReadStream
-
-Reads change history from `cf_map_stream`. Uses `REPEATABLE READ` isolation. Supports:
-- Filter by `Since` position (channel_offset-based)
-- Forward and reverse order
-- Pagination with limit

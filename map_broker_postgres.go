@@ -12,11 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/epoch"
-	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -26,13 +23,13 @@ var postgresSchemaJSONBSQL string
 //go:embed internal/postgres_sql/schema_binary.sql
 var postgresSchemaBinarySQL string
 
-// pgNames holds precomputed table/function/publication names based on BinaryData mode.
+// pgNames holds precomputed table/function names based on BinaryData mode.
 // When BinaryData=false (default): prefix = "cf_map_"
 // When BinaryData=true:            prefix = "cf_binary_map_"
 type pgNames struct {
-	stream, state, meta, idempotency, outboxCursor string // table names
-	publish, remove, expireKeys                    string // function names
-	pubPrefix, slotPrefix                          string // for WAL publication/slot names
+	stream, state, meta, idempotency string // table names
+	publish, remove, expireKeys      string // function names
+	notifyChannel                    string // pg_notify channel name
 }
 
 func newPgNames(binary bool) pgNames {
@@ -41,16 +38,14 @@ func newPgNames(binary bool) pgNames {
 		p = "cf_binary_map_"
 	}
 	return pgNames{
-		stream:       p + "stream",
-		state:        p + "state",
-		meta:         p + "meta",
-		idempotency:  p + "idempotency",
-		outboxCursor: p + "outbox_cursor",
-		publish:      p + "publish",
-		remove:       p + "remove",
-		expireKeys:   p + "expire_keys",
-		pubPrefix:    p + "stream_",
-		slotPrefix:   p + "shard_",
+		stream:        p + "stream",
+		state:         p + "state",
+		meta:          p + "meta",
+		idempotency:   p + "idempotency",
+		publish:       p + "publish",
+		remove:        p + "remove",
+		expireKeys:    p + "expire_keys",
+		notifyChannel: p + "stream_notify",
 	}
 }
 
@@ -60,7 +55,8 @@ func newPgNames(binary bool) pgNames {
 //
 // Key features:
 //   - Dual ID system: global `id` for polling, per-channel `offset` for Centrifuge
-//   - Two delivery modes: Outbox (default, simpler setup) or WAL (opt-in, uses logical replication)
+//   - All nodes independently poll the stream table (SQL SELECT is reliable)
+//   - Optional LISTEN/NOTIFY for low-latency outbox wakeup
 //   - Full ACID transactions for atomic CAS operations
 //   - Optional read replica support for scaling reads
 //
@@ -82,28 +78,21 @@ type PostgresMapBroker struct {
 	node         *Node
 	conf         PostgresMapBrokerConfig
 	names        pgNames
-	pool         *pgxpool.Pool // Primary pool for writes
+	pool         *pgxpool.Pool   // Primary pool for writes
+	readPools    []*pgxpool.Pool // One per replica; empty = use primary
 	eventHandler BrokerEventHandler
 	closeCh      chan struct{}
 	closeOnce    sync.Once
 	running      atomic.Bool
 	cancelCtx    context.Context
 	cancelFunc   context.CancelFunc
-
-	// WAL reader state (used when WAL.Enabled = true)
-	walClaimedShards  map[int]bool
-	walClaimedShardMu sync.RWMutex
-
-	// Outbox worker state (used when WAL.Enabled = false, which is default)
-	outboxClaimedShards  map[int]bool
-	outboxClaimedShardMu sync.RWMutex
+	notifyCh     chan struct{} // nil when UseNotify is false
 }
 
 var _ MapBroker = (*PostgresMapBroker)(nil)
 
-// OutboxConfig configures the outbox-based delivery mode (default).
-// Outbox mode polls cf_map_stream using per-shard cursors tracked in cf_map_outbox_cursor.
-// This mode requires no special PostgreSQL setup (no logical replication).
+// OutboxConfig configures the outbox-based delivery mode.
+// Every node independently polls cf_map_stream — no advisory locks needed.
 type OutboxConfig struct {
 	// PollInterval is how often to poll for new stream entries when idle.
 	// Default: 50ms
@@ -112,38 +101,6 @@ type OutboxConfig struct {
 	// BatchSize is the maximum number of rows to process per batch.
 	// Default: 1000
 	BatchSize int
-
-	// AdvisoryLockBaseID is the base ID for PostgreSQL advisory locks.
-	// Each shard uses AdvisoryLockBaseID + shardID as its lock ID.
-	// Default: 72616653 (derived from 'crf' in ASCII)
-	AdvisoryLockBaseID int64
-}
-
-// WALConfig configures the WAL-based delivery mode (opt-in).
-// WAL mode uses PostgreSQL logical replication to stream changes.
-// This requires PostgreSQL setup: wal_level=logical, publications, replication slots.
-type WALConfig struct {
-	// Enabled activates WAL mode instead of the default outbox mode.
-	// When true, the broker uses logical replication to stream changes.
-	// Default: false (use outbox mode)
-	Enabled bool
-
-	// ShardIDs specifies which shard(s) this node should try to claim.
-	// Each shard uses advisory locks for leader election - only one node
-	// can read each shard at a time.
-	// If empty, the node will try to claim all shards (suitable for single-node).
-	// For multi-node deployments, distribute shards across nodes or let all
-	// nodes compete for all shards (advisory locks ensure only one wins each).
-	ShardIDs []int
-
-	// AdvisoryLockBaseID is the base ID for PostgreSQL advisory locks.
-	// Each shard uses AdvisoryLockBaseID + shardID as its lock ID.
-	// Default: 72616654 (different from outbox to avoid conflicts)
-	AdvisoryLockBaseID int64
-
-	// HeartbeatInterval is how often to send standby status updates.
-	// Default: 10s
-	HeartbeatInterval time.Duration
 }
 
 // PostgresMapBrokerConfig configures the PostgreSQL map broker.
@@ -156,12 +113,8 @@ type PostgresMapBrokerConfig struct {
 	// Default: 32
 	PoolSize int
 
-	// NumShards is the total number of shards for parallel delivery workers
-	// (both outbox and WAL modes). Channels are distributed across shards
-	// using hash(channel) % NumShards.
-	// IMPORTANT: In outbox mode, each worker holds a connection for its advisory lock,
-	// so NumShards must be less than PoolSize to leave connections for queries.
-	// In WAL mode, NumShards must match the number of publications created in PostgreSQL.
+	// NumShards is the total number of shards for parallel delivery workers.
+	// Channels are distributed across shards using hash(channel) % NumShards.
 	// Default: 16
 	NumShards int
 
@@ -177,23 +130,48 @@ type PostgresMapBrokerConfig struct {
 	// Default: 5m
 	IdempotentResultTTL time.Duration
 
-	// Broker is used to fan out changes to all nodes via pub/sub (e.g., Redis).
-	// Optional. If nil, only local delivery is performed (suitable for single-node).
-	// For multi-node deployments, provide a broker.
-	Broker Broker
-
-	// Outbox configures the outbox-based delivery mode (default).
-	// Used when WAL.Enabled is false.
+	// Outbox configures the outbox-based delivery mode.
 	Outbox OutboxConfig
-
-	// WAL configures the WAL-based delivery mode (opt-in).
-	// Set WAL.Enabled = true to use logical replication instead of outbox.
-	WAL WALConfig
 
 	// BinaryData uses BYTEA columns instead of JSONB for data fields.
 	// Default: false (JSONB — suitable for JSON payloads, enables JSONB queries).
 	// Set to true if data payloads are not valid JSON (binary/protobuf).
 	BinaryData bool
+
+	// StreamRetention controls how long stream entries are kept.
+	// Cleanup worker deletes entries older than this. Default: 24h.
+	StreamRetention time.Duration
+
+	// UseNotify enables LISTEN/NOTIFY for low-latency outbox wakeup.
+	// When false (default), outbox worker uses PollInterval-based polling only.
+	// When true, a listener goroutine wakes the worker immediately on new entries.
+	UseNotify bool
+
+	// ReadReplicaConnStrings is an optional list of read replica connection strings.
+	// When set, ReadState queries with AllowCached=true are distributed
+	// across replicas using shard-based routing for consistency:
+	//   hash(channel) % NumShards → shard_id % len(replicas) → replica
+	// Default: empty (all reads go to primary).
+	ReadReplicaConnStrings []string
+
+	// ReadReplicaPoolSize sets max connections per replica pool.
+	// Default: same as PoolSize.
+	ReadReplicaPoolSize int
+
+	// Partitioning enables automatic daily partitioning of the stream table.
+	// This is purely an optimization — without it, the broker works correctly
+	// using simple DELETE-based cleanup. Partitioning helps at scale where
+	// DROP TABLE (instant) is better than DELETE + VACUUM overhead.
+	// Default: false.
+	Partitioning bool
+
+	// PartitionRetentionDays: how many days of partitions to keep.
+	// Only used when Partitioning is true. Default: 3.
+	PartitionRetentionDays int
+
+	// PartitionLookaheadDays: how many future partitions to pre-create.
+	// Only used when Partitioning is true. Default: 2.
+	PartitionLookaheadDays int
 }
 
 func (c *PostgresMapBrokerConfig) setDefaults() {
@@ -212,6 +190,9 @@ func (c *PostgresMapBrokerConfig) setDefaults() {
 	if c.IdempotentResultTTL <= 0 {
 		c.IdempotentResultTTL = 5 * time.Minute
 	}
+	if c.StreamRetention <= 0 {
+		c.StreamRetention = 24 * time.Hour
+	}
 
 	// Outbox config defaults
 	if c.Outbox.PollInterval <= 0 {
@@ -220,16 +201,15 @@ func (c *PostgresMapBrokerConfig) setDefaults() {
 	if c.Outbox.BatchSize <= 0 {
 		c.Outbox.BatchSize = 1000
 	}
-	if c.Outbox.AdvisoryLockBaseID <= 0 {
-		c.Outbox.AdvisoryLockBaseID = 72616653 // 'crf' in ASCII
-	}
 
-	// WAL config defaults
-	if c.WAL.AdvisoryLockBaseID <= 0 {
-		c.WAL.AdvisoryLockBaseID = 72616654 // Different from outbox
+	if c.ReadReplicaPoolSize <= 0 {
+		c.ReadReplicaPoolSize = c.PoolSize
 	}
-	if c.WAL.HeartbeatInterval <= 0 {
-		c.WAL.HeartbeatInterval = 10 * time.Second
+	if c.PartitionRetentionDays <= 0 {
+		c.PartitionRetentionDays = 3
+	}
+	if c.PartitionLookaheadDays <= 0 {
+		c.PartitionLookaheadDays = 2
 	}
 }
 
@@ -239,13 +219,6 @@ func NewPostgresMapBroker(n *Node, conf PostgresMapBrokerConfig) (*PostgresMapBr
 
 	if conf.ConnString == "" {
 		return nil, errors.New("postgres map broker: ConnString is required")
-	}
-
-	// Validate pool size is sufficient for outbox workers.
-	// Each outbox worker holds a connection for its advisory lock.
-	if !conf.WAL.Enabled && conf.PoolSize <= conf.NumShards {
-		return nil, fmt.Errorf("postgres map broker: PoolSize (%d) must be greater than NumShards (%d) to leave connections for queries",
-			conf.PoolSize, conf.NumShards)
 	}
 
 	ctx := context.Background()
@@ -271,55 +244,78 @@ func NewPostgresMapBroker(n *Node, conf PostgresMapBrokerConfig) (*PostgresMapBr
 	ctx, cancel := context.WithCancel(context.Background())
 
 	e := &PostgresMapBroker{
-		node:                n,
-		conf:                conf,
-		names:               newPgNames(conf.BinaryData),
-		pool:                pool,
-		closeCh:             make(chan struct{}),
-		cancelCtx:           ctx,
-		cancelFunc:          cancel,
-		walClaimedShards:    make(map[int]bool),
-		outboxClaimedShards: make(map[int]bool),
+		node:       n,
+		conf:       conf,
+		names:      newPgNames(conf.BinaryData),
+		pool:       pool,
+		closeCh:    make(chan struct{}),
+		cancelCtx:  ctx,
+		cancelFunc: cancel,
+	}
+
+	if conf.UseNotify {
+		e.notifyCh = make(chan struct{}, 1)
+	}
+
+	// Create replica pools if configured
+	if len(conf.ReadReplicaConnStrings) > 0 {
+		for _, connStr := range conf.ReadReplicaConnStrings {
+			replicaConfig, err := pgxpool.ParseConfig(connStr)
+			if err != nil {
+				pool.Close()
+				for _, rp := range e.readPools {
+					rp.Close()
+				}
+				cancel()
+				return nil, fmt.Errorf("postgres map broker: parse replica config: %w", err)
+			}
+			replicaConfig.MaxConns = int32(conf.ReadReplicaPoolSize)
+
+			rp, err := pgxpool.NewWithConfig(context.Background(), replicaConfig)
+			if err != nil {
+				pool.Close()
+				for _, rp := range e.readPools {
+					rp.Close()
+				}
+				cancel()
+				return nil, fmt.Errorf("postgres map broker: connect replica: %w", err)
+			}
+			e.readPools = append(e.readPools, rp)
+		}
 	}
 
 	return e, nil
 }
 
-// getReadPool returns the pool for read operations.
-func (e *PostgresMapBroker) getReadPool() *pgxpool.Pool {
-	return e.pool
-}
-
-// pgGenerateEpoch creates a random epoch string using the shared epoch package.
-func pgGenerateEpoch() string {
-	return epoch.Generate()
-}
-
-// ensureChannelMeta creates the channel meta if it doesn't exist and returns the stream position.
-// This ensures that empty channels have an epoch, matching MemoryMapBroker behavior.
-// Uses a single query with CTE for efficiency.
-func (e *PostgresMapBroker) ensureChannelMeta(ctx context.Context, ch string) (StreamPosition, error) {
-	epoch := pgGenerateEpoch()
-
-	var topOffset int64
-	var actualEpoch string
-	err := e.pool.QueryRow(ctx, fmt.Sprintf(`
-		WITH new_row AS (
-			INSERT INTO %s (channel, top_offset, epoch)
-			VALUES ($1, 0, $2)
-			ON CONFLICT (channel) DO NOTHING
-			RETURNING top_offset, epoch
-		)
-		SELECT top_offset, epoch FROM new_row
-		UNION ALL
-		SELECT top_offset, epoch FROM %s
-		WHERE channel = $1 AND NOT EXISTS (SELECT 1 FROM new_row)
-	`, e.names.meta, e.names.meta), ch, epoch).Scan(&topOffset, &actualEpoch)
-	if err != nil {
-		return StreamPosition{}, err
+// getReadPool returns the pool for reading the given channel.
+// Only routes to replica when allowCached is true AND replicas are configured.
+// Routes by shard: hash(channel) % NumShards % len(readPools) → replica index.
+func (e *PostgresMapBroker) getReadPool(channel string, allowCached bool) *pgxpool.Pool {
+	if !allowCached || len(e.readPools) == 0 {
+		return e.pool
 	}
+	shardID := abs32(hashtext(channel)) % e.conf.NumShards
+	replicaIdx := shardID % len(e.readPools)
+	return e.readPools[replicaIdx]
+}
 
-	return StreamPosition{Offset: uint64(topOffset), Epoch: actualEpoch}, nil
+// hashtext approximates PostgreSQL hashtext() for shard routing.
+func hashtext(s string) int32 {
+	// Use FNV-like hash matching PostgreSQL hashtext behavior.
+	// We only need consistency within a process, not cross-process compatibility with PG,
+	// since shard routing is for outbox/replica selection, not for correctness.
+	var h int32
+	for i := 0; i < len(s); i++ {
+		h = h*31 + int32(s[i])
+	}
+	return h
+}
+
+func abs32(n int32) int {
+	if n < 0 {
+		return int(-n)
+	}
+	return int(n)
 }
 
 // RegisterEventHandler registers the event handler and starts background workers.
@@ -330,40 +326,20 @@ func (e *PostgresMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 		return errors.New("postgres map broker: already running")
 	}
 
-	// Start the inner broker's pub/sub if configured (for multi-node fan-out).
-	if e.conf.Broker != nil {
-		if err := e.conf.Broker.RegisterBrokerEventHandler(h); err != nil {
-			return fmt.Errorf("postgres map broker: register inner broker: %w", err)
-		}
+	if e.conf.UseNotify {
+		go e.runNotificationListener()
 	}
 
-	// Start TTL and cleanup workers (always needed)
+	// Start outbox workers: one per replica (or one for primary)
+	numWorkers := max(len(e.readPools), 1)
+	for i := 0; i < numWorkers; i++ {
+		go e.runOutboxWorker(i)
+	}
+
 	go e.runTTLExpirationWorker()
-	go e.runStreamCleanupWorker()
-
-	// Mode selection: WAL if explicitly enabled, otherwise outbox (default)
-	if e.conf.WAL.Enabled {
-		// WAL mode: start WAL readers
-		shardIDs := e.conf.WAL.ShardIDs
-		if len(shardIDs) == 0 {
-			// Default: try to claim all shards
-			shardIDs = make([]int, e.conf.NumShards)
-			for i := 0; i < e.conf.NumShards; i++ {
-				shardIDs[i] = i
-			}
-		}
-
-		for _, shardID := range shardIDs {
-			if shardID < 0 || shardID >= e.conf.NumShards {
-				continue
-			}
-			go e.runWALReaderForShard(shardID)
-		}
-	} else {
-		// Outbox mode (default): start outbox workers
-		for shardID := 0; shardID < e.conf.NumShards; shardID++ {
-			go e.runOutboxWorkerForShard(shardID)
-		}
+	go e.runCleanupWorker()
+	if e.conf.Partitioning {
+		go e.runPartitionWorker()
 	}
 
 	return nil
@@ -374,10 +350,8 @@ func (e *PostgresMapBroker) Close(ctx context.Context) error {
 	e.closeOnce.Do(func() {
 		e.cancelFunc() // Cancel context to unblock WaitForNotification
 		close(e.closeCh)
-		if e.conf.Broker != nil {
-			if closer, ok := e.conf.Broker.(Closer); ok {
-				_ = closer.Close(ctx)
-			}
+		for _, rp := range e.readPools {
+			rp.Close()
 		}
 		e.pool.Close()
 	})
@@ -386,7 +360,7 @@ func (e *PostgresMapBroker) Close(ctx context.Context) error {
 
 // SchemaObject identifies a database object involved in a schema error.
 type SchemaObject struct {
-	Type string // "table", "index", "function", "publication"
+	Type string // "table", "index", "function"
 	Name string
 }
 
@@ -406,8 +380,7 @@ func (e *SchemaError) Unwrap() error {
 }
 
 // EnsureSchema creates all required database objects idempotently.
-// It executes the embedded schema SQL (tables, indexes, functions) and,
-// when WAL mode is enabled, creates publications for each shard.
+// It executes the embedded schema SQL (tables, indexes, functions).
 //
 // Data columns use JSONB by default (suitable for JSON payloads).
 // Set BinaryData=true in config to use BYTEA instead — this creates a
@@ -438,9 +411,8 @@ func (e *PostgresMapBroker) EnsureSchema(ctx context.Context) error {
 		}
 	}
 
-	// Create publications for WAL mode.
-	if e.conf.WAL.Enabled {
-		if err := e.ensurePublications(ctx); err != nil {
+	if e.conf.Partitioning {
+		if err := e.ensurePartitionedStream(ctx); err != nil {
 			return err
 		}
 	}
@@ -448,116 +420,13 @@ func (e *PostgresMapBroker) EnsureSchema(ctx context.Context) error {
 	return nil
 }
 
-// ensurePublications creates shard publications and the "all" publication for WAL mode.
-// It checks existing publications and only creates missing ones.
-func (e *PostgresMapBroker) ensurePublications(ctx context.Context) error {
-	numShards := e.conf.NumShards
-	shardPrefix := e.names.pubPrefix + "shard_" // e.g. "cf_map_stream_shard_" or "cf_binary_map_stream_shard_"
-	likePattern := e.names.pubPrefix + "%"      // e.g. "cf_map_stream_%"
-
-	// Query existing publications for this schema variant.
-	rows, err := e.pool.Query(ctx,
-		`SELECT pubname FROM pg_publication WHERE pubname LIKE $1`, likePattern)
-	if err != nil {
-		return &SchemaError{
-			Object: SchemaObject{Type: "publication", Name: ""},
-			Op:     "verify",
-			Err:    fmt.Errorf("query pg_publication: %w", err),
-		}
-	}
-	defer rows.Close()
-
-	existing := make(map[string]bool)
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return &SchemaError{
-				Object: SchemaObject{Type: "publication", Name: ""},
-				Op:     "verify",
-				Err:    fmt.Errorf("scan pg_publication: %w", err),
-			}
-		}
-		existing[name] = true
-	}
-	rows.Close()
-
-	// Count shard publications (exclude "all").
-	shardCount := 0
-	for name := range existing {
-		if strings.HasPrefix(name, shardPrefix) {
-			shardCount++
-		}
-	}
-
-	if shardCount > 0 && shardCount != numShards {
-		return &SchemaError{
-			Object: SchemaObject{Type: "publication", Name: shardPrefix + "*"},
-			Op:     "verify",
-			Err: fmt.Errorf(
-				"found %d shard publications but NumShards=%d; "+
-					"drop existing publications and re-run EnsureSchema, or adjust NumShards to match",
-				shardCount, numShards),
-		}
-	}
-
-	// Create missing shard publications.
-	for i := 0; i < numShards; i++ {
-		name := fmt.Sprintf("%sshard_%d", e.names.pubPrefix, i)
-		if existing[name] {
-			continue
-		}
-		sql := fmt.Sprintf(
-			"CREATE PUBLICATION %s FOR TABLE %s WHERE (shard_id = %d) WITH (publish = 'insert')", name, e.names.stream, i)
-		if _, err := e.pool.Exec(ctx, sql); err != nil {
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) && pgErr.Code == "42710" {
-				// duplicate_object — another node created it concurrently, that's fine.
-				continue
-			}
-			return &SchemaError{
-				Object: SchemaObject{Type: "publication", Name: name},
-				Op:     "create",
-				Err:    err,
-			}
-		}
-	}
-
-	// Create "all" publication if missing.
-	allPubName := e.names.pubPrefix + "all"
-	if !existing[allPubName] {
-		sql := fmt.Sprintf(
-			"CREATE PUBLICATION %s FOR TABLE %s WITH (publish = 'insert')", allPubName, e.names.stream)
-		if _, err := e.pool.Exec(ctx, sql); err != nil {
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) && pgErr.Code == "42710" {
-				// duplicate_object — concurrent creation, fine.
-			} else {
-				return &SchemaError{
-					Object: SchemaObject{Type: "publication", Name: allPubName},
-					Op:     "create",
-					Err:    err,
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// Subscribe subscribes to broker PUB/SUB when broker is configured.
-// For single-node (no broker), this is a no-op since WAL reader delivers locally.
+// Subscribe is a no-op — every node independently polls the stream table.
 func (e *PostgresMapBroker) Subscribe(ch string) error {
-	if e.conf.Broker != nil {
-		return e.conf.Broker.Subscribe(ch)
-	}
 	return nil
 }
 
-// Unsubscribe unsubscribes from broker PUB/SUB when broker is configured.
+// Unsubscribe is a no-op.
 func (e *PostgresMapBroker) Unsubscribe(ch string) error {
-	if e.conf.Broker != nil {
-		return e.conf.Broker.Unsubscribe(ch)
-	}
 	return nil
 }
 
@@ -631,17 +500,10 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 	}
 
 	// Prepare TTLs as interval strings.
-	// Channel options are already resolved, so values are final:
-	//   > 0: use as-is (send interval string)
-	//   = 0: disabled (send NULL — SQL treats NULL as "no TTL")
-	var keyTTL, streamTTL, metaTTL, idempotencyTTL *string
+	var keyTTL, metaTTL, idempotencyTTL *string
 	if chOpts.KeyTTL > 0 {
 		s := durationToIntervalString(chOpts.KeyTTL)
 		keyTTL = &s
-	}
-	if chOpts.StreamTTL > 0 {
-		s := durationToIntervalString(chOpts.StreamTTL)
-		streamTTL = &s
 	}
 	if chOpts.MetaTTL > 0 {
 		s := durationToIntervalString(chOpts.MetaTTL)
@@ -687,12 +549,6 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		idempotencyKey = &opts.IdempotencyKey
 	}
 
-	// Prepare stream size. NULL = no trimming, > 0 = trim to this size.
-	var streamSize *int
-	if chOpts.StreamSize > 0 {
-		streamSize = &chOpts.StreamSize
-	}
-
 	// Call cf_map_publish function
 	numShards := e.conf.NumShards
 
@@ -714,11 +570,11 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 
 	err = e.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset
-		FROM %s($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::interval, $12::interval, $13, $14::interval, $15, $16, $17, $18, $19, $20, $21, $22::interval, $23, $24, $25, $26)
+		FROM %s($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::interval, $12::interval, $13, $14, $15, $16, $17, $18, $19, $20::interval, $21, $22, $23, $24)
 	`, e.names.publish),
 		ch, key, opts.Data, tagsJSON,
 		clientID, userID, connInfo, chanInfo, publishedAt,
-		keyMode, keyTTL, streamTTL, streamSize, metaTTL,
+		keyMode, keyTTL, metaTTL,
 		expectedOffset, score, nil, nil, // p_version, p_version_epoch (unused, per-key version used instead)
 		keyVersion, keyVersionEpoch,
 		idempotencyKey, idempotencyTTL, opts.RefreshTTLOnSuppress,
@@ -767,12 +623,7 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 	}
 
 	// Prepare TTLs as interval strings.
-	// NULL = no TTL, > 0 = use as-is.
-	var streamTTL, metaTTL, idempotencyTTL *string
-	if chOpts.StreamTTL > 0 {
-		s := durationToIntervalString(chOpts.StreamTTL)
-		streamTTL = &s
-	}
+	var metaTTL, idempotencyTTL *string
 	if chOpts.MetaTTL > 0 {
 		s := durationToIntervalString(chOpts.MetaTTL)
 		metaTTL = &s
@@ -814,9 +665,9 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 	var clientID, userID *string
 	err = e.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset
-		FROM %s($1, $2, $3, $4, $5::interval, $6, $7::interval, $8::interval, $9, $10)
+		FROM %s($1, $2, $3, $4, $5, $6::interval, $7::interval, $8, $9)
 	`, e.names.remove),
-		ch, key, clientID, userID, streamTTL, idempotencyKey, idempotencyTTL, metaTTL,
+		ch, key, clientID, userID, idempotencyKey, idempotencyTTL, metaTTL,
 		numShards, expectedOffset,
 	).Scan(&id, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset)
 
@@ -847,171 +698,147 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 
 // ReadState retrieves keyed state with revisions.
 func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
-	pool := e.getReadPool()
+	pool := e.getReadPool(ch, opts.AllowCached)
 
-	// Use REPEATABLE READ transaction to ensure atomic read of meta + state.
-	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return MapStateResult{}, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	// Get current stream position.
-	var topOffset int64
-	var epoch string
-	err = tx.QueryRow(ctx, fmt.Sprintf(`
-		SELECT top_offset, epoch FROM %s WHERE channel = $1
-	`, e.names.meta), ch).Scan(&topOffset, &epoch)
-	if errors.Is(err, pgx.ErrNoRows) {
-		// Channel doesn't exist yet
-		if opts.Revision != nil && opts.Revision.Epoch != "" {
-			// Client sent an epoch but channel is gone - unrecoverable
-			return MapStateResult{}, ErrorUnrecoverablePosition
-		}
-		// Rollback read-only tx, then create channel meta with epoch.
-		// This matches MemoryMapBroker behavior where empty channels have an epoch.
-		_ = tx.Rollback(ctx)
-		pos, err := e.ensureChannelMeta(ctx, ch)
-		if err != nil {
-			return MapStateResult{}, err
-		}
-		return MapStateResult{Position: pos}, nil
-	}
-	if err != nil {
-		return MapStateResult{}, err
+	// Limit=0 with no key: return just stream position, no transaction needed.
+	if opts.Limit == 0 && opts.Key == "" {
+		return e.readStatePosition(ctx, pool, ch, opts)
 	}
 
-	streamPos := StreamPosition{Offset: uint64(topOffset), Epoch: epoch}
-
-	// Check revision epoch
-	if opts.Revision != nil && opts.Revision.Epoch != "" {
-		if opts.Revision.Epoch != epoch {
-			return MapStateResult{Position: streamPos}, ErrorUnrecoverablePosition
-		}
-	}
-
-	// Single key lookup (for CAS read)
+	// Single key lookup (CAS read): batch meta + key query.
 	if opts.Key != "" {
-		var p Publication
-		var tagsJSON []byte
-		var clientID, userID *string
-		var connInfo, chanInfo []byte
-		err := tx.QueryRow(ctx, fmt.Sprintf(`
-			SELECT key, data, tags, key_offset, client_id, user_id, conn_info, chan_info
-			FROM %s
-			WHERE channel = $1 AND key = $2
-		`, e.names.state), ch, opts.Key).Scan(&p.Key, &p.Data, &tagsJSON, &p.Offset, &clientID, &userID, &connInfo, &chanInfo)
-
-		if errors.Is(err, pgx.ErrNoRows) {
-			return MapStateResult{Position: streamPos}, nil
-		}
-		if err != nil {
-			return MapStateResult{}, err
-		}
-		if len(tagsJSON) > 0 {
-			_ = json.Unmarshal(tagsJSON, &p.Tags)
-		}
-		if clientID != nil {
-			p.Info = &ClientInfo{
-				ClientID: *clientID,
-				ConnInfo: connInfo,
-				ChanInfo: chanInfo,
-			}
-			if userID != nil {
-				p.Info.UserID = *userID
-			}
-		}
-		return MapStateResult{Publications: []*Publication{&p}, Position: streamPos}, nil
+		return e.readStateKey(ctx, pool, ch, opts)
 	}
 
-	// Limit=0: return only stream position (no entries).
-	if opts.Limit == 0 {
-		return MapStateResult{Position: streamPos}, nil
-	}
-
-	// Paginated state read using keyset pagination (no OFFSET).
+	// Full/paginated state read.
+	// Resolve channel options before building query (pure Go, no DB call).
 	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapStateResult{}, err
 	}
-	ordered := chOpts.Ordered
-	asc := opts.Asc
 
 	limit := opts.Limit
 	if limit < 0 {
-		// -1 means no client-imposed limit. Use a large SQL limit as a safety
-		// bound — if more entries exist, a cursor is returned for pagination.
 		limit = 100000
 	}
 
-	var rows pgx.Rows
+	// Build state query based on ordering and cursor.
 	stateTable := e.names.state
+	ordered := chOpts.Ordered
+	asc := opts.Asc
+	var stateQuery string
+	var stateArgs []any
 	if ordered {
 		if opts.Cursor == "" {
 			if asc {
-				rows, err = tx.Query(ctx, fmt.Sprintf(`
+				stateQuery = fmt.Sprintf(`
 					SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
 					FROM %s
 					WHERE channel = $1
 					ORDER BY score ASC, key ASC
 					LIMIT $2
-				`, stateTable), ch, limit+1)
+				`, stateTable)
 			} else {
-				rows, err = tx.Query(ctx, fmt.Sprintf(`
+				stateQuery = fmt.Sprintf(`
 					SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
 					FROM %s
 					WHERE channel = $1
 					ORDER BY score DESC, key DESC
 					LIMIT $2
-				`, stateTable), ch, limit+1)
+				`, stateTable)
 			}
+			stateArgs = []any{ch, limit + 1}
 		} else {
 			cursorScore, cursorKey := parseOrderedCursor(opts.Cursor)
 			cursorScoreInt, _ := strconv.ParseInt(cursorScore, 10, 64)
 			if asc {
-				rows, err = tx.Query(ctx, fmt.Sprintf(`
+				stateQuery = fmt.Sprintf(`
 					SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
 					FROM %s
 					WHERE channel = $1
 					  AND (score > $3 OR (score = $3 AND key > $4))
 					ORDER BY score ASC, key ASC
 					LIMIT $2
-				`, stateTable), ch, limit+1, cursorScoreInt, cursorKey)
+				`, stateTable)
 			} else {
-				rows, err = tx.Query(ctx, fmt.Sprintf(`
+				stateQuery = fmt.Sprintf(`
 					SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
 					FROM %s
 					WHERE channel = $1
 					  AND (score < $3 OR (score = $3 AND key < $4))
 					ORDER BY score DESC, key DESC
 					LIMIT $2
-				`, stateTable), ch, limit+1, cursorScoreInt, cursorKey)
+				`, stateTable)
 			}
+			stateArgs = []any{ch, limit + 1, cursorScoreInt, cursorKey}
 		}
 	} else {
-		// Unordered: sort by key ASC.
 		if opts.Cursor == "" {
-			rows, err = tx.Query(ctx, fmt.Sprintf(`
+			stateQuery = fmt.Sprintf(`
 				SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
 				FROM %s
 				WHERE channel = $1
 				ORDER BY key
 				LIMIT $2
-			`, stateTable), ch, limit+1)
+			`, stateTable)
+			stateArgs = []any{ch, limit + 1}
 		} else {
-			rows, err = tx.Query(ctx, fmt.Sprintf(`
+			stateQuery = fmt.Sprintf(`
 				SELECT key, data, tags, key_offset, score, client_id, user_id, conn_info, chan_info
 				FROM %s
 				WHERE channel = $1 AND key > $3
 				ORDER BY key
 				LIMIT $2
-			`, stateTable), ch, limit+1, opts.Cursor)
+			`, stateTable)
+			stateArgs = []any{ch, limit + 1, opts.Cursor}
 		}
 	}
-	if err != nil {
+
+	// Pipelined batch: meta + state in a single round trip with REPEATABLE READ.
+	metaQuery := fmt.Sprintf(`SELECT top_offset, epoch FROM %s WHERE channel = $1`, e.names.meta)
+	batch := &pgx.Batch{}
+	batch.Queue("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+	batch.Queue(metaQuery, ch)
+	batch.Queue(stateQuery, stateArgs...)
+	batch.Queue("COMMIT")
+
+	br := pool.SendBatch(ctx, batch)
+
+	// Consume BEGIN.
+	if _, err := br.Exec(); err != nil {
+		_ = br.Close()
 		return MapStateResult{}, err
 	}
-	defer rows.Close()
+
+	// Read meta.
+	var topOffset int64
+	var epoch string
+	err = br.QueryRow().Scan(&topOffset, &epoch)
+	if errors.Is(err, pgx.ErrNoRows) {
+		_ = br.Close()
+		if opts.Revision != nil && opts.Revision.Epoch != "" {
+			return MapStateResult{}, ErrorUnrecoverablePosition
+		}
+		return MapStateResult{}, nil
+	}
+	if err != nil {
+		_ = br.Close()
+		return MapStateResult{}, err
+	}
+
+	streamPos := StreamPosition{Offset: uint64(topOffset), Epoch: epoch}
+
+	if opts.Revision != nil && opts.Revision.Epoch != "" && opts.Revision.Epoch != epoch {
+		_ = br.Close()
+		return MapStateResult{Position: streamPos}, ErrorUnrecoverablePosition
+	}
+
+	// Read state rows.
+	rows, err := br.Query()
+	if err != nil {
+		_ = br.Close()
+		return MapStateResult{}, err
+	}
 
 	allocHint := limit + 1 // +1 for next-page detection row.
 	if allocHint > 1001 {
@@ -1042,6 +869,12 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 		}
 		pubs = append(pubs, p)
 	}
+	rows.Close()
+
+	// Consume COMMIT.
+	_, _ = br.Exec()
+	_ = br.Close()
+
 	if err := rows.Err(); err != nil {
 		return MapStateResult{}, err
 	}
@@ -1060,71 +893,145 @@ func (e *PostgresMapBroker) ReadState(ctx context.Context, ch string, opts MapRe
 	return MapStateResult{Publications: pubs, Position: streamPos, Cursor: nextCursor}, nil
 }
 
-// ReadStream retrieves publications from stream.
-func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
-	pool := e.getReadPool()
-
-	// Use REPEATABLE READ transaction to ensure atomic read of meta + stream.
-	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return MapStreamResult{}, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	// Get current meta.
+// readStatePosition returns just the stream position for a channel (no state entries).
+// Used when Limit=0 with no key filter — a single meta query, no transaction needed.
+func (e *PostgresMapBroker) readStatePosition(ctx context.Context, pool *pgxpool.Pool, ch string, opts MapReadStateOptions) (MapStateResult, error) {
 	var topOffset int64
 	var epoch string
-	err = tx.QueryRow(ctx, fmt.Sprintf(`
-		SELECT top_offset, epoch FROM %s WHERE channel = $1
-	`, e.names.meta), ch).Scan(&topOffset, &epoch)
+	err := pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT top_offset, epoch FROM %s WHERE channel = $1`, e.names.meta), ch,
+	).Scan(&topOffset, &epoch)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Channel doesn't exist yet - create it with an epoch.
-		// This matches MemoryMapBroker behavior where empty channels have an epoch.
-		_ = tx.Rollback(ctx)
-		pos, err := e.ensureChannelMeta(ctx, ch)
-		if err != nil {
-			return MapStreamResult{}, err
+		if opts.Revision != nil && opts.Revision.Epoch != "" {
+			return MapStateResult{}, ErrorUnrecoverablePosition
 		}
-		return MapStreamResult{Position: pos}, nil
+		return MapStateResult{}, nil
 	}
 	if err != nil {
-		return MapStreamResult{}, err
+		return MapStateResult{}, err
+	}
+	streamPos := StreamPosition{Offset: uint64(topOffset), Epoch: epoch}
+	if opts.Revision != nil && opts.Revision.Epoch != "" && opts.Revision.Epoch != epoch {
+		return MapStateResult{Position: streamPos}, ErrorUnrecoverablePosition
+	}
+	return MapStateResult{Position: streamPos}, nil
+}
+
+// readStateKey reads a single key from state (CAS read path).
+// Uses pipelined batch: meta + key query in one round trip with REPEATABLE READ.
+func (e *PostgresMapBroker) readStateKey(ctx context.Context, pool *pgxpool.Pool, ch string, opts MapReadStateOptions) (MapStateResult, error) {
+	metaQuery := fmt.Sprintf(`SELECT top_offset, epoch FROM %s WHERE channel = $1`, e.names.meta)
+	keyQuery := fmt.Sprintf(`
+		SELECT key, data, tags, key_offset, client_id, user_id, conn_info, chan_info
+		FROM %s
+		WHERE channel = $1 AND key = $2
+	`, e.names.state)
+
+	batch := &pgx.Batch{}
+	batch.Queue("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+	batch.Queue(metaQuery, ch)
+	batch.Queue(keyQuery, ch, opts.Key)
+	batch.Queue("COMMIT")
+
+	br := pool.SendBatch(ctx, batch)
+
+	// Consume BEGIN.
+	if _, err := br.Exec(); err != nil {
+		_ = br.Close()
+		return MapStateResult{}, err
+	}
+
+	// Read meta.
+	var topOffset int64
+	var epoch string
+	err := br.QueryRow().Scan(&topOffset, &epoch)
+	if errors.Is(err, pgx.ErrNoRows) {
+		_ = br.Close()
+		if opts.Revision != nil && opts.Revision.Epoch != "" {
+			return MapStateResult{}, ErrorUnrecoverablePosition
+		}
+		return MapStateResult{}, nil
+	}
+	if err != nil {
+		_ = br.Close()
+		return MapStateResult{}, err
 	}
 
 	streamPos := StreamPosition{Offset: uint64(topOffset), Epoch: epoch}
 
+	if opts.Revision != nil && opts.Revision.Epoch != "" && opts.Revision.Epoch != epoch {
+		_ = br.Close()
+		return MapStateResult{Position: streamPos}, ErrorUnrecoverablePosition
+	}
+
+	// Read key.
+	var p Publication
+	var tagsJSON []byte
+	var clientID, userID *string
+	var connInfo, chanInfo []byte
+	err = br.QueryRow().Scan(&p.Key, &p.Data, &tagsJSON, &p.Offset, &clientID, &userID, &connInfo, &chanInfo)
+
+	// Consume COMMIT and close batch before processing results.
+	_, _ = br.Exec()
+	_ = br.Close()
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MapStateResult{Position: streamPos}, nil
+	}
+	if err != nil {
+		return MapStateResult{}, err
+	}
+	if len(tagsJSON) > 0 {
+		_ = json.Unmarshal(tagsJSON, &p.Tags)
+	}
+	if clientID != nil {
+		p.Info = &ClientInfo{
+			ClientID: *clientID,
+			ConnInfo: connInfo,
+			ChanInfo: chanInfo,
+		}
+		if userID != nil {
+			p.Info.UserID = *userID
+		}
+	}
+	return MapStateResult{Publications: []*Publication{&p}, Position: streamPos}, nil
+}
+
+// ReadStream retrieves publications from stream.
+func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
+	pool := e.getReadPool(ch, opts.AllowCached)
+
 	if opts.Filter.Limit == 0 {
-		return MapStreamResult{Position: streamPos}, nil
+		// Position check only — single meta query, no stream read needed.
+		return e.readStreamPosition(ctx, pool, ch)
 	}
 
 	sinceOffset := int64(0)
 	if opts.Filter.Since != nil {
 		sinceOffset = int64(opts.Filter.Since.Offset)
-		// Validate epoch if provided.
-		if opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != epoch {
-			return MapStreamResult{}, ErrorUnrecoverablePosition
-		}
 	}
 
 	limit := opts.Filter.Limit
 	unlimited := limit < 0
 
-	// Query by per-channel offset (not global id).
+	// Build stream query.
 	streamTable := e.names.stream
-	var query string
+	var streamQuery string
 	if opts.Filter.Reverse {
 		if opts.Filter.Since == nil {
-			sinceOffset = topOffset + 1
+			// For reverse without explicit Since, we need topOffset from meta.
+			// We handle this after reading meta from the batch result.
+			sinceOffset = 0 // placeholder, will be overridden
 		}
 		if unlimited {
-			query = fmt.Sprintf(`
+			streamQuery = fmt.Sprintf(`
 				SELECT key, data, tags, channel_offset, removed, score, client_id, user_id, conn_info, chan_info
 				FROM %s
 				WHERE channel = $1 AND channel_offset < $2
 				ORDER BY channel_offset DESC
 			`, streamTable)
 		} else {
-			query = fmt.Sprintf(`
+			streamQuery = fmt.Sprintf(`
 				SELECT key, data, tags, channel_offset, removed, score, client_id, user_id, conn_info, chan_info
 				FROM %s
 				WHERE channel = $1 AND channel_offset < $2
@@ -1134,14 +1041,14 @@ func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapR
 		}
 	} else {
 		if unlimited {
-			query = fmt.Sprintf(`
+			streamQuery = fmt.Sprintf(`
 				SELECT key, data, tags, channel_offset, removed, score, client_id, user_id, conn_info, chan_info
 				FROM %s
 				WHERE channel = $1 AND channel_offset > $2
 				ORDER BY channel_offset ASC
 			`, streamTable)
 		} else {
-			query = fmt.Sprintf(`
+			streamQuery = fmt.Sprintf(`
 				SELECT key, data, tags, channel_offset, removed, score, client_id, user_id, conn_info, chan_info
 				FROM %s
 				WHERE channel = $1 AND channel_offset > $2
@@ -1151,18 +1058,60 @@ func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapR
 		}
 	}
 
-	var rows pgx.Rows
-	if unlimited {
-		rows, err = tx.Query(ctx, query, ch, sinceOffset)
-	} else {
-		rows, err = tx.Query(ctx, query, ch, sinceOffset, limit)
+	// For reverse without Since, we need topOffset to set sinceOffset.
+	// Fall back to transactional path for this case.
+	if opts.Filter.Reverse && opts.Filter.Since == nil {
+		return e.readStreamTx(ctx, pool, ch, opts, streamQuery, unlimited, limit)
 	}
-	if err != nil {
+
+	// Pipelined batch: meta + stream in a single round trip, with REPEATABLE READ for consistency.
+	metaQuery := fmt.Sprintf(`SELECT top_offset, epoch FROM %s WHERE channel = $1`, e.names.meta)
+	batch := &pgx.Batch{}
+	batch.Queue("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+	batch.Queue(metaQuery, ch)
+	if unlimited {
+		batch.Queue(streamQuery, ch, sinceOffset)
+	} else {
+		batch.Queue(streamQuery, ch, sinceOffset, limit)
+	}
+	batch.Queue("COMMIT")
+
+	br := pool.SendBatch(ctx, batch)
+
+	// Consume BEGIN.
+	if _, err := br.Exec(); err != nil {
+		_ = br.Close()
 		return MapStreamResult{}, err
 	}
-	defer rows.Close()
 
-	// Pre-allocate slice with expected capacity.
+	// Read meta.
+	var topOffset int64
+	var epoch string
+	err := br.QueryRow().Scan(&topOffset, &epoch)
+	if errors.Is(err, pgx.ErrNoRows) {
+		_ = br.Close()
+		return MapStreamResult{}, nil
+	}
+	if err != nil {
+		_ = br.Close()
+		return MapStreamResult{}, err
+	}
+
+	streamPos := StreamPosition{Offset: uint64(topOffset), Epoch: epoch}
+
+	// Validate epoch if provided.
+	if opts.Filter.Since != nil && opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != epoch {
+		_ = br.Close()
+		return MapStreamResult{}, ErrorUnrecoverablePosition
+	}
+
+	// Read stream rows.
+	rows, err := br.Query()
+	if err != nil {
+		_ = br.Close()
+		return MapStreamResult{}, err
+	}
+
 	allocHint := limit
 	if unlimited {
 		allocHint = 64
@@ -1170,9 +1119,83 @@ func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapR
 	arena := byteArena{buf: make([]byte, 0, allocHint*64)}
 	backing := make([]Publication, 0, allocHint)
 	pubs := make([]*Publication, 0, allocHint)
-	// Use RawValues + arena to avoid per-row allocations.
 	// Column order: key(0), data(1), tags(2), channel_offset(3), removed(4),
 	//               score(5), client_id(6), user_id(7), conn_info(8), chan_info(9).
+	for rows.Next() {
+		raw := rows.RawValues()
+		backing = append(backing, Publication{})
+		p := &backing[len(backing)-1]
+		p.Key = pgRawString(&arena, raw[0])
+		p.Data = pgRawBytes(&arena, raw[1])
+		p.Tags = pgRawJSONBMap(raw[2])
+		p.Offset = pgRawUint64(raw[3])
+		p.Removed = pgRawBool(raw[4])
+		p.Score = pgRawInt64(raw[5])
+		if raw[6] != nil {
+			p.Info = &ClientInfo{
+				ClientID: pgRawString(&arena, raw[6]),
+				UserID:   pgRawString(&arena, raw[7]),
+				ConnInfo: pgRawBytes(&arena, raw[8]),
+				ChanInfo: pgRawBytes(&arena, raw[9]),
+			}
+		}
+		pubs = append(pubs, p)
+	}
+	rows.Close()
+
+	// Consume COMMIT.
+	_, _ = br.Exec()
+	_ = br.Close()
+
+	if err := rows.Err(); err != nil {
+		return MapStreamResult{}, err
+	}
+
+	return MapStreamResult{Publications: pubs, Position: streamPos}, nil
+}
+
+// readStreamTx is a fallback for ReadStream when we need meta before building the query
+// (e.g., reverse without explicit Since needs topOffset). Uses REPEATABLE READ transaction.
+func (e *PostgresMapBroker) readStreamTx(ctx context.Context, pool *pgxpool.Pool, ch string, opts MapReadStreamOptions, streamQuery string, unlimited bool, limit int) (MapStreamResult, error) {
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return MapStreamResult{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var topOffset int64
+	var epoch string
+	err = tx.QueryRow(ctx, fmt.Sprintf(`
+		SELECT top_offset, epoch FROM %s WHERE channel = $1
+	`, e.names.meta), ch).Scan(&topOffset, &epoch)
+	if errors.Is(err, pgx.ErrNoRows) {
+		_ = tx.Rollback(ctx)
+		return MapStreamResult{}, nil
+	}
+	if err != nil {
+		return MapStreamResult{}, err
+	}
+
+	sinceOffset := topOffset + 1
+
+	var rows pgx.Rows
+	if unlimited {
+		rows, err = tx.Query(ctx, streamQuery, ch, sinceOffset)
+	} else {
+		rows, err = tx.Query(ctx, streamQuery, ch, sinceOffset, limit)
+	}
+	if err != nil {
+		return MapStreamResult{}, err
+	}
+	defer rows.Close()
+
+	allocHint := limit
+	if unlimited {
+		allocHint = 64
+	}
+	arena := byteArena{buf: make([]byte, 0, allocHint*64)}
+	backing := make([]Publication, 0, allocHint)
+	pubs := make([]*Publication, 0, allocHint)
 	for rows.Next() {
 		raw := rows.RawValues()
 		backing = append(backing, Publication{})
@@ -1197,12 +1220,28 @@ func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapR
 		return MapStreamResult{}, err
 	}
 
-	return MapStreamResult{Publications: pubs, Position: streamPos}, nil
+	return MapStreamResult{Publications: pubs, Position: StreamPosition{Offset: uint64(topOffset), Epoch: epoch}}, nil
+}
+
+// readStreamPosition returns just the stream position for a channel (Limit=0 case).
+func (e *PostgresMapBroker) readStreamPosition(ctx context.Context, pool *pgxpool.Pool, ch string) (MapStreamResult, error) {
+	var topOffset int64
+	var epoch string
+	err := pool.QueryRow(ctx, fmt.Sprintf(`
+		SELECT top_offset, epoch FROM %s WHERE channel = $1
+	`, e.names.meta), ch).Scan(&topOffset, &epoch)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MapStreamResult{}, nil
+	}
+	if err != nil {
+		return MapStreamResult{}, err
+	}
+	return MapStreamResult{Position: StreamPosition{Offset: uint64(topOffset), Epoch: epoch}}, nil
 }
 
 // Stats returns state statistics.
 func (e *PostgresMapBroker) Stats(ctx context.Context, ch string) (MapStats, error) {
-	pool := e.getReadPool()
+	pool := e.getReadPool(ch, false)
 
 	var count int
 	err := pool.QueryRow(ctx, fmt.Sprintf(`
@@ -1243,13 +1282,12 @@ func (e *PostgresMapBroker) Clear(ctx context.Context, ch string, _ MapClearOpti
 }
 
 // ============================================================================
-// WAL Reader Implementation
+// Notification Listener (optional, only started when UseNotify=true)
 // ============================================================================
 
-// runWALReaderForShard attempts to claim and read a shard using advisory locks.
-func (e *PostgresMapBroker) runWALReaderForShard(shardID int) {
+// runNotificationListener listens for pg_notify and wakes the outbox worker.
+func (e *PostgresMapBroker) runNotificationListener() {
 	ctx := e.cancelCtx
-	lockID := e.conf.WAL.AdvisoryLockBaseID + int64(shardID)
 	backoff := time.Second
 	maxBackoff := 30 * time.Second
 
@@ -1262,56 +1300,49 @@ func (e *PostgresMapBroker) runWALReaderForShard(shardID int) {
 		default:
 		}
 
-		// Try to acquire advisory lock for this shard
 		conn, err := e.pool.Acquire(ctx)
 		if err != nil {
-			e.logError("wal reader: acquire connection", err, shardID)
+			if ctx.Err() != nil {
+				return
+			}
+			e.logErrorMsg("notification listener: acquire connection", err)
 			time.Sleep(backoff)
 			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
 
-		// Try non-blocking advisory lock
-		var acquired bool
-		err = conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", lockID).Scan(&acquired)
+		_, err = conn.Exec(ctx, "LISTEN "+e.names.notifyChannel)
 		if err != nil {
 			conn.Release()
-			e.logError("wal reader: try advisory lock", err, shardID)
+			if ctx.Err() != nil {
+				return
+			}
+			e.logErrorMsg("notification listener: LISTEN", err)
 			time.Sleep(backoff)
 			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
 
-		if !acquired {
-			// Another node has this shard, wait and retry
-			conn.Release()
-			time.Sleep(5 * time.Second) // Check every 5 seconds
-			continue
-		}
-
-		// We got the lock! Mark shard as claimed
-		e.walClaimedShardMu.Lock()
-		e.walClaimedShards[shardID] = true
-		e.walClaimedShardMu.Unlock()
-
-		e.logInfo("wal reader: claimed shard", shardID)
 		backoff = time.Second
 
-		// Run the WAL reader until it fails or we're closed
-		err = e.runWALReaderLoop(ctx, shardID, conn)
-		if err != nil && ctx.Err() == nil {
-			e.logError("wal reader: loop error", err, shardID)
+		// Notification loop
+		for {
+			_, err := conn.Conn().WaitForNotification(ctx)
+			if err != nil {
+				conn.Release()
+				if ctx.Err() != nil {
+					return
+				}
+				e.logErrorMsg("notification listener: wait", err)
+				break // reconnect
+			}
+
+			// Non-blocking send to wake outbox worker
+			select {
+			case e.notifyCh <- struct{}{}:
+			default:
+			}
 		}
-
-		// Release the lock and mark shard as unclaimed
-		e.walClaimedShardMu.Lock()
-		delete(e.walClaimedShards, shardID)
-		e.walClaimedShardMu.Unlock()
-
-		_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", lockID)
-		conn.Release()
-
-		e.logInfo("wal reader: released shard", shardID)
 
 		select {
 		case <-e.closeCh:
@@ -1324,327 +1355,242 @@ func (e *PostgresMapBroker) runWALReaderForShard(shardID int) {
 	}
 }
 
-// runWALReaderLoop runs the logical replication reader for a shard.
-func (e *PostgresMapBroker) runWALReaderLoop(ctx context.Context, shardID int, lockConn *pgxpool.Conn) error {
-	slotName := fmt.Sprintf("%s%d", e.names.slotPrefix, shardID)
-	publication := fmt.Sprintf("%sshard_%d", e.names.pubPrefix, shardID)
+// ============================================================================
+// Outbox Worker Implementation
+// ============================================================================
 
-	// Create replication connection (separate from regular pool)
-	replConnStr := e.conf.ConnString
-	if replConnStr[len(replConnStr)-1] != '?' && !strings.Contains(replConnStr, "?") {
-		replConnStr += "?replication=database"
-	} else {
-		replConnStr += "&replication=database"
+// outboxWorkerConfig returns (pool, shardIDs) for outbox worker #i.
+// With N replicas: worker i handles shards where shard_id % N == i.
+func (e *PostgresMapBroker) outboxWorkerConfig(replicaIdx int) (*pgxpool.Pool, []int) {
+	n := len(e.readPools)
+	if n == 0 {
+		return e.pool, nil // nil = all shards (no filter)
 	}
+	var shards []int
+	for s := 0; s < e.conf.NumShards; s++ {
+		if s%n == replicaIdx {
+			shards = append(shards, s)
+		}
+	}
+	return e.readPools[replicaIdx], shards
+}
 
-	replConn, err := pgconn.Connect(ctx, replConnStr)
+// runOutboxWorker polls the stream table for new entries and delivers them.
+func (e *PostgresMapBroker) runOutboxWorker(replicaIdx int) {
+	ctx := e.cancelCtx
+	pool, shards := e.outboxWorkerConfig(replicaIdx)
+
+	// Initialize cursor: start from current max ID so we only get future entries.
+	var cursor int64
+	err := pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT COALESCE(MAX(id), 0) FROM %s`, e.names.stream)).Scan(&cursor)
 	if err != nil {
-		return fmt.Errorf("connect replication: %w", err)
-	}
-	defer replConn.Close(ctx)
-
-	// Check if slot exists
-	var slotExists bool
-	result := replConn.Exec(ctx, fmt.Sprintf(
-		"SELECT EXISTS(SELECT 1 FROM pg_replication_slots WHERE slot_name = '%s')", slotName))
-	result.NextResult()
-	if rr := result.ResultReader(); rr != nil && rr.NextRow() {
-		existsStr := string(rr.Values()[0])
-		slotExists = existsStr == "t"
-	}
-	result.Close()
-
-	// Determine starting LSN
-	var startLSN pglogrepl.LSN
-
-	if !slotExists {
-		// Create slot - use the consistent point returned
-		res, err := pglogrepl.CreateReplicationSlot(ctx, replConn, slotName, "pgoutput",
-			pglogrepl.CreateReplicationSlotOptions{Temporary: false})
-		if err != nil {
-			// Ignore "already exists" error (race with another node)
-			if !strings.Contains(err.Error(), "already exists") {
-				return fmt.Errorf("create replication slot: %w", err)
-			}
-			// Slot was created by another node, query its position
-			slotExists = true
-		} else {
-			startLSN, err = pglogrepl.ParseLSN(res.ConsistentPoint)
-			if err != nil {
-				return fmt.Errorf("parse consistent point: %w", err)
-			}
-			e.logInfo("wal reader: created replication slot", shardID)
+		if ctx.Err() != nil {
+			return
 		}
+		e.logErrorMsg("outbox worker: init cursor", err)
+		// Retry after delay
+		time.Sleep(time.Second)
+		go e.runOutboxWorker(replicaIdx)
+		return
 	}
 
-	if slotExists {
-		// Query the slot's confirmed_flush_lsn to start from where we left off
-		var lsnStr string
-		result := replConn.Exec(ctx, fmt.Sprintf(
-			"SELECT COALESCE(confirmed_flush_lsn, restart_lsn)::text FROM pg_replication_slots WHERE slot_name = '%s'", slotName))
-		result.NextResult()
-		if rr := result.ResultReader(); rr != nil && rr.NextRow() {
-			lsnStr = string(rr.Values()[0])
-		}
-		result.Close()
+	pollInterval := e.conf.Outbox.PollInterval
 
-		if lsnStr != "" {
-			startLSN, err = pglogrepl.ParseLSN(lsnStr)
-			if err != nil {
-				return fmt.Errorf("parse slot LSN: %w", err)
-			}
-		}
+	// Pre-allocate reusable batch buffer.
+	allocHint := e.conf.Outbox.BatchSize
+	if allocHint > 1001 {
+		allocHint = 1001
 	}
-
-	// Start replication from slot's position (no gap possible)
-	err = pglogrepl.StartReplication(ctx, replConn, slotName, startLSN,
-		pglogrepl.StartReplicationOptions{
-			PluginArgs: []string{
-				"proto_version '1'",
-				fmt.Sprintf("publication_names '%s'", publication),
-			},
-		})
-	if err != nil {
-		return fmt.Errorf("start replication: %w", err)
+	buf := &outboxBatchBuf{
+		metas: make([]outboxMeta, 0, allocHint),
 	}
-
-	e.logInfo("wal reader: started replication", shardID)
-
-	// Message processing loop
-	clientXLogPos := startLSN
-	standbyDeadline := time.Now().Add(e.conf.WAL.HeartbeatInterval)
-	relations := make(map[uint32]*pglogrepl.RelationMessage)
 
 	for {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
 		case <-e.closeCh:
-			return nil
+			return
+		case <-ctx.Done():
+			return
 		default:
 		}
 
-		// Send standby status if needed
-		if time.Now().After(standbyDeadline) {
-			err = pglogrepl.SendStandbyStatusUpdate(ctx, replConn,
-				pglogrepl.StandbyStatusUpdate{WALWritePosition: clientXLogPos})
+		// Inner loop: process batches until less than full batch
+		for {
+			processed, newCursor, err := e.processOutboxBatch(ctx, pool, cursor, shards, buf)
 			if err != nil {
-				return fmt.Errorf("send standby status: %w", err)
+				if ctx.Err() != nil {
+					return
+				}
+				e.logErrorMsg("outbox worker: process batch", err)
+				break
 			}
-			standbyDeadline = time.Now().Add(e.conf.WAL.HeartbeatInterval)
-		}
-
-		// Receive message with timeout
-		receiveCtx, cancel := context.WithDeadline(ctx, standbyDeadline)
-		rawMsg, err := replConn.ReceiveMessage(receiveCtx)
-		cancel()
-
-		if err != nil {
-			if pgconn.Timeout(err) {
-				continue // Timeout is expected, send heartbeat
+			if newCursor > cursor {
+				cursor = newCursor
 			}
-			return fmt.Errorf("receive message: %w", err)
+			if processed < e.conf.Outbox.BatchSize {
+				break
+			}
 		}
 
-		if rawMsg == nil {
-			continue
-		}
-
-		switch msg := rawMsg.(type) {
-		case *pgproto3.CopyData:
-			switch msg.Data[0] {
-			case pglogrepl.PrimaryKeepaliveMessageByteID:
-				pkm, err := pglogrepl.ParsePrimaryKeepaliveMessage(msg.Data[1:])
-				if err != nil {
-					return fmt.Errorf("parse keepalive: %w", err)
-				}
-				if pkm.ReplyRequested {
-					standbyDeadline = time.Time{} // Force immediate reply
-				}
-
-			case pglogrepl.XLogDataByteID:
-				xld, err := pglogrepl.ParseXLogData(msg.Data[1:])
-				if err != nil {
-					return fmt.Errorf("parse xlog data: %w", err)
-				}
-
-				err = e.processWALMessage(ctx, xld.WALData, relations)
-				if err != nil {
-					e.logError("wal reader: process message", err, shardID)
-				}
-
-				clientXLogPos = xld.WALStart + pglogrepl.LSN(len(xld.WALData))
+		// Wait for notification or poll interval
+		if e.notifyCh != nil {
+			select {
+			case <-e.closeCh:
+				return
+			case <-ctx.Done():
+				return
+			case <-e.notifyCh:
+			case <-time.After(pollInterval):
+			}
+		} else {
+			select {
+			case <-e.closeCh:
+				return
+			case <-ctx.Done():
+				return
+			case <-time.After(pollInterval):
 			}
 		}
 	}
 }
 
-// processWALMessage processes a single WAL message and publishes to broker.
-func (e *PostgresMapBroker) processWALMessage(ctx context.Context, walData []byte, relations map[uint32]*pglogrepl.RelationMessage) error {
-	logicalMsg, err := pglogrepl.Parse(walData)
+// outboxMeta holds per-row metadata not captured in Publication.
+// String/byte fields reference arena memory — no per-field heap allocation.
+type outboxMeta struct {
+	id           int64
+	channel      string
+	epoch        string
+	previousData []byte
+}
+
+// outboxBatchBuf holds reusable buffers for processOutboxBatch. Only metas
+// (internal metadata) is reused across batches. pubBacking and infoBacking are
+// allocated fresh each batch because handlers may retain *Publication pointers
+// asynchronously (e.g. cachedEventHandler.BufferPublication, channelMedium queue).
+type outboxBatchBuf struct {
+	metas []outboxMeta
+}
+
+// reset clears metas while retaining capacity.
+func (b *outboxBatchBuf) reset() {
+	clear(b.metas[:cap(b.metas)])
+	b.metas = b.metas[:0]
+}
+
+// processOutboxBatch fetches and processes a batch of stream entries.
+// Uses RawValues + byteArena to avoid per-row heap allocations from pgx Scan.
+func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, pool *pgxpool.Pool, cursor int64, shardIDs []int, buf *outboxBatchBuf) (int, int64, error) {
+	batchSize := e.conf.Outbox.BatchSize
+
+	var rows pgx.Rows
+	var err error
+	if shardIDs != nil {
+		rows, err = pool.Query(ctx, fmt.Sprintf(`
+			SELECT id, shard_id, channel, channel_offset, epoch, key, data, tags, removed, score,
+				   client_id, user_id, conn_info, chan_info, previous_data
+			FROM %s
+			WHERE id > $1 AND shard_id = ANY($2)
+			ORDER BY id
+			LIMIT $3
+		`, e.names.stream), cursor, shardIDs, batchSize)
+	} else {
+		rows, err = pool.Query(ctx, fmt.Sprintf(`
+			SELECT id, shard_id, channel, channel_offset, epoch, key, data, tags, removed, score,
+				   client_id, user_id, conn_info, chan_info, previous_data
+			FROM %s
+			WHERE id > $1
+			ORDER BY id
+			LIMIT $2
+		`, e.names.stream), cursor, batchSize)
+	}
 	if err != nil {
-		return fmt.Errorf("parse logical message: %w", err)
+		return 0, cursor, fmt.Errorf("query stream: %w", err)
 	}
 
-	switch msg := logicalMsg.(type) {
-	case *pglogrepl.RelationMessage:
-		relations[msg.RelationID] = msg
+	buf.reset()
+	arena := byteArena{}
+	allocHint := batchSize
+	if allocHint > 1001 {
+		allocHint = 1001
+	}
+	pubBacking := make([]Publication, 0, allocHint)
+	infoBacking := make([]ClientInfo, 0, allocHint/4+1)
 
-	case *pglogrepl.InsertMessage:
-		rel, ok := relations[msg.RelationID]
-		if !ok {
-			return nil // Unknown relation, skip
-		}
-		if rel.RelationName != e.names.stream {
-			return nil // Not our table
+	var maxID int64
+
+	// Use RawValues + arena to avoid per-row allocations.
+	// Column order: id(0), shard_id(1), channel(2), channel_offset(3), epoch(4),
+	//              key(5), data(6), tags(7), removed(8), score(9),
+	//              client_id(10), user_id(11), conn_info(12), chan_info(13), previous_data(14).
+	for rows.Next() {
+		raw := rows.RawValues()
+
+		id := pgRawInt64(raw[0])
+		if id > maxID {
+			maxID = id
 		}
 
-		return e.processInsertMessage(ctx, rel, msg.Tuple)
+		pubBacking = append(pubBacking, Publication{})
+		p := &pubBacking[len(pubBacking)-1]
+
+		p.Offset = pgRawUint64(raw[3])
+		p.Key = pgRawString(&arena, raw[5])
+		p.Data = pgRawBytes(&arena, raw[6])
+		p.Tags = pgRawJSONBMap(raw[7])
+		p.Removed = pgRawBool(raw[8])
+		p.Score = pgRawInt64(raw[9])
+		if raw[10] != nil {
+			infoBacking = append(infoBacking, ClientInfo{
+				ClientID: pgRawString(&arena, raw[10]),
+				UserID:   pgRawString(&arena, raw[11]),
+				ConnInfo: pgRawBytes(&arena, raw[12]),
+				ChanInfo: pgRawBytes(&arena, raw[13]),
+			})
+			p.Info = &infoBacking[len(infoBacking)-1]
+		}
+
+		m := outboxMeta{
+			id:           id,
+			channel:      pgRawString(&arena, raw[2]),
+			epoch:        pgRawString(&arena, raw[4]),
+			previousData: pgRawBytes(&arena, raw[14]),
+		}
+		buf.metas = append(buf.metas, m)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, cursor, fmt.Errorf("iterate rows: %w", err)
 	}
 
-	return nil
+	if len(buf.metas) == 0 {
+		return 0, cursor, nil
+	}
+
+	// Deliver each entry via HandlePublication.
+	for i := range buf.metas {
+		m := &buf.metas[i]
+		pub := &pubBacking[i]
+		streamPos := StreamPosition{Offset: pub.Offset, Epoch: m.epoch}
+
+		var prevPub *Publication
+		useDelta := len(m.previousData) > 0
+		if useDelta {
+			prevPub = &Publication{Data: m.previousData}
+		}
+
+		if e.eventHandler != nil {
+			_ = e.eventHandler.HandlePublication(m.channel, pub, streamPos, useDelta, prevPub)
+		}
+	}
+
+	return len(buf.metas), maxID, nil
 }
 
-// processInsertMessage processes an INSERT into cf_map_stream and publishes to broker.
-func (e *PostgresMapBroker) processInsertMessage(ctx context.Context, rel *pglogrepl.RelationMessage, tuple *pglogrepl.TupleData) error {
-	if tuple == nil {
-		return nil
+func (e *PostgresMapBroker) logErrorMsg(msg string, err error) {
+	if e.node != nil {
+		e.node.logger.log(newErrorLogEntry(err, msg, nil))
 	}
-
-	// Build a map of column name -> value
-	values := make(map[string][]byte)
-	for i, col := range tuple.Columns {
-		if i < len(rel.Columns) {
-			colName := rel.Columns[i].Name
-			if col.DataType == 't' { // text
-				values[colName] = col.Data
-			} else if col.DataType == 'b' { // binary
-				values[colName] = col.Data
-			}
-		}
-	}
-
-	// Extract required fields
-	channel := string(values["channel"])
-	if channel == "" {
-		return nil
-	}
-
-	key := string(values["key"])
-	data := decodePgBytea(values["data"])
-	epoch := string(values["epoch"]) // Denormalized in cf_map_stream for efficiency
-
-	var offset uint64
-	if offsetBytes, ok := values["channel_offset"]; ok {
-		offset, _ = strconv.ParseUint(string(offsetBytes), 10, 64)
-	}
-
-	var removed bool
-	if removedBytes, ok := values["removed"]; ok {
-		removed = string(removedBytes) == "t" || string(removedBytes) == "true"
-	}
-
-	var score int64
-	if scoreBytes, ok := values["score"]; ok && len(scoreBytes) > 0 {
-		score, _ = strconv.ParseInt(string(scoreBytes), 10, 64)
-	}
-
-	// Parse tags
-	var tags map[string]string
-	if tagsBytes, ok := values["tags"]; ok && len(tagsBytes) > 0 {
-		_ = json.Unmarshal(tagsBytes, &tags)
-	}
-
-	// Parse previous data for key-based delta.
-	var previousData []byte
-	if prevBytes, ok := values["previous_data"]; ok {
-		previousData = decodePgBytea(prevBytes)
-	}
-
-	// Extract client info fields
-	var clientID, userID string
-	if v, ok := values["client_id"]; ok {
-		clientID = string(v)
-	}
-	if v, ok := values["user_id"]; ok {
-		userID = string(v)
-	}
-	var connInfo, chanInfo []byte
-	if v, ok := values["conn_info"]; ok {
-		connInfo = decodePgBytea(v)
-	}
-	if v, ok := values["chan_info"]; ok {
-		chanInfo = decodePgBytea(v)
-	}
-
-	// Create publication. Epoch is NOT set on Publication — see handleOutboxEntry.
-	pub := &Publication{
-		Offset:  offset,
-		Key:     key,
-		Data:    data,
-		Tags:    tags,
-		Removed: removed,
-		Score:   score,
-	}
-
-	// Add client info if present
-	if clientID != "" || userID != "" {
-		pub.Info = &ClientInfo{
-			ClientID: clientID,
-			UserID:   userID,
-			ConnInfo: connInfo,
-			ChanInfo: chanInfo,
-		}
-	}
-
-	// Construct prevPub for key-based delta if previous data available.
-	var prevPub *Publication
-	useDelta := len(previousData) > 0
-	if useDelta {
-		prevPub = &Publication{Data: previousData}
-	}
-
-	if e.conf.Broker != nil {
-		// Multi-node: publish to broker, which will deliver to all subscribed nodes (including this one)
-		_, err := e.conf.Broker.Publish(channel, data, PublishOptions{
-			ClientInfo: pub.Info,
-			Key:        key,
-			Removed:    removed,
-			Score:      score,
-			Tags:       tags,
-			Offset:     offset,
-			Epoch:      epoch,
-		})
-		if err != nil {
-			return fmt.Errorf("broker publish: %w", err)
-		}
-	} else if e.eventHandler != nil {
-		// Single-node: deliver locally only
-		_ = e.eventHandler.HandlePublication(channel, pub, StreamPosition{Offset: offset, Epoch: epoch}, useDelta, prevPub)
-	}
-
-	return nil
-}
-
-// decodePgBytea decodes PostgreSQL bytea hex escape format (\x...) to raw bytes.
-func decodePgBytea(data []byte) []byte {
-	if len(data) < 2 {
-		return data
-	}
-	// Check for hex format: \x followed by hex pairs
-	if data[0] == '\\' && data[1] == 'x' {
-		hexStr := string(data[2:])
-		decoded := make([]byte, len(hexStr)/2)
-		for i := 0; i < len(decoded); i++ {
-			b, err := strconv.ParseUint(hexStr[i*2:i*2+2], 16, 8)
-			if err != nil {
-				return data // Return original on decode error
-			}
-			decoded[i] = byte(b)
-		}
-		return decoded
-	}
-	return data
 }
 
 func (e *PostgresMapBroker) logError(msg string, err error, shardID int) {
@@ -1659,49 +1605,9 @@ func (e *PostgresMapBroker) logInfo(msg string, shardID int) {
 	}
 }
 
-// IsWALShardClaimed returns whether this node currently holds the WAL reader lock for a shard.
-func (e *PostgresMapBroker) IsWALShardClaimed(shardID int) bool {
-	e.walClaimedShardMu.RLock()
-	defer e.walClaimedShardMu.RUnlock()
-	return e.walClaimedShards[shardID]
-}
-
-// WALClaimedShards returns a list of currently claimed WAL reader shard IDs.
-func (e *PostgresMapBroker) WALClaimedShards() []int {
-	e.walClaimedShardMu.RLock()
-	defer e.walClaimedShardMu.RUnlock()
-	shards := make([]int, 0, len(e.walClaimedShards))
-	for id := range e.walClaimedShards {
-		shards = append(shards, id)
-	}
-	return shards
-}
-
-// IsOutboxShardClaimed returns whether this node currently holds the outbox worker lock for a shard.
-func (e *PostgresMapBroker) IsOutboxShardClaimed(shardID int) bool {
-	e.outboxClaimedShardMu.RLock()
-	defer e.outboxClaimedShardMu.RUnlock()
-	return e.outboxClaimedShards[shardID]
-}
-
-// OutboxClaimedShards returns a list of currently claimed outbox worker shard IDs.
-func (e *PostgresMapBroker) OutboxClaimedShards() []int {
-	e.outboxClaimedShardMu.RLock()
-	defer e.outboxClaimedShardMu.RUnlock()
-	shards := make([]int, 0, len(e.outboxClaimedShards))
-	for id := range e.outboxClaimedShards {
-		shards = append(shards, id)
-	}
-	return shards
-}
-
-// ClaimedShards returns a list of currently claimed shard IDs (WAL or outbox depending on mode).
-func (e *PostgresMapBroker) ClaimedShards() []int {
-	if e.conf.WAL.Enabled {
-		return e.WALClaimedShards()
-	}
-	return e.OutboxClaimedShards()
-}
+// ============================================================================
+// TTL Expiration Worker
+// ============================================================================
 
 // runTTLExpirationWorker expires keys with TTL and emits removal events.
 func (e *PostgresMapBroker) runTTLExpirationWorker() {
@@ -1751,11 +1657,7 @@ func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 			e.node.logger.log(newErrorLogEntry(err, "error resolving channel options for key expiration", map[string]any{"channel": ch}))
 			continue
 		}
-		var streamTTL, metaTTL *string
-		if chOpts.StreamTTL > 0 {
-			s := durationToIntervalString(chOpts.StreamTTL)
-			streamTTL = &s
-		}
+		var metaTTL *string
 		if chOpts.MetaTTL > 0 {
 			s := durationToIntervalString(chOpts.MetaTTL)
 			metaTTL = &s
@@ -1764,13 +1666,13 @@ func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 		// Call expire_keys SQL function which atomically:
 		// 1. Deletes expired keys from state
 		// 2. Inserts removal events into the stream
-		// The outbox/WAL worker will pick up the stream entries and deliver them
+		// The outbox worker will pick up the stream entries and deliver them
 		// via HandlePublication — we must NOT call HandlePublication here to avoid
 		// duplicate delivery.
 		rows, err := e.pool.Query(ctx, fmt.Sprintf(`
 			SELECT out_channel, out_key, out_offset, out_epoch
-			FROM %s($1, $2, $3::interval, $4::interval, $5)
-		`, e.names.expireKeys), 1000, numShards, streamTTL, metaTTL, ch)
+			FROM %s($1, $2, $3::interval, $4)
+		`, e.names.expireKeys), 1000, numShards, metaTTL, ch)
 		if err != nil {
 			e.node.logger.log(newErrorLogEntry(err, "error in batch key expiration", map[string]any{"channel": ch}))
 			continue
@@ -1782,8 +1684,12 @@ func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 	}
 }
 
-// runStreamCleanupWorker cleans up expired stream/meta/idempotency entries.
-func (e *PostgresMapBroker) runStreamCleanupWorker() {
+// ============================================================================
+// Cleanup Worker
+// ============================================================================
+
+// runCleanupWorker cleans up old stream entries and expired meta/idempotency entries.
+func (e *PostgresMapBroker) runCleanupWorker() {
 	ticker := time.NewTicker(e.conf.CleanupInterval)
 	defer ticker.Stop()
 	ctx := e.cancelCtx
@@ -1795,46 +1701,21 @@ func (e *PostgresMapBroker) runStreamCleanupWorker() {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			e.cleanupExpiredEntries(ctx)
+			e.cleanupEntries(ctx)
 		}
 	}
 }
 
-func (e *PostgresMapBroker) cleanupExpiredEntries(ctx context.Context) {
-	// Remove expired stream entries (cursor-aware: only delete after delivery).
-	// Per-shard comparison: each entry checked against its own shard's cursor.
-	if _, err := e.pool.Exec(ctx, fmt.Sprintf(`
-		DELETE FROM %s
-		WHERE expires_at IS NOT NULL AND expires_at < NOW()
-		AND (
-			NOT EXISTS (SELECT 1 FROM %s)
-			OR %s.id <= (
-				SELECT c.last_processed_id FROM %s c
-				WHERE c.shard_id = %s.shard_id
-			)
-		)
-	`, e.names.stream, e.names.outboxCursor, e.names.stream, e.names.outboxCursor, e.names.stream)); err != nil {
-		e.node.logger.log(newErrorLogEntry(err, "error cleaning up expired stream entries", map[string]any{}))
-	}
-
-	// Clean up delivered stream entries from abandoned channels.
-	// Only delete entries where: (a) already delivered (below shard cursor),
-	// (b) no explicit TTL, and (c) the channel's meta no longer exists (expired/removed).
-	// If meta still exists, entries may be needed for stream_size recovery.
-	// Uses USING to let planner drive from the small cursor table (16 rows)
-	// via the (shard_id, id) index, avoiding a full table scan on expires_at IS NULL.
-	// In WAL mode (no cursor rows), USING produces no joins — nothing deleted (correct).
-	if _, err := e.pool.Exec(ctx, fmt.Sprintf(`
-		DELETE FROM %s s
-		USING %s c
-		WHERE c.shard_id = s.shard_id
-		AND s.id <= c.last_processed_id
-		AND s.expires_at IS NULL
-		AND NOT EXISTS (
-			SELECT 1 FROM %s m WHERE m.channel = s.channel
-		)
-	`, e.names.stream, e.names.outboxCursor, e.names.meta)); err != nil {
-		e.node.logger.log(newErrorLogEntry(err, "error cleaning up delivered stream entries", map[string]any{}))
+func (e *PostgresMapBroker) cleanupEntries(ctx context.Context) {
+	// Remove old stream entries (time-based retention).
+	if !e.conf.Partitioning {
+		retention := durationToIntervalString(e.conf.StreamRetention)
+		if _, err := e.pool.Exec(ctx, fmt.Sprintf(`
+			DELETE FROM %s
+			WHERE created_at < NOW() - $1::interval
+		`, e.names.stream), retention); err != nil {
+			e.logErrorMsg("error cleaning up old stream entries", err)
+		}
 	}
 
 	// Remove expired stream metadata
@@ -1842,7 +1723,7 @@ func (e *PostgresMapBroker) cleanupExpiredEntries(ctx context.Context) {
 		DELETE FROM %s
 		WHERE expires_at IS NOT NULL AND expires_at < NOW()
 	`, e.names.meta)); err != nil {
-		e.node.logger.log(newErrorLogEntry(err, "error cleaning up expired stream metadata", map[string]any{}))
+		e.logErrorMsg("error cleaning up expired stream metadata", err)
 	}
 
 	// Remove expired idempotency keys
@@ -1850,315 +1731,177 @@ func (e *PostgresMapBroker) cleanupExpiredEntries(ctx context.Context) {
 		DELETE FROM %s
 		WHERE expires_at < NOW()
 	`, e.names.idempotency)); err != nil {
-		e.node.logger.log(newErrorLogEntry(err, "error cleaning up expired idempotency keys", map[string]any{}))
+		e.logErrorMsg("error cleaning up expired idempotency keys", err)
 	}
 }
 
 // ============================================================================
-// Outbox Worker Implementation (default delivery mode)
+// Partitioning Support (optional optimization)
 // ============================================================================
 
-// runOutboxWorkerForShard attempts to claim and process a shard using advisory locks.
-func (e *PostgresMapBroker) runOutboxWorkerForShard(shardID int) {
-	ctx := e.cancelCtx
-	lockID := e.conf.Outbox.AdvisoryLockBaseID + int64(shardID)
-	backoff := time.Second
-	maxBackoff := 30 * time.Second
-
-	for {
-		select {
-		case <-e.closeCh:
-			return
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		// Try to acquire advisory lock for this shard
-		conn, err := e.pool.Acquire(ctx)
-		if err != nil {
-			e.logError("outbox worker: acquire connection", err, shardID)
-			time.Sleep(backoff)
-			backoff = min(backoff*2, maxBackoff)
-			continue
-		}
-
-		// Try non-blocking advisory lock
-		var acquired bool
-		err = conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", lockID).Scan(&acquired)
-		if err != nil {
-			conn.Release()
-			e.logError("outbox worker: try advisory lock", err, shardID)
-			time.Sleep(backoff)
-			backoff = min(backoff*2, maxBackoff)
-			continue
-		}
-
-		if !acquired {
-			// Another node has this shard, wait and retry
-			conn.Release()
-			time.Sleep(5 * time.Second) // Check every 5 seconds
-			continue
-		}
-
-		// We got the lock! Mark shard as claimed
-		e.outboxClaimedShardMu.Lock()
-		e.outboxClaimedShards[shardID] = true
-		e.outboxClaimedShardMu.Unlock()
-
-		e.logInfo("outbox worker: claimed shard", shardID)
-		backoff = time.Second
-
-		// Initialize cursor: UPSERT cursor row (idempotent)
-		_, err = e.pool.Exec(ctx, fmt.Sprintf(
-			`INSERT INTO %s (shard_id, last_processed_id) VALUES ($1, 0)
-			 ON CONFLICT (shard_id) DO NOTHING`, e.names.outboxCursor), shardID)
-		if err != nil {
-			e.logError("outbox worker: init cursor", err, shardID)
-			e.outboxClaimedShardMu.Lock()
-			delete(e.outboxClaimedShards, shardID)
-			e.outboxClaimedShardMu.Unlock()
-			_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", lockID)
-			conn.Release()
-			time.Sleep(backoff)
-			backoff = min(backoff*2, maxBackoff)
-			continue
-		}
-
-		// Read initial cursor position
-		var lastProcessedID int64
-		err = e.pool.QueryRow(ctx, fmt.Sprintf(
-			`SELECT last_processed_id FROM %s WHERE shard_id = $1`, e.names.outboxCursor),
-			shardID).Scan(&lastProcessedID)
-		if err != nil {
-			e.logError("outbox worker: read cursor", err, shardID)
-			e.outboxClaimedShardMu.Lock()
-			delete(e.outboxClaimedShards, shardID)
-			e.outboxClaimedShardMu.Unlock()
-			_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", lockID)
-			conn.Release()
-			time.Sleep(backoff)
-			backoff = min(backoff*2, maxBackoff)
-			continue
-		}
-
-		// Run the outbox processor until it fails or we're closed
-		err = e.processOutboxLoop(ctx, shardID, conn, lastProcessedID)
-		if err != nil && ctx.Err() == nil {
-			e.logError("outbox worker: loop error", err, shardID)
-		}
-
-		// Release the lock and mark shard as unclaimed
-		e.outboxClaimedShardMu.Lock()
-		delete(e.outboxClaimedShards, shardID)
-		e.outboxClaimedShardMu.Unlock()
-
-		_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", lockID)
-		conn.Release()
-
-		e.logInfo("outbox worker: released shard", shardID)
-
-		select {
-		case <-e.closeCh:
-			return
-		case <-ctx.Done():
-			return
-		case <-time.After(backoff):
-			backoff = min(backoff*2, maxBackoff)
-		}
-	}
-}
-
-// processOutboxLoop is the main processing loop for an outbox worker.
-func (e *PostgresMapBroker) processOutboxLoop(ctx context.Context, shardID int, conn *pgxpool.Conn, cursor int64) error {
-	pollInterval := e.conf.Outbox.PollInterval
-
-	// Pre-allocate reusable batch buffer — only metas (internal) is reused across batches.
-	allocHint := e.conf.Outbox.BatchSize
-	if allocHint > 1001 {
-		allocHint = 1001
-	}
-	buf := &outboxBatchBuf{
-		metas: make([]outboxMeta, 0, allocHint),
-	}
-
-	for {
-		select {
-		case <-e.closeCh:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		// Process a batch of stream entries
-		processed, newCursor, err := e.processOutboxBatch(ctx, shardID, cursor, buf)
-		if err != nil {
-			return fmt.Errorf("process batch: %w", err)
-		}
-		if newCursor > cursor {
-			cursor = newCursor
-		}
-
-		// If we processed a full batch, immediately try again (more may be waiting)
-		if processed >= e.conf.Outbox.BatchSize {
-			continue
-		}
-
-		// Otherwise, wait before polling again
-		select {
-		case <-e.closeCh:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(pollInterval):
-		}
-	}
-}
-
-// outboxMeta holds per-row metadata not captured in Publication.
-// String/byte fields reference arena memory — no per-field heap allocation.
-type outboxMeta struct {
-	id           int64
-	channel      string
-	epoch        string
-	previousData []byte
-}
-
-// outboxBatchBuf holds reusable buffers for processOutboxBatch. Only metas
-// (internal metadata) is reused across batches. pubBacking and infoBacking are
-// allocated fresh each batch because handlers may retain *Publication pointers
-// asynchronously (e.g. cachedEventHandler.BufferPublication, channelMedium queue).
-type outboxBatchBuf struct {
-	metas []outboxMeta
-}
-
-// reset clears metas while retaining capacity.
-// clear() zeroes struct fields so old arena-backed strings/bytes don't pin memory.
-func (b *outboxBatchBuf) reset() {
-	clear(b.metas[:cap(b.metas)])
-	b.metas = b.metas[:0]
-}
-
-// processOutboxBatch fetches and processes a batch of stream entries using cursor-based delivery.
-// Uses RawValues + byteArena to avoid per-row heap allocations from pgx Scan.
-// The buf parameter provides reusable backing slices — allocated once in processOutboxLoop.
-func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, shardID int, cursor int64, buf *outboxBatchBuf) (int, int64, error) {
-	batchSize := e.conf.Outbox.BatchSize
-
-	rows, err := e.pool.Query(ctx, fmt.Sprintf(`
-		SELECT id, shard_id, channel, channel_offset, epoch, key, data, tags, removed, score,
-			   client_id, user_id, conn_info, chan_info, previous_data
-		FROM %s
-		WHERE shard_id = $1 AND id > $2
-		ORDER BY id
-		LIMIT $3
-	`, e.names.stream), shardID, cursor, batchSize)
+// ensurePartitionedStream converts the stream table to partitioned if needed.
+func (e *PostgresMapBroker) ensurePartitionedStream(ctx context.Context) error {
+	// Check if table is already partitioned
+	var isPartitioned bool
+	err := e.pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM pg_partitioned_table
+			WHERE partrelid = $1::regclass
+		)
+	`, e.names.stream).Scan(&isPartitioned)
 	if err != nil {
-		return 0, cursor, fmt.Errorf("query stream: %w", err)
+		// If the table doesn't exist as partitioned, we need to set it up
+		isPartitioned = false
 	}
 
-	buf.reset()
-	arena := byteArena{}
-	// pubBacking and infoBacking are allocated fresh each batch (not reused) because
-	// handlers may retain *Publication pointers after HandlePublication returns
-	// (e.g. cachedEventHandler.BufferPublication, channelMedium async queue).
-	allocHint := batchSize
-	if allocHint > 1001 {
-		allocHint = 1001
-	}
-	pubBacking := make([]Publication, 0, allocHint)
-	infoBacking := make([]ClientInfo, 0, allocHint/4+1)
-
-	var maxID int64
-
-	// Use RawValues + arena to avoid per-row allocations (same pattern as ReadState/ReadStream).
-	// Column order: id(0), shard_id(1), channel(2), channel_offset(3), epoch(4),
-	//              key(5), data(6), tags(7), removed(8), score(9),
-	//              client_id(10), user_id(11), conn_info(12), chan_info(13), previous_data(14).
-	for rows.Next() {
-		raw := rows.RawValues()
-
-		id := pgRawInt64(raw[0])
-		if id > maxID {
-			maxID = id
-		}
-
-		pubBacking = append(pubBacking, Publication{})
-		p := &pubBacking[len(pubBacking)-1]
-
-		p.Offset = pgRawUint64(raw[3])
-		p.Key = pgRawString(&arena, raw[5])
-		p.Data = pgRawBytes(&arena, raw[6])
-		p.Tags = pgRawJSONBMap(raw[7])
-		p.Removed = pgRawBool(raw[8])
-		p.Score = pgRawInt64(raw[9])
-		if raw[10] != nil {
-			infoBacking = append(infoBacking, ClientInfo{
-				ClientID: pgRawString(&arena, raw[10]),
-				UserID:   pgRawString(&arena, raw[11]),
-				ConnInfo: pgRawBytes(&arena, raw[12]),
-				ChanInfo: pgRawBytes(&arena, raw[13]),
-			})
-			p.Info = &infoBacking[len(infoBacking)-1]
-		}
-
-		m := outboxMeta{
-			id:           id,
-			channel:      pgRawString(&arena, raw[2]),
-			epoch:        pgRawString(&arena, raw[4]),
-			previousData: pgRawBytes(&arena, raw[14]),
-		}
-		buf.metas = append(buf.metas, m)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return 0, cursor, fmt.Errorf("iterate rows: %w", err)
-	}
-
-	if len(buf.metas) == 0 {
-		return 0, cursor, nil
-	}
-
-	// Deliver each entry. Epoch is NOT set on Publication — it travels only in
-	// StreamPosition (passed to HandlePublication) and PublishOptions (for
-	// multi-node broker fan-out).
-	for i := range buf.metas {
-		m := &buf.metas[i]
-		pub := &pubBacking[i]
-		streamPos := StreamPosition{Offset: pub.Offset, Epoch: m.epoch}
-
-		var prevPub *Publication
-		useDelta := len(m.previousData) > 0
-		if useDelta {
-			prevPub = &Publication{Data: m.previousData}
-		}
-
-		if e.conf.Broker != nil {
-			_, err := e.conf.Broker.Publish(m.channel, pub.Data, PublishOptions{
-				ClientInfo: pub.Info,
-				Key:        pub.Key,
-				Removed:    pub.Removed,
-				Score:      pub.Score,
-				Tags:       pub.Tags,
-				Offset:     pub.Offset,
-				Epoch:      m.epoch,
-			})
-			if err != nil {
-				e.logError("outbox worker: broker publish", err, shardID)
+	if !isPartitioned {
+		// Drop and recreate as partitioned table (only safe for fresh DB).
+		// For existing deployments, manual migration would be needed.
+		_, err := e.pool.Exec(ctx, fmt.Sprintf(`
+			DROP TABLE IF EXISTS %s CASCADE;
+			CREATE TABLE %s (
+				id              BIGSERIAL,
+				channel         TEXT NOT NULL,
+				channel_offset  BIGINT NOT NULL,
+				epoch           TEXT NOT NULL DEFAULT '',
+				key             TEXT NOT NULL,
+				data            %s,
+				tags            JSONB,
+				client_id       TEXT,
+				user_id         TEXT,
+				conn_info       %s,
+				chan_info        %s,
+				subscribed_at   TIMESTAMPTZ,
+				removed         BOOLEAN DEFAULT FALSE,
+				score           BIGINT,
+				previous_data   %s,
+				created_at      TIMESTAMPTZ DEFAULT NOW(),
+				shard_id        SMALLINT NOT NULL DEFAULT 0,
+				PRIMARY KEY (id, created_at)
+			) PARTITION BY RANGE (created_at);
+			CREATE INDEX IF NOT EXISTS %s_channel_offset_idx ON %s (channel, channel_offset);
+			CREATE INDEX IF NOT EXISTS %s_channel_id_idx ON %s (channel, id DESC);
+			CREATE INDEX IF NOT EXISTS %s_shard_id_idx ON %s (shard_id, id);
+		`, e.names.stream, e.names.stream,
+			e.dataType(), e.dataType(), e.dataType(), e.dataType(),
+			e.names.stream, e.names.stream,
+			e.names.stream, e.names.stream,
+			e.names.stream, e.names.stream,
+		))
+		if err != nil {
+			return &SchemaError{
+				Object: SchemaObject{Type: "table", Name: e.names.stream},
+				Op:     "create",
+				Err:    fmt.Errorf("create partitioned stream: %w", err),
 			}
-		} else if e.eventHandler != nil {
-			_ = e.eventHandler.HandlePublication(m.channel, pub, streamPos, useDelta, prevPub)
+		}
+
+		// Re-create the publish/remove/expire functions since they reference the stream table.
+		schemaSQL := postgresSchemaJSONBSQL
+		if e.conf.BinaryData {
+			schemaSQL = postgresSchemaBinarySQL
+		}
+		// Extract only the function definitions (skip CREATE TABLE IF NOT EXISTS lines).
+		if _, err := e.pool.Exec(ctx, schemaSQL); err != nil {
+			return &SchemaError{
+				Object: SchemaObject{Type: "function", Name: ""},
+				Op:     "create",
+				Err:    fmt.Errorf("recreate functions after partitioning: %w", err),
+			}
 		}
 	}
 
-	// Advance cursor.
-	_, err = e.pool.Exec(ctx, fmt.Sprintf(
-		`UPDATE %s SET last_processed_id = $1, updated_at = NOW()
-		 WHERE shard_id = $2`, e.names.outboxCursor), maxID, shardID)
-	if err != nil {
-		return 0, cursor, fmt.Errorf("advance cursor: %w", err)
-	}
+	// Ensure lookahead partitions exist
+	return e.ensureLookaheadPartitions(ctx)
+}
 
-	return len(buf.metas), maxID, nil
+func (e *PostgresMapBroker) dataType() string {
+	if e.conf.BinaryData {
+		return "BYTEA"
+	}
+	return "JSONB"
+}
+
+func (e *PostgresMapBroker) ensureLookaheadPartitions(ctx context.Context) error {
+	now := time.Now().UTC()
+	for d := 0; d <= e.conf.PartitionLookaheadDays; d++ {
+		day := now.AddDate(0, 0, d)
+		nextDay := day.AddDate(0, 0, 1)
+		partName := fmt.Sprintf("%s_%s", e.names.stream, day.Format("2006_01_02"))
+		_, err := e.pool.Exec(ctx, fmt.Sprintf(
+			`CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM ('%s') TO ('%s')`,
+			partName, e.names.stream,
+			day.Format("2006-01-02"), nextDay.Format("2006-01-02"),
+		))
+		if err != nil {
+			return &SchemaError{
+				Object: SchemaObject{Type: "table", Name: partName},
+				Op:     "create",
+				Err:    err,
+			}
+		}
+	}
+	return nil
+}
+
+func (e *PostgresMapBroker) dropOldPartitions(ctx context.Context) {
+	cutoff := time.Now().UTC().AddDate(0, 0, -e.conf.PartitionRetentionDays)
+
+	// List child partitions via pg_inherits
+	rows, err := e.pool.Query(ctx, `
+		SELECT c.relname
+		FROM pg_inherits i
+		JOIN pg_class c ON c.oid = i.inhrelid
+		JOIN pg_class p ON p.oid = i.inhparent
+		WHERE p.relname = $1
+	`, e.names.stream)
+	if err != nil {
+		e.logErrorMsg("error listing partitions for cleanup", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var partName string
+		if err := rows.Scan(&partName); err != nil {
+			continue
+		}
+		// Parse date from partition name suffix: {stream}_{YYYY}_{MM}_{DD}
+		parts := strings.Split(partName, "_")
+		if len(parts) < 3 {
+			continue
+		}
+		dateStr := strings.Join(parts[len(parts)-3:], "-")
+		partDate, err := time.Parse("2006-01-02", dateStr)
+		if err != nil {
+			continue
+		}
+		if partDate.Before(cutoff) {
+			_, err := e.pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", partName))
+			if err != nil {
+				e.logErrorMsg("error dropping old partition "+partName, err)
+			}
+		}
+	}
+}
+
+// runPartitionWorker manages partition creation and cleanup.
+func (e *PostgresMapBroker) runPartitionWorker() {
+	ticker := time.NewTicker(e.conf.CleanupInterval)
+	defer ticker.Stop()
+	ctx := e.cancelCtx
+
+	for {
+		select {
+		case <-e.closeCh:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := e.ensureLookaheadPartitions(ctx); err != nil {
+				e.logErrorMsg("error ensuring lookahead partitions", err)
+			}
+			e.dropOldPartitions(ctx)
+		}
+	}
 }

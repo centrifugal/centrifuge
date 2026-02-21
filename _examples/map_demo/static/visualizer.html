@@ -854,8 +854,8 @@ function updateInfoPanel() {
     } else {
         document.getElementById('syncTimeDisplay').textContent = '-';
     }
-    document.getElementById('epochDisplay').textContent = lastEpoch || '-';
-    document.getElementById('offsetDisplay').textContent = lastOffset != null ? lastOffset : '-';
+    document.getElementById('epochDisplay').textContent = lastEpoch !== null ? (lastEpoch === '' ? '""' : lastEpoch) : '-';
+    document.getElementById('offsetDisplay').textContent = lastOffset !== null ? lastOffset : '-';
     document.getElementById('recoveredDisplay').textContent = lastRecovered != null ? String(lastRecovered) : '-';
 
     const keysDiv = document.getElementById('stateKeys');
@@ -943,8 +943,9 @@ window.__wsInterceptor.onMessage = function(msg) {
         currentPhase = phase;
 
         if (s.id) subId = s.id;
-        if (s.epoch) lastEpoch = s.epoch;
-        if (s.offset != null) lastOffset = s.offset;
+        // Protobuf omits zero/empty default values, so treat undefined as the default.
+        lastEpoch = s.epoch !== undefined ? s.epoch : '';
+        lastOffset = s.offset !== undefined ? s.offset : 0;
         if (s.recovered != null) lastRecovered = s.recovered;
 
         const stateCount = s.state ? s.state.length : 0;

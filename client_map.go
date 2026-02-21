@@ -588,6 +588,7 @@ func (c *Client) handleMapTransitionToLive(
 				},
 				Limit: readLimit,
 			},
+			AllowCached: true,
 		}
 
 		streamResult, err := c.node.MapStreamRead(c.ctx, channel, streamOpts)
@@ -605,6 +606,18 @@ func (c *Client) handleMapTransitionToLive(
 		}
 		pubs := streamResult.Publications
 		streamPos = streamResult.Position
+
+		// If recovering from empty epoch but server now has a real epoch, we cannot
+		// validate whether a Clear happened in between — force full re-subscribe.
+		// The client SDK stores epoch from the subscribe response and never updates
+		// it from publication deliveries. So on reconnect it sends epoch="", which
+		// would bypass epoch validation and could mask a Clear event.
+		if params.isRecovery && params.sincePosition.Epoch == "" && streamPos.Epoch != "" {
+			c.pubSubSync.StopBuffering(channel)
+			_ = c.node.removeSubscription(channel, c)
+			c.cleanupMapSubscribing(channel)
+			return ErrorUnrecoverablePosition
+		}
 
 		// If we got more than the limit, client is too far behind.
 		if streamLimit > 0 && len(pubs) > streamLimit {
@@ -908,6 +921,7 @@ func (c *Client) handleMapStreamPhase(
 			},
 			Limit: limit,
 		},
+		AllowCached: true,
 	}
 
 	// Read stream.
