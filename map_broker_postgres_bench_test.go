@@ -607,9 +607,19 @@ func BenchmarkPostgresMapBroker_OutboxThroughput(b *testing.B) {
 	// Track deliveries
 	var delivered int64
 	doneCh := make(chan struct{})
+	var mu sync.Mutex
+	perChannelOffsets := make(map[string]uint64)
 
 	broker, cleanup := setupPostgresMapBrokerOutboxBenchWithHandler(b, &testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			mu.Lock()
+			o, ok := perChannelOffsets[ch]
+			if ok && sp.Offset != o+1 {
+				b.Logf("offset %d != %d", sp.Offset, o+1)
+			}
+			perChannelOffsets[ch] = sp.Offset
+			mu.Unlock()
+
 			if atomic.AddInt64(&delivered, 1) >= int64(b.N) {
 				select {
 				case <-doneCh:
@@ -664,7 +674,7 @@ func BenchmarkPostgresMapBroker_OutboxThroughput(b *testing.B) {
 	// Wait for all deliveries
 	select {
 	case <-doneCh:
-	case <-time.After(60 * time.Second):
+	case <-time.After(10 * time.Second):
 		b.Fatalf("timeout: only delivered %d/%d", atomic.LoadInt64(&delivered), b.N)
 	}
 

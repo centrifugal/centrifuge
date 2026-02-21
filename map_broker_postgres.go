@@ -2,7 +2,9 @@ package centrifuge
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,13 +25,57 @@ var postgresSchemaJSONBSQL string
 //go:embed internal/postgres_sql/schema_binary.sql
 var postgresSchemaBinarySQL string
 
+// execSchemaWithRetry executes idempotent schema SQL, retrying on transient
+// conflicts: deadlock (40P01) and "tuple concurrently updated" (XX000).
+// The latter occurs when concurrent CREATE OR REPLACE FUNCTION statements
+// race on the same function (e.g. during rolling deploys).
+func (e *PostgresMapBroker) execSchemaWithRetry(ctx context.Context, sql string) error {
+	const maxRetries = 3
+	for attempt := range maxRetries {
+		_, err := e.pool.Exec(ctx, sql)
+		if err == nil {
+			return nil
+		}
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && (pgErr.Code == "40P01" || pgErr.Code == "XX000") && attempt < maxRetries-1 {
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		if errors.As(err, &pgErr) {
+			return &SchemaError{
+				Object: SchemaObject{Type: "schema", Name: pgErr.TableName},
+				Op:     "create",
+				Err:    err,
+			}
+		}
+		return &SchemaError{
+			Object: SchemaObject{Type: "schema", Name: ""},
+			Op:     "create",
+			Err:    err,
+		}
+	}
+	return nil
+}
+
+// splitSchemaSQL splits the schema SQL into DDL (tables+indexes) and function
+// definitions. They must be executed as separate transactions to avoid deadlocks
+// with concurrent function executions during rolling deploys.
+func splitSchemaSQL(sql string) (ddl, funcs string) {
+	const marker = "CREATE OR REPLACE FUNCTION"
+	i := strings.Index(sql, marker)
+	if i < 0 {
+		return sql, ""
+	}
+	return sql[:i], sql[i:]
+}
+
 // pgNames holds precomputed table/function names based on BinaryData mode.
 // When BinaryData=false (default): prefix = "cf_map_"
 // When BinaryData=true:            prefix = "cf_binary_map_"
 type pgNames struct {
-	stream, state, meta, idempotency string // table names
-	publish, remove, expireKeys      string // function names
-	notifyChannel                    string // pg_notify channel name
+	stream, state, meta, idempotency, shardLock, schemaVersion string // table names
+	publish, remove, expireKeys                                string // function names
+	notifyChannel                                              string // pg_notify channel name
 }
 
 func newPgNames(binary bool) pgNames {
@@ -42,6 +88,8 @@ func newPgNames(binary bool) pgNames {
 		state:         p + "state",
 		meta:          p + "meta",
 		idempotency:   p + "idempotency",
+		shardLock:     p + "shard_lock",
+		schemaVersion: p + "schema_version",
 		publish:       p + "publish",
 		remove:        p + "remove",
 		expireKeys:    p + "expire_keys",
@@ -146,6 +194,11 @@ type PostgresMapBrokerConfig struct {
 	// When false (default), outbox worker uses PollInterval-based polling only.
 	// When true, a listener goroutine wakes the worker immediately on new entries.
 	UseNotify bool
+
+	// SkipShardLock disables per-shard serialization of stream inserts.
+	// Default false: shard locking ensures outbox workers never miss rows.
+	// Set to true when using WAL-based delivery (future).
+	SkipShardLock bool
 
 	// ReadReplicaConnStrings is an optional list of read replica connection strings.
 	// When set, ReadState queries with AllowCached=true are distributed
@@ -330,13 +383,9 @@ func (e *PostgresMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 		go e.runNotificationListener()
 	}
 
-	// Start outbox workers: one per shard (or per replica if replicas configured).
-	// Each worker handles its subset of shards for parallel delivery.
-	numWorkers := e.conf.NumShards
-	if len(e.readPools) > 0 {
-		numWorkers = len(e.readPools)
-	}
-	for i := 0; i < numWorkers; i++ {
+	// Start outbox workers: one per shard. Per-shard serialization (FOR UPDATE
+	// on shard_lock) + one-shard-per-worker eliminates BIGSERIAL gaps.
+	for i := 0; i < e.conf.NumShards; i++ {
 		go e.runOutboxWorker(i)
 	}
 
@@ -393,25 +442,77 @@ func (e *SchemaError) Unwrap() error {
 //
 // This method is safe to call multiple times — all DDL uses
 // CREATE IF NOT EXISTS / CREATE OR REPLACE.
+//
+// To avoid DDL lock conflicts during rolling deploys (where concurrent nodes
+// are actively publishing), EnsureSchema computes a hash of the schema SQL +
+// shard configuration and stores it in a version table. On subsequent calls,
+// if the hash matches, all DDL is skipped entirely — no catalog locks taken.
 func (e *PostgresMapBroker) EnsureSchema(ctx context.Context) error {
 	schemaSQL := postgresSchemaJSONBSQL
 	if e.conf.BinaryData {
 		schemaSQL = postgresSchemaBinarySQL
 	}
 
-	if _, err := e.pool.Exec(ctx, schemaSQL); err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			return &SchemaError{
-				Object: SchemaObject{Type: "schema", Name: pgErr.TableName},
-				Op:     "create",
-				Err:    err,
-			}
+	// Compute a version hash from schema SQL + shard count.
+	h := sha256.Sum256([]byte(fmt.Sprintf("%s\n%d", schemaSQL, e.conf.NumShards)))
+	versionHash := hex.EncodeToString(h[:16])
+
+	// Quick check: if schema version matches, nothing changed — skip all DDL.
+	var currentHash string
+	err := e.pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT version_hash FROM %s WHERE id = 1`, e.names.schemaVersion,
+	)).Scan(&currentHash)
+	if err == nil && currentHash == versionHash {
+		return nil
+	}
+
+	// Schema needs update — run full DDL + functions.
+	// Split into DDL (tables+indexes) and functions, executed as separate
+	// transactions to reduce lock scope. Each part retries on deadlock/conflict.
+	ddlSQL, funcSQL := splitSchemaSQL(schemaSQL)
+	for _, sql := range []string{ddlSQL, funcSQL} {
+		if sql == "" {
+			continue
 		}
+		if err := e.execSchemaWithRetry(ctx, sql); err != nil {
+			return err
+		}
+	}
+
+	// Create shard_lock table in a separate transaction from schema SQL above.
+	// This avoids deadlocks during rolling deploys: the schema SQL contains
+	// CREATE OR REPLACE FUNCTION (needs AccessExclusiveLock on function objects),
+	// and concurrent transactions execute those functions while holding FOR UPDATE
+	// on shard_lock. Keeping them in separate transactions breaks the lock cycle.
+	if _, err := e.pool.Exec(ctx, fmt.Sprintf(
+		`CREATE TABLE IF NOT EXISTS %s (shard_id SMALLINT PRIMARY KEY)`,
+		e.names.shardLock)); err != nil {
 		return &SchemaError{
-			Object: SchemaObject{Type: "schema", Name: ""},
+			Object: SchemaObject{Type: "table", Name: e.names.shardLock},
 			Op:     "create",
 			Err:    err,
+		}
+	}
+
+	// Populate shard_lock rows (idempotent). Insert new rows for increases,
+	// delete excess rows for decreases. This makes shard_lock the single source
+	// of truth for shard count — SQL functions auto-derive it via COUNT(*).
+	if _, err := e.pool.Exec(ctx, fmt.Sprintf(
+		`INSERT INTO %s (shard_id) SELECT generate_series(0, $1 - 1) ON CONFLICT DO NOTHING`,
+		e.names.shardLock), e.conf.NumShards); err != nil {
+		return &SchemaError{
+			Object: SchemaObject{Type: "table", Name: e.names.shardLock},
+			Op:     "create",
+			Err:    fmt.Errorf("populate shard_lock: %w", err),
+		}
+	}
+	if _, err := e.pool.Exec(ctx, fmt.Sprintf(
+		`DELETE FROM %s WHERE shard_id >= $1`,
+		e.names.shardLock), e.conf.NumShards); err != nil {
+		return &SchemaError{
+			Object: SchemaObject{Type: "table", Name: e.names.shardLock},
+			Op:     "create",
+			Err:    fmt.Errorf("trim shard_lock: %w", err),
 		}
 	}
 
@@ -419,6 +520,23 @@ func (e *PostgresMapBroker) EnsureSchema(ctx context.Context) error {
 		if err := e.ensurePartitionedStream(ctx); err != nil {
 			return err
 		}
+	}
+
+	// Store the version hash. Create the table first (cheap, no conflict with DML).
+	if _, err := e.pool.Exec(ctx, fmt.Sprintf(
+		`CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY, version_hash TEXT NOT NULL)`,
+		e.names.schemaVersion)); err != nil {
+		return &SchemaError{
+			Object: SchemaObject{Type: "table", Name: e.names.schemaVersion},
+			Op:     "create",
+			Err:    err,
+		}
+	}
+	if _, err := e.pool.Exec(ctx, fmt.Sprintf(
+		`INSERT INTO %s (id, version_hash) VALUES (1, $1) ON CONFLICT (id) DO UPDATE SET version_hash = $1`,
+		e.names.schemaVersion), versionHash); err != nil {
+		// Non-fatal: schema was created successfully, just version tracking failed.
+		e.logErrorMsg("schema version update", err)
 	}
 
 	return nil
@@ -574,7 +692,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 
 	err = e.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset
-		FROM %s($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::interval, $12::interval, $13, $14, $15, $16, $17, $18, $19, $20::interval, $21, $22, $23, $24)
+		FROM %s($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::interval, $12::interval, $13, $14, $15, $16, $17, $18, $19, $20::interval, $21, $22, $23, $24, $25)
 	`, e.names.publish),
 		ch, key, opts.Data, tagsJSON,
 		clientID, userID, connInfo, chanInfo, publishedAt,
@@ -582,7 +700,7 @@ func (e *PostgresMapBroker) Publish(ctx context.Context, ch string, key string, 
 		expectedOffset, score, nil, nil, // p_version, p_version_epoch (unused, per-key version used instead)
 		keyVersion, keyVersionEpoch,
 		idempotencyKey, idempotencyTTL, opts.RefreshTTLOnSuppress,
-		useDelta, numShards, streamData,
+		useDelta, numShards, streamData, e.conf.SkipShardLock,
 	).Scan(&id, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset)
 
 	if err != nil {
@@ -669,10 +787,10 @@ func (e *PostgresMapBroker) Remove(ctx context.Context, ch string, key string, o
 	var clientID, userID *string
 	err = e.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset
-		FROM %s($1, $2, $3, $4, $5, $6::interval, $7::interval, $8, $9)
+		FROM %s($1, $2, $3, $4, $5, $6::interval, $7::interval, $8, $9, $10)
 	`, e.names.remove),
 		ch, key, clientID, userID, idempotencyKey, idempotencyTTL, metaTTL,
-		numShards, expectedOffset,
+		numShards, expectedOffset, e.conf.SkipShardLock,
 	).Scan(&id, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset)
 
 	if err != nil {
@@ -1363,29 +1481,25 @@ func (e *PostgresMapBroker) runNotificationListener() {
 // Outbox Worker Implementation
 // ============================================================================
 
-// outboxWorkerConfig returns (pool, shardIDs) for outbox worker #i.
-// Without replicas: NumShards workers, each handles shards where shard_id % NumShards == i.
-// With replicas: one worker per replica, each handles shards where shard_id % len(replicas) == i.
+// outboxWorkerConfig returns (pool, shardIDs) for outbox worker #workerIdx.
+// Each worker handles exactly one shard. With replicas, the worker reads from
+// readPools[workerIdx % len(readPools)], matching getReadPool's routing.
 func (e *PostgresMapBroker) outboxWorkerConfig(workerIdx int) (*pgxpool.Pool, []int) {
 	pool := e.pool
-	numWorkers := e.conf.NumShards
 	if len(e.readPools) > 0 {
-		numWorkers = len(e.readPools)
-		pool = e.readPools[workerIdx]
+		pool = e.readPools[workerIdx%len(e.readPools)]
 	}
-	var shards []int
-	for s := 0; s < e.conf.NumShards; s++ {
-		if s%numWorkers == workerIdx {
-			shards = append(shards, s)
-		}
-	}
-	return pool, shards
+	return pool, []int{workerIdx}
 }
 
 // runOutboxWorker polls the stream table for new entries and delivers them.
-func (e *PostgresMapBroker) runOutboxWorker(replicaIdx int) {
+//
+// Per-shard serialization (FOR UPDATE on shard_lock) combined with
+// one-shard-per-worker guarantees that BIGSERIAL IDs within a shard are
+// committed in order — no gaps possible. This allows a simple maxID cursor.
+func (e *PostgresMapBroker) runOutboxWorker(workerIdx int) {
 	ctx := e.cancelCtx
-	pool, shards := e.outboxWorkerConfig(replicaIdx)
+	pool, shards := e.outboxWorkerConfig(workerIdx)
 
 	// Initialize cursor: start from current max ID so we only get future entries.
 	var cursor int64
@@ -1398,7 +1512,7 @@ func (e *PostgresMapBroker) runOutboxWorker(replicaIdx int) {
 		e.logErrorMsg("outbox worker: init cursor", err)
 		// Retry after delay
 		time.Sleep(time.Second)
-		go e.runOutboxWorker(replicaIdx)
+		go e.runOutboxWorker(workerIdx)
 		return
 	}
 
@@ -1422,10 +1536,10 @@ func (e *PostgresMapBroker) runOutboxWorker(replicaIdx int) {
 		default:
 		}
 
-		// Inner loop: process batches until no data found.
+		// Deliver batches until idle.
 		idle := true
 		for {
-			processed, newCursor, err := e.processOutboxBatch(ctx, pool, cursor, shards, buf)
+			processed, maxID, err := e.processOutboxBatch(ctx, pool, cursor, shards, buf)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
@@ -1433,11 +1547,11 @@ func (e *PostgresMapBroker) runOutboxWorker(replicaIdx int) {
 				e.logErrorMsg("outbox worker: process batch", err)
 				break
 			}
-			if newCursor > cursor {
-				cursor = newCursor
-			}
 			if processed == 0 {
 				break
+			}
+			if maxID > cursor {
+				cursor = maxID
 			}
 			idle = false
 		}
@@ -1490,32 +1604,21 @@ func (b *outboxBatchBuf) reset() {
 	b.metas = b.metas[:0]
 }
 
-// processOutboxBatch fetches and processes a batch of stream entries.
+// processOutboxBatch fetches and processes a batch of stream entries for the
+// given shards. Per-shard serialization (FOR UPDATE on shard_lock) guarantees
+// IDs within a shard are committed in order, so a simple cursor is safe.
 // Uses RawValues + byteArena to avoid per-row heap allocations from pgx Scan.
 func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, pool *pgxpool.Pool, cursor int64, shardIDs []int, buf *outboxBatchBuf) (int, int64, error) {
 	batchSize := e.conf.Outbox.BatchSize
 
-	var rows pgx.Rows
-	var err error
-	if shardIDs != nil {
-		rows, err = pool.Query(ctx, fmt.Sprintf(`
-			SELECT id, shard_id, channel, channel_offset, epoch, key, data, tags, removed, score,
-				   client_id, user_id, conn_info, chan_info, previous_data
-			FROM %s
-			WHERE id > $1 AND shard_id = ANY($2)
-			ORDER BY id
-			LIMIT $3
-		`, e.names.stream), cursor, shardIDs, batchSize)
-	} else {
-		rows, err = pool.Query(ctx, fmt.Sprintf(`
-			SELECT id, shard_id, channel, channel_offset, epoch, key, data, tags, removed, score,
-				   client_id, user_id, conn_info, chan_info, previous_data
-			FROM %s
-			WHERE id > $1
-			ORDER BY id
-			LIMIT $2
-		`, e.names.stream), cursor, batchSize)
-	}
+	rows, err := pool.Query(ctx, fmt.Sprintf(`
+		SELECT id, shard_id, channel, channel_offset, epoch, key, data, tags, removed, score,
+			   client_id, user_id, conn_info, chan_info, previous_data
+		FROM %s
+		WHERE id > $1 AND shard_id = ANY($2)
+		ORDER BY id
+		LIMIT $3
+	`, e.names.stream), cursor, shardIDs, batchSize)
 	if err != nil {
 		return 0, cursor, fmt.Errorf("query stream: %w", err)
 	}
@@ -1683,8 +1786,8 @@ func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 		// duplicate delivery.
 		rows, err := e.pool.Query(ctx, fmt.Sprintf(`
 			SELECT out_channel, out_key, out_offset, out_epoch
-			FROM %s($1, $2, $3::interval, $4)
-		`, e.names.expireKeys), 1000, numShards, metaTTL, ch)
+			FROM %s($1, $2, $3::interval, $4, $5)
+		`, e.names.expireKeys), 1000, numShards, metaTTL, ch, e.conf.SkipShardLock)
 		if err != nil {
 			e.node.logger.log(newErrorLogEntry(err, "error in batch key expiration", map[string]any{"channel": ch}))
 			continue

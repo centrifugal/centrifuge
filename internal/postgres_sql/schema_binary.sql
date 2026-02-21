@@ -117,8 +117,9 @@ CREATE OR REPLACE FUNCTION cf_binary_map_publish(
     p_idempotency_ttl INTERVAL DEFAULT NULL,
     p_refresh_ttl_on_suppress BOOLEAN DEFAULT FALSE,
     p_use_delta BOOLEAN DEFAULT FALSE,
-    p_num_shards INTEGER DEFAULT 16,
-    p_stream_data BYTEA DEFAULT NULL
+    p_num_shards INTEGER DEFAULT NULL,
+    p_stream_data BYTEA DEFAULT NULL,
+    p_skip_shard_lock BOOLEAN DEFAULT FALSE
 ) RETURNS TABLE(
     result_id BIGINT,
     channel_offset BIGINT,
@@ -140,8 +141,18 @@ DECLARE
     v_current_version_epoch TEXT;
     v_shard_id INTEGER;
 BEGIN
+    -- Auto-derive num_shards from shard_lock table when not provided.
+    IF p_num_shards IS NULL THEN
+        SELECT COUNT(*)::INTEGER INTO p_num_shards FROM cf_binary_map_shard_lock;
+    END IF;
+
     -- Calculate shard_id from channel hash
     v_shard_id := abs(hashtext(p_channel)) % p_num_shards;
+
+    -- 0. Per-shard serialization lock (lock order: shard → meta → state)
+    IF NOT p_skip_shard_lock THEN
+        PERFORM 1 FROM cf_binary_map_shard_lock WHERE shard_id = v_shard_id FOR UPDATE;
+    END IF;
 
     -- 1. Get or create stream metadata
     INSERT INTO cf_binary_map_meta (channel, top_offset, epoch, updated_at)
@@ -283,8 +294,9 @@ CREATE OR REPLACE FUNCTION cf_binary_map_publish_strict(
     p_idempotency_ttl INTERVAL DEFAULT NULL,
     p_refresh_ttl_on_suppress BOOLEAN DEFAULT FALSE,
     p_use_delta BOOLEAN DEFAULT FALSE,
-    p_num_shards INTEGER DEFAULT 16,
-    p_stream_data BYTEA DEFAULT NULL
+    p_num_shards INTEGER DEFAULT NULL,
+    p_stream_data BYTEA DEFAULT NULL,
+    p_skip_shard_lock BOOLEAN DEFAULT FALSE
 ) RETURNS TABLE(
     result_id BIGINT,
     channel_offset BIGINT,
@@ -301,7 +313,7 @@ BEGIN
         p_expected_offset, p_score, p_version, p_version_epoch,
         p_key_version, p_key_version_epoch,
         p_idempotency_key, p_idempotency_ttl, p_refresh_ttl_on_suppress,
-        p_use_delta, p_num_shards, p_stream_data
+        p_use_delta, p_num_shards, p_stream_data, p_skip_shard_lock
     );
 
     IF v_result.suppressed THEN
@@ -341,8 +353,9 @@ CREATE OR REPLACE FUNCTION cf_binary_map_remove(
     p_idempotency_key TEXT DEFAULT NULL,
     p_idempotency_ttl INTERVAL DEFAULT NULL,
     p_meta_ttl INTERVAL DEFAULT NULL,
-    p_num_shards INTEGER DEFAULT 16,
-    p_expected_offset BIGINT DEFAULT NULL
+    p_num_shards INTEGER DEFAULT NULL,
+    p_expected_offset BIGINT DEFAULT NULL,
+    p_skip_shard_lock BOOLEAN DEFAULT FALSE
 ) RETURNS TABLE(
     result_id BIGINT,
     channel_offset BIGINT,
@@ -361,8 +374,18 @@ DECLARE
     v_current_offset BIGINT;
     v_current_data BYTEA;
 BEGIN
+    -- Auto-derive num_shards from shard_lock table when not provided.
+    IF p_num_shards IS NULL THEN
+        SELECT COUNT(*)::INTEGER INTO p_num_shards FROM cf_binary_map_shard_lock;
+    END IF;
+
     -- Calculate shard_id from channel hash
     v_shard_id := abs(hashtext(p_channel)) % p_num_shards;
+
+    -- 0. Per-shard serialization lock (lock order: shard → meta → state)
+    IF NOT p_skip_shard_lock THEN
+        PERFORM 1 FROM cf_binary_map_shard_lock WHERE shard_id = v_shard_id FOR UPDATE;
+    END IF;
 
     -- 1. Get stream metadata
     SELECT top_offset, m.epoch INTO v_offset, v_epoch
@@ -444,8 +467,9 @@ CREATE OR REPLACE FUNCTION cf_binary_map_remove_strict(
     p_idempotency_key TEXT DEFAULT NULL,
     p_idempotency_ttl INTERVAL DEFAULT NULL,
     p_meta_ttl INTERVAL DEFAULT NULL,
-    p_num_shards INTEGER DEFAULT 16,
-    p_expected_offset BIGINT DEFAULT NULL
+    p_num_shards INTEGER DEFAULT NULL,
+    p_expected_offset BIGINT DEFAULT NULL,
+    p_skip_shard_lock BOOLEAN DEFAULT FALSE
 ) RETURNS TABLE(
     result_id BIGINT,
     channel_offset BIGINT,
@@ -457,7 +481,7 @@ BEGIN
     SELECT * INTO v_result FROM cf_binary_map_remove(
         p_channel, p_key, p_client_id, p_user_id,
         p_idempotency_key, p_idempotency_ttl, p_meta_ttl,
-        p_num_shards, p_expected_offset
+        p_num_shards, p_expected_offset, p_skip_shard_lock
     );
 
     IF v_result.suppressed THEN
@@ -470,13 +494,14 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- cf_binary_map_expire_keys: Atomically expire keys that have passed their TTL.
--- Lock ordering: meta FOR UPDATE first, then state FOR UPDATE SKIP LOCKED.
--- This matches publish's lock order (meta → state), preventing deadlocks.
+-- Lock ordering: shard_lock → meta FOR UPDATE → state FOR UPDATE SKIP LOCKED.
+-- This matches publish's lock order (shard → meta → state), preventing deadlocks.
 CREATE OR REPLACE FUNCTION cf_binary_map_expire_keys(
     p_batch_size INT DEFAULT 1000,
-    p_num_shards INTEGER DEFAULT 16,
+    p_num_shards INTEGER DEFAULT NULL,
     p_meta_ttl INTERVAL DEFAULT NULL,
-    p_channel TEXT DEFAULT NULL
+    p_channel TEXT DEFAULT NULL,
+    p_skip_shard_lock BOOLEAN DEFAULT FALSE
 ) RETURNS TABLE(
     out_channel TEXT,
     out_key TEXT,
@@ -492,13 +517,25 @@ DECLARE
     v_processed INT := 0;
     v_notified BOOLEAN := FALSE;
 BEGIN
+    -- Auto-derive num_shards from shard_lock table when not provided.
+    IF p_num_shards IS NULL THEN
+        SELECT COUNT(*)::INTEGER INTO p_num_shards FROM cf_binary_map_shard_lock;
+    END IF;
+
     -- Process one channel at a time to maintain meta→state lock ordering.
     FOR v_channel IN
         SELECT DISTINCT s.channel FROM cf_binary_map_state s
         WHERE s.expires_at IS NOT NULL AND s.expires_at <= NOW()
           AND (p_channel IS NULL OR s.channel = p_channel)
     LOOP
-        -- 1. Lock meta FIRST (same order as publish: meta → state).
+        -- 0. Calculate shard_id and acquire per-shard serialization lock
+        --    (lock order: shard → meta → state).
+        v_shard_id := abs(hashtext(v_channel)) % p_num_shards;
+        IF NOT p_skip_shard_lock THEN
+            PERFORM 1 FROM cf_binary_map_shard_lock WHERE shard_id = v_shard_id FOR UPDATE;
+        END IF;
+
+        -- 1. Lock meta (same order as publish: shard → meta → state).
         SELECT top_offset, m.epoch INTO v_offset, v_epoch
         FROM cf_binary_map_meta m WHERE m.channel = v_channel FOR UPDATE;
 
@@ -507,8 +544,6 @@ BEGIN
               AND expires_at IS NOT NULL AND expires_at <= NOW();
             CONTINUE;
         END IF;
-
-        v_shard_id := abs(hashtext(v_channel)) % p_num_shards;
 
         -- 2. Now lock and process expired state rows (meta already locked).
         FOR rec IN

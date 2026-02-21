@@ -514,7 +514,7 @@ func TestPostgresMapBroker_KeyTTL(t *testing.T) {
 	broker := newTestPostgresMapBroker(t, node)
 
 	ctx := context.Background()
-	channel := "test_key_ttl"
+	channel := fmt.Sprintf("test_key_ttl_%d", time.Now().UnixNano())
 
 	// Publish with short TTL (2s from channel config)
 	_, err := broker.Publish(ctx, channel, "ephemeral", MapPublishOptions{
@@ -1356,6 +1356,8 @@ func dropAllSchemaObjects(ctx context.Context, pool *pgxpool.Pool) {
 		_, _ = pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %sstream CASCADE", prefix))
 		_, _ = pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %sstate CASCADE", prefix))
 		_, _ = pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %smeta CASCADE", prefix))
+		_, _ = pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %sshard_lock CASCADE", prefix))
+		_, _ = pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %sschema_version CASCADE", prefix))
 	}
 }
 
