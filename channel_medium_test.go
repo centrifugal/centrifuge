@@ -25,6 +25,7 @@ func setupChannelMedium(t testing.TB, options ChannelMediumOptions, node nodeSub
 type mockNode struct {
 	handlePublicationFunc func(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error
 	streamTopFunc         func(ch string, historyMetaTTL time.Duration) (StreamPosition, error)
+	mapStreamTopFunc      func(ch string) (StreamPosition, error)
 }
 
 func (m *mockNode) handlePublication(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
@@ -37,6 +38,13 @@ func (m *mockNode) handlePublication(channel string, sp StreamPosition, pub, pre
 func (m *mockNode) streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error) {
 	if m.streamTopFunc != nil {
 		return m.streamTopFunc(ch, historyMetaTTL)
+	}
+	return StreamPosition{}, nil
+}
+
+func (m *mockNode) mapStreamTop(ch string) (StreamPosition, error) {
+	if m.mapStreamTopFunc != nil {
+		return m.mapStreamTopFunc(ch)
 	}
 	return StreamPosition{}, nil
 }
@@ -190,6 +198,80 @@ func TestChannelMediumPositionSyncRetry(t *testing.T) {
 	case <-doneCh:
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "streamTopLatestPubFunc was not called")
+	}
+}
+
+func TestChannelMediumPositionSyncMap(t *testing.T) {
+	// Verify that SharedPositionSync for map channels calls mapStreamTop (not streamTop).
+	options := ChannelMediumOptions{
+		SharedPositionSync: true,
+	}
+	mapStreamTopCalled := make(chan struct{})
+	var closeOnce sync.Once
+	medium := setupChannelMedium(t, options, &mockNode{
+		streamTopFunc: func(ch string, historyMetaTTL time.Duration) (StreamPosition, error) {
+			require.Fail(t, "streamTop should not be called for map channel")
+			return StreamPosition{}, nil
+		},
+		mapStreamTopFunc: func(ch string) (StreamPosition, error) {
+			closeOnce.Do(func() {
+				close(mapStreamTopCalled)
+			})
+			return StreamPosition{Offset: 5, Epoch: "abc"}, nil
+		},
+	})
+	medium.isMap = true
+
+	originalGetter := channelMediumTimeNow
+	channelMediumTimeNow = func() time.Time {
+		return time.Now().Add(time.Hour)
+	}
+	// Position matches — should return true.
+	valid := medium.CheckPosition(time.Second, StreamPosition{Offset: 5, Epoch: "abc"}, time.Second)
+	channelMediumTimeNow = originalGetter
+	require.True(t, valid)
+	select {
+	case <-mapStreamTopCalled:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "mapStreamTopFunc was not called")
+	}
+}
+
+func TestChannelMediumPositionSyncMapMismatch(t *testing.T) {
+	// Verify that SharedPositionSync for map channels detects position mismatch.
+	options := ChannelMediumOptions{
+		SharedPositionSync: true,
+		enableQueue:        true,
+	}
+	insufficientCh := make(chan struct{})
+	var closeOnce sync.Once
+	medium := setupChannelMedium(t, options, &mockNode{
+		handlePublicationFunc: func(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
+			if pub.Offset == math.MaxUint64 {
+				closeOnce.Do(func() {
+					close(insufficientCh)
+				})
+			}
+			return nil
+		},
+		mapStreamTopFunc: func(ch string) (StreamPosition, error) {
+			return StreamPosition{Offset: 10, Epoch: "xyz"}, nil
+		},
+	})
+	medium.isMap = true
+
+	originalGetter := channelMediumTimeNow
+	channelMediumTimeNow = func() time.Time {
+		return time.Now().Add(time.Hour)
+	}
+	// Client has stale position — should return false.
+	valid := medium.CheckPosition(time.Second, StreamPosition{Offset: 5, Epoch: "xyz"}, time.Second)
+	channelMediumTimeNow = originalGetter
+	require.False(t, valid)
+	select {
+	case <-insufficientCh:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "insufficient state was not broadcast")
 	}
 }
 

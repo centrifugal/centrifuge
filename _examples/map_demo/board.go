@@ -58,8 +58,7 @@ func handleBoardCreateHTTP(w http.ResponseWriter, r *http.Request) {
 			p_channel => 'board',
 			p_key => $1,
 			p_data => $2,
-			p_score => $3,
-			p_stream_size => 1000
+			p_score => $3
 		)
 	`, taskID, taskData, score).Scan(
 		&resultID, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset,
@@ -128,8 +127,7 @@ func handleBoardUpdateHTTP(w http.ResponseWriter, r *http.Request) {
 			p_channel => 'board',
 			p_key => $1,
 			p_data => $2,
-			p_score => $3,
-			p_stream_size => 1000
+			p_score => $3
 		)
 	`, req.TaskID, taskData, req.Score).Scan(
 		&resultID, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset,

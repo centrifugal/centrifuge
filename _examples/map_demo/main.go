@@ -37,6 +37,11 @@ func main() {
 	node, err := centrifuge.New(centrifuge.Config{
 		LogLevel:   centrifuge.LogLevelDebug,
 		LogHandler: handleLog,
+		GetChannelMediumOptions: func(channel string) centrifuge.ChannelMediumOptions {
+			return centrifuge.ChannelMediumOptions{
+				SharedPositionSync: true,
+			}
+		},
 		// Map subscription sync protocol configs.
 		MapMinStreamPaginationLimit:  100,  // Minimum limit for stream pagination to prevent excessive round trips.
 		MapMaxImmediateJoinStateSize: 1000, // Max state entries for immediate join (Scenario B).

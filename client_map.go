@@ -607,12 +607,10 @@ func (c *Client) handleMapTransitionToLive(
 		pubs := streamResult.Publications
 		streamPos = streamResult.Position
 
-		// If recovering from empty epoch but server now has a real epoch, we cannot
-		// validate whether a Clear happened in between — force full re-subscribe.
-		// The client SDK stores epoch from the subscribe response and never updates
-		// it from publication deliveries. So on reconnect it sends epoch="", which
-		// would bypass epoch validation and could mask a Clear event.
-		if params.isRecovery && params.sincePosition.Epoch == "" && streamPos.Epoch != "" {
+		// If recovering and the epoch doesn't match, force full re-subscribe.
+		// This covers: empty→real (client never had epoch), real→empty (after MapClear
+		// deleted meta row), and real→different (after Clear + new publications).
+		if params.isRecovery && params.sincePosition.Epoch != streamPos.Epoch {
 			c.pubSubSync.StopBuffering(channel)
 			_ = c.node.removeSubscription(channel, c)
 			c.cleanupMapSubscribing(channel)

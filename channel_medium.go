@@ -60,6 +60,7 @@ type channelMedium struct {
 	channel string
 	node    nodeSubset
 	options ChannelMediumOptions
+	isMap   bool
 
 	mu      sync.RWMutex
 	closeCh chan struct{}
@@ -77,6 +78,7 @@ type channelMedium struct {
 type nodeSubset interface {
 	handlePublication(ch string, sp StreamPosition, pub, prevPub *Publication, localPrevPub *Publication) error
 	streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error)
+	mapStreamTop(ch string) (StreamPosition, error)
 }
 
 func newChannelMedium(channel string, node nodeSubset, options ChannelMediumOptions) (*channelMedium, error) {
@@ -259,7 +261,13 @@ func (c *channelMedium) checkPositionWithRetry(historyMetaTTL time.Duration, cli
 }
 
 func (c *channelMedium) checkPositionOnce(historyMetaTTL time.Duration, clientPosition StreamPosition) (StreamPosition, bool, error) {
-	streamTop, err := c.node.streamTop(c.channel, historyMetaTTL)
+	var streamTop StreamPosition
+	var err error
+	if c.isMap {
+		streamTop, err = c.node.mapStreamTop(c.channel)
+	} else {
+		streamTop, err = c.node.streamTop(c.channel, historyMetaTTL)
+	}
 	if err != nil {
 		return StreamPosition{}, false, err
 	}

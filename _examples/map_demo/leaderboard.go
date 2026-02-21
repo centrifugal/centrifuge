@@ -57,8 +57,6 @@ func handleLeaderboardJoinHTTP(w http.ResponseWriter, r *http.Request) {
 			p_key => $2,
 			p_data => $3,
 			p_score => $4,
-			p_stream_size => 1000,
-			p_stream_ttl => '1 hour'::interval,
 			p_meta_ttl => '24 hours'::interval
 		)
 	`, "leaderboard", req.UserID, entryData, entry.Score).Scan(
@@ -139,8 +137,6 @@ func handleLeaderboardClickHTTP(w http.ResponseWriter, r *http.Request) {
 			p_key => $1,
 			p_data => $2,
 			p_score => $3,
-			p_stream_size => 1000,
-			p_stream_ttl => '1 hour'::interval,
 			p_meta_ttl => '24 hours'::interval
 		)
 	`, req.UserID, newData, entry.Score).Scan(

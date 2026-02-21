@@ -15,6 +15,7 @@ import (
 	_ "embed"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
+	"github.com/centrifugal/centrifuge/internal/epoch"
 
 	"github.com/centrifugal/protocol"
 	"github.com/redis/rueidis"
@@ -754,7 +755,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 			strconv.Itoa(int(opts.HistoryTTL.Seconds())),
 			publishChannelStr,
 			strconv.Itoa(historyMetaTTLSeconds),
-			strconv.FormatInt(time.Now().Unix(), 10),
+			epoch.Generate(),
 			publishCommand,
 			resultExpire,
 			useDelta,
@@ -1322,7 +1323,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOption
 
 	historyMetaTTLSeconds := int(historyMetaTTL.Seconds())
 
-	replies, err := b.historyStreamScript.Exec(context.Background(), s.client, []string{string(historyKey), string(historyMetaKey)}, []string{includePubs, strconv.FormatUint(offset, 10), strconv.Itoa(limit), reverse, strconv.Itoa(historyMetaTTLSeconds), strconv.FormatInt(time.Now().Unix(), 10)}).ToArray()
+	replies, err := b.historyStreamScript.Exec(context.Background(), s.client, []string{string(historyKey), string(historyMetaKey)}, []string{includePubs, strconv.FormatUint(offset, 10), strconv.Itoa(limit), reverse, strconv.Itoa(historyMetaTTLSeconds), epoch.Generate()}).ToArray()
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}
@@ -1412,7 +1413,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 
 	historyMetaTTLSeconds := int(b.node.config.HistoryMetaTTL.Seconds())
 
-	replies, err := b.historyListScript.Exec(context.Background(), s.client, []string{string(historyKey), string(historyMetaKey)}, []string{includePubs, rightBound, strconv.Itoa(historyMetaTTLSeconds), strconv.FormatInt(time.Now().Unix(), 10)}).ToArray()
+	replies, err := b.historyListScript.Exec(context.Background(), s.client, []string{string(historyKey), string(historyMetaKey)}, []string{includePubs, rightBound, strconv.Itoa(historyMetaTTLSeconds), epoch.Generate()}).ToArray()
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}

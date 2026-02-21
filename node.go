@@ -207,6 +207,12 @@ func New(c Config) (*Node, error) {
 	}
 	n.SetBroker(b)
 
+	mb, err := NewMemoryMapBroker(n, MemoryMapBrokerConfig{})
+	if err != nil {
+		return nil, err
+	}
+	n.SetMapBroker(mb)
+
 	pm, err := NewMemoryPresenceManager(n, MemoryPresenceManagerConfig{})
 	if err != nil {
 		return nil, err
@@ -1093,6 +1099,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 					_, _, _ = n.hub.removeSub(ch, sub.client)
 					return 0, err
 				}
+				medium.isMap = sub.isMap
 				mediumMu := n.mediumLock(ch)
 				mediumMu.Lock()
 				n.mediums[ch] = medium
@@ -1615,38 +1622,48 @@ func (n *Node) streamTop(ch string, historyMetaTTL time.Duration) (StreamPositio
 	return historyResult.StreamPosition, nil
 }
 
+func (n *Node) mapStreamTop(ch string) (StreamPosition, error) {
+	mapBroker := n.getMapBroker(ch)
+	if mapBroker == nil {
+		return StreamPosition{}, nil
+	}
+	streamResult, err := mapBroker.ReadStream(context.Background(), ch, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: 0},
+	})
+	if err != nil {
+		return StreamPosition{}, err
+	}
+	return streamResult.Position, nil
+}
+
 func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMetaTTL time.Duration, isMap bool) (bool, error) {
 	if isMap {
 		mapBroker := n.getMapBroker(ch)
 		if mapBroker == nil {
-			// No MapBroker configured, skip position check.
 			return true, nil
 		}
-		// Use ReadStream with Limit: 0 to only get stream top position.
-		streamResult, err := mapBroker.ReadStream(context.Background(), ch, MapReadStreamOptions{
-			Filter: StreamFilter{Limit: 0},
-		})
-		if err != nil {
-			// Will be checked later.
-			return false, err
-		}
-		return streamResult.Position.Epoch == clientPosition.Epoch && clientPosition.Offset == streamResult.Position.Offset, nil
 	}
 	mu := n.subLock(ch)
 	mu.Lock()
 	medium, ok := n.mediums[ch]
 	mu.Unlock()
-	if !ok || !medium.options.SharedPositionSync {
-		// No medium for channel or position sync disabled – we then check position over Broker.
-		streamTop, err := n.streamTop(ch, historyMetaTTL)
+	if ok && medium.options.SharedPositionSync {
+		validPosition := medium.CheckPosition(historyMetaTTL, clientPosition, n.config.ClientChannelPositionCheckDelay)
+		return validPosition, nil
+	}
+	// No medium for channel or position sync disabled – check position over Broker.
+	if isMap {
+		streamTop, err := n.mapStreamTop(ch)
 		if err != nil {
-			// Will be checked later.
 			return false, err
 		}
 		return streamTop.Epoch == clientPosition.Epoch && clientPosition.Offset == streamTop.Offset, nil
 	}
-	validPosition := medium.CheckPosition(historyMetaTTL, clientPosition, n.config.ClientChannelPositionCheckDelay)
-	return validPosition, nil
+	streamTop, err := n.streamTop(ch, historyMetaTTL)
+	if err != nil {
+		return false, err
+	}
+	return streamTop.Epoch == clientPosition.Epoch && clientPosition.Offset == streamTop.Offset, nil
 }
 
 // RemoveHistory removes channel history.
@@ -1827,6 +1844,12 @@ func (n *Node) OnCacheEmpty(h CacheEmptyHandler) {
 func (n *Node) HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 	if pub == nil {
 		panic("nil Publication received, this must never happen")
+	}
+	// Deliver epoch in the first publication (offset==1) so clients learn
+	// the channel epoch. This covers first-ever publish and post-Clear
+	// scenarios. Subsequent publications omit epoch to save wire bytes.
+	if pub.Offset == 1 && sp.Epoch != "" {
+		pub.Epoch = sp.Epoch
 	}
 	if n.config.GetChannelMediumOptions != nil {
 		mu := n.mediumLock(ch) // Note, avoid using subLock in HandlePublication – this leads to the deadlock.

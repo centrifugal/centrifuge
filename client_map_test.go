@@ -2,6 +2,8 @@ package centrifuge
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -3586,4 +3588,139 @@ func TestMapSubscribe_RecoveryMatchingEpoch(t *testing.T) {
 	require.Equal(t, MapPhaseLive, result.Phase)
 	require.Equal(t, epoch, result.Epoch)
 	require.True(t, result.Recovered)
+}
+
+// TestMapSubscribe_RecoveryAfterClear verifies that recovering with a real epoch
+// after MapClear (which deletes channel state) returns ErrorUnrecoverablePosition.
+// After Clear, ReadStream returns a new epoch — the guard must catch real→different mismatch.
+func TestMapSubscribe_RecoveryAfterClear(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_recovery_after_clear"
+	ctx := context.Background()
+
+	// Publish data to establish a real epoch.
+	res, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"v":"data"}`),
+	})
+	require.NoError(t, err)
+	oldEpoch := res.Position.Epoch
+	require.NotEmpty(t, oldEpoch)
+
+	// Clear the channel — removes all state including epoch.
+	err = broker.Clear(ctx, channel, MapClearOptions{})
+	require.NoError(t, err)
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Recovery with old epoch after Clear — epoch mismatch → unrecoverable.
+	rwWrapper := testReplyWriterWrapper()
+	err = client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+		Offset:  res.Position.Offset,
+		Epoch:   oldEpoch,
+		Recover: true,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.NotNil(t, rwWrapper.replies[0].Error, "should get error for epoch mismatch after Clear")
+	require.Equal(t, ErrorUnrecoverablePosition.Code, rwWrapper.replies[0].Error.Code)
+}
+
+// TestMapSubscribe_EpochInFirstPublication verifies that the first publication
+// (offset=1) includes epoch on the wire, while subsequent publications do not.
+// This allows the client SDK to learn the channel epoch from the first publication
+// without redundant epoch bytes in every message.
+func TestMapSubscribe_EpochInFirstPublication(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_epoch_in_pub"
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+	})
+
+	// Create client with transport sink to capture wire data.
+	transport := newTestTransport(func() {})
+	transport.sink = make(chan []byte, 100)
+	newCtx := SetCredentials(context.Background(), &Credentials{UserID: "user1"})
+	client, err := newClient(newCtx, node, transport)
+	require.NoError(t, err)
+	connectClientV2(t, client)
+
+	// Subscribe to map channel (live phase, no state to catch up).
+	subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+		Phase:   MapPhaseLive,
+	})
+
+	// Publish two entries.
+	_, err = broker.Publish(context.Background(), channel, "key1", MapPublishOptions{
+		Data: []byte(`{"v":"first"}`),
+	})
+	require.NoError(t, err)
+	_, err = broker.Publish(context.Background(), channel, "key2", MapPublishOptions{
+		Data: []byte(`{"v":"second"}`),
+	})
+	require.NoError(t, err)
+
+	// Collect publications from the transport sink.
+	type pubMsg struct {
+		Push struct {
+			Pub struct {
+				Offset uint64 `json:"offset"`
+				Epoch  string `json:"epoch"`
+				Key    string `json:"key"`
+			} `json:"pub"`
+		} `json:"push"`
+	}
+
+	var pubs []pubMsg
+	timeout := time.After(2 * time.Second)
+	for len(pubs) < 2 {
+		select {
+		case data := <-transport.sink:
+			dec := json.NewDecoder(strings.NewReader(string(data)))
+			for {
+				var p pubMsg
+				if err := dec.Decode(&p); err != nil {
+					break
+				}
+				if p.Push.Pub.Key != "" {
+					pubs = append(pubs, p)
+				}
+			}
+		case <-timeout:
+			require.Fail(t, "timeout waiting for publications")
+		}
+	}
+
+	// First publication (offset=1): epoch must be present.
+	require.Equal(t, uint64(1), pubs[0].Push.Pub.Offset)
+	require.NotEmpty(t, pubs[0].Push.Pub.Epoch, "first publication (offset=1) must include epoch")
+
+	// Second publication (offset=2): epoch must be absent.
+	require.Equal(t, uint64(2), pubs[1].Push.Pub.Offset)
+	require.Empty(t, pubs[1].Push.Pub.Epoch, "subsequent publications must not include epoch")
 }

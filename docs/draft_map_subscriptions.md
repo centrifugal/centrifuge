@@ -336,8 +336,7 @@ SELECT * FROM cf_map_publish(
     p_channel := 'leaderboard',
     p_key := 'user123',
     p_data := '{"name": "Alice", "score": 100}'::jsonb,
-    p_score := 100,  -- For ordered retrieval
-    p_stream_ttl := '1 hour'::interval
+    p_score := 100  -- For ordered retrieval
 );
 
 -- Remove a key
@@ -392,12 +391,11 @@ func handleLeaderboardJoin(w http.ResponseWriter, r *http.Request) {
             p_channel := 'leaderboard',
             p_key := $1,
             p_data := $2,
-            p_score := 0,
-            p_stream_ttl := '1 hour'::interval
+            p_score := 0
         )
     `, req.UserID, leaderboardEntryJSON(req))
 
-    // Real-time update delivered automatically via WAL
+    // Real-time update delivered automatically via outbox polling
 }
 ```
 

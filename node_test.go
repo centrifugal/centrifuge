@@ -1492,6 +1492,79 @@ func TestNodeCheckPositionMap(t *testing.T) {
 	require.True(t, isValid)
 }
 
+func TestNodeCheckPositionMapWithMedium(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			KeyTTL:        60 * time.Second,
+		}
+	}
+	node.config.GetChannelMediumOptions = func(channel string) ChannelMediumOptions {
+		return ChannelMediumOptions{
+			SharedPositionSync: true,
+		}
+	}
+	node.config.ClientChannelPositionCheckDelay = 0
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	ctx := context.Background()
+	channel := "test_map_medium"
+
+	// Publish data to create stream position.
+	result, err := mapBroker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"test": 1}`),
+	})
+	require.NoError(t, err)
+	streamPos := result.Position
+
+	// Create a subscription to trigger medium creation with isMap=true.
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
+					HistoryMetaTTL:    200 * time.Second,
+				},
+			}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+	subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    1,
+	})
+
+	// Now checkPosition should use the medium's SharedPositionSync path.
+	// Correct position — valid.
+	isValid, err := node.checkPosition(channel, streamPos, 200*time.Second, true)
+	require.NoError(t, err)
+	require.True(t, isValid)
+
+	// Wrong offset — invalid.
+	isValid, err = node.checkPosition(channel, StreamPosition{
+		Offset: streamPos.Offset + 1,
+		Epoch:  streamPos.Epoch,
+	}, 200*time.Second, true)
+	require.NoError(t, err)
+	require.False(t, isValid)
+
+	// Wrong epoch — invalid.
+	isValid, err = node.checkPosition(channel, StreamPosition{
+		Offset: streamPos.Offset,
+		Epoch:  "wrong",
+	}, 200*time.Second, true)
+	require.NoError(t, err)
+	require.False(t, isValid)
+}
+
 func TestGetBroker(t *testing.T) {
 	node := defaultTestNode()
 	customBroker := NewTestBroker()

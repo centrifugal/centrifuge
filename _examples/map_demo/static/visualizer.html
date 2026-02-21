@@ -957,6 +957,7 @@ window.__wsInterceptor.onMessage = function(msg) {
         if (s.cursor) parts.push(`has next page`);
         if (s.recovered) parts.push('recovered=true');
         if (s.offset != null) parts.push(`offset=${s.offset}`);
+        parts.push(`epoch=${s.epoch !== undefined ? (s.epoch === '' ? '""' : `"${s.epoch}"`) : '""'}`);
         if (!s.cursor && stateCount === 0 && pubCount === 0) parts.push('empty');
 
         addEntry('in', 'SUBSCRIBE OK', parts.join(', '), phase, msg);
@@ -969,9 +970,13 @@ window.__wsInterceptor.onMessage = function(msg) {
         if (p.channel === 'visualizer' || p.id === subId) {
             if (p.pub) {
                 const pub = p.pub;
+                if (pub.offset) lastOffset = pub.offset;
+                if (pub.epoch) lastEpoch = pub.epoch;
                 const removed = pub.removed ? ' [REMOVED]' : '';
-                const summary = `key="${pub.key || '?'}"${removed}`;
+                let summary = `key="${pub.key || '?'}"${removed}, offset=${pub.offset || 0}`;
+                if (pub.epoch) summary += `, epoch="${pub.epoch}"`;
                 addEntry('in', 'PUBLICATION', summary, 0, msg);
+                updateInfoPanel();
             }
             if (p.unsubscribe) {
                 const u = p.unsubscribe;
