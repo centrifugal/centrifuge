@@ -790,3 +790,73 @@ loop:
 		b.ReportMetric(float64(avgLatency.Microseconds()), "us/op")
 	}
 }
+
+// BenchmarkPostgresMapBroker_Cleanup benchmarks TTL-based key cleanup throughput.
+// Measures how fast the expire_keys SQL function processes expired keys.
+// Throughput in keys/second = keys/op * 1e9 / ns_per_op.
+func BenchmarkPostgresMapBroker_Cleanup(b *testing.B) {
+	for _, ordered := range []bool{false, true} {
+		orderLabel := "unordered"
+		if ordered {
+			orderLabel = "ordered"
+		}
+		for _, numKeys := range []int{100, 1000, 10000} {
+			b.Run(fmt.Sprintf("%s/keys_%d", orderLabel, numKeys), func(b *testing.B) {
+				connString := getPostgresConnString(b)
+				node, _ := New(Config{
+					GetMapChannelOptions: func(channel string) MapChannelOptions {
+						return MapChannelOptions{
+							SyncMode:      MapSyncConverging,
+							RetentionMode: MapRetentionExpiring,
+							KeyTTL:        time.Millisecond,
+							Ordered:       ordered,
+						}
+					},
+				})
+				broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+					DSN:              connString,
+					BinaryData:       true,
+					TTLCheckInterval: time.Hour,  // Prevent background TTL worker interference.
+					CleanupInterval:  time.Hour,  // Prevent background cleanup worker interference.
+				})
+				if err != nil {
+					b.Fatal(err)
+				}
+				ctx := context.Background()
+				if err := broker.EnsureSchema(ctx); err != nil {
+					b.Fatal(err)
+				}
+				_ = broker.RegisterEventHandler(&testBrokerEventHandler{})
+				cleanupTestTables(ctx, broker)
+				b.Cleanup(func() {
+					_ = broker.Close(context.Background())
+					_ = node.Shutdown(context.Background())
+				})
+
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					b.StopTimer()
+					ch := fmt.Sprintf("test_cleanup_%d_%d", time.Now().UnixNano(), i)
+					for k := 0; k < numKeys; k++ {
+						_, err := broker.Publish(ctx, ch, fmt.Sprintf("key%d", k), MapPublishOptions{
+							Data:  []byte("data"),
+							Score: int64(k),
+						})
+						if err != nil {
+							b.Fatal(err)
+						}
+					}
+					time.Sleep(2 * time.Millisecond)
+					b.StartTimer()
+
+					// expireKeys processes up to 1000 keys per channel per call.
+					calls := (numKeys + 999) / 1000
+					for c := 0; c <= calls; c++ {
+						broker.expireKeys(ctx)
+					}
+				}
+				b.ReportMetric(float64(numKeys), "keys/op")
+			})
+		}
+	}
+}

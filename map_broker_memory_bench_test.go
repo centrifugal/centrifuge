@@ -474,3 +474,52 @@ func BenchmarkMemoryMapBroker_PublishWithDelta(b *testing.B) {
 		}
 	})
 }
+
+// BenchmarkMemoryMapBroker_Cleanup benchmarks TTL-based key cleanup throughput.
+// Throughput in keys/second = keys/op * 1e9 / ns_per_op.
+func BenchmarkMemoryMapBroker_Cleanup(b *testing.B) {
+	for _, ordered := range []bool{false, true} {
+		orderLabel := "unordered"
+		if ordered {
+			orderLabel = "ordered"
+		}
+		for _, numKeys := range []int{1000, 10000, 100000} {
+			b.Run(fmt.Sprintf("%s/keys_%d", orderLabel, numKeys), func(b *testing.B) {
+				node, _ := New(Config{
+					GetMapChannelOptions: func(channel string) MapChannelOptions {
+						return MapChannelOptions{
+							SyncMode:      MapSyncConverging,
+							RetentionMode: MapRetentionExpiring,
+							KeyTTL:        time.Millisecond,
+							Ordered:       ordered,
+						}
+					},
+				})
+				broker, _ := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+				// Set handler directly to avoid starting background cleanup workers via RegisterEventHandler.
+				broker.mapHub.setEventHandler(&testBrokerEventHandler{})
+				b.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+				ctx := context.Background()
+				ch := "bench_cleanup"
+
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					b.StopTimer()
+					for k := 0; k < numKeys; k++ {
+						_, _ = broker.Publish(ctx, ch, fmt.Sprintf("key%d", k), MapPublishOptions{
+							Data:  []byte("data"),
+							Score: int64(k),
+						})
+					}
+					time.Sleep(2 * time.Millisecond)
+					b.StartTimer()
+
+					var check int64
+					broker.mapHub.expireKeysIteration(&check)
+				}
+				b.ReportMetric(float64(numKeys), "keys/op")
+			})
+		}
+	}
+}

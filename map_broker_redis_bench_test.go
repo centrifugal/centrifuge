@@ -358,3 +358,53 @@ func BenchmarkRedisMapBroker_VersionedPublish(b *testing.B) {
 		}
 	})
 }
+
+// BenchmarkRedisMapBroker_Cleanup benchmarks TTL-based key cleanup throughput.
+// Measures how fast the cleanup Lua script processes expired keys.
+// Throughput in keys/second = keys/op * 1e9 / ns_per_op.
+func BenchmarkRedisMapBroker_Cleanup(b *testing.B) {
+	for _, ordered := range []bool{false, true} {
+		orderLabel := "unordered"
+		if ordered {
+			orderLabel = "ordered"
+		}
+		for _, numKeys := range []int{100, 1000, 10000} {
+			b.Run(fmt.Sprintf("%s/keys_%d", orderLabel, numKeys), func(b *testing.B) {
+				node, _ := New(Config{
+					GetMapChannelOptions: func(channel string) MapChannelOptions {
+						return MapChannelOptions{
+							SyncMode:      MapSyncConverging,
+							RetentionMode: MapRetentionExpiring,
+							KeyTTL:        time.Millisecond,
+							Ordered:       ordered,
+						}
+					},
+				})
+				broker := newTestRedisMapBroker(b, node)
+
+				ctx := context.Background()
+
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					b.StopTimer()
+					ch := randomChannel("bench_cleanup")
+					for k := 0; k < numKeys; k++ {
+						_, err := broker.Publish(ctx, ch, fmt.Sprintf("key%d", k), MapPublishOptions{
+							Data:  []byte("data"),
+							Score: int64(k),
+						})
+						if err != nil {
+							b.Fatal(err)
+						}
+					}
+					time.Sleep(2 * time.Millisecond)
+					b.StartTimer()
+
+					// runCleanupCycle loops internally until all expired keys are processed.
+					broker.runCleanupCycle(ctx)
+				}
+				b.ReportMetric(float64(numKeys), "keys/op")
+			})
+		}
+	}
+}
