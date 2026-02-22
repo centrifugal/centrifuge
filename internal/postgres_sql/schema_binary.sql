@@ -529,8 +529,9 @@ CREATE OR REPLACE FUNCTION cf_binary_map_expire_keys(
 ) AS $$
 DECLARE
     v_channel TEXT;
-    rec RECORD;
-    v_offset BIGINT;
+    v_keys TEXT[];
+    v_count INT;
+    v_base_offset BIGINT;
     v_epoch TEXT;
     v_shard_id INTEGER;
     v_processed INT := 0;
@@ -555,7 +556,7 @@ BEGIN
         END IF;
 
         -- 1. Lock meta (same order as publish: shard → meta → state).
-        SELECT top_offset, m.epoch INTO v_offset, v_epoch
+        SELECT top_offset, m.epoch INTO v_base_offset, v_epoch
         FROM cf_binary_map_meta m WHERE m.channel = v_channel FOR UPDATE;
 
         IF NOT FOUND THEN
@@ -564,56 +565,46 @@ BEGIN
             CONTINUE;
         END IF;
 
-        -- 2. Now lock and process expired state rows (meta already locked).
-        FOR rec IN
+        -- 2. Collect expired keys in one query (already under shard + meta locks).
+        SELECT array_agg(key), count(*) INTO v_keys, v_count FROM (
             SELECT key FROM cf_binary_map_state
             WHERE channel = v_channel
               AND expires_at IS NOT NULL AND expires_at <= NOW()
             LIMIT p_batch_size - v_processed
             FOR UPDATE SKIP LOCKED
-        LOOP
-            -- Re-check expiration after lock (key may have been refreshed).
-            PERFORM 1 FROM cf_binary_map_state
-            WHERE channel = v_channel AND key = rec.key
-              AND expires_at IS NOT NULL AND expires_at <= NOW();
-            IF NOT FOUND THEN
-                CONTINUE;
-            END IF;
+        ) t;
 
-            -- Increment offset.
-            UPDATE cf_binary_map_meta SET
-                top_offset = top_offset + 1,
-                expires_at = COALESCE(CASE WHEN p_meta_ttl IS NOT NULL THEN NOW() + p_meta_ttl ELSE NULL END, expires_at),
-                updated_at = NOW()
-            WHERE channel = v_channel
-            RETURNING top_offset INTO v_offset;
+        IF v_count IS NULL OR v_count = 0 THEN
+            CONTINUE;
+        END IF;
 
-            -- Delete from state.
-            DELETE FROM cf_binary_map_state WHERE channel = v_channel AND key = rec.key;
+        -- Bump offset by count (1 UPDATE instead of N).
+        UPDATE cf_binary_map_meta SET
+            top_offset = top_offset + v_count,
+            expires_at = COALESCE(CASE WHEN p_meta_ttl IS NOT NULL THEN NOW() + p_meta_ttl ELSE NULL END, expires_at),
+            updated_at = NOW()
+        WHERE channel = v_channel
+        RETURNING top_offset - v_count INTO v_base_offset;
 
-            -- Insert removal into stream.
-            INSERT INTO cf_binary_map_stream (channel, channel_offset, epoch, key, removed, shard_id)
-            VALUES (
-                v_channel, v_offset, v_epoch, rec.key, TRUE,
-                v_shard_id
-            );
+        -- Batch delete (1 DELETE instead of N).
+        DELETE FROM cf_binary_map_state WHERE channel = v_channel AND key = ANY(v_keys);
 
-            v_notified := TRUE;
+        -- Batch insert removal events (1 INSERT instead of N).
+        INSERT INTO cf_binary_map_stream (channel, channel_offset, epoch, key, removed, shard_id)
+        SELECT v_channel, v_base_offset + rn, v_epoch, k, TRUE, v_shard_id
+        FROM unnest(v_keys) WITH ORDINALITY AS t(k, rn);
 
-            out_channel := v_channel;
-            out_key := rec.key;
-            out_offset := v_offset;
-            out_epoch := v_epoch;
-            RETURN NEXT;
+        -- Return results.
+        RETURN QUERY
+        SELECT v_channel, k, (v_base_offset + rn)::BIGINT, v_epoch
+        FROM unnest(v_keys) WITH ORDINALITY AS t(k, rn);
 
-            v_processed := v_processed + 1;
-            IF v_processed >= p_batch_size THEN
-                IF v_notified THEN
-                    PERFORM pg_notify('cf_binary_map_stream_notify', '');
-                END IF;
-                RETURN;
-            END IF;
-        END LOOP;
+        v_notified := TRUE;
+        v_processed := v_processed + v_count;
+        IF v_processed >= p_batch_size THEN
+            PERFORM pg_notify('cf_binary_map_stream_notify', '');
+            RETURN;
+        END IF;
     END LOOP;
 
     -- Notify outbox workers if any entries were expired.
