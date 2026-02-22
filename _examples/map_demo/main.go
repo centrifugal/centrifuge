@@ -245,11 +245,13 @@ func main() {
 		publishScoreboardData(ctx, node)
 	})
 
-	// Start poll manager goroutine.
+	// Start poll manager goroutine (requires PostgreSQL for native cf_map_publish calls).
 	// Uses advisory lock so only one instance runs this when scaling horizontally.
-	go runAsLeader(appCtx, pgPool, 2, "poll-manager", func(ctx context.Context) {
-		runPollManager(ctx)
-	})
+	if pgPool != nil {
+		go runAsLeader(appCtx, pgPool, 2, "poll-manager", func(ctx context.Context) {
+			runPollManager(ctx)
+		})
+	}
 
 	// Serve static files.
 	http.Handle("/", http.FileServer(http.Dir("./static")))

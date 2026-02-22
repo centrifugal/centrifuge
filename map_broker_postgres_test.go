@@ -32,7 +32,7 @@ func newTestPostgresMapBrokerWithOutbox(tb testing.TB, n *Node) *PostgresMapBrok
 	connString := getPostgresConnString(tb)
 
 	e, err := NewPostgresMapBroker(n, PostgresMapBrokerConfig{
-		ConnString: connString,
+		DSN:        connString,
 		NumShards:  4, // Fewer shards for faster tests
 		BinaryData: true,
 		Outbox: OutboxConfig{
@@ -57,7 +57,6 @@ func newTestPostgresMapBrokerWithOutbox(tb testing.TB, n *Node) *PostgresMapBrok
 	})
 	return e
 }
-
 
 func cleanupTestTables(ctx context.Context, e *PostgresMapBroker) {
 	_, _ = e.pool.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE channel LIKE 'test_%%'", e.names.stream))
@@ -877,7 +876,6 @@ func TestPostgresMapBroker_ConcurrentPublishOrdering(t *testing.T) {
 	}
 }
 
-
 // ============================================================================
 // Outbox Mode Tests
 // ============================================================================
@@ -901,7 +899,7 @@ func TestPostgresMapBroker_OutboxOrdering(t *testing.T) {
 
 	// Create broker with outbox mode (default)
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: connString,
+		DSN:        connString,
 		BinaryData: true,
 		NumShards:  4,
 		Outbox: OutboxConfig{
@@ -997,7 +995,7 @@ func TestPostgresMapBroker_OutboxConcurrentPublish(t *testing.T) {
 	require.NoError(t, node.Run())
 
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: connString,
+		DSN:        connString,
 		BinaryData: true,
 		NumShards:  4,
 		Outbox: OutboxConfig{
@@ -1091,7 +1089,6 @@ func TestPostgresMapBroker_OutboxConcurrentPublish(t *testing.T) {
 	}
 }
 
-
 // TestPostgresMapBroker_Delta_Outbox tests key-based delta delivery via outbox workers.
 func TestPostgresMapBroker_Delta_Outbox(t *testing.T) {
 	connString := getPostgresConnString(t)
@@ -1122,7 +1119,7 @@ func TestPostgresMapBroker_Delta_Outbox(t *testing.T) {
 	}
 
 	e, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: connString,
+		DSN:        connString,
 		BinaryData: true,
 		NumShards:  4,
 		Outbox: OutboxConfig{
@@ -1296,7 +1293,6 @@ func TestPostgresMapBroker_Clear(t *testing.T) {
 	require.Equal(t, 0, stats.NumKeys)
 }
 
-
 func TestPostgresMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
@@ -1459,8 +1455,8 @@ func TestPostgresMapBroker_EnsureSchema_Fresh(t *testing.T) {
 		},
 	})
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: connString,
-		NumShards:  4,
+		DSN:       connString,
+		NumShards: 4,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -1494,8 +1490,8 @@ func TestPostgresMapBroker_EnsureSchema_Idempotent(t *testing.T) {
 		},
 	})
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: connString,
-		NumShards:  4,
+		DSN:       connString,
+		NumShards: 4,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -1531,8 +1527,8 @@ func TestPostgresMapBroker_EnsureSchema_PartialState(t *testing.T) {
 		},
 	})
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: connString,
-		NumShards:  4,
+		DSN:       connString,
+		NumShards: 4,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -1559,9 +1555,6 @@ func TestPostgresMapBroker_EnsureSchema_PartialState(t *testing.T) {
 	verifySchemaComplete(t, ctx, broker.pool, "cf_map_", true)
 }
 
-
-
-
 // TestPostgresMapBroker_EnsureSchema_BinaryData tests BYTEA columns when BinaryData=true.
 func TestPostgresMapBroker_EnsureSchema_BinaryData(t *testing.T) {
 	connString := getPostgresConnString(t)
@@ -1577,7 +1570,7 @@ func TestPostgresMapBroker_EnsureSchema_BinaryData(t *testing.T) {
 		},
 	})
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: connString,
+		DSN:        connString,
 		NumShards:  4,
 		BinaryData: true,
 	})
@@ -1611,8 +1604,8 @@ func TestPostgresMapBroker_EnsureSchema_FunctionalAfterSetup(t *testing.T) {
 		},
 	})
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: connString,
-		NumShards:  4,
+		DSN:       connString,
+		NumShards: 4,
 		Outbox: OutboxConfig{
 			PollInterval: 10 * time.Millisecond,
 		},
@@ -1895,14 +1888,14 @@ func TestPostgresMapBroker_OrderedStateAscSameScores(t *testing.T) {
 func TestPostgresMapBroker_ClientInfoInState(t *testing.T) {
 	testMapBrokerClientInfoInState(t, func(t *testing.T) MapBroker {
 		node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
-				KeyTTL:        60 * time.Second,
-			}
-		},
-	})
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					SyncMode:      MapSyncConverging,
+					RetentionMode: MapRetentionExpiring,
+					KeyTTL:        60 * time.Second,
+				}
+			},
+		})
 		return newTestPostgresMapBroker(t, node)
 	})
 }
@@ -1910,14 +1903,14 @@ func TestPostgresMapBroker_ClientInfoInState(t *testing.T) {
 func TestPostgresMapBroker_ClientInfoInStream(t *testing.T) {
 	testMapBrokerClientInfoInStream(t, func(t *testing.T) MapBroker {
 		node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
-				KeyTTL:        60 * time.Second,
-			}
-		},
-	})
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					SyncMode:      MapSyncConverging,
+					RetentionMode: MapRetentionExpiring,
+					KeyTTL:        60 * time.Second,
+				}
+			},
+		})
 		return newTestPostgresMapBroker(t, node)
 	})
 }
@@ -1953,7 +1946,7 @@ func TestPostgresMapBroker_ClientInfoDelivery_Outbox(t *testing.T) {
 	}
 
 	e, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: connString,
+		DSN:        connString,
 		BinaryData: true,
 		NumShards:  4,
 		Outbox: OutboxConfig{
@@ -2044,7 +2037,7 @@ func TestPostgresMapBroker_AllColumnTypes(t *testing.T) {
 	}
 
 	e, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: connString,
+		DSN:        connString,
 		BinaryData: true,
 		NumShards:  4,
 		Outbox: OutboxConfig{

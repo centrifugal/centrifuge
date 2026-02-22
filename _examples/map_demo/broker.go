@@ -20,11 +20,11 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr, replicaAddrs
 	if postgresAddr != "" {
 		log.Printf("Using PostgreSQL map broker")
 		pgConfig := centrifuge.PostgresMapBrokerConfig{
-			ConnString: postgresAddr,
+			DSN: postgresAddr,
 		}
 		if replicaAddrs != "" {
-			pgConfig.ReadReplicaConnStrings = strings.Split(replicaAddrs, ",")
-			log.Printf("Configured %d read replica(s)", len(pgConfig.ReadReplicaConnStrings))
+			pgConfig.ReplicaDSN = strings.Split(replicaAddrs, ",")
+			log.Printf("Configured %d read replica(s)", len(pgConfig.ReplicaDSN))
 		}
 
 		broker, err := centrifuge.NewPostgresMapBroker(node, pgConfig)

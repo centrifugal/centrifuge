@@ -153,9 +153,9 @@ type OutboxConfig struct {
 
 // PostgresMapBrokerConfig configures the PostgreSQL map broker.
 type PostgresMapBrokerConfig struct {
-	// ConnString is the primary PostgreSQL connection string for writes.
+	// DSN is the primary PostgreSQL connection string for writes.
 	// Example: "postgres://user:pass@localhost:5432/dbname?sslmode=disable"
-	ConnString string
+	DSN string
 
 	// PoolSize sets the maximum number of connections in the pool.
 	// Default: 32
@@ -200,16 +200,16 @@ type PostgresMapBrokerConfig struct {
 	// Set to true when using WAL-based delivery (future).
 	SkipShardLock bool
 
-	// ReadReplicaConnStrings is an optional list of read replica connection strings.
+	// ReplicaDSN is an optional list of read replica connection strings.
 	// When set, ReadState queries with AllowCached=true are distributed
 	// across replicas using shard-based routing for consistency:
 	//   hash(channel) % NumShards → shard_id % len(replicas) → replica
 	// Default: empty (all reads go to primary).
-	ReadReplicaConnStrings []string
+	ReplicaDSN []string
 
-	// ReadReplicaPoolSize sets max connections per replica pool.
+	// ReplicaPoolSize sets max connections per replica pool.
 	// Default: same as PoolSize.
-	ReadReplicaPoolSize int
+	ReplicaPoolSize int
 
 	// Partitioning enables automatic daily partitioning of the stream table.
 	// This is purely an optimization — without it, the broker works correctly
@@ -255,8 +255,8 @@ func (c *PostgresMapBrokerConfig) setDefaults() {
 		c.Outbox.BatchSize = 1000
 	}
 
-	if c.ReadReplicaPoolSize <= 0 {
-		c.ReadReplicaPoolSize = c.PoolSize
+	if c.ReplicaPoolSize <= 0 {
+		c.ReplicaPoolSize = c.PoolSize
 	}
 	if c.PartitionRetentionDays <= 0 {
 		c.PartitionRetentionDays = 3
@@ -270,14 +270,14 @@ func (c *PostgresMapBrokerConfig) setDefaults() {
 func NewPostgresMapBroker(n *Node, conf PostgresMapBrokerConfig) (*PostgresMapBroker, error) {
 	conf.setDefaults()
 
-	if conf.ConnString == "" {
-		return nil, errors.New("postgres map broker: ConnString is required")
+	if conf.DSN == "" {
+		return nil, errors.New("postgres map broker: DSN is required")
 	}
 
 	ctx := context.Background()
 
 	// Configure primary pool
-	poolConfig, err := pgxpool.ParseConfig(conf.ConnString)
+	poolConfig, err := pgxpool.ParseConfig(conf.DSN)
 	if err != nil {
 		return nil, fmt.Errorf("postgres map broker: parse config: %w", err)
 	}
@@ -311,8 +311,8 @@ func NewPostgresMapBroker(n *Node, conf PostgresMapBrokerConfig) (*PostgresMapBr
 	}
 
 	// Create replica pools if configured
-	if len(conf.ReadReplicaConnStrings) > 0 {
-		for _, connStr := range conf.ReadReplicaConnStrings {
+	if len(conf.ReplicaDSN) > 0 {
+		for _, connStr := range conf.ReplicaDSN {
 			replicaConfig, err := pgxpool.ParseConfig(connStr)
 			if err != nil {
 				pool.Close()
@@ -322,7 +322,7 @@ func NewPostgresMapBroker(n *Node, conf PostgresMapBrokerConfig) (*PostgresMapBr
 				cancel()
 				return nil, fmt.Errorf("postgres map broker: parse replica config: %w", err)
 			}
-			replicaConfig.MaxConns = int32(conf.ReadReplicaPoolSize)
+			replicaConfig.MaxConns = int32(conf.ReplicaPoolSize)
 
 			rp, err := pgxpool.NewWithConfig(context.Background(), replicaConfig)
 			if err != nil {
@@ -399,7 +399,7 @@ func (e *PostgresMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 }
 
 // Close shuts down the broker.
-func (e *PostgresMapBroker) Close(ctx context.Context) error {
+func (e *PostgresMapBroker) Close(_ context.Context) error {
 	e.closeOnce.Do(func() {
 		e.cancelFunc() // Cancel context to unblock WaitForNotification
 		close(e.closeCh)
@@ -543,12 +543,12 @@ func (e *PostgresMapBroker) EnsureSchema(ctx context.Context) error {
 }
 
 // Subscribe is a no-op — every node independently polls the stream table.
-func (e *PostgresMapBroker) Subscribe(ch string) error {
+func (e *PostgresMapBroker) Subscribe(_ string) error {
 	return nil
 }
 
 // Unsubscribe is a no-op.
-func (e *PostgresMapBroker) Unsubscribe(ch string) error {
+func (e *PostgresMapBroker) Unsubscribe(_ string) error {
 	return nil
 }
 
@@ -1287,7 +1287,7 @@ func (e *PostgresMapBroker) ReadStream(ctx context.Context, ch string, opts MapR
 
 // readStreamTx is a fallback for ReadStream when we need meta before building the query
 // (e.g., reverse without explicit Since needs topOffset). Uses REPEATABLE READ transaction.
-func (e *PostgresMapBroker) readStreamTx(ctx context.Context, pool *pgxpool.Pool, ch string, opts MapReadStreamOptions, streamQuery string, unlimited bool, limit int) (MapStreamResult, error) {
+func (e *PostgresMapBroker) readStreamTx(ctx context.Context, pool *pgxpool.Pool, ch string, _ MapReadStreamOptions, streamQuery string, unlimited bool, limit int) (MapStreamResult, error) {
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return MapStreamResult{}, err

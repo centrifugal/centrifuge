@@ -25,7 +25,7 @@ func setupPostgresMapBrokerBench(b *testing.B) (*PostgresMapBroker, func()) {
 		},
 	})
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: connString,
+		DSN:        connString,
 		BinaryData: true,
 	})
 	if err != nil {
@@ -62,7 +62,7 @@ func setupPostgresMapBrokerBenchOrdered(b *testing.B) (*PostgresMapBroker, func(
 		}
 	}
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: connString,
+		DSN:        connString,
 		BinaryData: true,
 	})
 	if err != nil {
@@ -497,7 +497,7 @@ func setupPostgresMapBrokerOutboxBench(b *testing.B) (*PostgresMapBroker, func()
 	})
 	// Use fewer shards than pool size to leave connections available for Publish calls.
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: connString,
+		DSN:        connString,
 		BinaryData: true,
 		PoolSize:   32,
 		NumShards:  8, // Must be less than PoolSize to leave room for Publish
@@ -541,7 +541,7 @@ func setupPostgresMapBrokerOutboxBenchWithHandler(b *testing.B, handler BrokerEv
 	})
 	// Use fewer shards than pool size to leave connections available for Publish calls.
 	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: connString,
+		DSN:        connString,
 		BinaryData: true,
 		PoolSize:   32,
 		NumShards:  8, // Must be less than PoolSize to leave room for Publish

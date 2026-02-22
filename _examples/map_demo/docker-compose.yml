@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   redis:
     image: redis:7
@@ -23,13 +21,50 @@ services:
       - "5432:5432"
     volumes:
       - map_broker_data:/var/lib/postgresql/data
+      - ./init-replication.sh:/docker-entrypoint-initdb.d/init-replication.sh
     command:
       - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_wal_senders=4"
+      - "-c"
+      - "hot_standby=on"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U centrifuge -d centrifuge"]
       interval: 5s
       timeout: 5s
       retries: 5
 
+  postgres-replica:
+    image: postgres:16
+    container_name: map_demo_postgres_replica
+    environment:
+      PGUSER: centrifuge
+      PGPASSWORD: centrifuge
+    ports:
+      - "5433:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - map_broker_replica_data:/var/lib/postgresql/data
+    entrypoint: |
+      bash -c '
+      if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+        until pg_isready -h postgres -U centrifuge; do sleep 1; done
+        chown postgres:postgres /var/lib/postgresql/data
+        chmod 700 /var/lib/postgresql/data
+        gosu postgres pg_basebackup -h postgres -U centrifuge -D /var/lib/postgresql/data -Fp -Xs -R
+      fi
+      exec gosu postgres postgres
+      '
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U centrifuge -d centrifuge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   map_broker_data:
+  map_broker_replica_data:

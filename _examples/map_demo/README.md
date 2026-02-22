@@ -12,21 +12,28 @@ This demo showcases Centrifuge's map subscriptions feature with multiple backend
 ## Quick Start with Docker Compose
 
 ```bash
-# Start PostgreSQL (and Redis if needed)
+# Start PostgreSQL primary, replica, and Redis
 docker-compose up -d
 
-# Wait for PostgreSQL to be ready
+# Wait for services to be ready
 docker-compose exec postgres pg_isready -U centrifuge -d centrifuge
 
-# Run the demo
+# Run with primary only
 go build -o map_demo . && ./map_demo -postgres "postgres://centrifuge:centrifuge@localhost:5432/centrifuge?sslmode=disable"
+
+# Or run with read replica (port 5433)
+./map_demo \
+  -postgres "postgres://centrifuge:centrifuge@localhost:5432/centrifuge?sslmode=disable" \
+  -replicas "postgres://centrifuge:centrifuge@localhost:5433/centrifuge?sslmode=disable"
 ```
 
 Open http://localhost:3000 in your browser.
 
 ## PostgreSQL Configuration
 
-No special PostgreSQL configuration is required. The broker uses standard SQL polling — no logical replication, no WAL-level settings, no replication slots needed.
+No special PostgreSQL configuration is required for single-node setups. The broker uses standard SQL polling — no logical replication, no replication slots needed.
+
+For read replicas, the primary needs `wal_level=replica` and `max_wal_senders >= 1` (configured in the provided docker-compose.yml).
 
 ### Schema Setup
 
@@ -119,30 +126,26 @@ Stream entries are retained for `StreamRetention` (default: 24h) and cleaned up 
 
 ### Command-Line Flags
 
-| Flag        | Description                          | Default |
-|-------------|--------------------------------------|---------|
-| `-port`     | HTTP server port                     | `3000`  |
-| `-postgres` | PostgreSQL connection string         | (none)  |
-| `-redis`    | Redis address                        | (none)  |
+| Flag        | Description                             | Default |
+|-------------|-----------------------------------------|---------|
+| `-port`     | HTTP server port                        | `3000`  |
+| `-postgres` | PostgreSQL connection string            | (none)  |
+| `-redis`    | Redis address                           | (none)  |
 | `-replicas` | Comma-separated PG replica conn strings | (none)  |
-| `-cache`    | Enable memory cache layer            | `false` |
+| `-cache`    | Enable memory cache layer               | `false` |
 
 ### PostgreSQL Broker Options
 
 When using `PostgresMapBrokerConfig`:
 
-| Option                   | Description                              | Default    |
-|--------------------------|------------------------------------------|------------|
-| `ConnString`             | PostgreSQL connection string             | (required) |
-| `PoolSize`               | Max connections in pool                  | `32`       |
-| `NumShards`              | Shards for parallel delivery             | `16`       |
-| `StreamRetention`        | How long to keep stream entries          | `24h`      |
-| `UseNotify`              | LISTEN/NOTIFY for low-latency wakeup    | `false`    |
-| `ReadReplicaConnStrings` | Read replica connection strings          | (none)     |
-| `Partitioning`           | Daily table partitioning for cleanup     | `false`    |
-| `Outbox.PollInterval`    | How often to poll for new entries        | `50ms`     |
-| `Outbox.BatchSize`       | Max rows per outbox batch                | `1000`     |
-
-## License
-
-Same as Centrifuge library.
+| Option                   | Description                          | Default    |
+|--------------------------|--------------------------------------|------------|
+| `DSN`                    | PostgreSQL connection string         | (required) |
+| `PoolSize`               | Max connections in pool              | `32`       |
+| `NumShards`              | Shards for parallel delivery         | `16`       |
+| `StreamRetention`        | How long to keep stream entries      | `24h`      |
+| `UseNotify`              | LISTEN/NOTIFY for low-latency wakeup | `false`    |
+| `ReplicaDSN`             | Read replica connection strings      | (none)     |
+| `Partitioning`           | Daily table partitioning for cleanup | `false`    |
+| `Outbox.PollInterval`    | How often to poll for new entries    | `50ms`     |
+| `Outbox.BatchSize`       | Max rows per outbox batch            | `1000`     |

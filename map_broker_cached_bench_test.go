@@ -601,7 +601,7 @@ func BenchmarkMapReadState_Postgres_Direct_vs_Cached(b *testing.B) {
 		},
 	})
 	backend, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: pgURL,
+		DSN:        pgURL,
 		BinaryData: true,
 	})
 	require.NoError(b, err)
@@ -675,7 +675,7 @@ func BenchmarkMapReadState_Postgres_Parallel(b *testing.B) {
 		},
 	})
 	backend, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: pgURL,
+		DSN:        pgURL,
 		PoolSize:   32,
 		BinaryData: true,
 	})
@@ -753,7 +753,7 @@ func BenchmarkMapPublish_Postgres_Direct_vs_Cached(b *testing.B) {
 		},
 	})
 	backend, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
-		ConnString: pgURL,
+		DSN: pgURL,
 	})
 	require.NoError(b, err)
 	err = backend.RegisterEventHandler(nil)
