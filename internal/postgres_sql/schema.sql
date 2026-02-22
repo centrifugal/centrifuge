@@ -99,6 +99,25 @@ CREATE TABLE IF NOT EXISTS __PREFIX__idempotency (
 CREATE INDEX IF NOT EXISTS __PREFIX__idempotency_expires_idx ON __PREFIX__idempotency (expires_at);
 
 -- ============================================================================
+-- Shard Lock Table
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS __PREFIX__shard_lock (
+    shard_id SMALLINT PRIMARY KEY
+);
+
+-- ============================================================================
+-- Schema Version
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS __PREFIX__schema_version (
+    id              INTEGER PRIMARY KEY,
+    schema_version  INTEGER NOT NULL
+);
+INSERT INTO __PREFIX__schema_version (id, schema_version) VALUES (1, 1)
+    ON CONFLICT (id) DO NOTHING;
+
+-- ============================================================================
 -- Functions
 -- ============================================================================
 

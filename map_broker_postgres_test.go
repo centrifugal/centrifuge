@@ -1364,7 +1364,7 @@ func verifySchemaComplete(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	t.Helper()
 
 	// Check tables exist.
-	for _, suffix := range []string{"stream", "state", "meta", "idempotency"} {
+	for _, suffix := range []string{"stream", "state", "meta", "idempotency", "shard_lock", "schema_version"} {
 		table := prefix + suffix
 		var exists bool
 		err := pool.QueryRow(ctx,
@@ -1472,8 +1472,9 @@ func TestPostgresMapBroker_EnsureSchema_Fresh(t *testing.T) {
 	err = broker.EnsureSchema(ctx)
 	require.NoError(t, err)
 
-	// Verify all objects exist with JSONB (default).
+	// Verify all objects exist for both prefixes.
 	verifySchemaComplete(t, ctx, broker.pool, "cf_map_", true)
+	verifySchemaComplete(t, ctx, broker.pool, "cf_binary_map_", false)
 }
 
 // TestPostgresMapBroker_EnsureSchema_Idempotent tests calling EnsureSchema twice.
@@ -1511,6 +1512,7 @@ func TestPostgresMapBroker_EnsureSchema_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 
 	verifySchemaComplete(t, ctx, broker.pool, "cf_map_", true)
+	verifySchemaComplete(t, ctx, broker.pool, "cf_binary_map_", false)
 }
 
 // TestPostgresMapBroker_EnsureSchema_PartialState tests that EnsureSchema handles partial schema.
@@ -1554,6 +1556,7 @@ func TestPostgresMapBroker_EnsureSchema_PartialState(t *testing.T) {
 	require.NoError(t, err)
 
 	verifySchemaComplete(t, ctx, broker.pool, "cf_map_", true)
+	verifySchemaComplete(t, ctx, broker.pool, "cf_binary_map_", false)
 }
 
 // TestPostgresMapBroker_EnsureSchema_BinaryData tests BYTEA columns when BinaryData=true.
@@ -1586,7 +1589,8 @@ func TestPostgresMapBroker_EnsureSchema_BinaryData(t *testing.T) {
 	err = broker.EnsureSchema(ctx)
 	require.NoError(t, err)
 
-	// Verify data columns are BYTEA.
+	// Verify both prefixes exist (EnsureSchema creates both).
+	verifySchemaComplete(t, ctx, broker.pool, "cf_map_", true)
 	verifySchemaComplete(t, ctx, broker.pool, "cf_binary_map_", false)
 }
 
@@ -1654,6 +1658,395 @@ func TestPostgresMapBroker_EnsureSchema_FunctionalAfterSetup(t *testing.T) {
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
 	require.NoError(t, err)
 	require.Empty(t, stateRes.Publications)
+}
+
+// TestPostgresMapBroker_EnsureSchema_VersionTracking tests that schema version is tracked.
+func TestPostgresMapBroker_EnsureSchema_VersionTracking(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		DSN:       connString,
+		NumShards: 4,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = broker.Close(ctx)
+		_ = node.Shutdown(ctx)
+	})
+
+	dropAllSchemaObjects(ctx, broker.pool)
+
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	// Verify version is set in both prefix tables.
+	for _, prefix := range []string{"cf_map_", "cf_binary_map_"} {
+		var version int
+		err := broker.pool.QueryRow(ctx,
+			fmt.Sprintf(`SELECT schema_version FROM %sschema_version WHERE id = 1`, prefix),
+		).Scan(&version)
+		require.NoError(t, err, "schema_version should exist for prefix %s", prefix)
+		require.Equal(t, schemaVersion, version, "version should match schemaVersion for prefix %s", prefix)
+	}
+}
+
+// TestPostgresMapBroker_EnsureSchema_BothPrefixesCreated tests that EnsureSchema creates both variants.
+func TestPostgresMapBroker_EnsureSchema_BothPrefixesCreated(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
+	// BinaryData=false, but both should still be created.
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		DSN:       connString,
+		NumShards: 4,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = broker.Close(ctx)
+		_ = node.Shutdown(ctx)
+	})
+
+	dropAllSchemaObjects(ctx, broker.pool)
+
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	// Verify both prefixes have all tables, indexes, and functions.
+	verifySchemaComplete(t, ctx, broker.pool, "cf_map_", true)
+	verifySchemaComplete(t, ctx, broker.pool, "cf_binary_map_", false)
+
+	// Verify shard_lock populated for both prefixes.
+	for _, prefix := range []string{"cf_map_", "cf_binary_map_"} {
+		var count int
+		err := broker.pool.QueryRow(ctx,
+			fmt.Sprintf(`SELECT COUNT(*) FROM %sshard_lock`, prefix),
+		).Scan(&count)
+		require.NoError(t, err)
+		require.Equal(t, 4, count, "shard_lock should have 4 rows for prefix %s", prefix)
+	}
+}
+
+// TestPostgresMapBroker_EnsureSchema_MigrationExecution tests that migrations run correctly.
+func TestPostgresMapBroker_EnsureSchema_MigrationExecution(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		DSN:       connString,
+		NumShards: 4,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = broker.Close(ctx)
+		_ = node.Shutdown(ctx)
+		// Cleanup: drop test columns and restore version.
+		for _, prefix := range []string{"cf_map_", "cf_binary_map_"} {
+			_, _ = broker.pool.Exec(ctx, fmt.Sprintf(
+				`ALTER TABLE %sstate DROP COLUMN IF EXISTS test_col`, prefix))
+		}
+		schemaVersion = 1
+		delete(schemaMigrations, 2)
+	})
+
+	dropAllSchemaObjects(ctx, broker.pool)
+
+	// Create v1 schema.
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	// Register migration v2: add test_col to both prefixes.
+	schemaMigrations[2] = `
+		ALTER TABLE cf_map_state ADD COLUMN IF NOT EXISTS test_col TEXT;
+		ALTER TABLE cf_binary_map_state ADD COLUMN IF NOT EXISTS test_col TEXT;
+	`
+	schemaVersion = 2
+
+	// Run EnsureSchema again — should apply migration.
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	// Verify test_col exists on both tables.
+	for _, prefix := range []string{"cf_map_", "cf_binary_map_"} {
+		var exists bool
+		err := broker.pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = 'test_col')`,
+			prefix+"state",
+		).Scan(&exists)
+		require.NoError(t, err)
+		require.True(t, exists, "test_col should exist on %sstate", prefix)
+	}
+
+	// Verify version is now 2.
+	var version int
+	err = broker.pool.QueryRow(ctx,
+		`SELECT schema_version FROM cf_map_schema_version WHERE id = 1`,
+	).Scan(&version)
+	require.NoError(t, err)
+	require.Equal(t, 2, version)
+}
+
+// TestPostgresMapBroker_EnsureSchema_MigrationIdempotent tests that migrations can run twice.
+func TestPostgresMapBroker_EnsureSchema_MigrationIdempotent(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		DSN:       connString,
+		NumShards: 4,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = broker.Close(ctx)
+		_ = node.Shutdown(ctx)
+		for _, prefix := range []string{"cf_map_", "cf_binary_map_"} {
+			_, _ = broker.pool.Exec(ctx, fmt.Sprintf(
+				`ALTER TABLE %sstate DROP COLUMN IF EXISTS test_col`, prefix))
+		}
+		schemaVersion = 1
+		delete(schemaMigrations, 2)
+	})
+
+	dropAllSchemaObjects(ctx, broker.pool)
+
+	// Create v1 schema.
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	// Register migration v2.
+	schemaMigrations[2] = `
+		ALTER TABLE cf_map_state ADD COLUMN IF NOT EXISTS test_col TEXT;
+		ALTER TABLE cf_binary_map_state ADD COLUMN IF NOT EXISTS test_col TEXT;
+	`
+	schemaVersion = 2
+
+	// First migration run.
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	// Reset version in DB to force re-run of DDL + migration.
+	_, _ = broker.pool.Exec(ctx, `UPDATE cf_map_schema_version SET schema_version = 1 WHERE id = 1`)
+	_, _ = broker.pool.Exec(ctx, `UPDATE cf_binary_map_schema_version SET schema_version = 1 WHERE id = 1`)
+
+	// Second migration run — should succeed (idempotent).
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+}
+
+// TestPostgresMapBroker_EnsureSchema_FreshInstallSkipsMigrations tests that fresh installs skip migrations.
+func TestPostgresMapBroker_EnsureSchema_FreshInstallSkipsMigrations(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		DSN:       connString,
+		NumShards: 4,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = broker.Close(ctx)
+		_ = node.Shutdown(ctx)
+		for _, prefix := range []string{"cf_map_", "cf_binary_map_"} {
+			_, _ = broker.pool.Exec(ctx, fmt.Sprintf(
+				`ALTER TABLE %sstate DROP COLUMN IF EXISTS test_col`, prefix))
+		}
+		schemaVersion = 1
+		delete(schemaMigrations, 2)
+	})
+
+	dropAllSchemaObjects(ctx, broker.pool)
+
+	// Set up v2 with a migration that adds a column (harmless but verifiable).
+	schemaMigrations[2] = `
+		ALTER TABLE cf_map_state ADD COLUMN IF NOT EXISTS test_col TEXT;
+		ALTER TABLE cf_binary_map_state ADD COLUMN IF NOT EXISTS test_col TEXT;
+	`
+	schemaVersion = 2
+
+	// Fresh install — DDL creates latest schema, migration should be skipped.
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	// Version should be 2 (set by UPDATE at end).
+	var version int
+	err = broker.pool.QueryRow(ctx,
+		`SELECT schema_version FROM cf_map_schema_version WHERE id = 1`,
+	).Scan(&version)
+	require.NoError(t, err)
+	require.Equal(t, 2, version)
+}
+
+// TestPostgresMapBroker_EnsureSchema_VersionPreservedOnDDLRerun tests that DO NOTHING preserves version.
+func TestPostgresMapBroker_EnsureSchema_VersionPreservedOnDDLRerun(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		DSN:       connString,
+		NumShards: 4,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = broker.Close(ctx)
+		_ = node.Shutdown(ctx)
+		schemaVersion = 1
+	})
+
+	dropAllSchemaObjects(ctx, broker.pool)
+
+	// Create v1 schema.
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	// Manually bump version to 2 (simulating a previous upgrade).
+	_, err = broker.pool.Exec(ctx, `UPDATE cf_map_schema_version SET schema_version = 2 WHERE id = 1`)
+	require.NoError(t, err)
+	_, err = broker.pool.Exec(ctx, `UPDATE cf_binary_map_schema_version SET schema_version = 2 WHERE id = 1`)
+	require.NoError(t, err)
+
+	// Set schemaVersion to 2 so fast path matches.
+	schemaVersion = 2
+
+	// Call EnsureSchema — should take fast path (version matches, probe OK).
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	// Verify version is still 2 (not reset to 1 by DDL's DO NOTHING).
+	var version int
+	err = broker.pool.QueryRow(ctx,
+		`SELECT schema_version FROM cf_map_schema_version WHERE id = 1`,
+	).Scan(&version)
+	require.NoError(t, err)
+	require.Equal(t, 2, version)
+}
+
+// TestPostgresMapBroker_EnsureSchema_FunctionalAfterMigration tests that all operations work after migration.
+func TestPostgresMapBroker_EnsureSchema_FunctionalAfterMigration(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		DSN:       connString,
+		NumShards: 4,
+		Outbox: OutboxConfig{
+			PollInterval: 10 * time.Millisecond,
+		},
+	})
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = broker.Close(ctx)
+		_ = node.Shutdown(ctx)
+		for _, prefix := range []string{"cf_map_", "cf_binary_map_"} {
+			_, _ = broker.pool.Exec(ctx, fmt.Sprintf(
+				`ALTER TABLE %sstate DROP COLUMN IF EXISTS test_col`, prefix))
+		}
+		schemaVersion = 1
+		delete(schemaMigrations, 2)
+	})
+
+	dropAllSchemaObjects(ctx, broker.pool)
+
+	// Create v1 schema.
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	// Register and apply v2 migration.
+	schemaMigrations[2] = `
+		ALTER TABLE cf_map_state ADD COLUMN IF NOT EXISTS test_col TEXT;
+		ALTER TABLE cf_binary_map_state ADD COLUMN IF NOT EXISTS test_col TEXT;
+	`
+	schemaVersion = 2
+	err = broker.EnsureSchema(ctx)
+	require.NoError(t, err)
+
+	err = broker.RegisterEventHandler(nil)
+	require.NoError(t, err)
+
+	channel := fmt.Sprintf("test_migration_func_%d", time.Now().UnixNano())
+
+	// Publish.
+	res, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"hello":"world"}`),
+	})
+	require.NoError(t, err)
+	require.False(t, res.Suppressed)
+
+	// ReadState.
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 1)
+	require.Equal(t, "key1", stateRes.Publications[0].Key)
+
+	// ReadStream.
+	streamRes, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	require.Len(t, streamRes.Publications, 1)
 }
 
 // TestPostgresMapBroker_OrderedStateAsc tests that ASC ordering returns entries

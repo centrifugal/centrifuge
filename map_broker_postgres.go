@@ -2,9 +2,7 @@ package centrifuge
 
 import (
 	"context"
-	"crypto/sha256"
 	_ "embed"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +22,14 @@ var postgresSchemaJSONBSQL string
 
 //go:embed internal/postgres_sql/schema_binary.sql
 var postgresSchemaBinarySQL string
+
+// schemaVersion is the current schema version. Bump when adding migrations.
+var schemaVersion = 1
+
+// schemaMigrations maps target version to migration SQL.
+// Each migration must handle BOTH prefixes and be idempotent.
+// Version 1 is the baseline (applied via full DDL). Migrations start at 2.
+var schemaMigrations = map[int]string{}
 
 // execSchemaWithRetry executes idempotent schema SQL, retrying on transient
 // conflicts: deadlock (40P01) and "tuple concurrently updated" (XX000).
@@ -470,36 +476,25 @@ func (e *SchemaError) Unwrap() error {
 }
 
 // EnsureSchema creates all required database objects idempotently.
-// It executes the embedded schema SQL (tables, indexes, functions).
+// It creates BOTH JSONB and BYTEA schema variants in a single call,
+// regardless of the BinaryData config (which only controls which variant
+// is used at runtime). This ensures both schemas are always available.
 //
-// Data columns use JSONB by default (suitable for JSON payloads).
-// Set BinaryData=true in config to use BYTEA instead — this creates a
-// completely separate set of tables and functions with the cf_binary_map_ prefix.
-// Both schemas can coexist in the same database.
+// Schema versioning uses an integer version stored in cf_map_schema_version.
+// On startup, if the version matches and a probe query succeeds, all DDL
+// is skipped (fast path). Otherwise, full DDL is re-applied (idempotent)
+// and any pending migrations are executed in order.
 //
-// This method is safe to call multiple times — all DDL uses
-// CREATE IF NOT EXISTS / CREATE OR REPLACE.
-//
-// To avoid DDL lock conflicts during rolling deploys (where concurrent nodes
-// are actively publishing), EnsureSchema computes a hash of the schema SQL +
-// shard configuration and stores it in a version table. On subsequent calls,
-// if the hash matches, all DDL is skipped entirely — no catalog locks taken.
+// This method is safe to call concurrently from multiple nodes — all DDL
+// uses CREATE IF NOT EXISTS / CREATE OR REPLACE, and all migrations must
+// be idempotent (e.g. ADD COLUMN IF NOT EXISTS).
 func (e *PostgresMapBroker) EnsureSchema(ctx context.Context) error {
-	schemaSQL := postgresSchemaJSONBSQL
-	if e.conf.BinaryData {
-		schemaSQL = postgresSchemaBinarySQL
-	}
-
-	// Compute a version hash from schema SQL + shard count.
-	h := sha256.Sum256([]byte(fmt.Sprintf("%s\n%d", schemaSQL, e.conf.NumShards)))
-	versionHash := hex.EncodeToString(h[:16])
-
-	// Quick check: if schema version matches, nothing changed — skip all DDL.
-	var currentHash string
-	err := e.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT version_hash FROM %s WHERE id = 1`, e.names.schemaVersion,
-	)).Scan(&currentHash)
-	if err == nil && currentHash == versionHash {
+	// 1. Read version: fast path if version matches and probe succeeds.
+	var dbVersion int
+	err := e.pool.QueryRow(ctx,
+		`SELECT schema_version FROM cf_map_schema_version WHERE id = 1`,
+	).Scan(&dbVersion)
+	if err == nil && dbVersion == schemaVersion {
 		// Verify a critical table actually exists — guards against partial
 		// schema loss (e.g. schema_version survived but tables were dropped).
 		if _, probeErr := e.pool.Exec(ctx, fmt.Sprintf(
@@ -507,12 +502,16 @@ func (e *PostgresMapBroker) EnsureSchema(ctx context.Context) error {
 			return nil
 		}
 	}
+	if err != nil {
+		dbVersion = 0 // Table doesn't exist or other error — treat as fresh.
+	}
 
-	// Schema needs update — run full DDL + functions.
-	// Split into DDL (tables+indexes) and functions, executed as separate
-	// transactions to reduce lock scope. Each part retries on deadlock/conflict.
-	ddlSQL, funcSQL := splitSchemaSQL(schemaSQL)
-	for _, sql := range []string{ddlSQL, funcSQL} {
+	// 2. Run DDL for both variants (separate transactions for lock isolation).
+	//    Split into DDL (tables+indexes) and functions, executed as separate
+	//    transactions to reduce lock scope. Each part retries on deadlock/conflict.
+	jsonbDDL, jsonbFuncs := splitSchemaSQL(postgresSchemaJSONBSQL)
+	binaryDDL, binaryFuncs := splitSchemaSQL(postgresSchemaBinarySQL)
+	for _, sql := range []string{jsonbDDL, binaryDDL, jsonbFuncs, binaryFuncs} {
 		if sql == "" {
 			continue
 		}
@@ -521,64 +520,55 @@ func (e *PostgresMapBroker) EnsureSchema(ctx context.Context) error {
 		}
 	}
 
-	// Create shard_lock table in a separate transaction from schema SQL above.
-	// This avoids deadlocks during rolling deploys: the schema SQL contains
-	// CREATE OR REPLACE FUNCTION (needs AccessExclusiveLock on function objects),
-	// and concurrent transactions execute those functions while holding FOR UPDATE
-	// on shard_lock. Keeping them in separate transactions breaks the lock cycle.
-	if _, err := e.pool.Exec(ctx, fmt.Sprintf(
-		`CREATE TABLE IF NOT EXISTS %s (shard_id SMALLINT PRIMARY KEY)`,
-		e.names.shardLock)); err != nil {
-		return &SchemaError{
-			Object: SchemaObject{Type: "table", Name: e.names.shardLock},
-			Op:     "create",
-			Err:    err,
+	// 3. Populate/trim shard_lock for BOTH prefixes.
+	for _, prefix := range []string{"cf_map_", "cf_binary_map_"} {
+		shardLock := prefix + "shard_lock"
+		if _, err := e.pool.Exec(ctx, fmt.Sprintf(
+			`INSERT INTO %s (shard_id) SELECT generate_series(0, $1 - 1) ON CONFLICT DO NOTHING`,
+			shardLock), e.conf.NumShards); err != nil {
+			return &SchemaError{
+				Object: SchemaObject{Type: "table", Name: shardLock},
+				Op:     "create",
+				Err:    fmt.Errorf("populate shard_lock: %w", err),
+			}
+		}
+		if _, err := e.pool.Exec(ctx, fmt.Sprintf(
+			`DELETE FROM %s WHERE shard_id >= $1`,
+			shardLock), e.conf.NumShards); err != nil {
+			return &SchemaError{
+				Object: SchemaObject{Type: "table", Name: shardLock},
+				Op:     "create",
+				Err:    fmt.Errorf("trim shard_lock: %w", err),
+			}
 		}
 	}
 
-	// Populate shard_lock rows (idempotent). Insert new rows for increases,
-	// delete excess rows for decreases. This makes shard_lock the single source
-	// of truth for shard count — SQL functions auto-derive it via COUNT(*).
-	if _, err := e.pool.Exec(ctx, fmt.Sprintf(
-		`INSERT INTO %s (shard_id) SELECT generate_series(0, $1 - 1) ON CONFLICT DO NOTHING`,
-		e.names.shardLock), e.conf.NumShards); err != nil {
-		return &SchemaError{
-			Object: SchemaObject{Type: "table", Name: e.names.shardLock},
-			Op:     "create",
-			Err:    fmt.Errorf("populate shard_lock: %w", err),
-		}
-	}
-	if _, err := e.pool.Exec(ctx, fmt.Sprintf(
-		`DELETE FROM %s WHERE shard_id >= $1`,
-		e.names.shardLock), e.conf.NumShards); err != nil {
-		return &SchemaError{
-			Object: SchemaObject{Type: "table", Name: e.names.shardLock},
-			Op:     "create",
-			Err:    fmt.Errorf("trim shard_lock: %w", err),
-		}
-	}
-
+	// 4. Partitioning (if configured, uses e.names for the active prefix).
 	if e.conf.Partitioning {
 		if err := e.ensurePartitionedStream(ctx); err != nil {
 			return err
 		}
 	}
 
-	// Store the version hash. Create the table first (cheap, no conflict with DML).
-	if _, err := e.pool.Exec(ctx, fmt.Sprintf(
-		`CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY, version_hash TEXT NOT NULL)`,
-		e.names.schemaVersion)); err != nil {
-		return &SchemaError{
-			Object: SchemaObject{Type: "table", Name: e.names.schemaVersion},
-			Op:     "create",
-			Err:    err,
+	// 5. Migration loop (SKIP if dbVersion == 0, fresh install — DDL has latest).
+	if dbVersion > 0 {
+		for v := dbVersion + 1; v <= schemaVersion; v++ {
+			if sql, ok := schemaMigrations[v]; ok {
+				if err := e.execSchemaWithRetry(ctx, sql); err != nil {
+					return err
+				}
+			}
 		}
 	}
-	if _, err := e.pool.Exec(ctx, fmt.Sprintf(
-		`INSERT INTO %s (id, version_hash) VALUES (1, $1) ON CONFLICT (id) DO UPDATE SET version_hash = $1`,
-		e.names.schemaVersion), versionHash); err != nil {
-		// Non-fatal: schema was created successfully, just version tracking failed.
-		e.logErrorMsg("schema version update", err)
+
+	// 6. Update version (always, ensures both tables are current).
+	for _, prefix := range []string{"cf_map_", "cf_binary_map_"} {
+		if _, err := e.pool.Exec(ctx, fmt.Sprintf(
+			`UPDATE %sschema_version SET schema_version = $1 WHERE id = 1`,
+			prefix), schemaVersion); err != nil {
+			// Non-fatal: schema was created successfully, just version tracking failed.
+			e.logErrorMsg("schema version update", err)
+		}
 	}
 
 	return nil

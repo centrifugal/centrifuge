@@ -91,6 +91,25 @@ CREATE TABLE IF NOT EXISTS cf_map_idempotency (
 CREATE INDEX IF NOT EXISTS cf_map_idempotency_expires_idx ON cf_map_idempotency (expires_at);
 
 -- ============================================================================
+-- Shard Lock Table
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS cf_map_shard_lock (
+    shard_id SMALLINT PRIMARY KEY
+);
+
+-- ============================================================================
+-- Schema Version
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS cf_map_schema_version (
+    id              INTEGER PRIMARY KEY,
+    schema_version  INTEGER NOT NULL
+);
+INSERT INTO cf_map_schema_version (id, schema_version) VALUES (1, 1)
+    ON CONFLICT (id) DO NOTHING;
+
+-- ============================================================================
 -- Functions
 -- ============================================================================
 
