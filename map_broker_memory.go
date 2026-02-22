@@ -560,6 +560,8 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 	// consistent with Publish: pubLock → hub lock (prevents potential deadlock).
 	var expiredEvents []expiredKeyEvent
 	var eventHandler BrokerEventHandler
+	var oldestExpireAt int64 // Track oldest expired timestamp for lag metric.
+	var keysRemoved int64    // Track total keys removed (independent of eventHandler).
 
 	h.Lock()
 	if h.nextKeyExpireCheck == 0 || h.nextKeyExpireCheck > time.Now().UnixMilli() {
@@ -621,9 +623,15 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 			continue
 		}
 
+		// Track the oldest expired timestamp for the lag metric.
+		if oldestExpireAt == 0 || expireAt < oldestExpireAt {
+			oldestExpireAt = expireAt
+		}
+
 		// Remove the expired key from state (stream.Add deferred to phase 2).
 		delete(channel.state, key)
 		delete(h.keyExpires, chKey)
+		keysRemoved++
 		channel.sortedKeysDirty = true
 		if channel.ordered {
 			delete(channel.scores, key)
@@ -663,6 +671,22 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 	}
 	h.nextKeyExpireCheck = *nextKeyExpireCheck
 	h.Unlock()
+
+	// Report cleanup metrics outside the lock.
+	if h.node != nil && h.node.metrics != nil {
+		if oldestExpireAt > 0 {
+			lagSeconds := float64(now-oldestExpireAt) / 1000.0
+			if lagSeconds < 0 {
+				lagSeconds = 0
+			}
+			h.node.metrics.setMapBrokerCleanupLag("", lagSeconds)
+		} else {
+			h.node.metrics.setMapBrokerCleanupLag("", 0)
+		}
+		if keysRemoved > 0 {
+			h.node.metrics.addMapBrokerCleanupKeysRemoved("", keysRemoved)
+		}
+	}
 
 	// Phase 2: Under pubLock → hub lock — add to stream and deliver events.
 	// This matches Publish's lock ordering: pubLock → hub lock → HandlePublication.
@@ -710,6 +734,9 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 		}
 		if err != nil {
 			h.node.logger.log(newErrorLogEntry(err, "error handling expired key publication", map[string]any{"channel": event.channel, "key": event.key}))
+			if h.node.metrics != nil {
+				h.node.metrics.incMapBrokerCleanupErrors("")
+			}
 		}
 	}
 }

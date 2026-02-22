@@ -168,6 +168,10 @@ type OutboxConfig struct {
 
 // PostgresMapBrokerConfig configures the PostgreSQL map broker.
 type PostgresMapBrokerConfig struct {
+	// Name of broker, for observability purposes – i.e. becomes part of metrics/logs labels.
+	// By default, empty string is used.
+	Name string
+
 	// DSN is the primary PostgreSQL connection string for writes.
 	// Example: "postgres://user:pass@localhost:5432/dbname?sslmode=disable"
 	DSN string
@@ -428,6 +432,7 @@ func (e *PostgresMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 	}
 
 	go e.runTTLExpirationWorker()
+	go e.runCleanupLagWorker()
 	go e.runCleanupWorker()
 	if e.conf.Partitioning {
 		go e.runPartitionWorker()
@@ -1964,21 +1969,34 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, pool *pgxpoo
 	return len(buf.metas), maxID, nil
 }
 
+// logFields returns fields with broker_name added if configured.
+// If fields is nil, a new map is created.
+func (e *PostgresMapBroker) logFields(fields map[string]any) map[string]any {
+	if e.conf.Name == "" {
+		return fields
+	}
+	if fields == nil {
+		fields = map[string]any{}
+	}
+	fields["broker_name"] = e.conf.Name
+	return fields
+}
+
 func (e *PostgresMapBroker) logErrorMsg(msg string, err error) {
 	if e.node != nil {
-		e.node.logger.log(newErrorLogEntry(err, msg, nil))
+		e.node.logger.log(newErrorLogEntry(err, msg, e.logFields(nil)))
 	}
 }
 
 func (e *PostgresMapBroker) logError(msg string, err error, shardID int) {
 	if e.node != nil {
-		e.node.logger.log(newErrorLogEntry(err, msg, map[string]any{"shard": shardID}))
+		e.node.logger.log(newErrorLogEntry(err, msg, e.logFields(map[string]any{"shard": shardID})))
 	}
 }
 
 func (e *PostgresMapBroker) logInfo(msg string, shardID int) {
 	if e.node != nil && e.node.logEnabled(LogLevelInfo) {
-		e.node.logger.log(newLogEntry(LogLevelInfo, msg, map[string]any{"shard": shardID}))
+		e.node.logger.log(newLogEntry(LogLevelInfo, msg, e.logFields(map[string]any{"shard": shardID})))
 	}
 }
 
@@ -2014,7 +2032,10 @@ func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 		LIMIT 100
 	`, e.names.state))
 	if err != nil {
-		e.node.logger.log(newErrorLogEntry(err, "error querying channels for key expiration", nil))
+		e.node.logger.log(newErrorLogEntry(err, "error querying channels for key expiration", e.logFields(nil)))
+		if e.node.metrics != nil {
+			e.node.metrics.incMapBrokerCleanupErrors(e.conf.Name)
+		}
 		return
 	}
 	var channels []string
@@ -2031,7 +2052,10 @@ func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 	for _, ch := range channels {
 		chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 		if err != nil {
-			e.node.logger.log(newErrorLogEntry(err, "error resolving channel options for key expiration", map[string]any{"channel": ch}))
+			e.node.logger.log(newErrorLogEntry(err, "error resolving channel options for key expiration", e.logFields(map[string]any{"channel": ch})))
+			if e.node.metrics != nil {
+				e.node.metrics.incMapBrokerCleanupErrors(e.conf.Name)
+			}
 			continue
 		}
 		var metaTTL *string
@@ -2051,14 +2075,66 @@ func (e *PostgresMapBroker) expireKeys(ctx context.Context) {
 			FROM %s($1, $2, $3::interval, $4, $5)
 		`, e.names.expireKeys), 1000, numShards, metaTTL, ch, e.conf.SkipShardLock)
 		if err != nil {
-			e.node.logger.log(newErrorLogEntry(err, "error in batch key expiration", map[string]any{"channel": ch}))
+			e.node.logger.log(newErrorLogEntry(err, "error in batch key expiration", e.logFields(map[string]any{"channel": ch})))
+			if e.node.metrics != nil {
+				e.node.metrics.incMapBrokerCleanupErrors(e.conf.Name)
+			}
 			continue
 		}
-		// Drain rows to ensure SQL function completes fully.
+		// Count rows to track keys removed.
+		var removedCount int64
 		for rows.Next() {
+			removedCount++
 		}
 		rows.Close()
+		if removedCount > 0 && e.node.metrics != nil {
+			e.node.metrics.addMapBrokerCleanupKeysRemoved(e.conf.Name, removedCount)
+		}
 	}
+}
+
+// runCleanupLagWorker periodically checks the oldest expired entry in the state
+// table and reports it as a lag metric. This runs in a separate goroutine to
+// avoid adding extra queries to the hot cleanup path.
+func (e *PostgresMapBroker) runCleanupLagWorker() {
+	interval := e.conf.TTLCheckInterval
+	if interval <= 0 {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	ctx := e.cancelCtx
+
+	for {
+		select {
+		case <-e.closeCh:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			e.updateCleanupLag(ctx)
+		}
+	}
+}
+
+func (e *PostgresMapBroker) updateCleanupLag(ctx context.Context) {
+	if e.node.metrics == nil {
+		return
+	}
+	var expiresAt *time.Time
+	err := e.pool.QueryRow(ctx, fmt.Sprintf(`
+		SELECT MIN(expires_at) FROM %s
+		WHERE expires_at IS NOT NULL AND expires_at <= NOW()
+	`, e.names.state)).Scan(&expiresAt)
+	if err != nil || expiresAt == nil {
+		e.node.metrics.setMapBrokerCleanupLag(e.conf.Name, 0)
+		return
+	}
+	lagSeconds := time.Since(*expiresAt).Seconds()
+	if lagSeconds < 0 {
+		lagSeconds = 0
+	}
+	e.node.metrics.setMapBrokerCleanupLag(e.conf.Name, lagSeconds)
 }
 
 // ============================================================================

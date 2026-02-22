@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -494,6 +495,59 @@ func TestPostgresMapBroker_CAS(t *testing.T) {
 	require.Equal(t, SuppressReasonPositionMismatch, res3.SuppressReason)
 	require.NotNil(t, res3.CurrentPublication)
 	require.Equal(t, []byte(`{"stock": 9}`), res3.CurrentPublication.Data)
+}
+
+func TestPostgresMapBroker_CleanupMetrics(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping cleanup metrics test in short mode")
+	}
+
+	registry := prometheus.NewRegistry()
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        2 * time.Second,
+			}
+		},
+		Metrics: MetricsConfig{
+			RegistererGatherer: registry,
+		},
+	})
+	broker := newTestPostgresMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := fmt.Sprintf("test_cleanup_metrics_%d", time.Now().UnixNano())
+
+	// Publish two entries with short TTL.
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte("data1"),
+	})
+	require.NoError(t, err)
+	_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{
+		Data: []byte("data2"),
+	})
+	require.NoError(t, err)
+
+	// Wait for TTL to expire.
+	time.Sleep(3 * time.Second)
+
+	// Trigger TTL check directly.
+	broker.expireKeys(ctx)
+
+	// Verify keys_removed counter was incremented.
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	var removedCount float64
+	for _, f := range families {
+		if f.GetName() == "centrifuge_map_broker_cleanup_keys_removed_count" {
+			for _, m := range f.GetMetric() {
+				removedCount += m.GetCounter().GetValue()
+			}
+		}
+	}
+	require.GreaterOrEqual(t, removedCount, float64(2), "cleanup_keys_removed_count should be at least 2")
 }
 
 // TestPostgresMapBroker_KeyTTL tests key TTL (this is a slower test).

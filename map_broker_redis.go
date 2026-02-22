@@ -249,6 +249,7 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 			}
 			if e.conf.CleanupInterval > 0 {
 				go e.runCleanupWorker(context.Background())
+				go e.runCleanupLagWorker(context.Background())
 			}
 
 			return e, nil
@@ -280,6 +281,7 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 
 	if e.conf.CleanupInterval > 0 {
 		go e.runCleanupWorker(context.Background())
+		go e.runCleanupLagWorker(context.Background())
 	}
 
 	return e, nil
@@ -2351,6 +2353,66 @@ const cleanupChannelBatchSize = 10000
 // network round-trip overhead from N sequential calls to ~N/concurrency batches.
 const cleanupChannelConcurrency = 64
 
+// runCleanupLagWorker periodically checks the oldest expired entry across all
+// cleanup ZSETs and reports it as a lag metric. This runs in a separate goroutine
+// to avoid adding extra Redis calls to the hot cleanup path.
+func (e *RedisMapBroker) runCleanupLagWorker(ctx context.Context) {
+	interval := e.conf.CleanupInterval
+	if interval <= 0 {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-e.closeCh:
+			return
+		case <-ticker.C:
+			e.updateCleanupLag(ctx)
+		}
+	}
+}
+
+func (e *RedisMapBroker) updateCleanupLag(ctx context.Context) {
+	if e.node.metrics == nil {
+		return
+	}
+	now := time.Now().UnixMilli()
+	var maxLagMs int64
+
+	for _, wrapper := range e.shards {
+		shard := wrapper.shard
+		var cleanupKeys []string
+		if e.useShardedPubSub(shard) {
+			cleanupKeys = make([]string, 0, e.conf.NumShardedPubSubPartitions)
+			for i := 0; i < e.conf.NumShardedPubSubPartitions; i++ {
+				cleanupKeys = append(cleanupKeys, e.conf.Prefix+":cleanup:channels:{"+strconv.Itoa(i)+"}")
+			}
+		} else {
+			cleanupKeys = []string{e.conf.Prefix + ":cleanup:channels"}
+		}
+		for _, cleanupKey := range cleanupKeys {
+			cmd := shard.client.B().Arbitrary("ZRANGE").Keys(cleanupKey).Args("0", "0", "WITHSCORES").Build()
+			if arr, err := shard.client.Do(ctx, cmd).AsStrSlice(); err == nil && len(arr) >= 2 {
+				if oldestScore, parseErr := strconv.ParseFloat(arr[1], 64); parseErr == nil {
+					if lagMs := now - int64(oldestScore); lagMs > maxLagMs {
+						maxLagMs = lagMs
+					}
+				}
+			}
+		}
+	}
+
+	if maxLagMs > 0 {
+		e.node.metrics.setMapBrokerCleanupLag(e.conf.Name, float64(maxLagMs)/1000.0)
+	} else {
+		e.node.metrics.setMapBrokerCleanupLag(e.conf.Name, 0)
+	}
+}
+
 // runCleanupWorker runs the background cleanup worker that generates LEAVE events
 // for expired presence entries. This ensures guaranteed delivery of LEAVE events
 // even when clients disconnect without explicit leave.
@@ -2435,6 +2497,9 @@ func (e *RedisMapBroker) cleanupPartition(ctx context.Context, shard *RedisShard
 					"error": err.Error(),
 				}))
 			}
+			if e.node.metrics != nil {
+				e.node.metrics.incMapBrokerCleanupErrors(e.conf.Name)
+			}
 			return
 		}
 		if len(channels) == 0 {
@@ -2461,6 +2526,9 @@ func (e *RedisMapBroker) cleanupPartition(ctx context.Context, shard *RedisShard
 							"channel": ch,
 							"error":   err.Error(),
 						}))
+					}
+					if e.node.metrics != nil {
+						e.node.metrics.incMapBrokerCleanupErrors(e.conf.Name)
 					}
 				}
 			}(ch)
@@ -2511,7 +2579,7 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 		streamlessFlag = "1"
 	}
 
-	_, err = e.cleanupScript.Exec(ctx, shard.client,
+	result, err := e.cleanupScript.Exec(ctx, shard.client,
 		[]string{
 			e.stateHashKey(shard, ch),   // KEYS[1]: state hash key
 			e.stateExpireKey(shard, ch), // KEYS[2]: state expire zset key
@@ -2534,7 +2602,18 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 			streamlessFlag,                        // ARGV[10]: streamless ("1" = skip stream/meta, "0" = normal)
 		},
 	).ToArray()
-	return err
+	if err != nil {
+		return err
+	}
+	// Parse removed_count from Lua result (first element).
+	if len(result) > 0 {
+		if removedCount, parseErr := result[0].AsInt64(); parseErr == nil && removedCount > 0 {
+			if e.node.metrics != nil {
+				e.node.metrics.addMapBrokerCleanupKeysRemoved(e.conf.Name, removedCount)
+			}
+		}
+	}
+	return nil
 }
 
 func (e *RedisMapBroker) runPubSub(s *brokerShardWrapper, logFields map[string]any, eventHandler BrokerEventHandler, clusterShardIndex, psShardIndex int, useShardedPubSub bool, startOnce func(error)) {

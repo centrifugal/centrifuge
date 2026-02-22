@@ -69,7 +69,10 @@ type metrics struct {
 	broadcastDurationHistogram *prometheus.HistogramVec
 	pubSubLagHistogram         *prometheus.HistogramVec
 	pingPongDurationHistogram  *prometheus.HistogramVec
-	mapPublishSuppressedCount *prometheus.CounterVec
+	mapPublishSuppressedCount        *prometheus.CounterVec
+	mapBrokerCleanupLag              *prometheus.GaugeVec
+	mapBrokerCleanupKeysRemoved      *prometheus.CounterVec
+	mapBrokerCleanupErrors           *prometheus.CounterVec
 
 	redisBrokerPubSubErrors           *prometheus.CounterVec
 	redisBrokerPubSubDroppedMessages  *prometheus.CounterVec
@@ -366,6 +369,27 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "Number of suppressed map publish/remove operations.",
 	}, []string{"reason", "channel_namespace"})
 
+	m.mapBrokerCleanupLag = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "map_broker",
+		Name:      "cleanup_lag_seconds",
+		Help:      "Lag between now and the oldest expired entry awaiting cleanup. 0 means caught up.",
+	}, []string{"broker_name"})
+
+	m.mapBrokerCleanupKeysRemoved = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "map_broker",
+		Name:      "cleanup_keys_removed_count",
+		Help:      "Total number of keys removed by cleanup.",
+	}, []string{"broker_name"})
+
+	m.mapBrokerCleanupErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "map_broker",
+		Name:      "cleanup_errors_count",
+		Help:      "Total number of cleanup errors.",
+	}, []string{"broker_name"})
+
 	m.redisBrokerPubSubErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "broker",
@@ -448,6 +472,9 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.pubSubLagHistogram,
 		m.broadcastDurationHistogram,
 		m.mapPublishSuppressedCount,
+		m.mapBrokerCleanupLag,
+		m.mapBrokerCleanupKeysRemoved,
+		m.mapBrokerCleanupErrors,
 		m.redisBrokerPubSubErrors,
 		m.redisBrokerPubSubDroppedMessages,
 		m.redisBrokerPubSubBufferedMessages,
@@ -880,6 +907,18 @@ func (m *metrics) incMapPublishSuppressed(reason SuppressReason, ch string) {
 		m.mapPublishSuppressedCache.Store(labels, counter)
 	}
 	counter.(prometheus.Counter).Inc()
+}
+
+func (m *metrics) setMapBrokerCleanupLag(name string, seconds float64) {
+	m.mapBrokerCleanupLag.WithLabelValues(name).Set(seconds)
+}
+
+func (m *metrics) addMapBrokerCleanupKeysRemoved(name string, count int64) {
+	m.mapBrokerCleanupKeysRemoved.WithLabelValues(name).Add(float64(count))
+}
+
+func (m *metrics) incMapBrokerCleanupErrors(name string) {
+	m.mapBrokerCleanupErrors.WithLabelValues(name).Inc()
 }
 
 // getAcceptProtocolLabel returns the transport accept protocol label based on HTTP version.

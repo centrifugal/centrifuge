@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -2360,4 +2361,66 @@ func TestMemoryMapBroker_OrderedStateAscSameScores(t *testing.T) {
 
 	require.Equal(t, "mango", stateRes.Publications[0].Key)
 	require.Equal(t, "zebra", stateRes.Publications[1].Key)
+}
+
+func TestMemoryMapBroker_CleanupMetrics(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	node, err := New(Config{
+		Metrics: MetricsConfig{
+			RegistererGatherer: registry,
+		},
+	})
+	require.NoError(t, err)
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			SyncMode:      MapSyncConverging,
+			RetentionMode: MapRetentionExpiring,
+			StreamSize:    100,
+			StreamTTL:     300 * time.Second,
+			KeyTTL:        50 * time.Millisecond,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	_, err = broker.Publish(ctx, "test_cleanup_metrics", "key1", MapPublishOptions{
+		Data: []byte("data1"),
+	})
+	require.NoError(t, err)
+	_, err = broker.Publish(ctx, "test_cleanup_metrics", "key2", MapPublishOptions{
+		Data: []byte("data2"),
+	})
+	require.NoError(t, err)
+
+	// Wait for keys to expire and cleanup to run (1s timer + some margin).
+	require.Eventually(t, func() bool {
+		families, err := registry.Gather()
+		if err != nil {
+			return false
+		}
+		for _, f := range families {
+			if f.GetName() == "centrifuge_map_broker_cleanup_keys_removed_count" {
+				for _, m := range f.GetMetric() {
+					if m.GetCounter().GetValue() >= 2 {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}, 5*time.Second, 100*time.Millisecond, "cleanup_keys_removed_count should reach at least 2")
+
+	// Verify lag metric was set (should be >= 0).
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	var foundLag bool
+	for _, f := range families {
+		if f.GetName() == "centrifuge_map_broker_cleanup_lag_seconds" {
+			for _, m := range f.GetMetric() {
+				_ = m.GetGauge().GetValue()
+				foundLag = true
+			}
+		}
+	}
+	require.True(t, foundLag, "cleanup_lag_seconds metric should exist")
 }

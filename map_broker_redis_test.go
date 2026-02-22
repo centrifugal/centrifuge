@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -2816,4 +2817,69 @@ func TestRedisMapBroker_OrderedStateAscSameScores(t *testing.T) {
 	require.Empty(t, stateRes.Cursor)
 	require.Equal(t, "mango", stateRes.Publications[0].Key)
 	require.Equal(t, "zebra", stateRes.Publications[1].Key)
+}
+
+func TestRedisMapBroker_CleanupMetrics(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	node, _ := New(Config{
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				StreamSize:    100,
+				StreamTTL:     300 * time.Second,
+				MetaTTL:       3600 * time.Second,
+				KeyTTL:        30 * time.Second,
+			}
+		},
+		Metrics: MetricsConfig{
+			RegistererGatherer: registry,
+		},
+	})
+
+	redisConf := testMapBrokerRedisShardConf()
+	shard, err := NewRedisShard(node, redisConf)
+	require.NoError(t, err)
+	brokerConf := testMapBrokerRedisConf()
+	brokerConf.Shards = []*RedisShard{shard}
+	brokerConf.CleanupBatchSize = 100
+	broker, err := NewRedisMapBroker(node, brokerConf)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+	})
+
+	ctx := context.Background()
+	channel := randomChannel("test_cleanup_metrics")
+
+	// Publish two keyed entries with TTL.
+	_, err = broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"status":"online"}`),
+	})
+	require.NoError(t, err)
+	_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{
+		Data: []byte(`{"status":"active"}`),
+	})
+	require.NoError(t, err)
+
+	// Simulate TTL expiry by calling cleanupChannel with a future "now".
+	shardWrapper := broker.shards[0]
+	cleanupKey := broker.cleanupRegistrationKeyForChannel(shardWrapper.shard, channel)
+	futureNow := time.Now().UnixMilli() + 31_000
+
+	err = broker.cleanupChannel(ctx, shardWrapper.shard, channel, cleanupKey, futureNow)
+	require.NoError(t, err)
+
+	// Verify keys_removed counter was incremented.
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	var removedCount float64
+	for _, f := range families {
+		if f.GetName() == "centrifuge_map_broker_cleanup_keys_removed_count" {
+			for _, m := range f.GetMetric() {
+				removedCount += m.GetCounter().GetValue()
+			}
+		}
+	}
+	require.GreaterOrEqual(t, removedCount, float64(2), "cleanup_keys_removed_count should be at least 2")
 }
