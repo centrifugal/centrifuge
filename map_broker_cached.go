@@ -15,6 +15,9 @@ type CachedMapBrokerConfig struct {
 
 	// SyncInterval is how often each channel syncs with backend.
 	// Each channel syncs independently on its own timer.
+	// This defines the upper bound for cross-node staleness: a state change published
+	// through one node becomes visible in another node's cached reads within SyncInterval.
+	// Writes on the local node are reflected immediately (read-your-own-writes).
 	// Default: 30s
 	SyncInterval time.Duration
 

@@ -172,16 +172,7 @@ func handleBoardDeleteHTTP(w http.ResponseWriter, r *http.Request) {
 
 	err := pgPool.QueryRow(r.Context(), `
 		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason
-		FROM cf_map_remove(
-			'board',
-			$1,
-			NULL,
-			NULL,
-			NULL,
-			NULL,
-			NULL,
-			NULL
-		)
+		FROM cf_map_remove(p_channel => 'board', p_key => $1)
 	`, req.TaskID).Scan(&resultID, &channelOffset, &epoch, &suppressed, &suppressReason)
 
 	if err != nil {

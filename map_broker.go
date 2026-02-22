@@ -53,6 +53,23 @@ import (
 //   - TTL: Automatic key expiration with KeyTTL for presence and ephemeral data.
 //   - Ordering: Optional score-based ordering for leaderboards and sorted collections.
 //
+// Epoch lifecycle:
+//
+// Each channel has an epoch — a unique string identifying the current generation of
+// state and stream. Epoch changes when the channel's state is fully reset:
+//
+//   - Memory broker: epoch changes on server restart (state is lost)
+//   - Redis broker: epoch changes when channel meta key expires or is deleted
+//     (controlled by MetaTTL), or on Redis flush/restart
+//   - PostgreSQL broker: epoch changes when channel is explicitly cleared via Clear(),
+//     or when meta row expires (MetaTTL for Expiring retention)
+//
+// When epoch changes, clients receive ErrorUnrecoverablePosition and automatically
+// re-sync from scratch — full state pagination followed by stream catch-up. No data
+// is lost from the client's perspective; they simply get a fresh snapshot. Epoch does
+// NOT change on normal Publish/Remove operations or on server rolling restarts when
+// using Redis or PostgreSQL backends.
+//
 // Implementations must ensure:
 //
 //   - State and stream consistency (same epoch, contiguous offsets)

@@ -186,14 +186,10 @@ func handleLeaderboardLeaveHTTP(w http.ResponseWriter, r *http.Request) {
 	err := pgPool.QueryRow(r.Context(), `
 		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason
 		FROM cf_map_remove(
-			'leaderboard',
-			$1,   -- key (userId)
-			NULL, -- client_id
-			$1,   -- user_id
-			'1 hour'::interval,    -- stream_ttl
-			NULL,                  -- idempotency_key
-			NULL,                  -- idempotency_ttl
-			'24 hours'::interval   -- meta_ttl
+			p_channel => 'leaderboard',
+			p_key => $1,
+			p_user_id => $1,
+			p_meta_ttl => '24 hours'::interval
 		)
 	`, req.UserID).Scan(&resultID, &channelOffset, &epoch, &suppressed, &suppressReason)
 
