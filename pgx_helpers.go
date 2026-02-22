@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strconv"
+	"time"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
 )
@@ -151,6 +152,29 @@ func pgRawJSONBBytes(a *byteArena, b []byte, format int16) []byte {
 // Format values: 0 = text, 1 = binary. Call pgColFormatsFromRows once per
 // query result, before iterating rows.
 type pgColFormats []int16
+
+// pgEpochDeltaUsec is the difference in microseconds between the Unix epoch
+// (1970-01-01) and the PostgreSQL epoch (2000-01-01).
+const pgEpochDeltaUsec = 946684800_000_000
+
+// pgRawTimestampMillis parses a pgx TIMESTAMPTZ value as Unix milliseconds.
+// Binary wire format: 8-byte big-endian int64 = microseconds since PG epoch (2000-01-01 UTC).
+// Text wire format: parsed with time.Parse. Returns 0 for nil input.
+func pgRawTimestampMillis(b []byte, format int16) int64 {
+	if b == nil {
+		return 0
+	}
+	if format == pgTextFormat {
+		// PostgreSQL text format for timestamptz, e.g. "2025-06-15 12:34:56.123456+00"
+		t, err := time.Parse("2006-01-02 15:04:05.999999Z07:00:00", convert.BytesToString(b))
+		if err != nil {
+			return 0
+		}
+		return t.UnixMilli()
+	}
+	usec := int64(binary.BigEndian.Uint64(b))
+	return (usec + pgEpochDeltaUsec) / 1000
+}
 
 // pgRawJSONBMap parses a JSONB value into a map[string]string.
 // Handles both binary wire format (1-byte version header + JSON body)

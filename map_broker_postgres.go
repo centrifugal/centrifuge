@@ -1851,7 +1851,7 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, pool *pgxpoo
 
 	rows, err := pool.Query(ctx, fmt.Sprintf(`
 		SELECT id, shard_id, channel, channel_offset, epoch, key, data, tags, removed, score,
-			   client_id, user_id, conn_info, chan_info, previous_data
+			   client_id, user_id, conn_info, chan_info, previous_data, created_at
 		FROM %s
 		WHERE id > $1 AND shard_id = ANY($2)
 		ORDER BY id
@@ -1875,7 +1875,8 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, pool *pgxpoo
 	// Use RawValues + arena to avoid per-row allocations.
 	// Column order: id(0), shard_id(1), channel(2), channel_offset(3), epoch(4),
 	//              key(5), data(6), tags(7), removed(8), score(9),
-	//              client_id(10), user_id(11), conn_info(12), chan_info(13), previous_data(14).
+	//              client_id(10), user_id(11), conn_info(12), chan_info(13),
+	//              previous_data(14), created_at(15).
 	var fmts pgColFormats
 	for rows.Next() {
 		if fmts == nil {
@@ -1897,6 +1898,7 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, pool *pgxpoo
 		p.Tags = pgRawJSONBMap(raw[7])
 		p.Removed = pgRawBool(raw[8], fmts[8])
 		p.Score = pgRawInt64(raw[9], fmts[9])
+		p.Time = pgRawTimestampMillis(raw[15], fmts[15])
 		if raw[10] != nil {
 			infoBacking = append(infoBacking, ClientInfo{
 				ClientID: pgRawString(&arena, raw[10]),

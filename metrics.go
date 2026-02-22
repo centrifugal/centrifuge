@@ -67,7 +67,7 @@ type metrics struct {
 	commandDurationUnknown       prometheus.Observer
 
 	broadcastDurationHistogram *prometheus.HistogramVec
-	pubSubLagHistogram         prometheus.Histogram
+	pubSubLagHistogram         *prometheus.HistogramVec
 	pingPongDurationHistogram  *prometheus.HistogramVec
 	mapPublishSuppressedCount *prometheus.CounterVec
 
@@ -89,6 +89,7 @@ type metrics struct {
 	messagesReceivedCache          sync.Map
 	tagsFilterDroppedCache         sync.Map
 	mapPublishSuppressedCache sync.Map
+	pubSubLagCache                 sync.Map
 	nsCache                        *otter.Cache[string, string]
 	codeStrings                    map[uint32]string
 }
@@ -339,13 +340,13 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "Number of publications dropped due to tags filtering.",
 	}, []string{"channel_namespace"})
 
-	m.pubSubLagHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+	m.pubSubLagHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
 		Name:      "pub_sub_lag_seconds",
 		Help:      "Pub sub lag in seconds",
 		Buckets:   []float64{0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.200, 0.500, 1.000, 2.000, 5.000, 10.000},
-	})
+	}, []string{"channel_namespace"})
 
 	m.broadcastDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: metricsNamespace,
@@ -541,11 +542,17 @@ func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Du
 	observer.Observe(d.Seconds())
 }
 
-func (m *metrics) observePubSubDeliveryLag(lagTimeMilli int64) {
+func (m *metrics) observePubSubDeliveryLag(lagTimeMilli int64, ch string) {
 	if lagTimeMilli < 0 {
 		lagTimeMilli = -lagTimeMilli
 	}
-	m.pubSubLagHistogram.Observe(float64(lagTimeMilli) / 1000)
+	channelNamespace := m.getChannelNamespaceLabel(ch)
+	observer, ok := m.pubSubLagCache.Load(channelNamespace)
+	if !ok {
+		observer = m.pubSubLagHistogram.WithLabelValues(channelNamespace)
+		m.pubSubLagCache.Store(channelNamespace, observer)
+	}
+	observer.(prometheus.Observer).Observe(float64(lagTimeMilli) / 1000)
 }
 
 func (m *metrics) observeBroadcastDuration(started time.Time, ch string) {

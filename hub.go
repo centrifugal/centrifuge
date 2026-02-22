@@ -807,7 +807,7 @@ func (s *subShard) broadcastPublication(
 		if s.maxTimeLagMilli > 0 && timeLagMilli > s.maxTimeLagMilli {
 			maxLagExceeded = true
 		}
-		s.metrics.observePubSubDeliveryLag(timeLagMilli)
+		s.metrics.observePubSubDeliveryLag(timeLagMilli, channel)
 	}
 
 	fullPub := pubToProto(pub)
