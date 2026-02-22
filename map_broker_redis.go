@@ -146,7 +146,7 @@ type RedisMapBrokerConfig struct {
 
 	// CleanupInterval defines how often to run the cleanup worker that
 	// generates remove events for expired keyed state entries (presence and state).
-	// Default is 5 seconds. Set to -1 to disable cleanup (make sure you understand the consequences).
+	// Default is 1 second. Set to -1 to disable cleanup (make sure you understand the consequences).
 	// Applies to all channels using TTL-based state.
 	CleanupInterval time.Duration
 	// CleanupBatchSize defines max entries to process per channel per cleanup cycle.
@@ -188,7 +188,7 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 		conf.CleanupBatchSize = 100
 	}
 	if conf.CleanupInterval == 0 {
-		conf.CleanupInterval = 5 * time.Second
+		conf.CleanupInterval = time.Second
 	}
 
 	shardWrappers := make([]*brokerShardWrapper, 0, len(conf.Shards))
