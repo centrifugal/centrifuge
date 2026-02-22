@@ -18,13 +18,29 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr, replicaAddrs
 
 	// PostgreSQL takes priority if specified
 	if postgresAddr != "" {
-		log.Printf("Using PostgreSQL map broker")
 		pgConfig := centrifuge.PostgresMapBrokerConfig{
 			DSN: postgresAddr,
 		}
 		if replicaAddrs != "" {
 			pgConfig.ReplicaDSN = strings.Split(replicaAddrs, ",")
-			log.Printf("Configured %d read replica(s)", len(pgConfig.ReplicaDSN))
+		}
+
+		if redisAddr != "" {
+			// Redis for PUB/SUB fan-out (advisory locks, single poller per shard).
+			redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
+				Address: redisAddr,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("error creating Redis shard for fan-out: %w", err)
+			}
+			redisBroker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
+				Shards: []*centrifuge.RedisShard{redisShard},
+				Prefix: "map_demo",
+			})
+			if err != nil {
+				return nil, fmt.Errorf("error creating Redis broker for fan-out: %w", err)
+			}
+			pgConfig.Broker = redisBroker
 		}
 
 		broker, err := centrifuge.NewPostgresMapBroker(node, pgConfig)
@@ -35,10 +51,19 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr, replicaAddrs
 			return nil, fmt.Errorf("error ensuring PostgreSQL schema: %w", err)
 		}
 		backend = broker
-	} else if redisAddr != "" {
-		// Redis if specified
-		log.Printf("Using Redis map broker at %s", redisAddr)
 
+		// Print startup summary.
+		mode := "independent polling (each node polls)"
+		if redisAddr != "" {
+			mode = fmt.Sprintf("Redis fan-out at %s (advisory locks, single poller per shard)", redisAddr)
+		}
+		log.Printf("Map broker: PostgreSQL")
+		log.Printf("  DSN: %s", postgresAddr)
+		if replicaAddrs != "" {
+			log.Printf("  Replicas: %d configured", len(pgConfig.ReplicaDSN))
+		}
+		log.Printf("  Delivery: %s", mode)
+	} else if redisAddr != "" {
 		redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
 			Address: redisAddr,
 		})
@@ -54,19 +79,18 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr, replicaAddrs
 			return nil, err
 		}
 		backend = broker
+		log.Printf("Map broker: Redis at %s", redisAddr)
 	} else {
-		// Default to memory - cache not applicable (already in-memory)
-		log.Println("Using in-memory map broker")
 		broker, err := centrifuge.NewMemoryMapBroker(node, centrifuge.MemoryMapBrokerConfig{})
 		if err != nil {
 			return nil, err
 		}
+		log.Printf("Map broker: in-memory")
 		return broker, nil
 	}
 
 	// Wrap with cache layer if enabled (only for Redis/Postgres)
 	if enableCache {
-		log.Println("Enabling memory cache layer")
 		cached, err := centrifuge.NewCachedMapBroker(node, backend, centrifuge.CachedMapBrokerConfig{
 			Cache: centrifuge.MapCacheConfig{
 				MaxChannels:        10000,
@@ -79,6 +103,7 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr, replicaAddrs
 		if err != nil {
 			return nil, fmt.Errorf("error creating cached map broker: %w", err)
 		}
+		log.Printf("  Cache: enabled (memory cache layer)")
 		return cached, nil
 	}
 

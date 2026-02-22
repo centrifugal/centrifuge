@@ -622,15 +622,16 @@ func (b *RedisBroker) Publish(ch string, data []byte, opts PublishOptions) (Publ
 
 func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts PublishOptions) (PublishResult, error) {
 	protoPub := &protocol.Publication{
-		Data:    data,
-		Info:    infoToProto(opts.ClientInfo),
-		Tags:    opts.Tags,
-		Time:    time.Now().UnixMilli(),
-		Key:     opts.Key,
-		Removed: opts.Removed,
-		Score:   opts.Score,
-		Offset:  opts.Offset,
-		Epoch:   opts.Epoch,
+		Data:     data,
+		Info:     infoToProto(opts.ClientInfo),
+		Tags:     opts.Tags,
+		Time:     time.Now().UnixMilli(),
+		Key:      opts.Key,
+		Removed:  opts.Removed,
+		Score:    opts.Score,
+		Offset:   opts.Offset,
+		Epoch:    opts.Epoch,
+		PrevData: opts.PrevData,
 	}
 	if opts.HistorySize <= 0 || opts.HistoryTTL <= 0 {
 		// In no history case we communicate delta flag over Publication field. This field is then
@@ -1257,7 +1258,12 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 			delta = true
 			pub.Delta = false
 		}
-		if delta && len(prevPayload) > 0 {
+		if len(pub.PrevData) > 0 {
+			// PrevData from map broker fan-out: carry previous data for delta computation.
+			prevPub := &Publication{Data: pub.PrevData}
+			pub.PrevData = nil // Clean before passing to Node layer.
+			_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, true, prevPub)
+		} else if delta && len(prevPayload) > 0 {
 			var prevPub protocol.Publication
 			err = prevPub.UnmarshalVT(prevPayload)
 			if err != nil {

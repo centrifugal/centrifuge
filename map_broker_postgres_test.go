@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -2172,4 +2173,534 @@ func TestPostgresMapBroker_AllColumnTypes(t *testing.T) {
 	require.Equal(t, "user1", sk.Info.UserID)
 	require.Equal(t, []byte(`{"ip":"1.2.3.4"}`), sk.Info.ConnInfo)
 	require.Equal(t, []byte(`{"role":"admin"}`), sk.Info.ChanInfo)
+}
+
+// ============================================================================
+// Redis Broker Fan-out Tests (advisory lock mode)
+// ============================================================================
+
+// newTestRedisBrokerForFanout creates a RedisBroker suitable for PG fan-out testing.
+// Does NOT call node.Run() or SetBroker — the PG broker handles registration.
+func newTestRedisBrokerForFanout(tb testing.TB, n *Node) *RedisBroker {
+	tb.Helper()
+	redisConf := RedisShardConfig{
+		Address:        "127.0.0.1:6379",
+		IOTimeout:      10 * time.Second,
+		ConnectTimeout: 10 * time.Second,
+	}
+	s, err := NewRedisShard(n, redisConf)
+	require.NoError(tb, err)
+
+	prefix := "pg_fanout_test_" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	broker, err := NewRedisBroker(n, RedisBrokerConfig{
+		Prefix: prefix,
+		Shards: []*RedisShard{s},
+	})
+	require.NoError(tb, err)
+	return broker
+}
+
+// TestPostgresMapBroker_RedisFanout_Delivery tests that publications reach
+// the event handler via Redis PUB/SUB fan-out with advisory locking.
+func TestPostgresMapBroker_RedisFanout_Delivery(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, err := New(Config{
+		LogLevel:   LogLevelDebug,
+		LogHandler: func(entry LogEntry) {},
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
+
+	redisBroker := newTestRedisBrokerForFanout(t, node)
+
+	type pubEvent struct {
+		ch      string
+		pub     *Publication
+		sp      StreamPosition
+		delta   bool
+		prevPub *Publication
+	}
+
+	eventCh := make(chan pubEvent, 20)
+
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			eventCh <- pubEvent{ch: ch, pub: pub, sp: sp, delta: delta, prevPub: prevPub}
+			return nil
+		},
+	}
+
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		DSN:        connString,
+		BinaryData: true,
+		NumShards:  4,
+		Broker:     redisBroker,
+		Outbox: OutboxConfig{
+			PollInterval: 10 * time.Millisecond,
+			BatchSize:    100,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, broker.EnsureSchema(ctx))
+	cleanupTestTables(ctx, broker)
+
+	err = broker.RegisterEventHandler(handler)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = broker.Close(context.Background())
+		_ = node.Shutdown(context.Background())
+	})
+
+	channel := fmt.Sprintf("test_redis_fanout_%d", time.Now().UnixNano())
+
+	// Subscribe via PG broker (delegates to Redis).
+	err = broker.Subscribe(channel)
+	require.NoError(t, err)
+
+	// Give workers time to start + subscribe to propagate.
+	time.Sleep(200 * time.Millisecond)
+
+	// Publish via PG broker.
+	const numMessages = 5
+	for i := 0; i < numMessages; i++ {
+		_, err = broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+			Data: []byte(fmt.Sprintf("data%d", i)),
+		})
+		require.NoError(t, err)
+	}
+
+	// Wait for all messages via Redis PUB/SUB.
+	var received []pubEvent
+	deadline := time.After(15 * time.Second)
+	for len(received) < numMessages {
+		select {
+		case ev := <-eventCh:
+			if ev.ch == channel {
+				received = append(received, ev)
+			}
+		case <-deadline:
+			t.Fatalf("timeout waiting for publications, received %d/%d", len(received), numMessages)
+		}
+	}
+
+	require.Len(t, received, numMessages)
+
+	// Verify fields propagated correctly.
+	for _, ev := range received {
+		require.NotZero(t, ev.sp.Offset, "offset should be set")
+		require.NotEmpty(t, ev.sp.Epoch, "epoch should be set")
+		require.NotEmpty(t, ev.pub.Key, "key should be set")
+		require.NotEmpty(t, ev.pub.Data, "data should be set")
+	}
+
+	// Unsubscribe.
+	err = broker.Unsubscribe(channel)
+	require.NoError(t, err)
+}
+
+// TestPostgresMapBroker_RedisFanout_Delta tests that delta/prevPub is correctly
+// propagated through Redis PUB/SUB fan-out.
+func TestPostgresMapBroker_RedisFanout_Delta(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, err := New(Config{
+		LogLevel:   LogLevelDebug,
+		LogHandler: func(entry LogEntry) {},
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
+
+	redisBroker := newTestRedisBrokerForFanout(t, node)
+
+	type pubEvent struct {
+		ch      string
+		pub     *Publication
+		delta   bool
+		prevPub *Publication
+	}
+
+	eventCh := make(chan pubEvent, 20)
+
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			eventCh <- pubEvent{ch: ch, pub: pub, delta: delta, prevPub: prevPub}
+			return nil
+		},
+	}
+
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		DSN:        connString,
+		BinaryData: true,
+		NumShards:  4,
+		Broker:     redisBroker,
+		Outbox: OutboxConfig{
+			PollInterval: 10 * time.Millisecond,
+			BatchSize:    100,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, broker.EnsureSchema(ctx))
+	cleanupTestTables(ctx, broker)
+
+	err = broker.RegisterEventHandler(handler)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = broker.Close(context.Background())
+		_ = node.Shutdown(context.Background())
+	})
+
+	channel := fmt.Sprintf("test_redis_delta_%d", time.Now().UnixNano())
+
+	err = broker.Subscribe(channel)
+	require.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+
+	waitEvent := func(t *testing.T) pubEvent {
+		t.Helper()
+		for {
+			select {
+			case ev := <-eventCh:
+				if ev.ch == channel {
+					return ev
+				}
+			case <-time.After(15 * time.Second):
+				t.Fatal("timeout waiting for publication event")
+				return pubEvent{}
+			}
+		}
+	}
+
+	// First publish with UseDelta — no previous state.
+	_, err = broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:     []byte("data1"),
+		UseDelta: true,
+	})
+	require.NoError(t, err)
+
+	ev := waitEvent(t)
+	require.False(t, ev.delta, "no previous data means useDelta is false")
+	require.Nil(t, ev.prevPub, "no previous state for first publish")
+	require.Equal(t, []byte("data1"), ev.pub.Data)
+
+	// Second publish same key — should get prevPub with first data via Redis.
+	_, err = broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:     []byte("data1_updated"),
+		UseDelta: true,
+	})
+	require.NoError(t, err)
+
+	ev = waitEvent(t)
+	require.True(t, ev.delta)
+	require.NotNil(t, ev.prevPub)
+	require.Equal(t, []byte("data1"), ev.prevPub.Data)
+	require.Equal(t, []byte("data1_updated"), ev.pub.Data)
+
+	// Different key — no previous state for this key.
+	_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{
+		Data:     []byte("data2"),
+		UseDelta: true,
+	})
+	require.NoError(t, err)
+
+	ev = waitEvent(t)
+	require.False(t, ev.delta, "no previous data for key2")
+	require.Nil(t, ev.prevPub, "no previous state for key2")
+
+	err = broker.Unsubscribe(channel)
+	require.NoError(t, err)
+}
+
+// TestPostgresMapBroker_RedisFanout_AdvisoryLockExclusion tests that advisory
+// locks ensure only one node per shard polls the stream table.
+func TestPostgresMapBroker_RedisFanout_AdvisoryLockExclusion(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	// Create two PG brokers sharing the same advisory lock base ID but
+	// with different Redis brokers for fan-out. Both point at the same PG.
+	// Only one should hold the lock per shard.
+
+	node1, err := New(Config{
+		LogLevel:   LogLevelDebug,
+		LogHandler: func(entry LogEntry) {},
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, node1.Run())
+
+	node2, err := New(Config{
+		LogLevel:   LogLevelDebug,
+		LogHandler: func(entry LogEntry) {},
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, node2.Run())
+
+	redisBroker1 := newTestRedisBrokerForFanout(t, node1)
+	redisBroker2 := newTestRedisBrokerForFanout(t, node2)
+
+	lockBaseID := int64(900000000) + time.Now().UnixNano()%1000000
+
+	var received1, received2 int
+	var mu1, mu2 sync.Mutex
+
+	channel := fmt.Sprintf("test_lock_excl_%d", time.Now().UnixNano())
+
+	handler1 := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			if ch == channel {
+				mu1.Lock()
+				received1++
+				mu1.Unlock()
+			}
+			return nil
+		},
+	}
+
+	handler2 := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			if ch == channel {
+				mu2.Lock()
+				received2++
+				mu2.Unlock()
+			}
+			return nil
+		},
+	}
+
+	numShards := 2
+
+	broker1, err := NewPostgresMapBroker(node1, PostgresMapBrokerConfig{
+		DSN:        connString,
+		BinaryData: true,
+		NumShards:  numShards,
+		Broker:     redisBroker1,
+		Outbox: OutboxConfig{
+			PollInterval:          10 * time.Millisecond,
+			BatchSize:             100,
+			AdvisoryLockBaseID:    lockBaseID,
+			AdvisoryLockRetryInterval: 500 * time.Millisecond,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, broker1.EnsureSchema(ctx))
+	cleanupTestTables(ctx, broker1)
+
+	broker2, err := NewPostgresMapBroker(node2, PostgresMapBrokerConfig{
+		DSN:        connString,
+		BinaryData: true,
+		NumShards:  numShards,
+		Broker:     redisBroker2,
+		Outbox: OutboxConfig{
+			PollInterval:          10 * time.Millisecond,
+			BatchSize:             100,
+			AdvisoryLockBaseID:    lockBaseID,
+			AdvisoryLockRetryInterval: 500 * time.Millisecond,
+		},
+	})
+	require.NoError(t, err)
+
+	// Subscribe both to the same channel.
+	err = broker1.Subscribe(channel)
+	require.NoError(t, err)
+	err = broker2.Subscribe(channel)
+	require.NoError(t, err)
+
+	err = broker1.RegisterEventHandler(handler1)
+	require.NoError(t, err)
+	err = broker2.RegisterEventHandler(handler2)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = broker1.Close(context.Background())
+		_ = broker2.Close(context.Background())
+		_ = node1.Shutdown(context.Background())
+		_ = node2.Shutdown(context.Background())
+	})
+
+	// Give advisory lock workers time to acquire locks.
+	time.Sleep(2 * time.Second)
+
+	// Check advisory locks — for each shard, exactly one session should hold the lock.
+	for i := 0; i < numShards; i++ {
+		lockID := lockBaseID + int64(i)
+		var count int
+		err := broker1.pool.QueryRow(ctx,
+			"SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = $1 AND granted = true",
+			lockID).Scan(&count)
+		require.NoError(t, err)
+		require.Equal(t, 1, count, "shard %d should have exactly one lock holder", i)
+	}
+
+	// Publish some data and verify it arrives via one of the handlers.
+	const numMessages = 5
+	for i := 0; i < numMessages; i++ {
+		_, err = broker1.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+			Data: []byte(fmt.Sprintf("data%d", i)),
+		})
+		require.NoError(t, err)
+	}
+
+	// Wait for delivery.
+	deadline := time.After(10 * time.Second)
+	for {
+		mu1.Lock()
+		mu2.Lock()
+		total := received1 + received2
+		mu2.Unlock()
+		mu1.Unlock()
+		if total >= numMessages {
+			break
+		}
+		select {
+		case <-deadline:
+			mu1.Lock()
+			mu2.Lock()
+			t.Fatalf("timeout: received1=%d received2=%d total=%d want=%d",
+				received1, received2, received1+received2, numMessages)
+			mu2.Unlock()
+			mu1.Unlock()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+
+	// Both handlers should have received the messages (via Redis PUB/SUB broadcast).
+	// But the polling should only happen on one broker per shard.
+	mu1.Lock()
+	mu2.Lock()
+	total := received1 + received2
+	mu2.Unlock()
+	mu1.Unlock()
+	require.GreaterOrEqual(t, total, numMessages,
+		"total received should be at least %d", numMessages)
+}
+
+// TestPostgresMapBroker_RedisFanout_ClientInfo tests that ClientInfo is preserved
+// through Redis PUB/SUB fan-out.
+func TestPostgresMapBroker_RedisFanout_ClientInfo(t *testing.T) {
+	connString := getPostgresConnString(t)
+	ctx := context.Background()
+
+	node, err := New(Config{
+		LogLevel:   LogLevelDebug,
+		LogHandler: func(entry LogEntry) {},
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncConverging,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
+
+	redisBroker := newTestRedisBrokerForFanout(t, node)
+
+	type pubEvent struct {
+		ch  string
+		pub *Publication
+	}
+	eventCh := make(chan pubEvent, 10)
+
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			eventCh <- pubEvent{ch: ch, pub: pub}
+			return nil
+		},
+	}
+
+	broker, err := NewPostgresMapBroker(node, PostgresMapBrokerConfig{
+		DSN:        connString,
+		BinaryData: true,
+		NumShards:  4,
+		Broker:     redisBroker,
+		Outbox: OutboxConfig{
+			PollInterval: 10 * time.Millisecond,
+			BatchSize:    100,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, broker.EnsureSchema(ctx))
+	cleanupTestTables(ctx, broker)
+
+	err = broker.RegisterEventHandler(handler)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = broker.Close(context.Background())
+		_ = node.Shutdown(context.Background())
+	})
+
+	channel := fmt.Sprintf("test_redis_clientinfo_%d", time.Now().UnixNano())
+
+	err = broker.Subscribe(channel)
+	require.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+
+	info := &ClientInfo{
+		ClientID: "c1",
+		UserID:   "u1",
+		ConnInfo: []byte("conn"),
+		ChanInfo: []byte("chan"),
+	}
+
+	_, err = broker.Publish(ctx, channel, "k1", MapPublishOptions{
+		Data:       []byte("data1"),
+		ClientInfo: info,
+	})
+	require.NoError(t, err)
+
+	for {
+		select {
+		case ev := <-eventCh:
+			if ev.ch != channel {
+				continue
+			}
+			require.NotNil(t, ev.pub.Info, "ClientInfo should be present in fan-out delivery")
+			require.Equal(t, "c1", ev.pub.Info.ClientID)
+			require.Equal(t, "u1", ev.pub.Info.UserID)
+			require.Equal(t, []byte("conn"), ev.pub.Info.ConnInfo)
+			require.Equal(t, []byte("chan"), ev.pub.Info.ChanInfo)
+
+			err = broker.Unsubscribe(channel)
+			require.NoError(t, err)
+			return
+		case <-time.After(15 * time.Second):
+			t.Fatal("timeout waiting for publication event")
+		}
+	}
 }

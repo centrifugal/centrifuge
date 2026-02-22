@@ -149,6 +149,15 @@ type OutboxConfig struct {
 	// BatchSize is the maximum number of rows to process per batch.
 	// Default: 1000
 	BatchSize int
+
+	// AdvisoryLockBaseID is the base ID for PostgreSQL advisory locks used to
+	// claim shards when Broker fan-out is enabled. Lock ID = AdvisoryLockBaseID + shardID.
+	// Default: 726966530.
+	AdvisoryLockBaseID int64
+
+	// AdvisoryLockRetryInterval is how often to retry advisory lock acquisition
+	// when Broker fan-out is enabled. Default: 5s.
+	AdvisoryLockRetryInterval time.Duration
 }
 
 // PostgresMapBrokerConfig configures the PostgreSQL map broker.
@@ -211,6 +220,13 @@ type PostgresMapBrokerConfig struct {
 	// Default: same as PoolSize.
 	ReplicaPoolSize int
 
+	// Broker is an optional Broker (e.g. RedisBroker) for PUB/SUB fan-out.
+	// When set, outbox workers use advisory locks (one worker per shard across
+	// all nodes) and publish via Broker instead of HandlePublication.
+	// Subscribe/Unsubscribe are delegated to this Broker.
+	// When nil, every node polls independently (current behavior).
+	Broker Broker
+
 	// Partitioning enables automatic daily partitioning of the stream table.
 	// This is purely an optimization — without it, the broker works correctly
 	// using simple DELETE-based cleanup. Partitioning helps at scale where
@@ -253,6 +269,12 @@ func (c *PostgresMapBrokerConfig) setDefaults() {
 	}
 	if c.Outbox.BatchSize <= 0 {
 		c.Outbox.BatchSize = 1000
+	}
+	if c.Outbox.AdvisoryLockBaseID == 0 {
+		c.Outbox.AdvisoryLockBaseID = 726966530
+	}
+	if c.Outbox.AdvisoryLockRetryInterval <= 0 {
+		c.Outbox.AdvisoryLockRetryInterval = 5 * time.Second
 	}
 
 	if c.ReplicaPoolSize <= 0 {
@@ -379,14 +401,24 @@ func (e *PostgresMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 		return errors.New("postgres map broker: already running")
 	}
 
-	if e.conf.UseNotify {
-		go e.runNotificationListener()
-	}
-
-	// Start outbox workers: one per shard. Per-shard serialization (FOR UPDATE
-	// on shard_lock) + one-shard-per-worker eliminates BIGSERIAL gaps.
-	for i := 0; i < e.conf.NumShards; i++ {
-		go e.runOutboxWorker(i)
+	if e.conf.Broker != nil {
+		// When inner Broker is configured, register it for PUB/SUB fan-out
+		// and use advisory lock workers to ensure only one node per shard polls.
+		if err := e.conf.Broker.RegisterBrokerEventHandler(h); err != nil {
+			return fmt.Errorf("postgres map broker: register inner broker: %w", err)
+		}
+		for i := 0; i < e.conf.NumShards; i++ {
+			go e.runOutboxWorkerWithLock(i)
+		}
+	} else {
+		if e.conf.UseNotify {
+			go e.runNotificationListener()
+		}
+		// Start outbox workers: one per shard. Per-shard serialization (FOR UPDATE
+		// on shard_lock) + one-shard-per-worker eliminates BIGSERIAL gaps.
+		for i := 0; i < e.conf.NumShards; i++ {
+			go e.runOutboxWorker(i)
+		}
 	}
 
 	go e.runTTLExpirationWorker()
@@ -399,10 +431,15 @@ func (e *PostgresMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 }
 
 // Close shuts down the broker.
-func (e *PostgresMapBroker) Close(_ context.Context) error {
+func (e *PostgresMapBroker) Close(ctx context.Context) error {
 	e.closeOnce.Do(func() {
 		e.cancelFunc() // Cancel context to unblock WaitForNotification
 		close(e.closeCh)
+		if e.conf.Broker != nil {
+			if closer, ok := e.conf.Broker.(Closer); ok {
+				_ = closer.Close(ctx)
+			}
+		}
 		for _, rp := range e.readPools {
 			rp.Close()
 		}
@@ -463,7 +500,12 @@ func (e *PostgresMapBroker) EnsureSchema(ctx context.Context) error {
 		`SELECT version_hash FROM %s WHERE id = 1`, e.names.schemaVersion,
 	)).Scan(&currentHash)
 	if err == nil && currentHash == versionHash {
-		return nil
+		// Verify a critical table actually exists — guards against partial
+		// schema loss (e.g. schema_version survived but tables were dropped).
+		if _, probeErr := e.pool.Exec(ctx, fmt.Sprintf(
+			`SELECT 1 FROM %s LIMIT 0`, e.names.stream)); probeErr == nil {
+			return nil
+		}
 	}
 
 	// Schema needs update — run full DDL + functions.
@@ -542,13 +584,19 @@ func (e *PostgresMapBroker) EnsureSchema(ctx context.Context) error {
 	return nil
 }
 
-// Subscribe is a no-op — every node independently polls the stream table.
-func (e *PostgresMapBroker) Subscribe(_ string) error {
+// Subscribe delegates to inner Broker when configured, otherwise no-op.
+func (e *PostgresMapBroker) Subscribe(ch string) error {
+	if e.conf.Broker != nil {
+		return e.conf.Broker.Subscribe(ch)
+	}
 	return nil
 }
 
-// Unsubscribe is a no-op.
-func (e *PostgresMapBroker) Unsubscribe(_ string) error {
+// Unsubscribe delegates to inner Broker when configured, otherwise no-op.
+func (e *PostgresMapBroker) Unsubscribe(ch string) error {
+	if e.conf.Broker != nil {
+		return e.conf.Broker.Unsubscribe(ch)
+	}
 	return nil
 }
 
@@ -1594,6 +1642,193 @@ func (e *PostgresMapBroker) runOutboxWorker(workerIdx int) {
 	}
 }
 
+// runOutboxWorkerWithLock uses PostgreSQL advisory locks to ensure only one node
+// per shard polls the stream table. Used when Broker fan-out is enabled.
+// The worker acquires a session-level advisory lock on the primary pool.
+// If the lock is held by another node, it retries after AdvisoryLockRetryInterval.
+// Once acquired, it runs the normal outbox poll loop. The lock is automatically
+// released when the connection is returned to the pool or dropped.
+func (e *PostgresMapBroker) runOutboxWorkerWithLock(workerIdx int) {
+	ctx := e.cancelCtx
+	lockID := e.conf.Outbox.AdvisoryLockBaseID + int64(workerIdx)
+	retryInterval := e.conf.Outbox.AdvisoryLockRetryInterval
+	_, shards := e.outboxWorkerConfig(workerIdx)
+
+	for {
+		select {
+		case <-e.closeCh:
+			return
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		// Acquire a connection from the primary pool for the advisory lock.
+		conn, err := e.pool.Acquire(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			e.logError("outbox worker: acquire lock connection", err, workerIdx)
+			select {
+			case <-e.closeCh:
+				return
+			case <-ctx.Done():
+				return
+			case <-time.After(retryInterval):
+			}
+			continue
+		}
+
+		// Try to acquire advisory lock (non-blocking).
+		var locked bool
+		err = conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", lockID).Scan(&locked)
+		if err != nil {
+			conn.Release()
+			if ctx.Err() != nil {
+				return
+			}
+			e.logError("outbox worker: try advisory lock", err, workerIdx)
+			select {
+			case <-e.closeCh:
+				return
+			case <-ctx.Done():
+				return
+			case <-time.After(retryInterval):
+			}
+			continue
+		}
+
+		if !locked {
+			conn.Release()
+			select {
+			case <-e.closeCh:
+				return
+			case <-ctx.Done():
+				return
+			case <-time.After(retryInterval):
+			}
+			continue
+		}
+
+		e.logInfo("outbox worker: acquired advisory lock", workerIdx)
+
+		// Lock acquired — run the poll loop.
+		// Use read pool (replica) for batch polling to offload the primary.
+		pollPool, _ := e.outboxWorkerConfig(workerIdx)
+
+		// Initialize cursor from current max ID.
+		var cursor int64
+		err = pollPool.QueryRow(ctx, fmt.Sprintf(
+			`SELECT COALESCE(MAX(id), 0) FROM %s`, e.names.stream)).Scan(&cursor)
+		if err != nil {
+			e.releaseAdvisoryLock(ctx, conn, lockID, workerIdx)
+			conn.Release()
+			if ctx.Err() != nil {
+				return
+			}
+			e.logError("outbox worker: init cursor", err, workerIdx)
+			select {
+			case <-e.closeCh:
+				return
+			case <-ctx.Done():
+				return
+			case <-time.After(retryInterval):
+			}
+			continue
+		}
+
+		pollInterval := e.conf.Outbox.PollInterval
+		allocHint := e.conf.Outbox.BatchSize
+		if allocHint > 1001 {
+			allocHint = 1001
+		}
+		buf := &outboxBatchBuf{
+			metas: make([]outboxMeta, 0, allocHint),
+		}
+
+		// Poll loop — runs until error or shutdown.
+		lockLost := false
+		for !lockLost {
+			select {
+			case <-e.closeCh:
+				e.releaseAdvisoryLock(ctx, conn, lockID, workerIdx)
+				conn.Release()
+				return
+			case <-ctx.Done():
+				e.releaseAdvisoryLock(ctx, conn, lockID, workerIdx)
+				conn.Release()
+				return
+			default:
+			}
+
+			idle := true
+			for {
+				processed, maxID, err := e.processOutboxBatch(ctx, pollPool, cursor, shards, buf)
+				if err != nil {
+					if ctx.Err() != nil {
+						e.releaseAdvisoryLock(ctx, conn, lockID, workerIdx)
+						conn.Release()
+						return
+					}
+					e.logError("outbox worker: process batch", err, workerIdx)
+					lockLost = true
+					break
+				}
+				if processed == 0 {
+					break
+				}
+				if maxID > cursor {
+					cursor = maxID
+				}
+				idle = false
+			}
+
+			if lockLost {
+				break
+			}
+
+			if !idle {
+				continue
+			}
+			select {
+			case <-e.closeCh:
+				e.releaseAdvisoryLock(ctx, conn, lockID, workerIdx)
+				conn.Release()
+				return
+			case <-ctx.Done():
+				e.releaseAdvisoryLock(ctx, conn, lockID, workerIdx)
+				conn.Release()
+				return
+			case <-time.After(pollInterval):
+			}
+		}
+
+		e.releaseAdvisoryLock(ctx, conn, lockID, workerIdx)
+		conn.Release()
+
+		// Back off before retrying lock acquisition.
+		select {
+		case <-e.closeCh:
+			return
+		case <-ctx.Done():
+			return
+		case <-time.After(retryInterval):
+		}
+	}
+}
+
+// releaseAdvisoryLock explicitly releases an advisory lock. This is best-effort;
+// the lock is also auto-released when the connection is returned to the pool.
+func (e *PostgresMapBroker) releaseAdvisoryLock(ctx context.Context, conn *pgxpool.Conn, lockID int64, shardID int) {
+	releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := conn.Exec(releaseCtx, "SELECT pg_advisory_unlock($1)", lockID)
+	if err != nil && ctx.Err() == nil {
+		e.logError("outbox worker: release advisory lock", err, shardID)
+	}
+}
+
 // outboxMeta holds per-row metadata not captured in Publication.
 // String/byte fields reference arena memory — no per-field heap allocation.
 type outboxMeta struct {
@@ -1699,7 +1934,7 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, pool *pgxpoo
 		return 0, cursor, nil
 	}
 
-	// Deliver each entry via HandlePublication.
+	// Deliver each entry.
 	for i := range buf.metas {
 		m := &buf.metas[i]
 		pub := &pubBacking[i]
@@ -1711,7 +1946,25 @@ func (e *PostgresMapBroker) processOutboxBatch(ctx context.Context, pool *pgxpoo
 			prevPub = &Publication{Data: m.previousData}
 		}
 
-		if e.eventHandler != nil {
+		if e.conf.Broker != nil {
+			// Fan-out via inner Broker (e.g. Redis PUB/SUB).
+			pubOpts := PublishOptions{
+				ClientInfo: pub.Info,
+				Key:        pub.Key,
+				Removed:    pub.Removed,
+				Score:      pub.Score,
+				Tags:       pub.Tags,
+				Offset:     pub.Offset,
+				Epoch:      m.epoch,
+				UseDelta:   useDelta,
+			}
+			if useDelta {
+				pubOpts.PrevData = m.previousData
+			}
+			if _, err := e.conf.Broker.Publish(m.channel, pub.Data, pubOpts); err != nil {
+				e.logErrorMsg("outbox worker: broker publish", err)
+			}
+		} else if e.eventHandler != nil {
 			_ = e.eventHandler.HandlePublication(m.channel, pub, streamPos, useDelta, prevPub)
 		}
 	}

@@ -157,6 +157,10 @@ type PublishOptions struct {
 	// Epoch is the stream epoch for map publications. When set along with Offset,
 	// the broker will include position information in the message for fan-out.
 	Epoch string
+	// PrevData carries previous publication data for delta computation.
+	// Used when map broker fans out through a standard Broker (e.g. Redis).
+	// The receiving node uses this as prevPub in HandlePublication.
+	PrevData []byte
 }
 
 // Broker is responsible for PUB/SUB mechanics.

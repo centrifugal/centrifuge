@@ -36,6 +36,8 @@ services:
       timeout: 5s
       retries: 5
 
+  # Demo-only setup. NOT suitable for production use.
+  # The replica wipes its data on every restart (pg_basebackup from primary).
   postgres-replica:
     image: postgres:16
     container_name: map_demo_postgres_replica
@@ -47,16 +49,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    volumes:
-      - map_broker_replica_data:/var/lib/postgresql/data
     entrypoint: |
       bash -c '
-      if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
-        until pg_isready -h postgres -U centrifuge; do sleep 1; done
-        chown postgres:postgres /var/lib/postgresql/data
-        chmod 700 /var/lib/postgresql/data
-        gosu postgres pg_basebackup -h postgres -U centrifuge -D /var/lib/postgresql/data -Fp -Xs -R
-      fi
+      # Demo only: wipe and re-basebackup on every restart.
+      # In production, use persistent volumes and proper replica management.
+      rm -rf /var/lib/postgresql/data/*
+      until pg_isready -h postgres -U centrifuge; do sleep 1; done
+      chown postgres:postgres /var/lib/postgresql/data
+      chmod 700 /var/lib/postgresql/data
+      gosu postgres pg_basebackup -h postgres -U centrifuge -D /var/lib/postgresql/data -Fp -Xs -R
       exec gosu postgres postgres
       '
     healthcheck:
@@ -67,4 +68,3 @@ services:
 
 volumes:
   map_broker_data:
-  map_broker_replica_data:
