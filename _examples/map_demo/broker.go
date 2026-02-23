@@ -1,69 +1,15 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
-	"strings"
-	"time"
 
 	"github.com/centrifugal/centrifuge"
 )
 
-// setupMapBroker creates either a memory, Redis, or PostgreSQL map broker.
-// When enableCache is true, wraps Redis/Postgres brokers with CachedMapBroker
-// for read-your-own-writes consistency and low-latency reads.
-func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr, replicaAddrs string, enableCache bool) (centrifuge.MapBroker, error) {
-	var backend centrifuge.MapBroker
-
-	// PostgreSQL takes priority if specified
-	if postgresAddr != "" {
-		pgConfig := centrifuge.PostgresMapBrokerConfig{
-			DSN: postgresAddr,
-		}
-		if replicaAddrs != "" {
-			pgConfig.ReplicaDSN = strings.Split(replicaAddrs, ",")
-		}
-
-		if redisAddr != "" {
-			// Redis for PUB/SUB fan-out (advisory locks, single poller per shard).
-			redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
-				Address: redisAddr,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("error creating Redis shard for fan-out: %w", err)
-			}
-			redisBroker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
-				Shards: []*centrifuge.RedisShard{redisShard},
-				Prefix: "map_demo",
-			})
-			if err != nil {
-				return nil, fmt.Errorf("error creating Redis broker for fan-out: %w", err)
-			}
-			pgConfig.Broker = redisBroker
-		}
-
-		broker, err := centrifuge.NewPostgresMapBroker(node, pgConfig)
-		if err != nil {
-			return nil, fmt.Errorf("error creating PostgreSQL map broker: %w", err)
-		}
-		if err := broker.EnsureSchema(context.Background()); err != nil {
-			return nil, fmt.Errorf("error ensuring PostgreSQL schema: %w", err)
-		}
-		backend = broker
-
-		// Print startup summary.
-		mode := "independent polling (each node polls)"
-		if redisAddr != "" {
-			mode = fmt.Sprintf("Redis fan-out at %s (advisory locks, single poller per shard)", redisAddr)
-		}
-		log.Printf("Map broker: PostgreSQL")
-		log.Printf("  DSN: %s", postgresAddr)
-		if replicaAddrs != "" {
-			log.Printf("  Replicas: %d configured", len(pgConfig.ReplicaDSN))
-		}
-		log.Printf("  Delivery: %s", mode)
-	} else if redisAddr != "" {
+// setupMapBroker creates either a memory or Redis map broker.
+func setupMapBroker(node *centrifuge.Node, redisAddr string) (centrifuge.MapBroker, error) {
+	if redisAddr != "" {
 		redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
 			Address: redisAddr,
 		})
@@ -78,34 +24,14 @@ func setupMapBroker(node *centrifuge.Node, redisAddr, postgresAddr, replicaAddrs
 		if err != nil {
 			return nil, err
 		}
-		backend = broker
 		log.Printf("Map broker: Redis at %s", redisAddr)
-	} else {
-		broker, err := centrifuge.NewMemoryMapBroker(node, centrifuge.MemoryMapBrokerConfig{})
-		if err != nil {
-			return nil, err
-		}
-		log.Printf("Map broker: in-memory")
 		return broker, nil
 	}
 
-	// Wrap with cache layer if enabled (only for Redis/Postgres)
-	if enableCache {
-		cached, err := centrifuge.NewCachedMapBroker(node, backend, centrifuge.CachedMapBrokerConfig{
-			Cache: centrifuge.MapCacheConfig{
-				MaxChannels:        10000,
-				ChannelIdleTimeout: 5 * time.Minute,
-				StreamSize:         1000,
-			},
-			SyncInterval:  10000 * time.Millisecond,
-			SyncBatchSize: 1000,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("error creating cached map broker: %w", err)
-		}
-		log.Printf("  Cache: enabled (memory cache layer)")
-		return cached, nil
+	broker, err := centrifuge.NewMemoryMapBroker(node, centrifuge.MemoryMapBrokerConfig{})
+	if err != nil {
+		return nil, err
 	}
-
-	return backend, nil
+	log.Printf("Map broker: in-memory")
+	return broker, nil
 }

@@ -13,22 +13,15 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-// PostgreSQL pool for native leaderboard operations.
-var pgPool *pgxpool.Pool
 
 func handleLog(e centrifuge.LogEntry) {
 	log.Printf("[centrifuge] %s: %v", e.Message, e.Fields)
 }
 
 var (
-	port         = flag.String("port", "3000", "HTTP server port")
-	redisAddr    = flag.String("redis", "", "Redis address (e.g., localhost:6379). If empty, uses in-memory broker.")
-	postgresAddr = flag.String("postgres", "", "PostgreSQL connection string (e.g., postgres://user:pass@localhost:5432/db?sslmode=disable)")
-	enableCache  = flag.Bool("cache", false, "Enable memory cache layer for Redis/Postgres brokers (provides read-your-own-writes and low-latency reads)")
-	replicas     = flag.String("replicas", "", "Comma-separated PostgreSQL read replica connection strings")
+	port      = flag.String("port", "3000", "HTTP server port")
+	redisAddr = flag.String("redis", "", "Redis address (e.g., localhost:6379). If empty, uses in-memory broker.")
 )
 
 func main() {
@@ -49,27 +42,13 @@ func main() {
 		// Configure channel options per channel.
 		// Each channel must specify SyncMode and RetentionMode explicitly.
 		GetMapChannelOptions: func(channel string) centrifuge.MapChannelOptions {
-			if channel == "inventory" || channel == "leaderboard" {
+			if channel == "inventory" {
 				return centrifuge.MapChannelOptions{
 					SyncMode:      centrifuge.MapSyncConverging,
 					RetentionMode: centrifuge.MapRetentionPermanent,
 				}
 			}
 			if channel == "scoreboard" {
-				return centrifuge.MapChannelOptions{
-					SyncMode:      centrifuge.MapSyncConverging,
-					RetentionMode: centrifuge.MapRetentionPermanent,
-				}
-			}
-			if channel == "board" {
-				return centrifuge.MapChannelOptions{
-					SyncMode:      centrifuge.MapSyncConverging,
-					RetentionMode: centrifuge.MapRetentionPermanent,
-					Ordered:       true,
-				}
-			}
-			// Poll channels need streams for proper state recovery after reconnect.
-			if strings.HasPrefix(channel, "poll:") {
 				return centrifuge.MapChannelOptions{
 					SyncMode:      centrifuge.MapSyncConverging,
 					RetentionMode: centrifuge.MapRetentionPermanent,
@@ -95,7 +74,7 @@ func main() {
 					KeyTTL:        60 * time.Second,
 				}
 			}
-			// Cursors, games — all ephemeral with expiring keys (default).
+			// Cursors, games, tickers — all ephemeral with expiring keys (default).
 			return centrifuge.MapChannelOptions{
 				SyncMode:      centrifuge.MapSyncEphemeral,
 				RetentionMode: centrifuge.MapRetentionExpiring,
@@ -107,33 +86,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Set up map broker (memory, Redis, or PostgreSQL based on flags).
-	// When -cache flag is set, wraps Redis/Postgres brokers with CachedMapBroker.
-	mapBroker, err := setupMapBroker(node, *redisAddr, *postgresAddr, *replicas, *enableCache)
+	// Set up map broker (memory or Redis based on flags).
+	mapBroker, err := setupMapBroker(node, *redisAddr)
 	if err != nil {
 		log.Fatal(err)
 	}
-	// Wrap with debouncing for cursors channel — coalesces rapid cursor updates
-	// on the server side before forwarding to the backend.
-	mapBroker = centrifuge.NewDebouncingMapBroker(node, mapBroker, centrifuge.DebouncingMapBrokerConfig{
-		Debounce: func(channel string) time.Duration {
-			if channel == "cursors" {
-				return 200 * time.Millisecond
-			}
-			return 0
-		},
-	})
 	node.SetMapBroker(mapBroker)
-
-	// Set up PostgreSQL pool for native leaderboard operations.
-	if *postgresAddr != "" {
-		pool, err := pgxpool.New(context.Background(), *postgresAddr)
-		if err != nil {
-			log.Fatal(err)
-		}
-		pgPool = pool
-		log.Printf("PostgreSQL pool initialized for native leaderboard and polls operations")
-	}
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		// Use client name as user ID for simplicity.
@@ -222,7 +180,6 @@ func main() {
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
 			log.Printf("client disconnected: %s", client.ID())
-			// Cursor cleanup is now automatic via MapRemoveOnUnsubscribe option.
 		})
 	})
 
@@ -233,25 +190,11 @@ func main() {
 	// Initialize inventory items on startup.
 	initInventory(node)
 
-	// App context — cancelled on shutdown signal to stop background goroutines.
-	appCtx, appCancel := context.WithCancel(context.Background())
-
 	// Start publishing ticker data every second.
 	go publishTickerData(node)
 
 	// Start publishing scoreboard data (6 live matches with delta compression).
-	// Uses advisory lock so only one instance runs this when scaling horizontally.
-	go runAsLeader(appCtx, pgPool, 1, "scoreboard", func(ctx context.Context) {
-		publishScoreboardData(ctx, node)
-	})
-
-	// Start poll manager goroutine (requires PostgreSQL for native cf_map_publish calls).
-	// Uses advisory lock so only one instance runs this when scaling horizontally.
-	if pgPool != nil {
-		go runAsLeader(appCtx, pgPool, 2, "poll-manager", func(ctx context.Context) {
-			runPollManager(ctx)
-		})
-	}
+	go publishScoreboardData(context.Background(), node)
 
 	// Serve static files.
 	http.Handle("/", http.FileServer(http.Dir("./static")))
@@ -259,15 +202,6 @@ func main() {
 	// WebSocket handler.
 	wsHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})
 	http.Handle("/connection/websocket", wsHandler)
-
-	// Native PostgreSQL leaderboard HTTP endpoints.
-	http.HandleFunc("/api/leaderboard/join", handleLeaderboardJoinHTTP)
-	http.HandleFunc("/api/leaderboard/click", handleLeaderboardClickHTTP)
-	http.HandleFunc("/api/leaderboard/leave", handleLeaderboardLeaveHTTP)
-	http.HandleFunc("/api/poll/vote", handlePollVoteHTTP)
-	http.HandleFunc("/api/board/create", handleBoardCreateHTTP)
-	http.HandleFunc("/api/board/update", handleBoardUpdateHTTP)
-	http.HandleFunc("/api/board/delete", handleBoardDeleteHTTP)
 
 	http.HandleFunc("/api/viz/populate", handleVizPopulate(node))
 	http.HandleFunc("/api/viz/publish", handleVizPublish(node))
@@ -281,11 +215,8 @@ func main() {
 		log.Printf("Starting server on http://localhost:%s", *port)
 		log.Printf("  - Cursors demo:    http://localhost:%s/cursors.html", *port)
 		log.Printf("  - Lobby demo:      http://localhost:%s/lobby.html", *port)
-		log.Printf("  - Leaderboard:     http://localhost:%s/leaderboard.html", *port)
 		log.Printf("  - Inventory demo:  http://localhost:%s/inventory.html", *port)
 		log.Printf("  - Tickers demo:    http://localhost:%s/tickers.html", *port)
-		log.Printf("  - Live Polls demo: http://localhost:%s/polls.html", *port)
-		log.Printf("  - Sprint Board:    http://localhost:%s/board.html", *port)
 		log.Printf("  - Scoreboard:      http://localhost:%s/scoreboard.html", *port)
 		log.Printf("  - Visualizer:      http://localhost:%s/visualizer.html", *port)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -298,14 +229,8 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 
-	// Stop leader-elected goroutines (scoreboard, polls) so another node can take over.
-	appCancel()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = server.Shutdown(ctx)
 	_ = node.Shutdown(ctx)
-	if pgPool != nil {
-		pgPool.Close()
-	}
 }
