@@ -109,7 +109,7 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 	defer mu.Unlock()
 
 	// Resolve and validate channel options.
-	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapUpdateResult{}, err
 	}
@@ -195,7 +195,7 @@ func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opt
 	defer mu.Unlock()
 
 	// Resolve and validate channel options.
-	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapUpdateResult{}, err
 	}
@@ -640,7 +640,7 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 		if eventHandler != nil {
 			var streamSize int
 			if h.channelOptionsResolver != nil {
-				chOpts, err := resolveAndValidateMapChannelOptions(h.channelOptionsResolver, ch)
+				chOpts, err := ResolveAndValidateMapChannelOptions(h.channelOptionsResolver, ch)
 				if err == nil && chOpts.SyncMode == MapSyncConverging {
 					streamSize = chOpts.StreamSize
 				}
@@ -1052,7 +1052,7 @@ func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) (MapStreamResul
 	// Resolve MetaTTL from channel config.
 	var metaTTL time.Duration
 	if h.channelOptionsResolver != nil {
-		chOpts, err := resolveAndValidateMapChannelOptions(h.channelOptionsResolver, ch)
+		chOpts, err := ResolveAndValidateMapChannelOptions(h.channelOptionsResolver, ch)
 		if err == nil {
 			metaTTL = chOpts.MetaTTL
 		}
@@ -1164,7 +1164,7 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) (MapStateResult, 
 	// Resolve MetaTTL from channel config.
 	var metaTTL time.Duration
 	if h.channelOptionsResolver != nil {
-		chOpts, err := resolveAndValidateMapChannelOptions(h.channelOptionsResolver, ch)
+		chOpts, err := ResolveAndValidateMapChannelOptions(h.channelOptionsResolver, ch)
 		if err == nil {
 			metaTTL = chOpts.MetaTTL
 		}
@@ -1319,7 +1319,7 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) (MapStateResult, 
 			if channel.ordered {
 				// Ordered cursor: "score\x00key"
 				lastScore := channel.scores[lastKey]
-				cursor = makeOrderedCursor(strconv.FormatInt(lastScore, 10), lastKey)
+				cursor = MakeOrderedCursor(strconv.FormatInt(lastScore, 10), lastKey)
 			} else {
 				// Unordered cursor: just the key
 				cursor = lastKey

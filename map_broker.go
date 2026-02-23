@@ -368,10 +368,10 @@ type MapStateResult struct {
 // Currently empty but reserved for future options (e.g., selective removal).
 type MapClearOptions struct{}
 
-// resolveAndValidateMapChannelOptions resolves and validates map channel options
+// ResolveAndValidateMapChannelOptions resolves and validates map channel options
 // for a channel. Returns an error if the resolver is nil, modes are not set,
 // or the configuration is invalid. Auto-derives stream defaults for Converging mode.
-func resolveAndValidateMapChannelOptions(resolver func(channel string) MapChannelOptions, channel string) (MapChannelOptions, error) {
+func ResolveAndValidateMapChannelOptions(resolver func(channel string) MapChannelOptions, channel string) (MapChannelOptions, error) {
 	if resolver == nil {
 		return MapChannelOptions{}, errors.New("map channel options resolver not configured")
 	}
@@ -452,13 +452,13 @@ func resolveAndValidateMapChannelOptions(resolver func(channel string) MapChanne
 	return opts, nil
 }
 
-// makeOrderedCursor creates a cursor for ordered state: "score\x00key".
-func makeOrderedCursor(score, key string) string {
+// MakeOrderedCursor creates a cursor for ordered state: "score\x00key".
+func MakeOrderedCursor(score, key string) string {
 	return score + "\x00" + key
 }
 
-// parseOrderedCursor parses an ordered cursor into score and key strings.
-func parseOrderedCursor(cursor string) (string, string) {
+// ParseOrderedCursor parses an ordered cursor into score and key strings.
+func ParseOrderedCursor(cursor string) (string, string) {
 	for i := 0; i < len(cursor); i++ {
 		if cursor[i] == '\x00' {
 			return cursor[:i], cursor[i+1:]
@@ -482,7 +482,7 @@ func findUnorderedCursorPosition(sortedKeys []string, cursor string) int {
 // For ASC (asc=true), sorted by (score ASC, key ASC), finds first entry where:
 //   - score > cursorScore, OR score == cursorScore AND key > cursorKey
 func findOrderedCursorPosition(sortedKeys []string, scores map[string]int64, cursor string, asc bool) int {
-	cursorScoreStr, cursorKey := parseOrderedCursor(cursor)
+	cursorScoreStr, cursorKey := ParseOrderedCursor(cursor)
 	cursorScore, _ := strconv.ParseInt(cursorScoreStr, 10, 64)
 
 	return sort.Search(len(sortedKeys), func(i int) bool {

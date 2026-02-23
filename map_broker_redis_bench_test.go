@@ -169,7 +169,7 @@ func BenchmarkRedisMapBroker_ReadStream(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, err := broker.ReadStreamZero(ctx, channel, MapReadStreamOptions{
+			_, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
 				Filter: StreamFilter{
 					Limit: 1000,
 					Since: &sp,

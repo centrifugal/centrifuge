@@ -1,7 +1,6 @@
 package centrifuge
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -10,16 +9,13 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
 	_ "embed"
 
-	"github.com/centrifugal/centrifuge/internal/bpool"
 	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/epoch"
 	"github.com/centrifugal/protocol"
 	"github.com/redis/rueidis"
-	"github.com/redis/rueidis/resp"
 )
 
 var (
@@ -506,7 +502,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 	shardClient := s.shard.client
 
 	// Resolve channel options once for this operation.
-	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapUpdateResult{}, err
 	}
@@ -749,7 +745,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 	shardClient := s.shard.client
 
 	// Resolve channel options once for this operation.
-	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapUpdateResult{}, err
 	}
@@ -903,7 +899,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 // Cursor "0" or "" means end of iteration.
 func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
 	// Resolve channel options once for this operation.
-	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapStateResult{}, err
 	}
@@ -928,32 +924,32 @@ func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadS
 	return e.readUnorderedState(ctx, ch, opts, chOpts)
 }
 
-func (e *RedisMapBroker) ReadStateZero(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
-	// Resolve channel options once for this operation.
-	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
-	if err != nil {
-		return MapStateResult{}, err
-	}
-
-	// Handle single key lookup (Key filter) — takes priority over Limit.
-	if opts.Key != "" {
-		return e.readSingleKeyWithOpts(ctx, ch, opts, chOpts)
-	}
-	// Limit=0: return only stream position (no entries).
-	if opts.Limit == 0 {
-		streamResult, err := e.ReadStream(ctx, ch, MapReadStreamOptions{
-			Filter: StreamFilter{Limit: 0},
-		})
-		if err != nil {
-			return MapStateResult{}, err
-		}
-		return MapStateResult{Position: streamResult.Position}, nil
-	}
-	if chOpts.Ordered {
-		return e.readOrderedState(ctx, ch, opts, chOpts)
-	}
-	return e.readUnorderedStateZero(ctx, ch, opts, chOpts)
-}
+//func (e *RedisMapBroker) ReadStateZero(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
+//	// Resolve channel options once for this operation.
+//	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+//	if err != nil {
+//		return MapStateResult{}, err
+//	}
+//
+//	// Handle single key lookup (Key filter) — takes priority over Limit.
+//	if opts.Key != "" {
+//		return e.readSingleKeyWithOpts(ctx, ch, opts, chOpts)
+//	}
+//	// Limit=0: return only stream position (no entries).
+//	if opts.Limit == 0 {
+//		streamResult, err := e.ReadStream(ctx, ch, MapReadStreamOptions{
+//			Filter: StreamFilter{Limit: 0},
+//		})
+//		if err != nil {
+//			return MapStateResult{}, err
+//		}
+//		return MapStateResult{Position: streamResult.Position}, nil
+//	}
+//	if chOpts.Ordered {
+//		return e.readOrderedState(ctx, ch, opts, chOpts)
+//	}
+//	return e.readUnorderedStateZero(ctx, ch, opts, chOpts)
+//}
 
 // readSingleKeyWithOpts retrieves a single key from the state using HGET instead of HSCAN.
 // This is more efficient for single key lookups and supports CAS read-modify-write patterns.
@@ -1144,155 +1140,156 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 	return MapStateResult{Publications: pubs, Position: streamPos, Cursor: nextCursor}, nil
 }
 
-func (e *RedisMapBroker) readUnorderedStateZero(
-	ctx context.Context,
-	ch string,
-	opts MapReadStateOptions,
-	chOpts MapChannelOptions,
-) (MapStateResult, error) {
-	s := e.getShard(ch)
-
-	stateTTL := "0"
-	if chOpts.MetaTTL > 0 {
-		stateTTL = millis(chOpts.MetaTTL)
-	}
-
-	cursor := opts.Cursor
-	if cursor == "" {
-		cursor = "0"
-	}
-
-	var (
-		streamPos  StreamPosition
-		nextCursor string
-		pubs       []*Publication
-	)
-
-	streamlessFlag := "0"
-	if chOpts.SyncMode == MapSyncEphemeral {
-		streamlessFlag = "1"
-	}
-
-	// In Lua scripts, limit=0 means "return all", limit>0 means paginate.
-	luaLimit := opts.Limit
-	if luaLimit < 0 {
-		luaLimit = 0
-	}
-
-	err := e.readUnorderedScript.ExecWithReader(
-		ctx,
-		s.shard.client,
-		[]string{
-			e.stateHashKey(s.shard, ch),
-			e.stateExpireKey(s.shard, ch),
-			e.metaKey(s.shard, ch),
-			e.stateMetaKey(s.shard, ch),
-		},
-		[]string{
-			cursor,
-			strconv.Itoa(luaLimit),
-			strconv.FormatInt(time.Now().UnixMilli(), 10),
-			millis(chOpts.MetaTTL),
-			stateTTL,
-			streamlessFlag,
-		},
-		func(r *bufio.Reader) error {
-			rr := resp.NewReader(r)
-			if err := rr.ExpectArrayWithLen(4); err != nil {
-				return err
-			}
-
-			// --- reply[0]: offset ---
-			offsetBytes, err := rr.ReadStringBytes()
-			if err != nil {
-				return err
-			}
-			if offsetBytes != nil {
-				streamPos.Offset, err = strconv.ParseUint(
-					unsafe.String(&offsetBytes[0], len(offsetBytes)), 10, 64,
-				)
-				if err != nil {
-					return err
-				}
-			}
-
-			// --- reply[1]: epoch ---
-			epochBytes, err := rr.ReadStringBytes()
-			if err != nil {
-				return err
-			}
-			if epochBytes != nil {
-				streamPos.Epoch = unsafe.String(&epochBytes[0], len(epochBytes))
-			}
-
-			// --- reply[2]: cursor ---
-			cursorBytes, err := rr.ReadStringBytes()
-			if err != nil && !errors.Is(err, rueidis.Nil) {
-				return err
-			}
-			if cursorBytes != nil {
-				nextCursor = unsafe.String(&cursorBytes[0], len(cursorBytes))
-			}
-			if nextCursor == "0" {
-				nextCursor = "" // Convert Redis HSCAN "0" (complete) to empty string
-			}
-
-			// --- reply[3]: key-value array ---
-			kvCount, err := rr.ExpectArray()
-			if err != nil {
-				return err
-			}
-			pubs = make([]*Publication, 0, kvCount/2)
-
-			for i := int64(0); i < kvCount; i += 2 {
-				// Read next key
-				keyBytes, err := rr.ReadStringBytes()
-				if err != nil {
-					return err
-				}
-				// Make a safe copy
-				key := convert.BytesToString(append([]byte(nil), keyBytes...))
-
-				// Read corresponding value
-				valBytes, err := rr.ReadStringBytes()
-				if err != nil {
-					return err
-				}
-				// Parse value: offset:epoch:payload
-				entryOffset, _, payloadBytes, err := parseStateValue(valBytes)
-				if err != nil {
-					// skip malformed entries
-					continue
-				}
-				// Unmarshal Publication from protobuf payload
-				var protoPub protocol.Publication
-				if err := protoPub.UnmarshalVT(payloadBytes); err != nil {
-					// Skip malformed entries
-					continue
-				}
-
-				pub := pubFromProto(&protoPub)
-				pub.Key = key
-				pub.Offset = entryOffset
-				pubs = append(pubs, pub)
-			}
-
-			return nil
-		},
-	)
-
-	if err != nil {
-		return MapStateResult{}, err
-	}
-
-	// Validate state revision (unchanged semantics)
-	if opts.Revision != nil &&
-		opts.Revision.Epoch != streamPos.Epoch {
-		return MapStateResult{Position: streamPos, Cursor: nextCursor}, ErrorUnrecoverablePosition
-	}
-
-	return MapStateResult{Publications: pubs, Position: streamPos, Cursor: nextCursor}, nil
-}
+//
+//func (e *RedisMapBroker) readUnorderedStateZero(
+//	ctx context.Context,
+//	ch string,
+//	opts MapReadStateOptions,
+//	chOpts MapChannelOptions,
+//) (MapStateResult, error) {
+//	s := e.getShard(ch)
+//
+//	stateTTL := "0"
+//	if chOpts.MetaTTL > 0 {
+//		stateTTL = millis(chOpts.MetaTTL)
+//	}
+//
+//	cursor := opts.Cursor
+//	if cursor == "" {
+//		cursor = "0"
+//	}
+//
+//	var (
+//		streamPos  StreamPosition
+//		nextCursor string
+//		pubs       []*Publication
+//	)
+//
+//	streamlessFlag := "0"
+//	if chOpts.SyncMode == MapSyncEphemeral {
+//		streamlessFlag = "1"
+//	}
+//
+//	// In Lua scripts, limit=0 means "return all", limit>0 means paginate.
+//	luaLimit := opts.Limit
+//	if luaLimit < 0 {
+//		luaLimit = 0
+//	}
+//
+//	err := e.readUnorderedScript.ExecWithReader(
+//		ctx,
+//		s.shard.client,
+//		[]string{
+//			e.stateHashKey(s.shard, ch),
+//			e.stateExpireKey(s.shard, ch),
+//			e.metaKey(s.shard, ch),
+//			e.stateMetaKey(s.shard, ch),
+//		},
+//		[]string{
+//			cursor,
+//			strconv.Itoa(luaLimit),
+//			strconv.FormatInt(time.Now().UnixMilli(), 10),
+//			millis(chOpts.MetaTTL),
+//			stateTTL,
+//			streamlessFlag,
+//		},
+//		func(r *bufio.Reader) error {
+//			rr := resp.NewReader(r)
+//			if err := rr.ExpectArrayWithLen(4); err != nil {
+//				return err
+//			}
+//
+//			// --- reply[0]: offset ---
+//			offsetBytes, err := rr.ReadStringBytes()
+//			if err != nil {
+//				return err
+//			}
+//			if offsetBytes != nil {
+//				streamPos.Offset, err = strconv.ParseUint(
+//					unsafe.String(&offsetBytes[0], len(offsetBytes)), 10, 64,
+//				)
+//				if err != nil {
+//					return err
+//				}
+//			}
+//
+//			// --- reply[1]: epoch ---
+//			epochBytes, err := rr.ReadStringBytes()
+//			if err != nil {
+//				return err
+//			}
+//			if epochBytes != nil {
+//				streamPos.Epoch = unsafe.String(&epochBytes[0], len(epochBytes))
+//			}
+//
+//			// --- reply[2]: cursor ---
+//			cursorBytes, err := rr.ReadStringBytes()
+//			if err != nil && !errors.Is(err, rueidis.Nil) {
+//				return err
+//			}
+//			if cursorBytes != nil {
+//				nextCursor = unsafe.String(&cursorBytes[0], len(cursorBytes))
+//			}
+//			if nextCursor == "0" {
+//				nextCursor = "" // Convert Redis HSCAN "0" (complete) to empty string
+//			}
+//
+//			// --- reply[3]: key-value array ---
+//			kvCount, err := rr.ExpectArray()
+//			if err != nil {
+//				return err
+//			}
+//			pubs = make([]*Publication, 0, kvCount/2)
+//
+//			for i := int64(0); i < kvCount; i += 2 {
+//				// Read next key
+//				keyBytes, err := rr.ReadStringBytes()
+//				if err != nil {
+//					return err
+//				}
+//				// Make a safe copy
+//				key := convert.BytesToString(append([]byte(nil), keyBytes...))
+//
+//				// Read corresponding value
+//				valBytes, err := rr.ReadStringBytes()
+//				if err != nil {
+//					return err
+//				}
+//				// Parse value: offset:epoch:payload
+//				entryOffset, _, payloadBytes, err := parseStateValue(valBytes)
+//				if err != nil {
+//					// skip malformed entries
+//					continue
+//				}
+//				// Unmarshal Publication from protobuf payload
+//				var protoPub protocol.Publication
+//				if err := protoPub.UnmarshalVT(payloadBytes); err != nil {
+//					// Skip malformed entries
+//					continue
+//				}
+//
+//				pub := pubFromProto(&protoPub)
+//				pub.Key = key
+//				pub.Offset = entryOffset
+//				pubs = append(pubs, pub)
+//			}
+//
+//			return nil
+//		},
+//	)
+//
+//	if err != nil {
+//		return MapStateResult{}, err
+//	}
+//
+//	// Validate state revision (unchanged semantics)
+//	if opts.Revision != nil &&
+//		opts.Revision.Epoch != streamPos.Epoch {
+//		return MapStateResult{Position: streamPos, Cursor: nextCursor}, ErrorUnrecoverablePosition
+//	}
+//
+//	return MapStateResult{Publications: pubs, Position: streamPos, Cursor: nextCursor}, nil
+//}
 
 // readOrderedState uses key-based cursor pagination for continuity.
 // Cursor format: "score\x00key" to ensure no entries are skipped during concurrent modifications.
@@ -1309,7 +1306,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 	cursorScore := ""
 	cursorKey := ""
 	if opts.Cursor != "" {
-		cursorScore, cursorKey = parseOrderedCursor(opts.Cursor)
+		cursorScore, cursorKey = ParseOrderedCursor(opts.Cursor)
 	}
 
 	streamlessFlag := "0"
@@ -1401,491 +1398,491 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 	// Build cursor for next page
 	cursor := ""
 	if nextCursorScore != "" && nextCursorKey != "" {
-		cursor = makeOrderedCursor(nextCursorScore, nextCursorKey)
+		cursor = MakeOrderedCursor(nextCursorScore, nextCursorKey)
 	}
 
 	return MapStateResult{Publications: pubs, Position: streamPos, Cursor: cursor}, nil
 }
 
-func (e *RedisMapBroker) ReadStreamZero(
-	ctx context.Context,
-	ch string,
-	opts MapReadStreamOptions,
-) (MapStreamResult, error) {
-	s := e.getShard(ch)
-
-	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
-	if err != nil {
-		return MapStreamResult{}, err
-	}
-
-	var includePubs = true
-	var offset string
-
-	if opts.Filter.Since != nil {
-		if opts.Filter.Reverse {
-			if opts.Filter.Since.Offset == 0 {
-				includePubs = false
-			} else {
-				offset = strconv.FormatUint(opts.Filter.Since.Offset-1, 10)
-			}
-		} else {
-			offset = strconv.FormatUint(opts.Filter.Since.Offset+1, 10)
-		}
-	} else {
-		offset = "-"
-		if opts.Filter.Reverse {
-			offset = "+"
-		}
-	}
-
-	limit := opts.Filter.Limit
-	if limit == 0 {
-		includePubs = false
-	}
-	if limit < 0 {
-		limit = 0
-	}
-
-	reverse := "0"
-	if opts.Filter.Reverse {
-		reverse = "1"
-	}
-
-	metaExpire := "0"
-	if chOpts.MetaTTL > 0 {
-		metaExpire = millis(chOpts.MetaTTL)
-	}
-
-	includePubsStr := "0"
-	if includePubs {
-		includePubsStr = "1"
-	}
-
-	var (
-		streamPos StreamPosition
-		pubs      []*Publication
-	)
-
-	err = e.readStreamScript.ExecWithReader(
-		ctx,
-		s.shard.client,
-		[]string{
-			e.streamKey(s.shard, ch),
-			e.metaKey(s.shard, ch),
-		},
-		[]string{
-			includePubsStr,
-			offset,
-			strconv.Itoa(limit),
-			reverse,
-			metaExpire,
-			e.node.ID(),
-		},
-		func(r *bufio.Reader) error {
-			rr := resp.NewReader(r)
-
-			// ---- top-level reply ----
-			n, err := rr.ExpectArray()
-			if err != nil {
-				return err
-			}
-			if n < 2 {
-				return fmt.Errorf("wrong number of replies: %d", n)
-			}
-
-			// ---- reply[0]: top offset ----
-			switch rr.PeekKind() {
-			case resp.KindInt:
-				v, err := rr.ReadInt64()
-				if err != nil {
-					return err
-				}
-				streamPos.Offset = uint64(v)
-			case resp.KindString:
-				buf, err := rr.ReadStringBytes()
-				if err != nil {
-					return err
-				}
-				v, err := strconv.ParseUint(
-					unsafe.String(&buf[0], len(buf)),
-					10,
-					64,
-				)
-				if err != nil {
-					return err
-				}
-				streamPos.Offset = v
-			default:
-				return fmt.Errorf("unexpected RESP kind for offset")
-			}
-
-			buf, err := rr.ReadStringBytes()
-			if err != nil {
-				return err
-			}
-			// Make a safe copy of the bytes.
-			safeBuf := make([]byte, len(buf))
-			copy(safeBuf, buf)
-			streamPos.Epoch = convert.BytesToString(safeBuf)
-
-			// Validate epoch if provided in Since filter.
-			if opts.Filter.Since != nil && opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != streamPos.Epoch {
-				return ErrorUnrecoverablePosition
-			}
-
-			if !includePubs || n < 3 {
-				return nil
-			}
-
-			// ---- reply[2]: publications ----
-			pubCount, err := rr.ExpectArray()
-			if err != nil {
-				return err
-			}
-
-			pubs = make([]*Publication, 0, pubCount)
-
-			for i := int64(0); i < pubCount; i++ {
-				// entry = [id, fields]
-				if _, err := rr.ExpectArray(); err != nil {
-					return err
-				}
-
-				// ---- id ----
-				idBuf, err := rr.ReadStringBytes()
-				if err != nil {
-					return err
-				}
-
-				idStr := unsafe.String(&idBuf[0], len(idBuf))
-				hyphen := strings.IndexByte(idStr, '-')
-				if hyphen <= 0 {
-					return fmt.Errorf("invalid stream id")
-				}
-
-				pubOffset, err := strconv.ParseUint(idStr[:hyphen], 10, 64)
-				if err != nil {
-					return err
-				}
-
-				// ---- fields ----
-				fieldCount, err := rr.ExpectArray()
-				if err != nil {
-					return err
-				}
-
-				var payload *bpool.ByteBuffer
-
-				for j := int64(0); j < fieldCount; j += 2 {
-					// key
-					key, err := rr.ReadStringBytes()
-					if err != nil {
-						return err
-					}
-					isData := len(key) == 1 && key[0] == 'd'
-
-					// value
-					if isData {
-						vbuf, err := rr.ReadStringBytes()
-						if err != nil {
-							return err
-						}
-						payload = bpool.GetByteBuffer(len(vbuf))
-						payload.B = payload.B[:len(vbuf)]
-						copy(payload.B, vbuf)
-					} else {
-						if err := rr.SkipValue(); err != nil {
-							return err
-						}
-					}
-				}
-
-				if payload == nil {
-					return errors.New("no payload data found in entry")
-				}
-
-				var protoPub protocol.Publication
-				if err := protoPub.UnmarshalVT(payload.B); err != nil {
-					bpool.PutByteBuffer(payload)
-					return err
-				}
-				bpool.PutByteBuffer(payload)
-
-				protoPub.Offset = pubOffset
-				pubs = append(pubs, &Publication{
-					Offset:  protoPub.Offset,
-					Data:    protoPub.Data,
-					Info:    infoFromProto(protoPub.GetInfo()),
-					Tags:    protoPub.GetTags(),
-					Time:    protoPub.Time,
-					Key:     protoPub.GetKey(),
-					Removed: protoPub.GetRemoved(),
-					Score:   protoPub.GetScore(),
-				})
-			}
-			return nil
-		},
-	)
-
-	if err != nil {
-		return MapStreamResult{}, err
-	}
-
-	return MapStreamResult{Publications: pubs, Position: streamPos}, nil
-}
+//func (e *RedisMapBroker) ReadStreamZero(
+//	ctx context.Context,
+//	ch string,
+//	opts MapReadStreamOptions,
+//) (MapStreamResult, error) {
+//	s := e.getShard(ch)
+//
+//	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+//	if err != nil {
+//		return MapStreamResult{}, err
+//	}
+//
+//	var includePubs = true
+//	var offset string
+//
+//	if opts.Filter.Since != nil {
+//		if opts.Filter.Reverse {
+//			if opts.Filter.Since.Offset == 0 {
+//				includePubs = false
+//			} else {
+//				offset = strconv.FormatUint(opts.Filter.Since.Offset-1, 10)
+//			}
+//		} else {
+//			offset = strconv.FormatUint(opts.Filter.Since.Offset+1, 10)
+//		}
+//	} else {
+//		offset = "-"
+//		if opts.Filter.Reverse {
+//			offset = "+"
+//		}
+//	}
+//
+//	limit := opts.Filter.Limit
+//	if limit == 0 {
+//		includePubs = false
+//	}
+//	if limit < 0 {
+//		limit = 0
+//	}
+//
+//	reverse := "0"
+//	if opts.Filter.Reverse {
+//		reverse = "1"
+//	}
+//
+//	metaExpire := "0"
+//	if chOpts.MetaTTL > 0 {
+//		metaExpire = millis(chOpts.MetaTTL)
+//	}
+//
+//	includePubsStr := "0"
+//	if includePubs {
+//		includePubsStr = "1"
+//	}
+//
+//	var (
+//		streamPos StreamPosition
+//		pubs      []*Publication
+//	)
+//
+//	err = e.readStreamScript.ExecWithReader(
+//		ctx,
+//		s.shard.client,
+//		[]string{
+//			e.streamKey(s.shard, ch),
+//			e.metaKey(s.shard, ch),
+//		},
+//		[]string{
+//			includePubsStr,
+//			offset,
+//			strconv.Itoa(limit),
+//			reverse,
+//			metaExpire,
+//			e.node.ID(),
+//		},
+//		func(r *bufio.Reader) error {
+//			rr := resp.NewReader(r)
+//
+//			// ---- top-level reply ----
+//			n, err := rr.ExpectArray()
+//			if err != nil {
+//				return err
+//			}
+//			if n < 2 {
+//				return fmt.Errorf("wrong number of replies: %d", n)
+//			}
+//
+//			// ---- reply[0]: top offset ----
+//			switch rr.PeekKind() {
+//			case resp.KindInt:
+//				v, err := rr.ReadInt64()
+//				if err != nil {
+//					return err
+//				}
+//				streamPos.Offset = uint64(v)
+//			case resp.KindString:
+//				buf, err := rr.ReadStringBytes()
+//				if err != nil {
+//					return err
+//				}
+//				v, err := strconv.ParseUint(
+//					unsafe.String(&buf[0], len(buf)),
+//					10,
+//					64,
+//				)
+//				if err != nil {
+//					return err
+//				}
+//				streamPos.Offset = v
+//			default:
+//				return fmt.Errorf("unexpected RESP kind for offset")
+//			}
+//
+//			buf, err := rr.ReadStringBytes()
+//			if err != nil {
+//				return err
+//			}
+//			// Make a safe copy of the bytes.
+//			safeBuf := make([]byte, len(buf))
+//			copy(safeBuf, buf)
+//			streamPos.Epoch = convert.BytesToString(safeBuf)
+//
+//			// Validate epoch if provided in Since filter.
+//			if opts.Filter.Since != nil && opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != streamPos.Epoch {
+//				return ErrorUnrecoverablePosition
+//			}
+//
+//			if !includePubs || n < 3 {
+//				return nil
+//			}
+//
+//			// ---- reply[2]: publications ----
+//			pubCount, err := rr.ExpectArray()
+//			if err != nil {
+//				return err
+//			}
+//
+//			pubs = make([]*Publication, 0, pubCount)
+//
+//			for i := int64(0); i < pubCount; i++ {
+//				// entry = [id, fields]
+//				if _, err := rr.ExpectArray(); err != nil {
+//					return err
+//				}
+//
+//				// ---- id ----
+//				idBuf, err := rr.ReadStringBytes()
+//				if err != nil {
+//					return err
+//				}
+//
+//				idStr := unsafe.String(&idBuf[0], len(idBuf))
+//				hyphen := strings.IndexByte(idStr, '-')
+//				if hyphen <= 0 {
+//					return fmt.Errorf("invalid stream id")
+//				}
+//
+//				pubOffset, err := strconv.ParseUint(idStr[:hyphen], 10, 64)
+//				if err != nil {
+//					return err
+//				}
+//
+//				// ---- fields ----
+//				fieldCount, err := rr.ExpectArray()
+//				if err != nil {
+//					return err
+//				}
+//
+//				var payload *bpool.ByteBuffer
+//
+//				for j := int64(0); j < fieldCount; j += 2 {
+//					// key
+//					key, err := rr.ReadStringBytes()
+//					if err != nil {
+//						return err
+//					}
+//					isData := len(key) == 1 && key[0] == 'd'
+//
+//					// value
+//					if isData {
+//						vbuf, err := rr.ReadStringBytes()
+//						if err != nil {
+//							return err
+//						}
+//						payload = bpool.GetByteBuffer(len(vbuf))
+//						payload.B = payload.B[:len(vbuf)]
+//						copy(payload.B, vbuf)
+//					} else {
+//						if err := rr.SkipValue(); err != nil {
+//							return err
+//						}
+//					}
+//				}
+//
+//				if payload == nil {
+//					return errors.New("no payload data found in entry")
+//				}
+//
+//				var protoPub protocol.Publication
+//				if err := protoPub.UnmarshalVT(payload.B); err != nil {
+//					bpool.PutByteBuffer(payload)
+//					return err
+//				}
+//				bpool.PutByteBuffer(payload)
+//
+//				protoPub.Offset = pubOffset
+//				pubs = append(pubs, &Publication{
+//					Offset:  protoPub.Offset,
+//					Data:    protoPub.Data,
+//					Info:    infoFromProto(protoPub.GetInfo()),
+//					Tags:    protoPub.GetTags(),
+//					Time:    protoPub.Time,
+//					Key:     protoPub.GetKey(),
+//					Removed: protoPub.GetRemoved(),
+//					Score:   protoPub.GetScore(),
+//				})
+//			}
+//			return nil
+//		},
+//	)
+//
+//	if err != nil {
+//		return MapStreamResult{}, err
+//	}
+//
+//	return MapStreamResult{Publications: pubs, Position: streamPos}, nil
+//}
 
 // ReadStreamZero2 is a 2-call version of ReadStreamZero with zero-alloc optimizations.
 // Call 1: Get metadata (epoch, top_offset) using simpler Lua script with ExecWithReader
 // Call 2: Read publications using native XRANGE/XREVRANGE with DoWithReader
 // Key difference: Must filter out publications with offset > top_offset (non-atomic).
-func (e *RedisMapBroker) ReadStreamZero2(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
-	s := e.getShard(ch)
-
-	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
-	if err != nil {
-		return MapStreamResult{}, err
-	}
-
-	// 1. Parse options (same as ReadStream/ReadStreamZero)
-	var includePubs = true
-	var offset string
-	if opts.Filter.Since != nil {
-		if opts.Filter.Reverse {
-			if opts.Filter.Since.Offset == 0 {
-				includePubs = false
-			} else {
-				offset = strconv.FormatUint(opts.Filter.Since.Offset-1, 10)
-			}
-		} else {
-			offset = strconv.FormatUint(opts.Filter.Since.Offset+1, 10)
-		}
-	} else {
-		offset = "-"
-		if opts.Filter.Reverse {
-			offset = "+"
-		}
-	}
-
-	limit := opts.Filter.Limit
-	if limit == 0 {
-		includePubs = false
-	}
-	if limit < 0 {
-		limit = 0
-	}
-
-	metaExpire := "0"
-	if chOpts.MetaTTL > 0 {
-		metaExpire = millis(chOpts.MetaTTL)
-	}
-
-	// 2. Call 1: Get metadata with ExecWithReader (zero-alloc)
-	var streamPos StreamPosition
-
-	err = e.readMetaScript.ExecWithReader(
-		ctx,
-		s.shard.client,
-		[]string{e.metaKey(s.shard, ch)},
-		[]string{metaExpire, e.node.ID()},
-		func(r *bufio.Reader) error {
-			rr := resp.NewReader(r)
-
-			// Top-level must be an array of at least 2 elements
-			n, err := rr.ExpectArray()
-			if err != nil {
-				return err
-			}
-			if n < 2 {
-				return fmt.Errorf("wrong number of replies: %d", n)
-			}
-
-			// ---- reply[0]: top offset ----
-			switch rr.PeekKind() {
-			case resp.KindInt:
-				v, err := rr.ReadInt64()
-				if err != nil && !errors.Is(err, rueidis.Nil) {
-					return err
-				}
-				streamPos.Offset = uint64(v)
-			case resp.KindString:
-				b, err := rr.ReadStringBytes()
-				if err != nil {
-					return err
-				}
-				if len(b) > 0 {
-					v, err := strconv.ParseUint(unsafe.String(&b[0], len(b)), 10, 64)
-					if err != nil {
-						return err
-					}
-					streamPos.Offset = v
-				}
-			default:
-				return fmt.Errorf("unexpected RESP type for offset: %q", rr.PeekKind())
-			}
-
-			// ---- reply[1]: epoch ----
-			buf, err := rr.ReadStringBytes()
-			if err != nil {
-				return err
-			}
-			// Make a safe copy of the bytes.
-			safeBuf := make([]byte, len(buf))
-			copy(safeBuf, buf)
-			streamPos.Epoch = convert.BytesToString(safeBuf)
-
-			return nil
-		},
-	)
-	if err != nil {
-		return MapStreamResult{}, err
-	}
-
-	// Validate epoch if provided in Since filter.
-	if opts.Filter.Since != nil && opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != streamPos.Epoch {
-		return MapStreamResult{}, ErrorUnrecoverablePosition
-	}
-
-	// 3. Early return if metadata-only
-	if !includePubs {
-		return MapStreamResult{Position: streamPos}, nil
-	}
-
-	topOffset := streamPos.Offset
-
-	// 4. Call 2: Execute XRANGE with DoWithReader (zero-alloc)
-	streamKey := e.streamKey(s.shard, ch)
-	var cmd rueidis.Completed
-
-	if opts.Filter.Reverse {
-		builder := s.shard.client.B().Xrevrange().Key(streamKey).End(offset).Start("-")
-		if limit > 0 {
-			cmd = builder.Count(int64(limit)).Build()
-		} else {
-			cmd = builder.Build()
-		}
-	} else {
-		builder := s.shard.client.B().Xrange().Key(streamKey).Start(offset).End("+")
-		if limit > 0 {
-			cmd = builder.Count(int64(limit)).Build()
-		} else {
-			cmd = builder.Build()
-		}
-	}
-
-	var pubs []*Publication
-
-	err = s.shard.client.DoWithReader(ctx, cmd, func(r *bufio.Reader) error {
-		rr := resp.NewReader(r)
-
-		// Top-level must be an array
-		entryCount, err := rr.ExpectArray()
-		if err != nil {
-			return err
-		}
-
-		if entryCount > 0 {
-			pubs = make([]*Publication, 0, entryCount)
-		}
-
-		for i := int64(0); i < entryCount; i++ {
-			// Each entry = [id, fields]
-			if _, err := rr.ExpectArray(); err != nil {
-				return err
-			}
-
-			// ---- id ----
-			idBytes, err := rr.ReadStringBytes()
-			if err != nil {
-				return err
-			}
-			idStr := unsafe.String(&idBytes[0], len(idBytes))
-			hyphen := strings.IndexByte(idStr, '-')
-			if hyphen <= 0 {
-				return fmt.Errorf("invalid stream id")
-			}
-
-			pubOffset, err := strconv.ParseUint(idStr[:hyphen], 10, 64)
-			if err != nil {
-				return err
-			}
-
-			// Filter entries written after metadata read
-			if pubOffset > topOffset {
-				if err := rr.SkipValue(); err != nil { // skip fields array
-					return err
-				}
-				continue
-			}
-
-			// ---- fields ----
-			fieldCount, err := rr.ExpectArray()
-			if err != nil {
-				return err
-			}
-
-			var payload *bpool.ByteBuffer
-
-			for j := int64(0); j < fieldCount; j += 2 {
-				// key
-				keyBytes, err := rr.ReadStringBytes()
-				if err != nil {
-					return err
-				}
-				isData := len(keyBytes) == 1 && keyBytes[0] == 'd'
-
-				// value
-				valBytes, err := rr.ReadStringBytes()
-				if err != nil {
-					return err
-				}
-
-				if isData {
-					payload = bpool.GetByteBuffer(len(valBytes))
-					payload.B = payload.B[:len(valBytes)]
-					copy(payload.B, valBytes)
-				}
-			}
-
-			if payload == nil {
-				return errors.New("no payload data found in entry")
-			}
-
-			var protoPub protocol.Publication
-			if err := protoPub.UnmarshalVT(payload.B); err != nil {
-				bpool.PutByteBuffer(payload)
-				return err
-			}
-			bpool.PutByteBuffer(payload)
-
-			protoPub.Offset = pubOffset
-			pubs = append(pubs, &Publication{
-				Offset:  protoPub.Offset,
-				Data:    protoPub.Data,
-				Info:    infoFromProto(protoPub.GetInfo()),
-				Tags:    protoPub.GetTags(),
-				Time:    protoPub.Time,
-				Key:     protoPub.GetKey(),
-				Removed: protoPub.GetRemoved(),
-				Score:   protoPub.GetScore(),
-			})
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		return MapStreamResult{}, err
-	}
-
-	return MapStreamResult{Publications: pubs, Position: streamPos}, nil
-}
+//func (e *RedisMapBroker) ReadStreamZero2(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
+//	s := e.getShard(ch)
+//
+//	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+//	if err != nil {
+//		return MapStreamResult{}, err
+//	}
+//
+//	// 1. Parse options (same as ReadStream/ReadStreamZero)
+//	var includePubs = true
+//	var offset string
+//	if opts.Filter.Since != nil {
+//		if opts.Filter.Reverse {
+//			if opts.Filter.Since.Offset == 0 {
+//				includePubs = false
+//			} else {
+//				offset = strconv.FormatUint(opts.Filter.Since.Offset-1, 10)
+//			}
+//		} else {
+//			offset = strconv.FormatUint(opts.Filter.Since.Offset+1, 10)
+//		}
+//	} else {
+//		offset = "-"
+//		if opts.Filter.Reverse {
+//			offset = "+"
+//		}
+//	}
+//
+//	limit := opts.Filter.Limit
+//	if limit == 0 {
+//		includePubs = false
+//	}
+//	if limit < 0 {
+//		limit = 0
+//	}
+//
+//	metaExpire := "0"
+//	if chOpts.MetaTTL > 0 {
+//		metaExpire = millis(chOpts.MetaTTL)
+//	}
+//
+//	// 2. Call 1: Get metadata with ExecWithReader (zero-alloc)
+//	var streamPos StreamPosition
+//
+//	err = e.readMetaScript.ExecWithReader(
+//		ctx,
+//		s.shard.client,
+//		[]string{e.metaKey(s.shard, ch)},
+//		[]string{metaExpire, e.node.ID()},
+//		func(r *bufio.Reader) error {
+//			rr := resp.NewReader(r)
+//
+//			// Top-level must be an array of at least 2 elements
+//			n, err := rr.ExpectArray()
+//			if err != nil {
+//				return err
+//			}
+//			if n < 2 {
+//				return fmt.Errorf("wrong number of replies: %d", n)
+//			}
+//
+//			// ---- reply[0]: top offset ----
+//			switch rr.PeekKind() {
+//			case resp.KindInt:
+//				v, err := rr.ReadInt64()
+//				if err != nil && !errors.Is(err, rueidis.Nil) {
+//					return err
+//				}
+//				streamPos.Offset = uint64(v)
+//			case resp.KindString:
+//				b, err := rr.ReadStringBytes()
+//				if err != nil {
+//					return err
+//				}
+//				if len(b) > 0 {
+//					v, err := strconv.ParseUint(unsafe.String(&b[0], len(b)), 10, 64)
+//					if err != nil {
+//						return err
+//					}
+//					streamPos.Offset = v
+//				}
+//			default:
+//				return fmt.Errorf("unexpected RESP type for offset: %q", rr.PeekKind())
+//			}
+//
+//			// ---- reply[1]: epoch ----
+//			buf, err := rr.ReadStringBytes()
+//			if err != nil {
+//				return err
+//			}
+//			// Make a safe copy of the bytes.
+//			safeBuf := make([]byte, len(buf))
+//			copy(safeBuf, buf)
+//			streamPos.Epoch = convert.BytesToString(safeBuf)
+//
+//			return nil
+//		},
+//	)
+//	if err != nil {
+//		return MapStreamResult{}, err
+//	}
+//
+//	// Validate epoch if provided in Since filter.
+//	if opts.Filter.Since != nil && opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != streamPos.Epoch {
+//		return MapStreamResult{}, ErrorUnrecoverablePosition
+//	}
+//
+//	// 3. Early return if metadata-only
+//	if !includePubs {
+//		return MapStreamResult{Position: streamPos}, nil
+//	}
+//
+//	topOffset := streamPos.Offset
+//
+//	// 4. Call 2: Execute XRANGE with DoWithReader (zero-alloc)
+//	streamKey := e.streamKey(s.shard, ch)
+//	var cmd rueidis.Completed
+//
+//	if opts.Filter.Reverse {
+//		builder := s.shard.client.B().Xrevrange().Key(streamKey).End(offset).Start("-")
+//		if limit > 0 {
+//			cmd = builder.Count(int64(limit)).Build()
+//		} else {
+//			cmd = builder.Build()
+//		}
+//	} else {
+//		builder := s.shard.client.B().Xrange().Key(streamKey).Start(offset).End("+")
+//		if limit > 0 {
+//			cmd = builder.Count(int64(limit)).Build()
+//		} else {
+//			cmd = builder.Build()
+//		}
+//	}
+//
+//	var pubs []*Publication
+//
+//	err = s.shard.client.DoWithReader(ctx, cmd, func(r *bufio.Reader) error {
+//		rr := resp.NewReader(r)
+//
+//		// Top-level must be an array
+//		entryCount, err := rr.ExpectArray()
+//		if err != nil {
+//			return err
+//		}
+//
+//		if entryCount > 0 {
+//			pubs = make([]*Publication, 0, entryCount)
+//		}
+//
+//		for i := int64(0); i < entryCount; i++ {
+//			// Each entry = [id, fields]
+//			if _, err := rr.ExpectArray(); err != nil {
+//				return err
+//			}
+//
+//			// ---- id ----
+//			idBytes, err := rr.ReadStringBytes()
+//			if err != nil {
+//				return err
+//			}
+//			idStr := unsafe.String(&idBytes[0], len(idBytes))
+//			hyphen := strings.IndexByte(idStr, '-')
+//			if hyphen <= 0 {
+//				return fmt.Errorf("invalid stream id")
+//			}
+//
+//			pubOffset, err := strconv.ParseUint(idStr[:hyphen], 10, 64)
+//			if err != nil {
+//				return err
+//			}
+//
+//			// Filter entries written after metadata read
+//			if pubOffset > topOffset {
+//				if err := rr.SkipValue(); err != nil { // skip fields array
+//					return err
+//				}
+//				continue
+//			}
+//
+//			// ---- fields ----
+//			fieldCount, err := rr.ExpectArray()
+//			if err != nil {
+//				return err
+//			}
+//
+//			var payload *bpool.ByteBuffer
+//
+//			for j := int64(0); j < fieldCount; j += 2 {
+//				// key
+//				keyBytes, err := rr.ReadStringBytes()
+//				if err != nil {
+//					return err
+//				}
+//				isData := len(keyBytes) == 1 && keyBytes[0] == 'd'
+//
+//				// value
+//				valBytes, err := rr.ReadStringBytes()
+//				if err != nil {
+//					return err
+//				}
+//
+//				if isData {
+//					payload = bpool.GetByteBuffer(len(valBytes))
+//					payload.B = payload.B[:len(valBytes)]
+//					copy(payload.B, valBytes)
+//				}
+//			}
+//
+//			if payload == nil {
+//				return errors.New("no payload data found in entry")
+//			}
+//
+//			var protoPub protocol.Publication
+//			if err := protoPub.UnmarshalVT(payload.B); err != nil {
+//				bpool.PutByteBuffer(payload)
+//				return err
+//			}
+//			bpool.PutByteBuffer(payload)
+//
+//			protoPub.Offset = pubOffset
+//			pubs = append(pubs, &Publication{
+//				Offset:  protoPub.Offset,
+//				Data:    protoPub.Data,
+//				Info:    infoFromProto(protoPub.GetInfo()),
+//				Tags:    protoPub.GetTags(),
+//				Time:    protoPub.Time,
+//				Key:     protoPub.GetKey(),
+//				Removed: protoPub.GetRemoved(),
+//				Score:   protoPub.GetScore(),
+//			})
+//		}
+//
+//		return nil
+//	})
+//
+//	if err != nil {
+//		return MapStreamResult{}, err
+//	}
+//
+//	return MapStreamResult{Publications: pubs, Position: streamPos}, nil
+//}
 
 // ReadStream retrieves publication stream for a channel.
 func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 	s := e.getShard(ch)
 
-	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapStreamResult{}, err
 	}
@@ -2048,7 +2045,7 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 	s := e.getShard(ch)
 
-	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapStreamResult{}, err
 	}
@@ -2562,7 +2559,7 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 	}
 
 	// Get channel options for this channel.
-	chOpts, err := resolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
 	if err != nil {
 		return err
 	}

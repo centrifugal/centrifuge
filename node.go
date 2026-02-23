@@ -281,7 +281,7 @@ func (n *Node) SetMapBroker(e MapBroker) {
 // Returns an error if GetMapChannelOptions is not configured or the channel
 // options are invalid.
 func (n *Node) ResolveMapChannelOptions(channel string) (MapChannelOptions, error) {
-	return resolveAndValidateMapChannelOptions(n.config.GetMapChannelOptions, channel)
+	return ResolveAndValidateMapChannelOptions(n.config.GetMapChannelOptions, channel)
 }
 
 // Hub returns node's Hub.
@@ -324,6 +324,37 @@ func (n *Node) Run() error {
 // logEnabled allows check whether a LogLevel enabled or not.
 func (n *Node) logEnabled(level LogLevel) bool {
 	return n.logger.enabled(level)
+}
+
+// Log sends a log entry through the node's logger.
+func (n *Node) Log(entry LogEntry) {
+	n.logger.log(entry)
+}
+
+// LogEnabled returns true if logging is enabled for the given level.
+func (n *Node) LogEnabled(level LogLevel) bool {
+	return n.logEnabled(level)
+}
+
+// IncMapBrokerCleanupErrors increments the map broker cleanup error counter for observability.
+func (n *Node) IncMapBrokerCleanupErrors(name string) {
+	if n.metrics != nil {
+		n.metrics.incMapBrokerCleanupErrors(name)
+	}
+}
+
+// AddMapBrokerCleanupKeysRemoved adds to the map broker cleanup keys removed counter for observability.
+func (n *Node) AddMapBrokerCleanupKeysRemoved(name string, count int64) {
+	if n.metrics != nil {
+		n.metrics.addMapBrokerCleanupKeysRemoved(name, count)
+	}
+}
+
+// SetMapBrokerCleanupLag sets the map broker cleanup lag gauge for observability.
+func (n *Node) SetMapBrokerCleanupLag(name string, seconds float64) {
+	if n.metrics != nil {
+		n.metrics.setMapBrokerCleanupLag(name, seconds)
+	}
 }
 
 // Shutdown sets shutdown flag to Node so handlers could stop accepting

@@ -654,141 +654,141 @@ func TestRedisMapBroker_ReadStream2(t *testing.T) {
 }
 
 // TestRedisMapBroker_ReadStreamZero2 tests the 2-call zero-alloc version of ReadStream.
-func TestRedisMapBroker_ReadStreamZero2(t *testing.T) {
-	node, _ := New(Config{})
-	broker := newTestRedisMapBroker(t, node)
+//func TestRedisMapBroker_ReadStreamZero2(t *testing.T) {
+//	node, _ := New(Config{})
+//	broker := newTestRedisMapBroker(t, node)
+//
+//	ctx := context.Background()
+//	channel := randomChannel("test_readstreamzero2")
+//
+//	// Publish 5 messages to stream
+//	for i := 1; i <= 5; i++ {
+//		_, err := broker.Publish(ctx, channel, "", MapPublishOptions{
+//			Data: []byte(fmt.Sprintf("msg_%d", i)),
+//		})
+//		require.NoError(t, err)
+//	}
+//
+//	// Test 1: Read all messages (forward)
+//	result, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
+//		Filter: StreamFilter{
+//			Limit: -1,
+//		},
+//	})
+//	require.NoError(t, err)
+//	require.Len(t, result.Publications, 5)
+//	require.NotEmpty(t, result.Position.Epoch)
+//	require.Equal(t, uint64(5), result.Position.Offset)
+//	require.Equal(t, []byte("msg_1"), result.Publications[0].Data)
+//	require.Equal(t, []byte("msg_5"), result.Publications[4].Data)
+//
+//	// Test 2: Read all messages (reverse)
+//	resultRev, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
+//		Filter: StreamFilter{
+//			Limit:   -1,
+//			Reverse: true,
+//		},
+//	})
+//	require.NoError(t, err)
+//	require.Len(t, resultRev.Publications, 5)
+//	require.Equal(t, uint64(5), resultRev.Position.Offset)
+//	require.Equal(t, []byte("msg_5"), resultRev.Publications[0].Data)
+//	require.Equal(t, []byte("msg_1"), resultRev.Publications[4].Data)
+//
+//	// Test 3: Read with limit
+//	resultLimited, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
+//		Filter: StreamFilter{
+//			Limit: 2,
+//		},
+//	})
+//	require.NoError(t, err)
+//	require.Len(t, resultLimited.Publications, 2)
+//	require.Equal(t, []byte("msg_1"), resultLimited.Publications[0].Data)
+//	require.Equal(t, []byte("msg_2"), resultLimited.Publications[1].Data)
+//
+//	// Test 4: Read since offset
+//	resultSince, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
+//		Filter: StreamFilter{
+//			Since: &StreamPosition{
+//				Offset: 2,
+//				Epoch:  result.Position.Epoch,
+//			},
+//			Limit: -1,
+//		},
+//	})
+//	require.NoError(t, err)
+//	require.Len(t, resultSince.Publications, 3)
+//	require.Equal(t, []byte("msg_3"), resultSince.Publications[0].Data)
+//	require.Equal(t, []byte("msg_5"), resultSince.Publications[2].Data)
+//
+//	// Test 5: Metadata-only read
+//	resultMeta, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
+//		Filter: StreamFilter{
+//			Limit: 0, // metadata only
+//		},
+//	})
+//	require.NoError(t, err)
+//	require.Nil(t, resultMeta.Publications)
+//	require.Equal(t, uint64(5), resultMeta.Position.Offset)
+//	require.NotEmpty(t, resultMeta.Position.Epoch)
+//}
 
-	ctx := context.Background()
-	channel := randomChannel("test_readstreamzero2")
-
-	// Publish 5 messages to stream
-	for i := 1; i <= 5; i++ {
-		_, err := broker.Publish(ctx, channel, "", MapPublishOptions{
-			Data: []byte(fmt.Sprintf("msg_%d", i)),
-		})
-		require.NoError(t, err)
-	}
-
-	// Test 1: Read all messages (forward)
-	result, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
-		Filter: StreamFilter{
-			Limit: -1,
-		},
-	})
-	require.NoError(t, err)
-	require.Len(t, result.Publications, 5)
-	require.NotEmpty(t, result.Position.Epoch)
-	require.Equal(t, uint64(5), result.Position.Offset)
-	require.Equal(t, []byte("msg_1"), result.Publications[0].Data)
-	require.Equal(t, []byte("msg_5"), result.Publications[4].Data)
-
-	// Test 2: Read all messages (reverse)
-	resultRev, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
-		Filter: StreamFilter{
-			Limit:   -1,
-			Reverse: true,
-		},
-	})
-	require.NoError(t, err)
-	require.Len(t, resultRev.Publications, 5)
-	require.Equal(t, uint64(5), resultRev.Position.Offset)
-	require.Equal(t, []byte("msg_5"), resultRev.Publications[0].Data)
-	require.Equal(t, []byte("msg_1"), resultRev.Publications[4].Data)
-
-	// Test 3: Read with limit
-	resultLimited, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
-		Filter: StreamFilter{
-			Limit: 2,
-		},
-	})
-	require.NoError(t, err)
-	require.Len(t, resultLimited.Publications, 2)
-	require.Equal(t, []byte("msg_1"), resultLimited.Publications[0].Data)
-	require.Equal(t, []byte("msg_2"), resultLimited.Publications[1].Data)
-
-	// Test 4: Read since offset
-	resultSince, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
-		Filter: StreamFilter{
-			Since: &StreamPosition{
-				Offset: 2,
-				Epoch:  result.Position.Epoch,
-			},
-			Limit: -1,
-		},
-	})
-	require.NoError(t, err)
-	require.Len(t, resultSince.Publications, 3)
-	require.Equal(t, []byte("msg_3"), resultSince.Publications[0].Data)
-	require.Equal(t, []byte("msg_5"), resultSince.Publications[2].Data)
-
-	// Test 5: Metadata-only read
-	resultMeta, err := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
-		Filter: StreamFilter{
-			Limit: 0, // metadata only
-		},
-	})
-	require.NoError(t, err)
-	require.Nil(t, resultMeta.Publications)
-	require.Equal(t, uint64(5), resultMeta.Position.Offset)
-	require.NotEmpty(t, resultMeta.Position.Epoch)
-}
-
-// TestRedisMapBroker_ReadStream2_Compatibility tests that ReadStream2 returns same results as ReadStream.
-func TestRedisMapBroker_ReadStream2_Compatibility(t *testing.T) {
-	node, _ := New(Config{})
-	broker := newTestRedisMapBroker(t, node)
-
-	ctx := context.Background()
-	channel := randomChannel("test_compat")
-
-	// Publish 10 messages
-	for i := 1; i <= 10; i++ {
-		_, err := broker.Publish(ctx, channel, "", MapPublishOptions{
-			Data: []byte(fmt.Sprintf("msg_%d", i)),
-		})
-		require.NoError(t, err)
-	}
-
-	// Compare ReadStream and ReadStream2 results
-	result1, err1 := broker.ReadStream(ctx, channel, MapReadStreamOptions{
-		Filter: StreamFilter{Limit: -1},
-	})
-	require.NoError(t, err1)
-
-	result2, err2 := broker.ReadStream2(ctx, channel, MapReadStreamOptions{
-		Filter: StreamFilter{Limit: -1},
-	})
-	require.NoError(t, err2)
-
-	// Compare results
-	require.Equal(t, len(result1.Publications), len(result2.Publications))
-	require.Equal(t, result1.Position.Offset, result2.Position.Offset)
-	require.Equal(t, result1.Position.Epoch, result2.Position.Epoch)
-	for i := range result1.Publications {
-		require.Equal(t, result1.Publications[i].Data, result2.Publications[i].Data)
-		require.Equal(t, result1.Publications[i].Offset, result2.Publications[i].Offset)
-	}
-
-	// Compare ReadStreamZero and ReadStreamZero2 results
-	result3, err3 := broker.ReadStreamZero(ctx, channel, MapReadStreamOptions{
-		Filter: StreamFilter{Limit: -1},
-	})
-	require.NoError(t, err3)
-
-	result4, err4 := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
-		Filter: StreamFilter{Limit: -1},
-	})
-	require.NoError(t, err4)
-
-	// Compare results
-	require.Equal(t, len(result3.Publications), len(result4.Publications))
-	require.Equal(t, result3.Position.Offset, result4.Position.Offset)
-	require.Equal(t, result3.Position.Epoch, result4.Position.Epoch)
-	for i := range result3.Publications {
-		require.Equal(t, result3.Publications[i].Data, result4.Publications[i].Data)
-		require.Equal(t, result3.Publications[i].Offset, result4.Publications[i].Offset)
-	}
-}
+//// TestRedisMapBroker_ReadStreamZero_Compatibility tests that ReadStream2 returns same results as ReadStream.
+//func TestRedisMapBroker_ReadStreamZero_Compatibility(t *testing.T) {
+//	node, _ := New(Config{})
+//	broker := newTestRedisMapBroker(t, node)
+//
+//	ctx := context.Background()
+//	channel := randomChannel("test_compat")
+//
+//	// Publish 10 messages
+//	for i := 1; i <= 10; i++ {
+//		_, err := broker.Publish(ctx, channel, "", MapPublishOptions{
+//			Data: []byte(fmt.Sprintf("msg_%d", i)),
+//		})
+//		require.NoError(t, err)
+//	}
+//
+//	// Compare ReadStream and ReadStream2 results
+//	result1, err1 := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+//		Filter: StreamFilter{Limit: -1},
+//	})
+//	require.NoError(t, err1)
+//
+//	result2, err2 := broker.ReadStream2(ctx, channel, MapReadStreamOptions{
+//		Filter: StreamFilter{Limit: -1},
+//	})
+//	require.NoError(t, err2)
+//
+//	// Compare results
+//	require.Equal(t, len(result1.Publications), len(result2.Publications))
+//	require.Equal(t, result1.Position.Offset, result2.Position.Offset)
+//	require.Equal(t, result1.Position.Epoch, result2.Position.Epoch)
+//	for i := range result1.Publications {
+//		require.Equal(t, result1.Publications[i].Data, result2.Publications[i].Data)
+//		require.Equal(t, result1.Publications[i].Offset, result2.Publications[i].Offset)
+//	}
+//
+//	// Compare ReadStreamZero and ReadStreamZero2 results
+//	result3, err3 := broker.ReadStreamZero(ctx, channel, MapReadStreamOptions{
+//		Filter: StreamFilter{Limit: -1},
+//	})
+//	require.NoError(t, err3)
+//
+//	result4, err4 := broker.ReadStreamZero2(ctx, channel, MapReadStreamOptions{
+//		Filter: StreamFilter{Limit: -1},
+//	})
+//	require.NoError(t, err4)
+//
+//	// Compare results
+//	require.Equal(t, len(result3.Publications), len(result4.Publications))
+//	require.Equal(t, result3.Position.Offset, result4.Position.Offset)
+//	require.Equal(t, result3.Position.Epoch, result4.Position.Epoch)
+//	for i := range result3.Publications {
+//		require.Equal(t, result3.Publications[i].Data, result4.Publications[i].Data)
+//		require.Equal(t, result3.Publications[i].Offset, result4.Publications[i].Offset)
+//	}
+//}
 
 // TestRedisMapBroker_CleanupGeneratesRemovalEvents verifies that the Lua cleanup script
 // correctly generates removal events (key + removed + timestamp) when entries expire by TTL.
@@ -1163,8 +1163,8 @@ func TestRedisMapBroker_OrderedStateOrdering(t *testing.T) {
 
 	for _, tc := range testCases {
 		_, err := broker.Publish(ctx, channel, tc.key, MapPublishOptions{
-			Data:       []byte(tc.data),
-			Score:      tc.score,
+			Data:  []byte(tc.data),
+			Score: tc.score,
 		})
 		require.NoError(t, err)
 	}
@@ -1214,8 +1214,8 @@ func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
 		data := fmt.Sprintf("data_%02d", i)
 
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(data),
-			Score:      score,
+			Data:  []byte(data),
+			Score: score,
 		})
 		require.NoError(t, err)
 	}
@@ -1335,8 +1335,8 @@ func TestRedisMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 
 	for _, tc := range testCases {
 		_, err := broker.Publish(ctx, channel, tc.key, MapPublishOptions{
-			Data:       []byte("data"),
-			Score:      tc.score,
+			Data:  []byte("data"),
+			Score: tc.score,
 		})
 		require.NoError(t, err)
 	}
@@ -1383,8 +1383,8 @@ func TestRedisMapBroker_OrderedStateWithSameScores(t *testing.T) {
 	for i := 1; i <= 5; i++ {
 		key := fmt.Sprintf("key_%d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%d", i)),
-			Score:      100, // Same score for all
+			Data:  []byte(fmt.Sprintf("data_%d", i)),
+			Score: 100, // Same score for all
 		})
 		require.NoError(t, err)
 	}
@@ -1430,8 +1430,8 @@ func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
 	// Publish 10 entries
 	for i := 1; i <= 10; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key_%02d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Score:      int64(i * 10),
+			Data:  []byte(fmt.Sprintf("data_%02d", i)),
+			Score: int64(i * 10),
 		})
 		require.NoError(t, err)
 	}
@@ -1529,8 +1529,8 @@ func TestRedisMapBroker_OrderedStateFullPagination(t *testing.T) {
 	// Publish entries
 	for i := 1; i <= totalEntries; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key_%03d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%03d", i)),
-			Score:      int64(i * 10),
+			Data:  []byte(fmt.Sprintf("data_%03d", i)),
+			Score: int64(i * 10),
 		})
 		require.NoError(t, err)
 	}
@@ -1601,8 +1601,8 @@ func TestRedisMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 	// Publish 5 entries
 	for i := 1; i <= 5; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key_%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%d", i)),
-			Score:      int64(i * 10), // 10, 20, 30, 40, 50
+			Data:  []byte(fmt.Sprintf("data_%d", i)),
+			Score: int64(i * 10), // 10, 20, 30, 40, 50
 		})
 		require.NoError(t, err)
 	}
@@ -1618,8 +1618,8 @@ func TestRedisMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 
 	// Update key_1 to have highest score (60)
 	_, err = broker.Publish(ctx, channel, "key_1", MapPublishOptions{
-		Data:       []byte("updated_data"),
-		Score:      60, // Now highest
+		Data:  []byte("updated_data"),
+		Score: 60, // Now highest
 	})
 	require.NoError(t, err)
 
@@ -1650,8 +1650,8 @@ func TestRedisMapBroker_KeyModeIfNew(t *testing.T) {
 
 	// First publish with KeyModeIfNew should succeed (key doesn't exist)
 	res1, err := broker.Publish(ctx, channel, "slot1", MapPublishOptions{
-		Data:       []byte("player1"),
-		KeyMode:    KeyModeIfNew,
+		Data:    []byte("player1"),
+		KeyMode: KeyModeIfNew,
 	})
 	require.NoError(t, err)
 	require.False(t, res1.Suppressed, "First publish should not be suppressed")
@@ -1659,8 +1659,8 @@ func TestRedisMapBroker_KeyModeIfNew(t *testing.T) {
 
 	// Second publish with KeyModeIfNew should be suppressed (key exists)
 	res2, err := broker.Publish(ctx, channel, "slot1", MapPublishOptions{
-		Data:       []byte("player2"),
-		KeyMode:    KeyModeIfNew,
+		Data:    []byte("player2"),
+		KeyMode: KeyModeIfNew,
 	})
 	require.NoError(t, err)
 	require.True(t, res2.Suppressed, "Second publish should be suppressed (key exists)")
@@ -1694,8 +1694,8 @@ func TestRedisMapBroker_KeyModeIfExists(t *testing.T) {
 
 	// First publish with KeyModeIfExists should be suppressed (key doesn't exist)
 	res1, err := broker.Publish(ctx, channel, "presence1", MapPublishOptions{
-		Data:       []byte("heartbeat1"),
-		KeyMode:    KeyModeIfExists,
+		Data:    []byte("heartbeat1"),
+		KeyMode: KeyModeIfExists,
 	})
 	require.NoError(t, err)
 	require.True(t, res1.Suppressed, "First publish should be suppressed (key doesn't exist)")
@@ -1703,16 +1703,16 @@ func TestRedisMapBroker_KeyModeIfExists(t *testing.T) {
 
 	// Create the key first with regular publish
 	res2, err := broker.Publish(ctx, channel, "presence1", MapPublishOptions{
-		Data:       []byte("initial"),
-		KeyMode:    KeyModeReplace, // or just leave empty
+		Data:    []byte("initial"),
+		KeyMode: KeyModeReplace, // or just leave empty
 	})
 	require.NoError(t, err)
 	require.False(t, res2.Suppressed, "Regular publish should not be suppressed")
 
 	// Now publish with KeyModeIfExists should succeed (key exists)
 	res3, err := broker.Publish(ctx, channel, "presence1", MapPublishOptions{
-		Data:       []byte("heartbeat2"),
-		KeyMode:    KeyModeIfExists,
+		Data:    []byte("heartbeat2"),
+		KeyMode: KeyModeIfExists,
 	})
 	require.NoError(t, err)
 	require.False(t, res3.Suppressed, "Third publish should not be suppressed (key exists)")
@@ -1737,16 +1737,16 @@ func TestRedisMapBroker_KeyModeReplace(t *testing.T) {
 
 	// First publish (key doesn't exist)
 	res1, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("value1"),
-		KeyMode:    KeyModeReplace, // explicit, same as default
+		Data:    []byte("value1"),
+		KeyMode: KeyModeReplace, // explicit, same as default
 	})
 	require.NoError(t, err)
 	require.False(t, res1.Suppressed)
 
 	// Second publish (key exists) - should still apply
 	res2, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("value2"),
-		KeyMode:    KeyModeReplace,
+		Data:    []byte("value2"),
+		KeyMode: KeyModeReplace,
 	})
 	require.NoError(t, err)
 	require.False(t, res2.Suppressed, "Replace should never be suppressed")
@@ -1770,12 +1770,12 @@ func TestRedisMapBroker_Remove(t *testing.T) {
 
 	// Publish some keys
 	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
+		Data: []byte("data1"),
 	})
 	require.NoError(t, err)
 
 	_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("data2"),
+		Data: []byte("data2"),
 	})
 	require.NoError(t, err)
 
@@ -1846,7 +1846,7 @@ func TestRedisMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Data: []byte(fmt.Sprintf("data_%02d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1880,7 +1880,7 @@ func TestRedisMapBroker_UnorderedContinuity_EntryAdded(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Data: []byte(fmt.Sprintf("data_%02d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -1888,7 +1888,7 @@ func TestRedisMapBroker_UnorderedContinuity_EntryAdded(t *testing.T) {
 	// CONCURRENT MODIFICATION: Add new entry that lexicographically comes before cursor
 	// This would shift entries with integer offset pagination
 	_, err := broker.Publish(ctx, channel, "key_05b", MapPublishOptions{
-		Data:       []byte("data_05b"),
+		Data: []byte("data_05b"),
 	})
 	require.NoError(t, err)
 
@@ -1925,8 +1925,8 @@ func TestRedisMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Score:      int64(i * 100),
+			Data:  []byte(fmt.Sprintf("data_%02d", i)),
+			Score: int64(i * 100),
 		})
 		require.NoError(t, err)
 	}
@@ -1946,8 +1946,8 @@ func TestRedisMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	// CONCURRENT MODIFICATION: Add entry with HIGHEST score
 	// This entry would appear at position 0, shifting all entries
 	_, err = broker.Publish(ctx, channel, "key_top", MapPublishOptions{
-		Data:       []byte("data_top"),
-		Score:      5000, // Higher than any existing
+		Data:  []byte("data_top"),
+		Score: 5000, // Higher than any existing
 	})
 	require.NoError(t, err)
 
@@ -1990,8 +1990,8 @@ func TestRedisMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Score:      int64(i * 100),
+			Data:  []byte(fmt.Sprintf("data_%02d", i)),
+			Score: int64(i * 100),
 		})
 		require.NoError(t, err)
 	}
@@ -2006,8 +2006,8 @@ func TestRedisMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	// CONCURRENT MODIFICATION: Add entry with LOWEST score
 	// This entry appears at end, shouldn't affect pagination much
 	_, err = broker.Publish(ctx, channel, "key_bottom", MapPublishOptions{
-		Data:       []byte("data_bottom"),
-		Score:      1, // Lower than any existing
+		Data:  []byte("data_bottom"),
+		Score: 1, // Lower than any existing
 	})
 	require.NoError(t, err)
 
@@ -2051,8 +2051,8 @@ func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Score:      int64(i * 100),
+			Data:  []byte(fmt.Sprintf("data_%02d", i)),
+			Score: int64(i * 100),
 		})
 		require.NoError(t, err)
 	}
@@ -2069,8 +2069,8 @@ func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	// key_05 had score 500, now gets score 3000 (highest)
 	// This entry was NOT in first page, but now would appear at position 0
 	_, err = broker.Publish(ctx, channel, "key_05", MapPublishOptions{
-		Data:       []byte("data_05_updated"),
-		Score:      3000,
+		Data:  []byte("data_05_updated"),
+		Score: 3000,
 	})
 	require.NoError(t, err)
 
@@ -2141,8 +2141,8 @@ func TestRedisMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Score:      int64(i * 100),
+			Data:  []byte(fmt.Sprintf("data_%02d", i)),
+			Score: int64(i * 100),
 		})
 		require.NoError(t, err)
 	}
@@ -2231,8 +2231,8 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	for i := 1; i <= 30; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Score:      int64(i * 100),
+			Data:  []byte(fmt.Sprintf("data_%02d", i)),
+			Score: int64(i * 100),
 		})
 		require.NoError(t, err)
 	}
@@ -2247,8 +2247,8 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	// CONCURRENT MODIFICATIONS:
 	// 1. Add new highest score entry
 	_, err = broker.Publish(ctx, channel, "key_new_top", MapPublishOptions{
-		Data:       []byte("data_new_top"),
-		Score:      5000,
+		Data:  []byte("data_new_top"),
+		Score: 5000,
 	})
 	require.NoError(t, err)
 
@@ -2258,8 +2258,8 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 
 	// 3. Update score of an entry (move it)
 	_, err = broker.Publish(ctx, channel, "key_05", MapPublishOptions{
-		Data:       []byte("data_05_moved"),
-		Score:      4000, // Move from 500 to 4000
+		Data:  []byte("data_05_moved"),
+		Score: 4000, // Move from 500 to 4000
 	})
 	require.NoError(t, err)
 
@@ -2273,8 +2273,8 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 
 	// 4. Add new lowest score entry
 	_, err = broker.Publish(ctx, channel, "key_new_bottom", MapPublishOptions{
-		Data:       []byte("data_new_bottom"),
-		Score:      1,
+		Data:  []byte("data_new_bottom"),
+		Score: 1,
 	})
 	require.NoError(t, err)
 
@@ -2349,8 +2349,8 @@ func TestRedisMapBroker_Delta(t *testing.T) {
 	// 1. First publish with UseDelta - no previous state in Redis hash.
 	// Lua sends non-delta format because HGET returns false.
 	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1"),
-		UseDelta:   true,
+		Data:     []byte("data1"),
+		UseDelta: true,
 	})
 	require.NoError(t, err)
 
@@ -2361,8 +2361,8 @@ func TestRedisMapBroker_Delta(t *testing.T) {
 
 	// 2. Second publish same key - Lua finds prev state via HGET, sends delta format.
 	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1_updated"),
-		UseDelta:   true,
+		Data:     []byte("data1_updated"),
+		UseDelta: true,
 	})
 	require.NoError(t, err)
 
@@ -2374,8 +2374,8 @@ func TestRedisMapBroker_Delta(t *testing.T) {
 
 	// 3. Different key - no previous state for this key.
 	_, err = e.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("data2"),
-		UseDelta:   true,
+		Data:     []byte("data2"),
+		UseDelta: true,
 	})
 	require.NoError(t, err)
 
@@ -2398,8 +2398,8 @@ func TestRedisMapBroker_Delta(t *testing.T) {
 
 	// 5. UseDelta=false - no delta.
 	_, err = e.Publish(ctx, channel, "key2", MapPublishOptions{
-		Data:       []byte("data2_updated"),
-		UseDelta:   false,
+		Data:     []byte("data2_updated"),
+		UseDelta: false,
 	})
 	require.NoError(t, err)
 
@@ -2409,8 +2409,8 @@ func TestRedisMapBroker_Delta(t *testing.T) {
 
 	// 6. Third publish to key1 after StreamData update - prevPub should have data1_full.
 	_, err = e.Publish(ctx, channel, "key1", MapPublishOptions{
-		Data:       []byte("data1_v3"),
-		UseDelta:   true,
+		Data:     []byte("data1_v3"),
+		UseDelta: true,
 	})
 	require.NoError(t, err)
 
@@ -2430,7 +2430,7 @@ func TestRedisMapBroker_Clear(t *testing.T) {
 	// Publish some keyed state and stream entries.
 	for i := 0; i < 3; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data%d", i)),
+			Data: []byte(fmt.Sprintf("data%d", i)),
 		})
 		require.NoError(t, err)
 	}
@@ -2481,7 +2481,7 @@ func TestRedisMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 	// Populate two channels.
 	for _, ch := range []string{ch1, ch2} {
 		_, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
-			Data:       []byte("v"),
+			Data: []byte("v"),
 		})
 		require.NoError(t, err)
 	}
@@ -2642,8 +2642,8 @@ func TestRedisMapBroker_OrderedStateAsc(t *testing.T) {
 
 	for _, tc := range testCases {
 		_, err := broker.Publish(ctx, channel, tc.key, MapPublishOptions{
-			Data:       []byte(tc.data),
-			Score:      tc.score,
+			Data:  []byte(tc.data),
+			Score: tc.score,
 		})
 		require.NoError(t, err)
 	}
@@ -2698,8 +2698,8 @@ func TestRedisMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 	// Publish 10 entries with scores 100..1000.
 	for i := 1; i <= 10; i++ {
 		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key_%02d", i), MapPublishOptions{
-			Data:       []byte(fmt.Sprintf("data_%02d", i)),
-			Score:      int64(i * 100),
+			Data:  []byte(fmt.Sprintf("data_%02d", i)),
+			Score: int64(i * 100),
 		})
 		require.NoError(t, err)
 	}
@@ -2771,8 +2771,8 @@ func TestRedisMapBroker_OrderedStateAscSameScores(t *testing.T) {
 	// All entries have score=100.
 	for _, key := range []string{"zebra", "apple", "mango", "banana"} {
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
-			Data:       []byte("data"),
-			Score:      100,
+			Data:  []byte("data"),
+			Score: 100,
 		})
 		require.NoError(t, err)
 	}
