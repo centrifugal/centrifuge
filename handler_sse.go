@@ -82,10 +82,11 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ack := make(chan struct{})
 	transport := newSSETransport(r, sseTransportConfig{
 		pingPong:   h.config.PingPongConfig,
 		protoMajor: uint8(r.ProtoMajor),
-	})
+	}, ack)
 
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
@@ -130,6 +131,13 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = HandleReadFrame(c, reader)
 	readerpool.PutBytesReader(reader)
 
+	sendAck := func() {
+		select {
+		case ack <- struct{}{}:
+		case <-r.Context().Done():
+		}
+	}
+
 	for {
 		select {
 		case <-r.Context().Done():
@@ -138,17 +146,20 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		case messages, messagesOK := <-transport.messages:
 			if !messagesOK {
+				sendAck()
 				return
 			}
 			_ = rc.SetWriteDeadline(time.Now().Add(streamingResponseWriteTimeout))
 			for _, msg := range messages {
 				_, err := w.Write(convert.StringToBytes("data: " + convert.BytesToString(msg) + "\n\n"))
 				if err != nil {
+					sendAck()
 					return
 				}
 			}
 			_ = rc.Flush()
 			_ = rc.SetWriteDeadline(time.Time{})
+			sendAck()
 		}
 	}
 }
@@ -160,6 +171,7 @@ const (
 type sseTransport struct {
 	mu           sync.Mutex
 	req          *http.Request
+	ack          chan struct{}
 	messages     chan [][]byte
 	disconnectCh chan struct{}
 	closedCh     chan struct{}
@@ -172,13 +184,14 @@ type sseTransportConfig struct {
 	protoMajor uint8
 }
 
-func newSSETransport(req *http.Request, config sseTransportConfig) *sseTransport {
+func newSSETransport(req *http.Request, config sseTransportConfig, ack chan struct{}) *sseTransport {
 	return &sseTransport{
 		messages:     make(chan [][]byte),
 		disconnectCh: make(chan struct{}),
 		closedCh:     make(chan struct{}),
 		req:          req,
 		config:       config,
+		ack:          ack,
 	}
 }
 
@@ -232,6 +245,11 @@ func (t *sseTransport) WriteMany(messages ...[]byte) error {
 	select {
 	case t.messages <- messages:
 	case <-t.closedCh:
+	}
+	select {
+	case <-t.ack:
+	case <-t.closedCh:
+		return nil
 	}
 	return nil
 }
