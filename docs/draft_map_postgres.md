@@ -14,23 +14,23 @@ All tables use prefix `cf_map_` (JSONB mode) or `cf_binary_map_` (BYTEA mode). S
 
 Append-only log. Every publish and remove appends a row. Outbox workers poll this table.
 
-| Column | Type | Purpose |
-|--------|------|---------|
-| `id` | BIGSERIAL PK | Global monotonic ID for cursor-based polling |
-| `channel` | TEXT | Channel name |
-| `channel_offset` | BIGINT | Per-channel sequence number (Centrifuge offset) |
-| `epoch` | TEXT | Channel epoch |
-| `key` | TEXT | Map key |
-| `data` | JSONB/BYTEA | Payload (NULL for removals) |
-| `tags` | JSONB | Optional key-value tags |
-| `removed` | BOOLEAN | TRUE for removal events |
-| `score` | BIGINT | Sort score (nullable) |
-| `previous_data` | JSONB/BYTEA | Previous value for delta compression |
-| `shard_id` | SMALLINT | `abs(hashtext(channel)) % num_shards` |
-| `client_id`, `user_id` | TEXT | Client metadata |
-| `conn_info`, `chan_info` | JSONB/BYTEA | Connection/channel info |
-| `subscribed_at` | TIMESTAMPTZ | Subscription timestamp |
-| `created_at` | TIMESTAMPTZ | Insert time |
+| Column                   | Type         | Purpose                                         |
+|--------------------------|--------------|-------------------------------------------------|
+| `id`                     | BIGSERIAL PK | Global monotonic ID for cursor-based polling    |
+| `channel`                | TEXT         | Channel name                                    |
+| `channel_offset`         | BIGINT       | Per-channel sequence number (Centrifuge offset) |
+| `epoch`                  | TEXT         | Channel epoch                                   |
+| `key`                    | TEXT         | Map key                                         |
+| `data`                   | JSONB/BYTEA  | Payload (NULL for removals)                     |
+| `tags`                   | JSONB        | Optional key-value tags                         |
+| `removed`                | BOOLEAN      | TRUE for removal events                         |
+| `score`                  | BIGINT       | Sort score (nullable)                           |
+| `previous_data`          | JSONB/BYTEA  | Previous value for delta compression            |
+| `shard_id`               | SMALLINT     | `abs(hashtext(channel)) % num_shards`           |
+| `client_id`, `user_id`   | TEXT         | Client metadata                                 |
+| `conn_info`, `chan_info` | JSONB/BYTEA  | Connection/channel info                         |
+| `subscribed_at`          | TIMESTAMPTZ  | Subscription timestamp                          |
+| `created_at`             | TIMESTAMPTZ  | Insert time                                     |
 
 Key indexes: `(channel, channel_offset)`, `(channel, id DESC)`, `(shard_id, id)` for outbox polling, `(created_at)` for time-based cleanup.
 
@@ -38,17 +38,17 @@ Key indexes: `(channel, channel_offset)`, `(channel, id DESC)`, `(shard_id, id)`
 
 One row per (channel, key). Updated on every publish, deleted on remove.
 
-| Column | Type | Purpose |
-|--------|------|---------|
-| `channel`, `key` | TEXT | Composite PK |
-| `data` | JSONB/BYTEA | Current value |
-| `tags` | JSONB | Current tags |
-| `score` | BIGINT | Sort score for ordered reads |
-| `key_offset` | BIGINT | Last channel_offset that touched this key |
-| `key_version`, `key_version_epoch` | BIGINT, TEXT | Key-level versioning |
-| `expires_at` | TIMESTAMPTZ | Key TTL |
-| `client_id`, `user_id`, `conn_info`, `chan_info`, `subscribed_at` | — | Client metadata |
-| `created_at`, `updated_at` | TIMESTAMPTZ | Timestamps |
+| Column                                                            | Type         | Purpose                                   |
+|-------------------------------------------------------------------|--------------|-------------------------------------------|
+| `channel`, `key`                                                  | TEXT         | Composite PK                              |
+| `data`                                                            | JSONB/BYTEA  | Current value                             |
+| `tags`                                                            | JSONB        | Current tags                              |
+| `score`                                                           | BIGINT       | Sort score for ordered reads              |
+| `key_offset`                                                      | BIGINT       | Last channel_offset that touched this key |
+| `key_version`, `key_version_epoch`                                | BIGINT, TEXT | Key-level versioning                      |
+| `expires_at`                                                      | TIMESTAMPTZ  | Key TTL                                   |
+| `client_id`, `user_id`, `conn_info`, `chan_info`, `subscribed_at` | —            | Client metadata                           |
+| `created_at`, `updated_at`                                        | TIMESTAMPTZ  | Timestamps                                |
 
 Indexes: `(channel, score DESC, key)` for ordered reads, `(expires_at)` for TTL worker.
 
@@ -56,13 +56,13 @@ Indexes: `(channel, score DESC, key)` for ordered reads, `(expires_at)` for TTL 
 
 One row per channel. Holds the current top offset and epoch.
 
-| Column | Type | Purpose |
-|--------|------|---------|
-| `channel` | TEXT PK | Channel name |
-| `top_offset` | BIGINT | Current max offset (incremented on each publish/remove) |
-| `epoch` | TEXT | Random epoch generated on first publish |
-| `version`, `version_epoch` | BIGINT, TEXT | Stream-level version for optimistic concurrency |
-| `expires_at` | TIMESTAMPTZ | Meta TTL (for channel cleanup) |
+| Column                     | Type         | Purpose                                                 |
+|----------------------------|--------------|---------------------------------------------------------|
+| `channel`                  | TEXT PK      | Channel name                                            |
+| `top_offset`               | BIGINT       | Current max offset (incremented on each publish/remove) |
+| `epoch`                    | TEXT         | Random epoch generated on first publish                 |
+| `version`, `version_epoch` | BIGINT, TEXT | Stream-level version for optimistic concurrency         |
+| `expires_at`               | TIMESTAMPTZ  | Meta TTL (for channel cleanup)                          |
 
 **Note:** The meta row is created lazily on the first publish (by `cf_map_publish`). Read operations (ReadState, ReadStream) do **not** create meta rows — they return zero-value results `(offset=0, epoch="")` when no meta exists. See [Empty Epoch Handling](#empty-epoch-handling) for details.
 
@@ -70,11 +70,11 @@ One row per channel. Holds the current top offset and epoch.
 
 Prevents duplicate publishes within a TTL window.
 
-| Column | Type |
-|--------|------|
+| Column                       | Type         |
+|------------------------------|--------------|
 | `channel`, `idempotency_key` | Composite PK |
-| `result_offset`, `result_id` | BIGINT |
-| `expires_at` | TIMESTAMPTZ |
+| `result_offset`, `result_id` | BIGINT       |
+| `expires_at`                 | TIMESTAMPTZ  |
 
 ## SQL Functions
 
@@ -222,12 +222,12 @@ Shard-based routing ensures that outbox worker and client reads for the same cha
 
 ### What uses AllowCached
 
-| Operation | AllowCached | Why |
-|-----------|-------------|-----|
-| Client ReadState (subscription) | true | State reads during subscribe |
-| Client ReadStream (subscription) | true | Stream catch-up during subscribe |
-| Position checks (`ReadStream(Limit:0)`) | false | Must see latest position from primary |
-| `CachedMapBroker` internal reads | false | Gap-fill and sync always hit primary |
+| Operation                               | AllowCached | Why                                   |
+|-----------------------------------------|-------------|---------------------------------------|
+| Client ReadState (subscription)         | true        | State reads during subscribe          |
+| Client ReadStream (subscription)        | true        | Stream catch-up during subscribe      |
+| Position checks (`ReadStream(Limit:0)`) | false       | Must see latest position from primary |
+| `CachedMapBroker` internal reads        | false       | Gap-fill and sync always hit primary  |
 
 ### Outbox Workers with Replicas
 
