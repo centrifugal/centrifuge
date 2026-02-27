@@ -36,8 +36,9 @@ func main() {
 			}
 		},
 		// Map subscription sync protocol configs.
-		MapMinStreamPaginationLimit:  100,  // Minimum limit for stream pagination to prevent excessive round trips.
-		MapMaxImmediateJoinStateSize: 1000, // Max state entries for immediate join (Scenario B).
+		MapMinPaginationLimit:        1,     // Set to 1 for demo purposes, use higher values in production.
+		MapMaxPaginationLimit:        10000, // Maximum limit for pagination.
+		MapMaxImmediateJoinStateSize: 1000,  // Max state entries for immediate join (Scenario B).
 		MapStateToLiveEnabled:        true,
 		// Configure channel options per channel.
 		// Each channel must specify SyncMode and RetentionMode explicitly.

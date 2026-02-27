@@ -2511,8 +2511,8 @@ func TestMapSubscribe_RecoveryMaxPublicationLimit(t *testing.T) {
 // Positioned mode: ErrorStateTooLarge on immediate join when state exceeds MapMaxImmediateJoinStateSize.
 func TestMapSubscribe_ImmediateJoin_StateTooLarge(t *testing.T) {
 	node, err := New(Config{
-		LogLevel:                    LogLevelTrace,
-		LogHandler:                  func(entry LogEntry) {},
+		LogLevel:                     LogLevelTrace,
+		LogHandler:                   func(entry LogEntry) {},
 		MapMaxImmediateJoinStateSize: 3, // Max 3 entries for immediate join.
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
@@ -2820,8 +2820,8 @@ func TestMapSubscribe_Streamless_ImmediateJoin(t *testing.T) {
 	})
 
 	require.Equal(t, MapPhaseLive, result.Phase)
-	require.Len(t, result.State, 3)       // Full state returned.
-	require.False(t, result.Recoverable)   // Streamless: not recoverable.
+	require.Len(t, result.State, 3)      // Full state returned.
+	require.False(t, result.Recoverable) // Streamless: not recoverable.
 	require.Contains(t, client.channels, channel)
 }
 
@@ -2859,8 +2859,8 @@ func TestMapSubscribe_Positioned_ImmediateJoin(t *testing.T) {
 	})
 
 	require.Equal(t, MapPhaseLive, result.Phase)
-	require.Len(t, result.State, 3)      // Full state returned.
-	require.True(t, result.Recoverable)  // Positioned: recoverable.
+	require.Len(t, result.State, 3)     // Full state returned.
+	require.True(t, result.Recoverable) // Positioned: recoverable.
 	require.Greater(t, result.Offset, uint64(0))
 	require.NotEmpty(t, result.Epoch)
 	require.Contains(t, client.channels, channel)
@@ -3020,7 +3020,7 @@ func TestMapSubscribe_CatchUpTimeout_StatePagination(t *testing.T) {
 		Limit:   5,
 		Cursor:  result.Cursor,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
-	require.ErrorIs(t, err, DisconnectStale)
+	require.ErrorIs(t, err, DisconnectSlow)
 
 	// mapSubscribing state should be cleaned up.
 	client.mu.RLock()
@@ -3076,7 +3076,7 @@ func TestMapSubscribe_CatchUpTimeout_PhaseTransition(t *testing.T) {
 		Offset:  result.Offset,
 		Epoch:   result.Epoch,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
-	require.ErrorIs(t, err, DisconnectStale)
+	require.ErrorIs(t, err, DisconnectSlow)
 }
 
 func TestMapSubscribe_CatchUpTimeout_Sweep(t *testing.T) {

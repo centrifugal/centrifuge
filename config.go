@@ -202,13 +202,14 @@ type Config struct {
 	// ClientTimerScheduler if set will be used for scheduling client timers.
 	// This is an EXPERIMENTAL API.
 	ClientTimerScheduler TimerScheduler
+
+	// MapMinPaginationLimit sets the minimum number of items per page in map
+	// subscription pagination requests. This prevents excessive round trips when
+	// clients send very small limits. Zero means no minimum.
+	MapMinPaginationLimit int
 	// MapMaxPaginationLimit sets the maximum number of items a client can request
 	// per page in map subscription pagination requests. Zero means no limit.
 	MapMaxPaginationLimit int
-	// MapMinStreamPaginationLimit sets the minimum number of items for stream pagination.
-	// This prevents excessive round trips when clients send very small limits.
-	// Zero means no minimum (clients can request any limit).
-	MapMinStreamPaginationLimit int
 	// MapMaxImmediateJoinStateSize sets the maximum number of state entries allowed
 	// for immediate join (Scenario B). If state exceeds this, ErrorStateTooLarge is returned.
 	// Zero means no limit (immediate join always allowed).
@@ -226,7 +227,7 @@ type Config struct {
 	MapStateToLiveEnabled bool
 	// MapSubscribeCatchUpTimeout sets the maximum time a client can spend paginating
 	// through state and stream phases before going live. If exceeded, the client is
-	// disconnected with DisconnectStale. Zero means 5 seconds (default). Negative
+	// disconnected with DisconnectSlow. Zero means 5 seconds (default). Negative
 	// means no timeout.
 	MapSubscribeCatchUpTimeout time.Duration
 	// GetMapChannelOptions returns channel options for map channels.

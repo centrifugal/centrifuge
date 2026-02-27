@@ -193,7 +193,7 @@ func (c *Client) handleMapSubscribeCommand(
 				"channel": req.Channel, "user": c.user, "client": c.uid,
 			}))
 			c.cleanupMapSubscribing(req.Channel)
-			return DisconnectStale
+			return DisconnectSlow
 		}
 		reply := SubscribeReply{Options: state.options}
 		if handleErr := c.handleMapSubscribe(req, reply, cmd, started, rw); handleErr != nil {
@@ -208,7 +208,7 @@ func (c *Client) handleMapSubscribeCommand(
 				"channel": req.Channel, "user": c.user, "client": c.uid,
 			}))
 			c.cleanupMapSubscribing(req.Channel)
-			return DisconnectStale
+			return DisconnectSlow
 		}
 		reply := SubscribeReply{Options: state.options}
 		if handleErr := c.handleMapSubscribe(req, reply, cmd, started, rw); handleErr != nil {
@@ -344,7 +344,10 @@ func (c *Client) handleMapStatePhase(
 	if limit <= 0 {
 		limit = 100 // Default limit.
 	}
-	// Cap at server max if configured.
+	// Enforce pagination limits.
+	if c.node.config.MapMinPaginationLimit > 0 && limit < c.node.config.MapMinPaginationLimit {
+		limit = c.node.config.MapMinPaginationLimit
+	}
 	if c.node.config.MapMaxPaginationLimit > 0 && limit > c.node.config.MapMaxPaginationLimit {
 		limit = c.node.config.MapMaxPaginationLimit
 	}
@@ -895,9 +898,9 @@ func (c *Client) handleMapStreamPhase(
 	if limit <= 0 {
 		limit = 500 // Default stream limit.
 	}
-	// Enforce minimum pagination limit to prevent excessive round trips.
-	if c.node.config.MapMinStreamPaginationLimit > 0 && limit < c.node.config.MapMinStreamPaginationLimit {
-		limit = c.node.config.MapMinStreamPaginationLimit
+	// Enforce pagination limits.
+	if c.node.config.MapMinPaginationLimit > 0 && limit < c.node.config.MapMinPaginationLimit {
+		limit = c.node.config.MapMinPaginationLimit
 	}
 	if c.node.config.MapMaxPaginationLimit > 0 && limit > c.node.config.MapMaxPaginationLimit {
 		limit = c.node.config.MapMaxPaginationLimit
@@ -1302,7 +1305,7 @@ func (c *Client) releaseMapPaginationLock(channel string) {
 
 // sweepExpiredMapSubscribing removes expired mapSubscribing entries for channels
 // other than skipChannel. The skipped channel is handled by the caller with a
-// proper DisconnectStale. Cleans up abandoned catch-ups where the client stopped
+// proper DisconnectSlow. Cleans up abandoned catch-ups where the client stopped
 // sending requests but stayed connected. Called at the start of every map subscribe
 // command — O(n) where n is in-progress catch-ups (typically 0–2), no-op when map
 // is empty.
