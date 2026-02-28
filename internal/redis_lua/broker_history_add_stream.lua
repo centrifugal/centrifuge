@@ -27,7 +27,6 @@ if current_epoch == false then
     redis.call("hset", meta_key, "e", current_epoch)
 end
 
--- Check version BEFORE incrementing offset (to match MemoryBroker behavior)
 if version ~= "0" then
     local prev_version_values = redis.call("hmget", meta_key, "v", "ve", "s")
     local prev_version = prev_version_values[1]
@@ -43,18 +42,13 @@ if version ~= "0" then
             return { offset_num, current_epoch, "0", "1" }
         end
     end
+    redis.call("hset", meta_key, "v", version, "ve", version_epoch)
 end
 
--- Only increment offset if not suppressed
 local top_offset = redis.call("hincrby", meta_key, "s", 1)
 
 if meta_expire ~= '0' then
     redis.call("expire", meta_key, meta_expire)
-end
-
--- Update version tracking after successful increment
-if version ~= "0" then
-    redis.call("hset", meta_key, "v", version, "ve", version_epoch)
 end
 
 local prev_message_payload = ""
