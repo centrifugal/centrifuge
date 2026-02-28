@@ -491,11 +491,9 @@
         });
 
         // Subscribe to games list (map channel)
-        // Using paginated join (Scenario A): fetches state in pages, then stream catch-up.
-        // For small channels, can use immediateJoin: true (Scenario B) to get state + stream in one request.
+        // Fetches state in pages, then catches up from stream if needed.
         const gamesSub = centrifuge.newMapSubscription('games', {
             limit: 50
-            // immediateJoin: true  // Uncomment for immediate join mode (single request for small state)
         });
 
         gamesSub.on('sync', (ctx) => {

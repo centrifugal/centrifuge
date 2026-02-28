@@ -36,10 +36,7 @@ func main() {
 			}
 		},
 		// Map subscription sync protocol configs.
-		MapMinPaginationLimit:        1,     // Set to 1 for demo purposes, use higher values in production.
-		MapMaxPaginationLimit:        10000, // Maximum limit for pagination.
-		MapMaxImmediateJoinStateSize: 1000,  // Max state entries for immediate join (Scenario B).
-		MapStateToLiveEnabled:        true,
+		MapPaginationMinLimit: 1, // Set to 1 for demo purposes, default is 100.
 		// Configure channel options per channel.
 		// Each channel must specify SyncMode and RetentionMode explicitly.
 		GetMapChannelOptions: func(channel string) centrifuge.MapChannelOptions {

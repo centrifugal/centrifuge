@@ -100,6 +100,13 @@ const (
 // subscribeResultTypeMap is the Type value for map subscriptions in protocol.SubscribeResult.
 const subscribeResultTypeMap = 1
 
+const (
+	// defaultMapPaginationMinLimit is the default minimum page size for map pagination.
+	defaultMapPaginationMinLimit = 100
+	// defaultMapPaginationMaxLimit is the default maximum page size for map pagination.
+	defaultMapPaginationMaxLimit = 1000
+)
+
 // validateAndCreateTagsFilter validates the tags filter from the request and creates a tagsFilter.
 // Returns (nil, nil) if req.Tf is nil. Returns (nil, error) if validation fails.
 func (c *Client) validateAndCreateTagsFilter(req *protocol.SubscribeRequest, allowTagsFilter bool, channel string) (*tagsFilter, error) {
@@ -341,15 +348,19 @@ func (c *Client) handleMapStatePhase(
 
 	// Build read options.
 	limit := int(req.Limit)
-	if limit <= 0 {
-		limit = 100 // Default limit.
+	minLimit := c.node.config.MapPaginationMinLimit
+	if minLimit <= 0 {
+		minLimit = defaultMapPaginationMinLimit
 	}
-	// Enforce pagination limits.
-	if c.node.config.MapMinPaginationLimit > 0 && limit < c.node.config.MapMinPaginationLimit {
-		limit = c.node.config.MapMinPaginationLimit
+	maxLimit := c.node.config.MapPaginationMaxLimit
+	if maxLimit <= 0 {
+		maxLimit = defaultMapPaginationMaxLimit
 	}
-	if c.node.config.MapMaxPaginationLimit > 0 && limit > c.node.config.MapMaxPaginationLimit {
-		limit = c.node.config.MapMaxPaginationLimit
+	if limit <= 0 || limit < minLimit {
+		limit = minLimit
+	}
+	if limit > maxLimit {
+		limit = maxLimit
 	}
 
 	opts := MapReadStateOptions{
@@ -449,17 +460,15 @@ func (c *Client) handleMapStatePhase(
 			// Streamless: always go LIVE on last page (no stream to paginate through).
 			return c.handleMapStateToLive(req, reply, state, cmd, started, rw, pubs, effectivePos)
 		}
-		// Positioned: optionally skip STREAM phase if stream hasn't advanced much.
-		if c.node.config.MapStateToLiveEnabled {
-			currentStreamPos, err := c.node.mapStreamPosition(c.ctx, channel)
-			if err == nil {
-				// Use limit as threshold - if stream is within one page, go LIVE.
-				if effectivePos.Offset+uint64(limit) >= currentStreamPos.Offset {
-					return c.handleMapStateToLive(req, reply, state, cmd, started, rw, pubs, effectivePos)
-				}
+		// Positioned: skip STREAM phase if stream hasn't advanced much.
+		currentStreamPos, err := c.node.mapStreamPosition(c.ctx, channel)
+		if err == nil {
+			// Use limit as threshold - if stream is within one page, go LIVE.
+			if effectivePos.Offset+uint64(limit) >= currentStreamPos.Offset {
+				return c.handleMapStateToLive(req, reply, state, cmd, started, rw, pubs, effectivePos)
 			}
-			// If error or stream too far ahead, fall through to normal STATE response.
 		}
+		// If error or stream too far ahead, fall through to normal STATE response.
 	}
 
 	// Use frozen offset from first page for consistency. On subsequent pages,
@@ -507,7 +516,7 @@ type mapTransitionToLiveParams struct {
 
 // handleMapTransitionToLive implements the shared buffer-subscribe-read-merge protocol
 // used by all four methods that transition a map subscription to the live phase:
-// handleMapStateToLive, handleMapStreamToLive, handleMapImmediateJoin, handleMapRecoveryJoin.
+// handleMapStateToLive, handleMapStreamToLive, and handleMapRecoveryJoin.
 func (c *Client) handleMapTransitionToLive(
 	req *protocol.SubscribeRequest,
 	reply SubscribeReply,
@@ -573,8 +582,8 @@ func (c *Client) handleMapTransitionToLive(
 	if positioning {
 		// Positioned mode: read stream from sincePosition to catch any updates.
 		streamLimit := -1 // No limit by default.
-		if c.node.config.MapRecoveryMaxPublicationLimit > 0 {
-			streamLimit = c.node.config.MapRecoveryMaxPublicationLimit
+		if c.node.config.MapLiveTransitionMaxPublicationLimit > 0 {
+			streamLimit = c.node.config.MapLiveTransitionMaxPublicationLimit
 		}
 
 		// Read limit+1 to distinguish "exactly at limit" from "too far behind".
@@ -895,15 +904,19 @@ func (c *Client) handleMapStreamPhase(
 
 	// Build read options.
 	limit := int(req.Limit)
-	if limit <= 0 {
-		limit = 500 // Default stream limit.
+	minLimit := c.node.config.MapPaginationMinLimit
+	if minLimit <= 0 {
+		minLimit = defaultMapPaginationMinLimit
 	}
-	// Enforce pagination limits.
-	if c.node.config.MapMinPaginationLimit > 0 && limit < c.node.config.MapMinPaginationLimit {
-		limit = c.node.config.MapMinPaginationLimit
+	maxLimit := c.node.config.MapPaginationMaxLimit
+	if maxLimit <= 0 {
+		maxLimit = defaultMapPaginationMaxLimit
 	}
-	if c.node.config.MapMaxPaginationLimit > 0 && limit > c.node.config.MapMaxPaginationLimit {
-		limit = c.node.config.MapMaxPaginationLimit
+	if limit <= 0 || limit < minLimit {
+		limit = minLimit
+	}
+	if limit > maxLimit {
+		limit = maxLimit
 	}
 
 	// Check if close enough to go LIVE: offset + limit >= streamStart
@@ -1003,9 +1016,7 @@ func (c *Client) handleMapStreamToLive(
 }
 
 // handleMapLivePhase handles joining pub/sub with coordination.
-// Supports two modes:
-//   - Immediate join (Scenario B): Fresh subscription with recover=false, returns state + stream.
-//   - Recovery/paginated join: After pagination or reconnect, returns only stream catch-up.
+// Used for recovery or paginated join: after pagination or reconnect, returns only stream catch-up.
 func (c *Client) handleMapLivePhase(
 	req *protocol.SubscribeRequest,
 	reply SubscribeReply,
@@ -1037,92 +1048,12 @@ func (c *Client) handleMapLivePhase(
 			return ErrorUnrecoverablePosition
 		}
 	} else {
-		// Direct live subscription (no prior pagination).
 		opts = reply.Options
 		isPresence = opts.Type.IsMapPresence()
 	}
 
-	// Immediate join: Fresh subscription (not recovering) without prior pagination.
-	// recover=false means fresh subscription → server returns state + stream.
-	// recover=true means reconnection → server returns only stream catch-up.
-	if !hasState && !req.Recover {
-		return c.handleMapImmediateJoin(req, reply, opts, isPresence, cmd, started, rw)
-	}
-
-	// Recovery or paginated join - only stream catch-up needed.
+	// Recovery or paginated join - stream catch-up needed.
 	return c.handleMapRecoveryJoin(req, reply, opts, isPresence, tagsFilterFromState, cmd, started, rw)
-}
-
-// handleMapImmediateJoin handles immediate join mode (Scenario B).
-// Returns full state + stream in one response.
-// State is read before calling the shared helper (reading state slightly earlier
-// is safe because the buffer-merge protocol covers any gap).
-func (c *Client) handleMapImmediateJoin(
-	req *protocol.SubscribeRequest,
-	reply SubscribeReply,
-	opts SubscribeOptions,
-	isPresence bool,
-	cmd *protocol.Command,
-	started time.Time,
-	rw *replyWriter,
-) error {
-	channel := req.Channel
-
-	// Validate tags filter early (before state read) to fail fast.
-	tf, err := c.validateAndCreateTagsFilter(req, opts.AllowTagsFilter, channel)
-	if err != nil {
-		return err
-	}
-
-	// Read full state (no pagination, enforce size limit).
-	stateLimit := -1 // Negative means no limit.
-	if c.node.config.MapMaxImmediateJoinStateSize > 0 {
-		stateLimit = c.node.config.MapMaxImmediateJoinStateSize
-	}
-
-	stateResult, err := c.node.MapStateRead(c.ctx, channel, MapReadStateOptions{
-		AllowCached: true, // Use cache for subscription state delivery
-		Limit:       stateLimit,
-		Asc:         req.Asc,
-	})
-	if err != nil {
-		if errors.Is(err, ErrorUnrecoverablePosition) {
-			return ErrorUnrecoverablePosition
-		}
-		c.node.logger.log(newErrorLogEntry(err, "error reading state for immediate join", map[string]any{
-			"channel": channel, "user": c.user, "client": c.uid,
-		}))
-		return ErrorInternal
-	}
-
-	// Check if state is too large for immediate join.
-	if stateResult.Cursor != "" {
-		return ErrorStateTooLarge
-	}
-
-	statePubs := stateResult.Publications
-	statePos := stateResult.Position
-
-	// Apply tags filter to state publications.
-	if tf != nil {
-		filteredPubs := make([]*Publication, 0, len(statePubs))
-		for _, pub := range statePubs {
-			match, _ := filter.Match(tf.filter, pub.Tags)
-			if match {
-				filteredPubs = append(filteredPubs, pub)
-			}
-		}
-		statePubs = filteredPubs
-	}
-
-	return c.handleMapTransitionToLive(req, reply, opts, isPresence, cmd, started, rw, mapTransitionToLiveParams{
-		sincePosition:       statePos,
-		statePubs:           statePubs,
-		allowStreamless:     true,
-		isRecovery:          false,
-		tagsFilterFromState: tf,
-		metricsAction:       "map_subscribe_immediate_join",
-	})
 }
 
 // handleMapRecoveryJoin handles recovery or paginated join (stream catch-up only).
@@ -1136,17 +1067,6 @@ func (c *Client) handleMapRecoveryJoin(
 	started time.Time,
 	rw *replyWriter,
 ) error {
-	channel := req.Channel
-
-	// In streamless mode, redirect recovery to immediate join (full state re-sync).
-	if !opts.EnablePositioning && !opts.EnableRecovery {
-		c.cleanupMapSubscribing(channel)
-		if req.Recover {
-			c.node.metrics.incRecover(false, channel, false)
-		}
-		return c.handleMapImmediateJoin(req, reply, opts, isPresence, cmd, started, rw)
-	}
-
 	return c.handleMapTransitionToLive(req, reply, opts, isPresence, cmd, started, rw, mapTransitionToLiveParams{
 		sincePosition:       StreamPosition{Offset: req.Offset, Epoch: req.Epoch},
 		statePubs:           nil,

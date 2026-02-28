@@ -203,28 +203,17 @@ type Config struct {
 	// This is an EXPERIMENTAL API.
 	ClientTimerScheduler TimerScheduler
 
-	// MapMinPaginationLimit sets the minimum number of items per page in map
+	// MapPaginationMinLimit sets the minimum number of items per page in map
 	// subscription pagination requests. This prevents excessive round trips when
-	// clients send very small limits. Zero means no minimum.
-	MapMinPaginationLimit int
-	// MapMaxPaginationLimit sets the maximum number of items a client can request
-	// per page in map subscription pagination requests. Zero means no limit.
-	MapMaxPaginationLimit int
-	// MapMaxImmediateJoinStateSize sets the maximum number of state entries allowed
-	// for immediate join (Scenario B). If state exceeds this, ErrorStateTooLarge is returned.
-	// Zero means no limit (immediate join always allowed).
-	MapMaxImmediateJoinStateSize int
-	// MapRecoveryMaxPublicationLimit sets the maximum number of stream publications
+	// clients send very small limits. Zero means default (100).
+	MapPaginationMinLimit int
+	// MapPaginationMaxLimit sets the maximum number of items a client can request
+	// per page in map subscription pagination requests. Zero means default (1000).
+	MapPaginationMaxLimit int
+	// MapLiveTransitionMaxPublicationLimit sets the maximum number of stream publications
 	// to recover during map subscription live transition. If limit is reached,
 	// ErrorUnrecoverablePosition is returned. Zero means no limit.
-	MapRecoveryMaxPublicationLimit int
-	// MapStateToLiveEnabled controls whether server can transition directly from
-	// STATE to LIVE phase on the last state page, skipping STREAM phase entirely.
-	// Only applies to positioned mode — in streamless mode, STATE always transitions
-	// to LIVE on the last page regardless of this setting.
-	// When enabled for positioned mode, if stream hasn't advanced much during state
-	// pagination, server goes LIVE immediately, reducing round trips.
-	MapStateToLiveEnabled bool
+	MapLiveTransitionMaxPublicationLimit int
 	// MapSubscribeCatchUpTimeout sets the maximum time a client can spend paginating
 	// through state and stream phases before going live. If exceeded, the client is
 	// disconnected with DisconnectSlow. Zero means 5 seconds (default). Negative

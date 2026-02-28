@@ -1540,6 +1540,8 @@ func TestNodeCheckPositionMapWithMedium(t *testing.T) {
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
 		Type:    1,
+		Phase:   MapPhaseState,
+		Limit:   100,
 	})
 
 	// Now checkPosition should use the medium's SharedPositionSync path.

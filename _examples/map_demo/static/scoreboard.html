@@ -434,6 +434,58 @@
             opacity: 0.7;
         }
 
+        /* Delta stats bar */
+        .delta-bar {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-bottom: 24px;
+            padding: 10px 16px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            font-family: var(--mono);
+            font-size: 12px;
+            color: var(--text-tertiary);
+            font-variant-numeric: tabular-nums;
+        }
+        .delta-bar .d-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-tertiary);
+        }
+        .delta-bar .d-val {
+            color: var(--text-secondary);
+        }
+        .delta-bar .d-highlight {
+            color: var(--green);
+            font-weight: 600;
+        }
+        .delta-bar .d-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .delta-bar .d-sep {
+            color: rgba(255,255,255,0.12);
+        }
+        .delta-ratio-bar {
+            width: 80px;
+            height: 6px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .delta-ratio-fill {
+            height: 100%;
+            background: var(--green);
+            border-radius: 3px;
+            transition: width 0.5s ease;
+        }
+
         /* Back link */
         .back-link {
             position: fixed;
@@ -461,6 +513,24 @@
         <div class="conn-status">
             <span class="conn-dot" id="connDot"></span>
             <span id="connText">Connecting...</span>
+        </div>
+
+        <!-- Delta compression stats -->
+        <div class="delta-bar" id="deltaBar">
+            <span class="d-label">Delta compression</span>
+            <span class="d-sep">|</span>
+            <span class="d-group"><span class="d-val" id="dPubs">0</span> msgs</span>
+            <span class="d-group"><span class="d-val" id="dFull">0</span> full</span>
+            <span class="d-group"><span class="d-val" id="dDelta">0</span> delta</span>
+            <span class="d-sep">|</span>
+            <span class="d-group">wire <span class="d-val" id="dWire">0 B</span></span>
+            <span class="d-group">decoded <span class="d-val" id="dDecoded">0 B</span></span>
+            <span class="d-group">saved <span class="d-highlight" id="dSaved">0 B</span></span>
+            <span class="d-sep">|</span>
+            <span class="d-group">
+                <div class="delta-ratio-bar"><div class="delta-ratio-fill" id="dRatioFill" style="width:0%"></div></div>
+                <span class="d-highlight" id="dRatio">0%</span>
+            </span>
         </div>
 
         <!-- Match cards -->
@@ -564,6 +634,26 @@
 
         sub.subscribe();
         centrifuge.connect();
+
+        // --- Delta stats update ---
+        function formatBytes(b) {
+            if (b < 1024) return b + ' B';
+            if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+            return (b / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        setInterval(() => {
+            const s = sub.deltaStats();
+            document.getElementById('dPubs').textContent = s.numPublications;
+            document.getElementById('dFull').textContent = s.numFullPayloads;
+            document.getElementById('dDelta').textContent = s.numDeltaPayloads;
+            document.getElementById('dWire').textContent = formatBytes(s.bytesReceived);
+            document.getElementById('dDecoded').textContent = formatBytes(s.bytesDecoded);
+            document.getElementById('dSaved').textContent = formatBytes(s.bytesDecoded - s.bytesReceived);
+            const pct = (s.compressionRatio * 100).toFixed(1);
+            document.getElementById('dRatio').textContent = pct + '%';
+            document.getElementById('dRatioFill').style.width = pct + '%';
+        }, 500);
 
         // --- Rendering ---
         const cardElements = new Map(); // matchID -> DOM element
