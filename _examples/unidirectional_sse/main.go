@@ -163,7 +163,8 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
 
-		transport := newEventsourceTransport(req)
+		ack := make(chan struct{})
+		transport := newEventsourceTransport(req, ack)
 
 		c, closeFn, err := centrifuge.NewClient(req.Context(), node, transport)
 		if err != nil {
@@ -191,6 +192,13 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 		tick := time.NewTicker(pingInterval)
 		defer tick.Stop()
 
+		sendAck := func() {
+			select {
+			case ack <- struct{}{}:
+			case <-req.Context().Done():
+			}
+		}
+
 		for {
 			select {
 			case <-req.Context().Done():
@@ -207,6 +215,7 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 				_ = rc.Flush()
 			case data, ok := <-transport.messages:
 				if !ok {
+					sendAck()
 					return
 				}
 				tick.Reset(pingInterval)
@@ -214,9 +223,11 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 				_, err = w.Write([]byte("data: " + string(data) + "\n\n"))
 				if err != nil {
 					log.Printf("error write: %v", err)
+					sendAck()
 					return
 				}
 				_ = rc.Flush()
+				sendAck()
 			}
 		}
 	}
@@ -257,18 +268,20 @@ func handleUnsubscribe(node *centrifuge.Node) http.HandlerFunc {
 type eventsourceTransport struct {
 	mu           sync.Mutex
 	req          *http.Request
+	ack          chan struct{}
 	messages     chan []byte
 	disconnectCh chan *centrifuge.Disconnect
 	closedCh     chan struct{}
 	closed       bool
 }
 
-func newEventsourceTransport(req *http.Request) *eventsourceTransport {
+func newEventsourceTransport(req *http.Request, ack chan struct{}) *eventsourceTransport {
 	return &eventsourceTransport{
 		messages:     make(chan []byte),
 		disconnectCh: make(chan *centrifuge.Disconnect),
 		closedCh:     make(chan struct{}),
 		req:          req,
+		ack:          ack,
 	}
 }
 
@@ -323,6 +336,11 @@ func (t *eventsourceTransport) WriteMany(messages ...[]byte) error {
 	for i := 0; i < len(messages); i++ {
 		select {
 		case t.messages <- messages[i]:
+		case <-t.closedCh:
+			return nil
+		}
+		select {
+		case <-t.ack:
 		case <-t.closedCh:
 			return nil
 		}

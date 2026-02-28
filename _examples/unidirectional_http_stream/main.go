@@ -164,7 +164,8 @@ func handleStream(node *centrifuge.Node) http.HandlerFunc {
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
 
-		transport := newStreamTransport(req)
+		ack := make(chan struct{})
+		transport := newStreamTransport(req, ack)
 
 		c, closeFn, err := centrifuge.NewClient(req.Context(), node, transport)
 		if err != nil {
@@ -186,6 +187,13 @@ func handleStream(node *centrifuge.Node) http.HandlerFunc {
 		tick := time.NewTicker(pingInterval)
 		defer tick.Stop()
 
+		sendAck := func() {
+			select {
+			case ack <- struct{}{}:
+			case <-req.Context().Done():
+			}
+		}
+
 		for {
 			select {
 			case <-req.Context().Done():
@@ -202,6 +210,7 @@ func handleStream(node *centrifuge.Node) http.HandlerFunc {
 				_ = rc.Flush()
 			case data, ok := <-transport.messages:
 				if !ok {
+					sendAck()
 					return
 				}
 				tick.Reset(pingInterval)
@@ -209,14 +218,17 @@ func handleStream(node *centrifuge.Node) http.HandlerFunc {
 				_, err = w.Write(data)
 				if err != nil {
 					log.Printf("error write: %v", err)
+					sendAck()
 					return
 				}
 				_, err = w.Write([]byte("\n"))
 				if err != nil {
 					log.Printf("error write: %v", err)
+					sendAck()
 					return
 				}
 				_ = rc.Flush()
+				sendAck()
 			}
 		}
 	}
@@ -261,18 +273,20 @@ func handleUnsubscribe(node *centrifuge.Node) http.HandlerFunc {
 type streamTransport struct {
 	mu           sync.Mutex
 	req          *http.Request
+	ack          chan struct{}
 	messages     chan []byte
 	disconnectCh chan *centrifuge.Disconnect
 	closedCh     chan struct{}
 	closed       bool
 }
 
-func newStreamTransport(req *http.Request) *streamTransport {
+func newStreamTransport(req *http.Request, ack chan struct{}) *streamTransport {
 	return &streamTransport{
 		messages:     make(chan []byte),
 		disconnectCh: make(chan *centrifuge.Disconnect),
 		closedCh:     make(chan struct{}),
 		req:          req,
+		ack:          ack,
 	}
 }
 
@@ -329,6 +343,11 @@ func (t *streamTransport) WriteMany(messages ...[]byte) error {
 	for i := 0; i < len(messages); i++ {
 		select {
 		case t.messages <- messages[i]:
+		case <-t.closedCh:
+			return nil
+		}
+		select {
+		case <-t.ack:
 		case <-t.closedCh:
 			return nil
 		}

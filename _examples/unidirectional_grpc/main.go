@@ -109,7 +109,8 @@ func newGRPCClientService(n *centrifuge.Node, c GRPCClientServiceConfig) *grpcCl
 // Consume is a unidirectional server->client stream with real-time data.
 func (s *grpcClientService) Consume(req *clientproto.ConnectRequest, stream clientproto.CentrifugeUni_ConsumeServer) error {
 	streamDataCh := make(chan []byte)
-	transport := newGRPCTransport(stream, streamDataCh)
+	ack := make(chan struct{})
+	transport := newGRPCTransport(stream, streamDataCh, ack)
 
 	connectRequest := centrifuge.ConnectRequest{
 		Token:   req.Token,
@@ -141,14 +142,23 @@ func (s *grpcClientService) Consume(req *clientproto.ConnectRequest, stream clie
 
 	c.Connect(connectRequest)
 
+	sendAck := func() {
+		select {
+		case ack <- struct{}{}:
+		case <-stream.Context().Done():
+		}
+	}
+
 	for {
 		select {
 		case streamData := <-streamDataCh:
 			err := stream.SendMsg(rawFrame(streamData))
 			if err != nil {
 				log.Printf("stream send error: %v", err)
+				sendAck()
 				return err
 			}
+			sendAck()
 		case <-transport.closeCh:
 			return nil
 		}
@@ -161,14 +171,16 @@ type grpcTransport struct {
 	stream       clientproto.CentrifugeUni_ConsumeServer
 	closed       bool
 	closeCh      chan struct{}
+	ack          chan struct{}
 	streamDataCh chan []byte
 }
 
-func newGRPCTransport(stream clientproto.CentrifugeUni_ConsumeServer, streamDataCh chan []byte) *grpcTransport {
+func newGRPCTransport(stream clientproto.CentrifugeUni_ConsumeServer, streamDataCh chan []byte, ack chan struct{}) *grpcTransport {
 	return &grpcTransport{
 		stream:       stream,
 		streamDataCh: streamDataCh,
 		closeCh:      make(chan struct{}),
+		ack:          ack,
 	}
 }
 
@@ -225,6 +237,11 @@ func (t *grpcTransport) WriteMany(messages ...[]byte) error {
 	for i := 0; i < len(messages); i++ {
 		select {
 		case t.streamDataCh <- messages[i]:
+		case <-t.closeCh:
+			return nil
+		}
+		select {
+		case <-t.ack:
 		case <-t.closeCh:
 			return nil
 		}

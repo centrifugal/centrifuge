@@ -85,11 +85,12 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ack := make(chan struct{})
 	transport := newHTTPStreamTransport(r, httpStreamTransportConfig{
 		protocolType: protocolType,
 		pingPong:     h.config.PingPongConfig,
 		protoMajor:   uint8(r.ProtoMajor),
-	})
+	}, ack)
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
 		h.node.logger.log(newErrorLogEntry(err, "error create client", map[string]any{"error": err.Error(), "transport": transportHTTPStream}))
@@ -122,6 +123,13 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = HandleReadFrame(c, reader)
 	readerpool.PutBytesReader(reader)
 
+	sendAck := func() {
+		select {
+		case ack <- struct{}{}:
+		case <-r.Context().Done():
+		}
+	}
+
 	for {
 		select {
 		case <-r.Context().Done():
@@ -130,6 +138,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		case messages, messagesOK := <-transport.messages:
 			if !messagesOK {
+				sendAck()
 				return
 			}
 			err = rc.SetWriteDeadline(time.Now().Add(streamingResponseWriteTimeout))
@@ -143,6 +152,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				_, err := w.Write(encoder.Finish())
 				if err != nil {
+					sendAck()
 					return
 				}
 				protocol.PutDataEncoder(protocolType.toProto(), encoder)
@@ -150,16 +160,19 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				for _, message := range messages {
 					_, err = w.Write(message)
 					if err != nil {
+						sendAck()
 						return
 					}
 					_, err = w.Write([]byte("\n"))
 					if err != nil {
+						sendAck()
 						return
 					}
 				}
 			}
 			_ = rc.Flush()
 			_ = rc.SetWriteDeadline(time.Time{})
+			sendAck()
 		}
 	}
 }
@@ -171,6 +184,7 @@ const (
 type httpStreamTransport struct {
 	mu           sync.Mutex
 	req          *http.Request
+	ack          chan struct{}
 	messages     chan [][]byte
 	disconnectCh chan struct{}
 	closedCh     chan struct{}
@@ -184,13 +198,14 @@ type httpStreamTransportConfig struct {
 	protoMajor   uint8
 }
 
-func newHTTPStreamTransport(req *http.Request, config httpStreamTransportConfig) *httpStreamTransport {
+func newHTTPStreamTransport(req *http.Request, config httpStreamTransportConfig, ack chan struct{}) *httpStreamTransport {
 	return &httpStreamTransport{
 		messages:     make(chan [][]byte),
 		disconnectCh: make(chan struct{}),
 		closedCh:     make(chan struct{}),
 		req:          req,
 		config:       config,
+		ack:          ack,
 	}
 }
 
@@ -244,6 +259,11 @@ func (t *httpStreamTransport) WriteMany(messages ...[]byte) error {
 	select {
 	case t.messages <- messages:
 	case <-t.closedCh:
+	}
+	select {
+	case <-t.ack:
+	case <-t.closedCh:
+		return nil
 	}
 	return nil
 }
