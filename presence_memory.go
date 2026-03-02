@@ -41,6 +41,19 @@ func (m *MemoryPresenceManager) AddPresence(ch string, uid string, info *ClientI
 	return m.presenceHub.add(ch, uid, info)
 }
 
+// AddPresenceBatch - see PresenceManager interface description.
+func (m *MemoryPresenceManager) AddPresenceBatch(items []PresenceBatchItem) error {
+	return m.presenceHub.addBatch(items)
+}
+
+// SupportsBatchPresence - see PresenceManager interface description.
+// MemoryPresenceManager always returns true: in-process batch writes are
+// a single mutex-protected loop with no network overhead, so batching is
+// always both correct and efficient regardless of configuration.
+func (m *MemoryPresenceManager) SupportsBatchPresence() bool {
+	return true
+}
+
 // RemovePresence - see PresenceManager interface description.
 func (m *MemoryPresenceManager) RemovePresence(ch string, clientID string, _ string) error {
 	return m.presenceHub.remove(ch, clientID)
@@ -81,6 +94,20 @@ func (h *presenceHub) add(ch string, uid string, info *ClientInfo) error {
 		h.presence[ch] = make(map[string]*ClientInfo)
 	}
 	h.presence[ch][uid] = info
+	return nil
+}
+
+func (h *presenceHub) addBatch(items []PresenceBatchItem) error {
+	h.Lock()
+	defer h.Unlock()
+
+	for _, item := range items {
+		_, ok := h.presence[item.Channel]
+		if !ok {
+			h.presence[item.Channel] = make(map[string]*ClientInfo)
+		}
+		h.presence[item.Channel][item.ClientID] = item.Info
+	}
 	return nil
 }
 

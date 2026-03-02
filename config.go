@@ -135,6 +135,10 @@ type Config struct {
 	// ClientTimerScheduler if set will be used for scheduling client timers.
 	// This is an EXPERIMENTAL API.
 	ClientTimerScheduler TimerScheduler
+	// ClientPresenceUpdateBatchSize sets the number of channels to process in each batch
+	// during presence update. This helps to reduce latency when a client has many subscribed channels.
+	// Zero value means 10 channels per batch.
+	ClientPresenceUpdateBatchSize int
 }
 
 const (

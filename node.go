@@ -141,6 +141,9 @@ func New(c Config) (*Node, error) {
 	if c.HistoryMetaTTL == 0 {
 		c.HistoryMetaTTL = 30 * 24 * time.Hour // 30 days by default.
 	}
+	if c.ClientPresenceUpdateBatchSize == 0 {
+		c.ClientPresenceUpdateBatchSize = 10 // 10 channels by default.
+	}
 
 	uidObj, err := uuid.NewRandom()
 	if err != nil {
@@ -1253,6 +1256,50 @@ func (n *Node) addPresence(ch string, uid string, info *ClientInfo) error {
 	}
 	n.metrics.incActionCount("add_presence", ch)
 	return presenceManager.AddPresence(ch, uid, info)
+}
+
+// addPresenceBatch proxies batch presence adding to PresenceManager.
+// This is more efficient than calling addPresence multiple times as it can
+// reduce network round trips to Redis.
+func (n *Node) addPresenceBatch(items []PresenceBatchItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	// Group items by presence manager
+	managerGroups := make(map[PresenceManager][]PresenceBatchItem)
+	for _, item := range items {
+		presenceManager := n.getPresenceManager(item.Channel)
+		if presenceManager == nil {
+			continue
+		}
+		managerGroups[presenceManager] = append(managerGroups[presenceManager], item)
+		n.metrics.incActionCount("add_presence", item.Channel)
+	}
+
+	// Execute updates for each presence manager.
+	// SupportsBatchPresence is part of the PresenceManager interface; every
+	// implementation declares whether AddPresenceBatch is safe and efficient.
+	// When a manager returns false (e.g. RedisPresenceManager with Redis Cluster
+	// shards) we fall back to individual AddPresence calls, which are always safe
+	// regardless of the underlying topology.
+	for presenceManager, managerItems := range managerGroups {
+		if presenceManager.SupportsBatchPresence() {
+			if err := presenceManager.AddPresenceBatch(managerItems); err != nil {
+				return err
+			}
+		} else {
+			// Batch unsupported: issue one AddPresence call per item.
+			for _, item := range managerItems {
+				if err := presenceManager.AddPresence(item.Channel, item.ClientID, item.Info); err != nil {
+					return err
+				}
+			}
+		}
+
+	}
+
+	return nil
 }
 
 // removePresence proxies presence removing to PresenceManager.
