@@ -176,10 +176,10 @@ func (m *RedisPresenceManager) addPresenceScriptKeysArgs(s *RedisShard, ch strin
 	}
 
 	hashKey := m.presenceHashKey(s, ch)
-	//setKey := m.presenceSetKey(s, ch)
-	//userSetKey := m.userSetKey(s, ch)
-	//userHashKey := m.userHashKey(s, ch)
-	keys := []string{string(hashKey)}
+	setKey := m.presenceSetKey(s, ch)
+	userSetKey := m.userSetKey(s, ch)
+	userHashKey := m.userHashKey(s, ch)
+	keys := []string{string(setKey), string(hashKey), string(userSetKey), string(userHashKey)}
 
 	expireAt := time.Now().Unix() + int64(expire)
 	useUserMapping := m.useUserMappingArg(ch)
