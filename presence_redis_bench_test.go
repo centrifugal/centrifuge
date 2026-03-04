@@ -289,6 +289,76 @@ func BenchmarkRedisLargeScale_BatchWithSplit(b *testing.B) {
 	}
 }
 
+// BenchmarkRedisLargeScale_Parallel benchmarks 10,000 channels under b.RunParallel,
+// comparing Individual (N sequential AddPresence per goroutine iteration) against
+// Batch with various batchSize splits. This simulates real-world concurrent clients
+// each updating presence for many channels simultaneously.
+func BenchmarkRedisLargeScale_Parallel(b *testing.B) {
+	const totalChannels = 10000
+
+	for _, tt := range excludeClusterPresenceTests(redisPresenceTests) {
+		if tt.Port != 6379 {
+			continue
+		}
+
+		// --- Individual: each parallel goroutine calls AddPresence 10,000 times ---
+		b.Run(fmt.Sprintf("%s/Individual/numCh_%d", tt.Name, totalChannels), func(b *testing.B) {
+			node := benchNode(b)
+			pm := newTestRedisPresenceManager(b, node, tt.UseCluster, false, false, tt.Port)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			defer stopRedisPresenceManager(pm)
+
+			channels := make([]string, totalChannels)
+			for i := range channels {
+				channels[i] = "par_ch_" + strconv.Itoa(i)
+			}
+			info := &ClientInfo{
+				ClientID: "uid-par",
+				UserID:   "user-par",
+			}
+
+			b.SetParallelism(getBenchParallelism())
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					for _, ch := range channels {
+						if err := pm.AddPresence(ch, "uid-par", info); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			})
+		})
+
+		// --- Batch with various batchSize splits ---
+		batchSizes := []int{10, 50, 100, 500, 1000, 2500, 5000, 10000}
+		for _, bs := range batchSizes {
+			bs := bs
+			b.Run(fmt.Sprintf("%s/Batch_bs%d/numCh_%d", tt.Name, bs, totalChannels), func(b *testing.B) {
+				node := benchNode(b)
+				pm := newTestRedisPresenceManager(b, node, tt.UseCluster, false, false, tt.Port)
+				defer func() { _ = node.Shutdown(context.Background()) }()
+				defer stopRedisPresenceManager(pm)
+
+				allItems := makePresenceBatchItems(totalChannels, "par_ch_")
+				batches := splitBatch(allItems, bs)
+
+				b.SetParallelism(getBenchParallelism())
+				b.ResetTimer()
+				b.RunParallel(func(pb *testing.PB) {
+					for pb.Next() {
+						for _, batch := range batches {
+							if err := pm.AddPresenceBatch(batch); err != nil {
+								b.Fatal(err)
+							}
+						}
+					}
+				})
+			})
+		}
+	}
+}
+
 // BenchmarkMemoryAddPresenceBatch_vs_Individual benchmarks batch vs individual
 // presence updates using the in-memory presence manager. This provides a
 // baseline to isolate Redis network overhead from the batching logic itself.

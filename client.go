@@ -828,7 +828,7 @@ func (c *Client) updatePresence() {
 	// legacy per-channel path instead (handled by the caller via config check).
 	batchSize := config.ClientPresenceUpdateBatchSize
 	if batchSize <= 0 {
-		batchSize = 500 // Default to 500 channels per batch.
+		batchSize = 1000 // Default to 1000 channels per batch.
 	}
 
 	// Convert the channel map to a slice so it can be split into fixed-size batches.

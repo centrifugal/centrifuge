@@ -142,7 +142,7 @@ func New(c Config) (*Node, error) {
 		c.HistoryMetaTTL = 30 * 24 * time.Hour // 30 days by default.
 	}
 	if c.ClientPresenceUpdateBatchSize == 0 {
-		c.ClientPresenceUpdateBatchSize = 500 // 500 channels by default.
+		c.ClientPresenceUpdateBatchSize = 1000 // 1000 channels by default.
 	}
 
 	uidObj, err := uuid.NewRandom()
