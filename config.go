@@ -137,7 +137,7 @@ type Config struct {
 	ClientTimerScheduler TimerScheduler
 	// ClientPresenceUpdateBatchSize sets the number of channels to process in each batch
 	// during presence update. This helps to reduce latency when a client has many subscribed channels.
-	// Zero value means 10 channels per batch.
+	// Zero value means 500 channels per batch.
 	ClientPresenceUpdateBatchSize int
 }
 
