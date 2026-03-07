@@ -34,7 +34,7 @@ func newNodeGroupedMapBrokerPrefix(t *testing.T, n *Node, numPartitions int, pre
 		Shards:                     []*RedisShard{shard},
 		Prefix:                     prefix,
 		NumShardedPubSubPartitions: numPartitions,
-		GroupPubSubByNode:          true,
+		GroupShardedPubSubByNode:          true,
 	})
 	require.NoError(t, err)
 
@@ -67,7 +67,7 @@ func TestRedisMapBroker_NodeGrouped_ConnectionCount(t *testing.T) {
 
 	wrapper := e.shards[0]
 
-	// With GroupPubSubByNode, subClients should be indexed by node, not partition.
+	// With GroupShardedPubSubByNode, subClients should be indexed by node, not partition.
 	numNodes := len(wrapper.nodeClients)
 	require.Greater(t, numNodes, 0, "should have at least one node")
 	require.Equal(t, numNodes, len(wrapper.subClients), "subClients first dimension should equal node count")
@@ -418,7 +418,7 @@ func TestRedisMapBroker_NodeGrouped_Cleanup(t *testing.T) {
 		Shards:                     []*RedisShard{shard},
 		Prefix:                     prefix,
 		NumShardedPubSubPartitions: 16,
-		GroupPubSubByNode:          true,
+		GroupShardedPubSubByNode:          true,
 		CleanupInterval:            500 * time.Millisecond,
 		CleanupBatchSize:           100,
 	})
@@ -467,7 +467,7 @@ func TestRedisMapBroker_NodeGrouped_Cleanup(t *testing.T) {
 	require.Len(t, pubs, 0, "expired key should be cleaned up")
 }
 
-// newNodeGroupedBroker creates a RedisBroker with GroupPubSubByNode=true on a 3-node cluster.
+// newNodeGroupedBroker creates a RedisBroker with GroupShardedPubSubByNode=true on a 3-node cluster.
 func newNodeGroupedBroker(t *testing.T, n *Node, numPartitions int) *RedisBroker {
 	return newNodeGroupedBrokerPrefix(t, n, numPartitions, getUniquePrefix())
 }
@@ -486,7 +486,7 @@ func newNodeGroupedBrokerPrefix(t *testing.T, n *Node, numPartitions int, prefix
 		Shards:                     []*RedisShard{shard},
 		Prefix:                     prefix,
 		NumShardedPubSubPartitions: numPartitions,
-		GroupPubSubByNode:          true,
+		GroupShardedPubSubByNode:   true,
 		numResubscribeShards:       4,
 		numPubSubProcessors:        2,
 	})

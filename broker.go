@@ -191,7 +191,7 @@ type Broker interface {
 	// PublishResult.StreamPosition describes stream epoch and offset assigned to
 	// the publication. For channels without history this should be zero value.
 	// PublishResult.Suppressed and PublishResult.SuppressReason indicate whether
-	// the publish was suppressed and why (e.g. idempotency deduplication, version skip).
+	// publication was suppressed and why (e.g. idempotency deduplication, version skip).
 	Publish(ch string, data []byte, opts PublishOptions) (PublishResult, error)
 	// PublishJoin publishes Join Push message into channel.
 	PublishJoin(ch string, info *ClientInfo) error

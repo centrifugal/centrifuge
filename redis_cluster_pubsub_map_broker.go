@@ -21,7 +21,7 @@ type slotRange struct {
 }
 
 // initNodeGroupedPubSub initializes per-node PubSub connection grouping.
-// Called from NewRedisMapBroker when GroupPubSubByNode is true.
+// Called from NewRedisMapBroker when GroupShardedPubSubByNode is true.
 func (e *RedisMapBroker) initNodeGroupedPubSub(wrapper *brokerShardWrapper, shard *RedisShard) error {
 	client := shard.client
 	if e.conf.SubscribeOnReplica {
@@ -59,7 +59,7 @@ func (e *RedisMapBroker) initNodeGroupedPubSub(wrapper *brokerShardWrapper, shar
 }
 
 // runNodeGroupedPubSubShard launches per-node PubSub goroutines.
-// Replaces runPubSubShard when GroupPubSubByNode is enabled.
+// Replaces runPubSubShard when GroupShardedPubSubByNode is enabled.
 func (e *RedisMapBroker) runNodeGroupedPubSubShard(s *brokerShardWrapper, h BrokerEventHandler) error {
 	if e.conf.SkipPubSub {
 		return nil

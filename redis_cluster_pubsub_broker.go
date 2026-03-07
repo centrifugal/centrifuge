@@ -7,7 +7,7 @@ import (
 )
 
 // initBrokerNodeGroupedPubSub initializes per-node PubSub connection grouping for RedisBroker.
-// Called from NewRedisBroker when GroupPubSubByNode is true.
+// Called from NewRedisBroker when GroupShardedPubSubByNode is true.
 func (b *RedisBroker) initBrokerNodeGroupedPubSub(wrapper *shardWrapper, shard *RedisShard) error {
 	client := shard.client
 	if b.config.SubscribeOnReplica {
@@ -45,7 +45,7 @@ func (b *RedisBroker) initBrokerNodeGroupedPubSub(wrapper *shardWrapper, shard *
 }
 
 // runBrokerNodeGroupedPubSubShard launches per-node PubSub goroutines for RedisBroker.
-// Replaces runPubSubShard when GroupPubSubByNode is enabled.
+// Replaces runPubSubShard when GroupShardedPubSubByNode is enabled.
 func (b *RedisBroker) runBrokerNodeGroupedPubSubShard(s *shardWrapper, h BrokerEventHandler) error {
 	if b.config.SkipPubSub {
 		return nil

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,7 +42,7 @@ type brokerShardWrapper struct {
 	subClients          [][]rueidis.DedicatedClient
 	pubSubStartChannels [][]*pubSubStart
 
-	// [node-grouped-pubsub] state (only set when GroupPubSubByNode=true)
+	// [node-grouped-pubsub] state (only set when GroupShardedPubSubByNode=true)
 	partitionToNodeIdx []int              // partition → subClients first-dimension index
 	nodePartitions     [][]int            // nodeIdx → partition indices
 	nodeClients        []rueidis.Client   // per-node clients from Nodes()
@@ -130,7 +131,7 @@ type RedisMapBrokerConfig struct {
 	NumShardedPubSubPartitions int
 	// [node-grouped-pubsub] Groups sharded PUB/SUB connections by Redis Cluster node
 	// instead of per-partition. Reduces connections from numPartitions to numRedisNodes.
-	GroupPubSubByNode bool
+	GroupShardedPubSubByNode bool
 	// numSubscribeShards defines how many subscribe shards will be used.
 	numSubscribeShards int
 	// numResubscribeShards defines how many subscriber goroutines will be used for
@@ -178,7 +179,13 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 		conf.numResubscribeShards = 16
 	}
 	if conf.numPubSubProcessors == 0 {
-		conf.numPubSubProcessors = 16 // Can be tuned
+		conf.numPubSubProcessors = runtime.NumCPU() / conf.numSubscribeShards
+		if conf.NumShardedPubSubPartitions > 0 {
+			conf.numPubSubProcessors /= conf.NumShardedPubSubPartitions
+		}
+		if conf.numPubSubProcessors < 1 {
+			conf.numPubSubProcessors = 1
+		}
 	}
 	if conf.CleanupBatchSize == 0 {
 		conf.CleanupBatchSize = 100
@@ -239,40 +246,34 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 		}
 
 		// [node-grouped-pubsub] use per-node connections instead of per-partition.
-		if e.conf.GroupPubSubByNode && e.useShardedPubSub(shard) {
+		if e.conf.GroupShardedPubSubByNode && e.useShardedPubSub(shard) {
 			if err := e.initNodeGroupedPubSub(wrapper, shard); err != nil {
 				return nil, fmt.Errorf("node-grouped PubSub init: %w", err)
 			}
-			if e.conf.CleanupInterval > 0 {
-				go e.runCleanupWorker(context.Background())
-				go e.runCleanupLagWorker(context.Background())
-			}
+		} else {
+			subChannels := make([][]rueidis.DedicatedClient, 0)
+			pubSubStartChannels := make([][]*pubSubStart, 0)
 
-			return e, nil
-		}
-
-		subChannels := make([][]rueidis.DedicatedClient, 0)
-		pubSubStartChannels := make([][]*pubSubStart, 0)
-
-		if e.useShardedPubSub(shard) {
-			for i := 0; i < e.conf.NumShardedPubSubPartitions; i++ {
+			if e.useShardedPubSub(shard) {
+				for i := 0; i < e.conf.NumShardedPubSubPartitions; i++ {
+					subChannels = append(subChannels, make([]rueidis.DedicatedClient, 0))
+					pubSubStartChannels = append(pubSubStartChannels, make([]*pubSubStart, 0))
+				}
+			} else {
 				subChannels = append(subChannels, make([]rueidis.DedicatedClient, 0))
 				pubSubStartChannels = append(pubSubStartChannels, make([]*pubSubStart, 0))
 			}
-		} else {
-			subChannels = append(subChannels, make([]rueidis.DedicatedClient, 0))
-			pubSubStartChannels = append(pubSubStartChannels, make([]*pubSubStart, 0))
-		}
 
-		for i := 0; i < len(subChannels); i++ {
-			for j := 0; j < e.conf.numSubscribeShards; j++ {
-				subChannels[i] = append(subChannels[i], nil)
-				pubSubStartChannels[i] = append(pubSubStartChannels[i], &pubSubStart{errCh: make(chan error, 1)})
+			for i := 0; i < len(subChannels); i++ {
+				for j := 0; j < e.conf.numSubscribeShards; j++ {
+					subChannels[i] = append(subChannels[i], nil)
+					pubSubStartChannels[i] = append(pubSubStartChannels[i], &pubSubStart{errCh: make(chan error, 1)})
+				}
 			}
-		}
 
-		wrapper.subClients = subChannels
-		wrapper.pubSubStartChannels = pubSubStartChannels
+			wrapper.subClients = subChannels
+			wrapper.pubSubStartChannels = pubSubStartChannels
+		}
 	}
 
 	if e.conf.CleanupInterval > 0 {
@@ -2270,7 +2271,7 @@ func (e *RedisMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 	// Run all shards.
 	for _, wrapper := range e.shards {
 		// [node-grouped-pubsub] use per-node PubSub goroutines.
-		if e.conf.GroupPubSubByNode && e.useShardedPubSub(wrapper.shard) {
+		if e.conf.GroupShardedPubSubByNode && e.useShardedPubSub(wrapper.shard) {
 			if err := e.runNodeGroupedPubSubShard(wrapper, h); err != nil {
 				return err
 			}

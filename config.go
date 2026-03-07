@@ -203,6 +203,15 @@ type Config struct {
 	// This is an EXPERIMENTAL API.
 	ClientTimerScheduler TimerScheduler
 
+	// GetMapChannelOptions returns channel options for map channels.
+	// Required for map channel operations. If nil, any map operation returns an error.
+	// Each channel must have SyncMode and RetentionMode explicitly set.
+	// NOTE: this callback is invoked on every broker operation (Publish, Remove,
+	// ReadState, ReadStream, etc.) — it must be fast and should not perform I/O.
+	GetMapChannelOptions func(channel string) MapChannelOptions
+	// MapPaginationDefaultLimit sets the default number of items per page when
+	// the client does not specify a limit. Zero means default (100).
+	MapPaginationDefaultLimit int
 	// MapPaginationMinLimit sets the minimum number of items per page in map
 	// subscription pagination requests. This prevents excessive round trips when
 	// clients send very small limits. Zero means default (100).
@@ -219,12 +228,6 @@ type Config struct {
 	// disconnected with DisconnectSlow. Zero means 5 seconds (default). Negative
 	// means no timeout.
 	MapSubscribeCatchUpTimeout time.Duration
-	// GetMapChannelOptions returns channel options for map channels.
-	// Required for map channel operations. If nil, any map operation returns an error.
-	// Each channel must have SyncMode and RetentionMode explicitly set.
-	// NOTE: this callback is invoked on every broker operation (Publish, Remove,
-	// ReadState, ReadStream, etc.) — it must be fast and should not perform I/O.
-	GetMapChannelOptions func(channel string) MapChannelOptions
 }
 
 const (

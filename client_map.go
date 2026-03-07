@@ -65,11 +65,11 @@ import (
 //
 // Presence is configured using channel prefixes:
 //
-//   - MapClientPresenceChannelPrefix (e.g., "clients:") - When set, client presence
+//   - MapClientPresenceChannelPrefix (e.g., "presence-clients:") - When set, client presence
 //     is published to {prefix}{channel}. Each entry is keyed by client ID and contains
 //     full ClientInfo. Use for tracking individual connections.
 //
-//   - MapUserPresenceChannelPrefix (e.g., "$users:") - When set, user presence is
+//   - MapUserPresenceChannelPrefix (e.g., "presence-users:") - When set, user presence is
 //     published to {prefix}{channel}. Each entry is keyed by user ID with minimal data.
 //     Provides natural deduplication when users have multiple connections.
 //
@@ -101,6 +101,8 @@ const (
 const subscribeResultTypeMap = 1
 
 const (
+	// defaultMapPaginationDefaultLimit is the default page size when client does not specify a limit.
+	defaultMapPaginationDefaultLimit = 100
 	// defaultMapPaginationMinLimit is the default minimum page size for map pagination.
 	defaultMapPaginationMinLimit = 100
 	// defaultMapPaginationMaxLimit is the default maximum page size for map pagination.
@@ -347,21 +349,7 @@ func (c *Client) handleMapStatePhase(
 	}
 
 	// Build read options.
-	limit := int(req.Limit)
-	minLimit := c.node.config.MapPaginationMinLimit
-	if minLimit <= 0 {
-		minLimit = defaultMapPaginationMinLimit
-	}
-	maxLimit := c.node.config.MapPaginationMaxLimit
-	if maxLimit <= 0 {
-		maxLimit = defaultMapPaginationMaxLimit
-	}
-	if limit <= 0 || limit < minLimit {
-		limit = minLimit
-	}
-	if limit > maxLimit {
-		limit = maxLimit
-	}
+	limit := c.getMapPaginationLimit(req)
 
 	opts := MapReadStateOptions{
 		AllowCached: true, // Use cache for subscription state delivery
@@ -902,22 +890,7 @@ func (c *Client) handleMapStreamPhase(
 		c.mu.Unlock()
 	}
 
-	// Build read options.
-	limit := int(req.Limit)
-	minLimit := c.node.config.MapPaginationMinLimit
-	if minLimit <= 0 {
-		minLimit = defaultMapPaginationMinLimit
-	}
-	maxLimit := c.node.config.MapPaginationMaxLimit
-	if maxLimit <= 0 {
-		maxLimit = defaultMapPaginationMaxLimit
-	}
-	if limit <= 0 || limit < minLimit {
-		limit = minLimit
-	}
-	if limit > maxLimit {
-		limit = maxLimit
-	}
+	limit := c.getMapPaginationLimit(req)
 
 	// Check if close enough to go LIVE: offset + limit >= streamStart
 	// This means client can catch up to streamStart in one more read.
@@ -993,6 +966,32 @@ func (c *Client) handleMapStreamPhase(
 	res.Publications = escapeStateForDelta(protoPubs, deltaWillBeEnabled, c.transport.Protocol() == ProtocolTypeJSON)
 
 	return c.writeMapSubscribeReply(channel, cmd, res, started, rw)
+}
+
+func (c *Client) getMapPaginationLimit(req *protocol.SubscribeRequest) int {
+	limit := int(req.Limit)
+	defaultLimit := c.node.config.MapPaginationDefaultLimit
+	if defaultLimit <= 0 {
+		defaultLimit = defaultMapPaginationDefaultLimit
+	}
+	minLimit := c.node.config.MapPaginationMinLimit
+	if minLimit <= 0 {
+		minLimit = defaultMapPaginationMinLimit
+	}
+	maxLimit := c.node.config.MapPaginationMaxLimit
+	if maxLimit <= 0 {
+		maxLimit = defaultMapPaginationMaxLimit
+	}
+	if limit <= 0 {
+		limit = defaultLimit
+	}
+	if limit < minLimit {
+		limit = minLimit
+	}
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+	return limit
 }
 
 // handleMapStreamToLive transitions from stream pagination to live phase.

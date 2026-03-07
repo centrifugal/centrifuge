@@ -59,7 +59,7 @@ type shardWrapper struct {
 	pubSubStartChannels [][]*pubSubStart
 	controlPubSubStart  *controlPubSubStart
 	logFields           map[string]any
-	// [node-grouped-pubsub] state (only set when GroupPubSubByNode=true)
+	// [node-grouped-pubsub] state (only set when GroupShardedPubSubByNode=true)
 	partitionToNodeIdx []int              // partition → subClients first-dimension index
 	nodePartitions     [][]int            // nodeIdx → partition indices
 	nodeClients        []rueidis.Client   // per-node clients from Nodes()
@@ -150,7 +150,7 @@ type RedisBrokerConfig struct {
 
 	// [node-grouped-pubsub] Groups sharded PUB/SUB connections by Redis Cluster node
 	// instead of per-partition. Reduces connections from numPartitions to numRedisNodes.
-	GroupPubSubByNode bool
+	GroupShardedPubSubByNode bool
 
 	// numSubscribeShards defines how many subscribe shards will be used by Centrifuge.
 	// Each subscribe shard uses a dedicated connection to Redis for making subscriptions.
@@ -247,7 +247,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 			return nil, errors.New("can use sharded PUB/SUB feature (non-zero number of pub/sub partitions) only with Redis Cluster")
 		}
 		// [node-grouped-pubsub] use per-node connections instead of per-partition.
-		if b.config.GroupPubSubByNode && b.useShardedPubSub(shard) {
+		if b.config.GroupShardedPubSubByNode && b.useShardedPubSub(shard) {
 			if err := b.initBrokerNodeGroupedPubSub(shardWrapper, shard); err != nil {
 				return nil, fmt.Errorf("node-grouped PubSub init: %w", err)
 			}
@@ -340,7 +340,7 @@ func (b *RedisBroker) RegisterBrokerEventHandler(h BrokerEventHandler) error {
 	// Run all shards.
 	for _, wrapper := range b.shards {
 		// [node-grouped-pubsub] use per-node PubSub goroutines.
-		if b.config.GroupPubSubByNode && b.useShardedPubSub(wrapper.shard) {
+		if b.config.GroupShardedPubSubByNode && b.useShardedPubSub(wrapper.shard) {
 			if err := b.runBrokerNodeGroupedPubSubShard(wrapper, h); err != nil {
 				return err
 			}
