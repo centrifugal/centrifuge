@@ -176,8 +176,8 @@ type ChannelContext struct {
 	positionCheckTime              int64
 	metaTTLSeconds                 int64
 	flags                          uint16
-	mapClientPresenceChannelPrefix string
-	mapUserPresenceChannelPrefix   string
+	mapClientPresenceChannel string
+	mapUserPresenceChannel   string
 	// Source is a source of subscription application can set in SubscribeHandler.
 	Source uint8
 }
@@ -4050,7 +4050,7 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		channelHasFlag(chCtx.flags, flagMapClientPresence) ||
 		channelHasFlag(chCtx.flags, flagMapUserPresence)
 
-	// Also need to run map cleanup if MapRemoveOnUnsubscribe is enabled.
+	// Also need to run map cleanup if MapRemoveClientOnUnsubscribe is enabled.
 	needsMapCleanup := hasAnyPresence || channelHasFlag(chCtx.flags, flagCleanupOnUnsubscribe)
 
 	if needsMapCleanup && channelHasFlag(chCtx.flags, flagSubscribed) {

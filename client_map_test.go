@@ -485,7 +485,7 @@ func TestMapSubscribe_WithPresence(t *testing.T) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
 					Type:                           SubscriptionTypeMap,
-					MapClientPresenceChannelPrefix: "clients:",
+					MapClientPresenceChannel: "clients:" + channel,
 				},
 			}, nil)
 		})
@@ -529,7 +529,7 @@ func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
 					Type:                           SubscriptionTypeMap,
-					MapClientPresenceChannelPrefix: "clients:",
+					MapClientPresenceChannel: "clients:" + channel,
 				},
 			}, nil)
 		})
@@ -577,7 +577,7 @@ func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
 					Type:                           SubscriptionTypeMap,
-					MapClientPresenceChannelPrefix: "clients:",
+					MapClientPresenceChannel: "clients:" + channel,
 				},
 			}, nil)
 		})
@@ -625,8 +625,8 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:                   SubscriptionTypeMap,
-					MapRemoveOnUnsubscribe: true,
+					Type:                         SubscriptionTypeMap,
+					MapRemoveClientOnUnsubscribe: true,
 				},
 			}, nil)
 		})
@@ -635,7 +635,7 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 	client := newTestConnectedClientV2(t, node, "user1")
 	clientID := client.ID()
 
-	// Subscribe with MapRemoveOnUnsubscribe.
+	// Subscribe with MapRemoveClientOnUnsubscribe.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
 		Type:    1,
@@ -681,8 +681,8 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:                   SubscriptionTypeMap,
-					MapRemoveOnUnsubscribe: true,
+					Type:                         SubscriptionTypeMap,
+					MapRemoveClientOnUnsubscribe: true,
 				},
 			}, nil)
 		})
@@ -691,7 +691,7 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 	client := newTestConnectedClientV2(t, node, "user1")
 	clientID := client.ID()
 
-	// Subscribe with MapRemoveOnUnsubscribe.
+	// Subscribe with MapRemoveClientOnUnsubscribe.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
 		Type:    1,
@@ -960,8 +960,8 @@ func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
 					Type:                           SubscriptionTypeMap,
-					MapClientPresenceChannelPrefix: "clients:",
-					MapUserPresenceChannelPrefix:   "$users:",
+					MapClientPresenceChannel: "clients:" + channel,
+					MapUserPresenceChannel:   "$users:" + channel,
 				},
 			}, nil)
 		})
@@ -1021,8 +1021,8 @@ func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
 					Type:                           SubscriptionTypeMap,
-					MapClientPresenceChannelPrefix: "clients:",
-					MapUserPresenceChannelPrefix:   "$users:",
+					MapClientPresenceChannel: "clients:" + channel,
+					MapUserPresenceChannel:   "$users:" + channel,
 				},
 			}, nil)
 		})
@@ -1080,8 +1080,8 @@ func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
 					Type:                           SubscriptionTypeMap,
-					MapClientPresenceChannelPrefix: "clients:",
-					MapUserPresenceChannelPrefix:   "$users:",
+					MapClientPresenceChannel: "clients:" + channel,
+					MapUserPresenceChannel:   "$users:" + channel,
 				},
 			}, nil)
 		})
@@ -1512,8 +1512,8 @@ func TestMapSubscribe_StateToLive_WithStreamPublications(t *testing.T) {
 	// Test that STATE→LIVE transition includes stream publications when
 	// there are updates between state read and going live.
 	node, err := New(Config{
-		LogLevel:              LogLevelTrace,
-		LogHandler:            func(entry LogEntry) {},
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
 				SyncMode:      MapSyncConverging,

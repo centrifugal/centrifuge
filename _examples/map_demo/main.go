@@ -126,13 +126,13 @@ func main() {
 
 			// Enable map presence for games and individual game channels.
 			if e.Channel == "games" || strings.HasPrefix(e.Channel, "game:") {
-				opts.MapClientPresenceChannelPrefix = "clients:"
-				opts.MapUserPresenceChannelPrefix = "users:"
+				opts.MapClientPresenceChannel = "clients:" + e.Channel
+				opts.MapUserPresenceChannel = "users:" + e.Channel
 			}
 
 			// Enable automatic cleanup for cursors channel - removes key=clientID on unsubscribe/disconnect.
 			if e.Channel == "cursors" {
-				opts.MapRemoveOnUnsubscribe = true
+				opts.MapRemoveClientOnUnsubscribe = true
 			}
 
 			// Tickers channel: enable tags filter for sector-based filtering.
@@ -149,7 +149,7 @@ func main() {
 
 		client.OnMapPublish(func(e centrifuge.MapPublishEvent, cb centrifuge.MapPublishCallback) {
 			// For cursors channel: server assigns key to client ID, auto-cleanup TTL.
-			// Removal is handled automatically via MapRemoveOnUnsubscribe.
+			// Removal is handled automatically via MapRemoveClientOnUnsubscribe.
 			if e.Channel == "cursors" {
 				cb(centrifuge.MapPublishReply{
 					Key: client.ID(),

@@ -63,14 +63,14 @@ import (
 // Map presence subscriptions allow clients to watch who is online in a channel.
 // They are a special type of map subscription that tracks client or user presence.
 //
-// Presence is configured using channel prefixes:
+// Presence is configured using full channel names:
 //
-//   - MapClientPresenceChannelPrefix (e.g., "presence-clients:") - When set, client presence
-//     is published to {prefix}{channel}. Each entry is keyed by client ID and contains
+//   - MapClientPresenceChannel (e.g., "presence-clients:game1") - When set, client presence
+//     is published to this channel. Each entry is keyed by client ID and contains
 //     full ClientInfo. Use for tracking individual connections.
 //
-//   - MapUserPresenceChannelPrefix (e.g., "presence-users:") - When set, user presence is
-//     published to {prefix}{channel}. Each entry is keyed by user ID with minimal data.
+//   - MapUserPresenceChannel (e.g., "presence-users:game1") - When set, user presence is
+//     published to this channel. Each entry is keyed by user ID with minimal data.
 //     Provides natural deduplication when users have multiple connections.
 //
 // Authorization flow:
@@ -759,8 +759,8 @@ func (c *Client) handleMapTransitionToLive(
 		metaTTLSeconds:                 int64(opts.HistoryMetaTTL.Seconds()),
 		positionCheckTime:              time.Now().Unix(),
 		Source:                         opts.Source,
-		mapClientPresenceChannelPrefix: opts.MapClientPresenceChannelPrefix,
-		mapUserPresenceChannelPrefix:   opts.MapUserPresenceChannelPrefix,
+		mapClientPresenceChannel: opts.MapClientPresenceChannel,
+		mapUserPresenceChannel:   opts.MapUserPresenceChannel,
 	}
 
 	// Move from mapSubscribing to channels. Always look up from the map under
@@ -1102,13 +1102,13 @@ func (c *Client) buildMapChannelFlags(deltaEnabled bool, delta string, isPresenc
 	if reply.ClientSideRefresh {
 		channelFlags |= flagClientSideRefresh
 	}
-	if opts.MapClientPresenceChannelPrefix != "" {
+	if opts.MapClientPresenceChannel != "" {
 		channelFlags |= flagMapClientPresence
 	}
-	if opts.MapUserPresenceChannelPrefix != "" {
+	if opts.MapUserPresenceChannel != "" {
 		channelFlags |= flagMapUserPresence
 	}
-	if opts.MapRemoveOnUnsubscribe {
+	if opts.MapRemoveClientOnUnsubscribe {
 		channelFlags |= flagCleanupOnUnsubscribe
 	}
 	return channelFlags
@@ -1131,24 +1131,24 @@ func (c *Client) setupMapPresenceAndJoin(channel string, opts SubscribeOptions) 
 		}
 	}
 
-	// Add map client presence if prefix is configured.
-	if opts.MapClientPresenceChannelPrefix != "" {
+	// Add map client presence if channel is configured.
+	if opts.MapClientPresenceChannel != "" {
 		info := &ClientInfo{
 			ClientID: c.uid,
 			UserID:   c.user,
 			ConnInfo: c.info,
 			ChanInfo: opts.ChannelInfo,
 		}
-		if err := c.addMapClientPresence(channel, opts.MapClientPresenceChannelPrefix, info); err != nil {
+		if err := c.addMapClientPresence(opts.MapClientPresenceChannel, info); err != nil {
 			c.node.logger.log(newErrorLogEntry(err, "error adding map client presence", map[string]any{
 				"channel": channel, "user": c.user, "client": c.uid,
 			}))
 		}
 	}
 
-	// Add map user presence if prefix is configured.
-	if opts.MapUserPresenceChannelPrefix != "" {
-		if err := c.addMapUserPresence(channel, opts.MapUserPresenceChannelPrefix); err != nil {
+	// Add map user presence if channel is configured.
+	if opts.MapUserPresenceChannel != "" {
+		if err := c.addMapUserPresence(opts.MapUserPresenceChannel); err != nil {
 			c.node.logger.log(newErrorLogEntry(err, "error adding map user presence", map[string]any{
 				"channel": channel, "user": c.user, "client": c.uid,
 			}))
@@ -1284,11 +1284,9 @@ func (c *Client) mapPresenceTTL() time.Duration {
 	return ttl
 }
 
-// addMapClientPresence adds client presence to {prefix}{channel}.
+// addMapClientPresence adds client presence to the given channel.
 // Key is clientId, stores full ClientInfo.
-func (c *Client) addMapClientPresence(channel string, prefix string, info *ClientInfo) error {
-	presenceChannel := prefix + channel
-
+func (c *Client) addMapClientPresence(presenceChannel string, info *ClientInfo) error {
 	// Use KeyModeIfNew with RefreshTTLOnSuppress to:
 	// - Publish JOIN event only if this is a new presence entry
 	// - Refresh TTL without publishing if entry already exists (quick reconnect)
@@ -1301,11 +1299,9 @@ func (c *Client) addMapClientPresence(channel string, prefix string, info *Clien
 	return err
 }
 
-// addMapUserPresence adds user presence to {prefix}{channel}.
+// addMapUserPresence adds user presence to the given channel.
 // Key is userId, no ClientInfo stored (just the key for uniqueness).
-func (c *Client) addMapUserPresence(channel string, prefix string) error {
-	presenceChannel := prefix + channel
-
+func (c *Client) addMapUserPresence(presenceChannel string) error {
 	// Use KeyModeIfNew with RefreshTTLOnSuppress to:
 	// - Publish JOIN event only if this is a new user
 	// - Refresh TTL without publishing if user already exists
@@ -1326,10 +1322,9 @@ func (c *Client) updateMapPresence(channel string, info *ClientInfo, ctx Channel
 	// - TTL is refreshed without generating stream entries
 	// Stream options (StreamSize/TTL/MetaTTL) use defaults from GetMapChannelOptions.
 
-	// Update client presence if prefix is configured.
-	if ctx.mapClientPresenceChannelPrefix != "" {
-		presenceChannel := ctx.mapClientPresenceChannelPrefix + channel
-		_, err := c.node.MapPublish(c.ctx, presenceChannel, c.uid, MapPublishOptions{
+	// Update client presence if channel is configured.
+	if ctx.mapClientPresenceChannel != "" {
+		_, err := c.node.MapPublish(c.ctx, ctx.mapClientPresenceChannel, c.uid, MapPublishOptions{
 			ClientInfo:           info,
 			KeyMode:              KeyModeIfNew,
 			RefreshTTLOnSuppress: true,
@@ -1339,10 +1334,9 @@ func (c *Client) updateMapPresence(channel string, info *ClientInfo, ctx Channel
 		}
 	}
 
-	// Update user presence if prefix is configured.
-	if ctx.mapUserPresenceChannelPrefix != "" {
-		presenceChannel := ctx.mapUserPresenceChannelPrefix + channel
-		_, err := c.node.MapPublish(c.ctx, presenceChannel, c.user, MapPublishOptions{
+	// Update user presence if channel is configured.
+	if ctx.mapUserPresenceChannel != "" {
+		_, err := c.node.MapPublish(c.ctx, ctx.mapUserPresenceChannel, c.user, MapPublishOptions{
 			KeyMode:              KeyModeIfNew,
 			RefreshTTLOnSuppress: true,
 		})
@@ -1365,11 +1359,10 @@ func (c *Client) removeMapPresence(channel string, ctx ChannelContext) error {
 		}
 	}
 
-	// Remove client presence if prefix is configured.
+	// Remove client presence if channel is configured.
 	// Stream options (StreamSize/TTL/MetaTTL) use defaults from GetMapChannelOptions.
-	if ctx.mapClientPresenceChannelPrefix != "" {
-		presenceChannel := ctx.mapClientPresenceChannelPrefix + channel
-		_, err := c.node.MapRemove(context.Background(), presenceChannel, c.uid, MapRemoveOptions{})
+	if ctx.mapClientPresenceChannel != "" {
+		_, err := c.node.MapRemove(context.Background(), ctx.mapClientPresenceChannel, c.uid, MapRemoveOptions{})
 		if err != nil {
 			c.node.logger.log(newErrorLogEntry(err, "error removing map clients presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		}
@@ -1378,7 +1371,7 @@ func (c *Client) removeMapPresence(channel string, ctx ChannelContext) error {
 	// User presence entries are NOT removed on disconnect - they only expire via TTL.
 	// This provides debounce/grace period for quick reconnects.
 
-	// Remove key=clientId from channel if MapRemoveOnUnsubscribe is enabled.
+	// Remove key=clientId from channel if MapRemoveClientOnUnsubscribe is enabled.
 	// This is for ephemeral state like cursors where each client publishes
 	// to a key that equals their client ID.
 	// Stream options (StreamSize/TTL/MetaTTL) use defaults from GetMapChannelOptions.

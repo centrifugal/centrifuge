@@ -194,23 +194,19 @@ type SubscribeOptions struct {
 	// Type defines the subscription type. Use SubscriptionTypeMap for map subscriptions.
 	// For regular subscriptions this can be left as zero value (SubscriptionTypeStream).
 	Type SubscriptionType
-	// MapClientPresenceChannelPrefix is the prefix for client presence channels.
-	// When set, client presence will be published to {prefix}{channel} on subscribe.
-	// For example, if prefix is "clients:" and channel is "games", presence goes to "clients:games".
+	// MapClientPresenceChannel is the full channel name for client presence.
+	// When set, client presence will be published to this channel on subscribe.
 	// Empty string means no client presence publishing.
-	MapClientPresenceChannelPrefix string
-	// MapUserPresenceChannelPrefix is the prefix for user presence channels.
-	// When set, user presence will be published to {prefix}{channel} on subscribe.
-	// For example, if prefix is "users:" and channel is "games", presence goes to "users:games".
+	MapClientPresenceChannel string
+	// MapUserPresenceChannel is the full channel name for user presence.
+	// When set, user presence will be published to this channel on subscribe.
 	// Empty string means no user presence publishing.
-	MapUserPresenceChannelPrefix string
-	// MapRemoveOnUnsubscribe enables automatic cleanup of map state when the
-	// subscription ends. When enabled, all keys in the channel's state that
-	// were published by this client (matched by client_id) will be removed
-	// when the client unsubscribes or disconnects. This is useful for ephemeral
-	// state like cursor positions or temporary resources that should not persist
-	// after the client leaves.
-	MapRemoveOnUnsubscribe bool
+	MapUserPresenceChannel string
+	// MapRemoveClientOnUnsubscribe enables automatic cleanup of map state when the
+	// subscription ends – the key matching current client ID will be removed.
+	// This is useful for ephemeral state like cursor positions or temporary resources
+	// that should not persist after the client leaves.
+	MapRemoveClientOnUnsubscribe bool
 }
 
 // SubscribeOption is a type to represent various Subscribe options.
