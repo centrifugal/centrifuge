@@ -678,6 +678,9 @@ type preparedData struct {
 	deltaSub        bool
 	wasFiltered     bool
 	filteredPub     *protocol.Publication
+	// For keyed channel lazy delta encoding (set by buildPreparedPollData).
+	keyedDeltaPatch  []byte // raw fossil delta data (patch or full data if patch >= full)
+	keyedDeltaIsReal bool   // true when the patch is a real delta (smaller than full)
 }
 
 func getDeltaPub(prevPub *Publication, fullPub *protocol.Publication, key preparedKey) *protocol.Publication {

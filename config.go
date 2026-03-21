@@ -228,6 +228,91 @@ type Config struct {
 	// disconnected with DisconnectSlow. Zero means 5 seconds (default). Negative
 	// means no timeout.
 	MapSubscribeCatchUpTimeout time.Duration
+
+	// GetSharedPollChannelOptions returns per-channel options for shared poll
+	// channels. Required for shared poll operations — if nil, any shared poll
+	// subscribe returns an error. Called when a new channel first appears in
+	// SharedPollManager. Must be fast, no I/O.
+	GetSharedPollChannelOptions func(channel string) (SharedPollChannelOptions, bool)
+	// SharedPollConcurrencyLimit sets the maximum number of concurrent backend
+	// calls across all shared poll channels. All channels share this pool.
+	// Zero means 64.
+	SharedPollConcurrencyLimit int
+}
+
+// SharedPollNotificationItem represents a lightweight notification that a specific
+// key in a channel has changed. Used to trigger immediate backend polls for
+// just the affected keys instead of waiting for the next timer-based cycle.
+type SharedPollNotificationItem struct {
+	Channel string `json:"channel"`
+	Key     string `json:"key"`
+}
+
+// SharedPollNotification is the top-level JSON envelope for notifications
+// published to the notification pub/sub channel.
+type SharedPollNotification struct {
+	Items []SharedPollNotificationItem `json:"items"`
+}
+
+const (
+	// SharedPollRefreshModeFull is the default refresh mode where the backend
+	// returns all items with {key, data, version}. Centrifugo filters by version.
+	SharedPollRefreshModeFull = "full"
+	// SharedPollRefreshModeDiff enables diff mode where item versions are included
+	// in the refresh request, allowing the backend to return only changed items.
+	SharedPollRefreshModeDiff = "diff"
+)
+
+// SharedPollChannelOptions configures a shared poll channel.
+type SharedPollChannelOptions struct {
+	// MaxKeysPerConnection limits how many keys a single connection
+	// can track in this channel. Zero value means 5000.
+	MaxKeysPerConnection int
+	// RefreshInterval sets how often the refresh worker calls OnSharedPoll.
+	// Zero value means 10 * time.Second.
+	RefreshInterval time.Duration
+	// RefreshBatchSize sets the maximum number of item keys per OnSharedPoll call.
+	// Zero value means 1000.
+	RefreshBatchSize int
+	// RefreshMode controls refresh request format.
+	// "full" (default, also ""): backend returns all items, Centrifugo filters by version.
+	// "diff": item versions included in request, backend returns only changed items.
+	RefreshMode string
+	// KeepLatestData controls whether TrackedEntry stores the last data payload
+	// per item. Default false.
+	KeepLatestData bool
+	// RefreshIntervalFn, if set, is called after each refresh cycle with the
+	// cycle's wall time, and returns the interval before the next cycle. Overrides
+	// static RefreshInterval. Used by Centrifugo PRO for adaptive backpressure.
+	RefreshIntervalFn func(cycleDuration time.Duration) time.Duration
+	// CallTimeout sets the maximum duration for each OnSharedPoll callback invocation.
+	// Zero value means 30 * time.Second.
+	CallTimeout time.Duration
+	// MaxConsecutiveAbsences sets how many consecutive refresh cycles an item can
+	// be absent from the response before it's treated as removed. Zero means 2.
+	MaxConsecutiveAbsences int
+	// ChannelShutdownDelay is the delay before shutting down a channel
+	// state after the last item is untracked. Zero means no delay (immediate shutdown).
+	ChannelShutdownDelay time.Duration
+	// NotificationBatchMaxSize sets the maximum number of notified keys to
+	// accumulate before triggering an immediate backend poll. The batch fires
+	// when either this size or NotificationBatchMaxDelay is reached first.
+	// Zero means 50.
+	NotificationBatchMaxSize int
+	// NotificationBatchMaxDelay sets the maximum time to wait while
+	// accumulating notified keys before triggering an immediate backend poll.
+	// Zero means 50ms.
+	NotificationBatchMaxDelay time.Duration
+	// TrackExpiredExtraDelay is extra time given to client to refresh track signature
+	// after it expires. Keys not refreshed within this delay are silently removed
+	// from server state. Zero means 25 * time.Second.
+	TrackExpiredExtraDelay time.Duration
+}
+
+func (o SharedPollChannelOptions) toKeyedChannelOptions() KeyedChannelOptions {
+	return KeyedChannelOptions{
+		MaxTrackedPerConnection: o.MaxKeysPerConnection,
+	}
 }
 
 const (

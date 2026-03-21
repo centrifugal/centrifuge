@@ -566,3 +566,60 @@ func newCommandProcessedEvent(command *protocol.Command, err error, reply *proto
 // purposes this seems tolerable as commands and replies may be matched by id.
 // Also, carefully read docs for CommandProcessedEvent to avoid possible bugs.
 type CommandProcessedHandler func(*Client, CommandProcessedEvent)
+
+// KeyedTrackEvent contains fields related to a track request on a keyed channel.
+type KeyedTrackEvent struct {
+	Channel   string
+	UserID    string
+	Items     []KeyedItem
+	Signature string
+}
+
+// KeyedItem represents a single item being tracked (key + version).
+type KeyedItem struct {
+	Key     string
+	Version uint64
+}
+
+// KeyedTrackReply contains the reaction to a keyed track event.
+type KeyedTrackReply struct {
+	ExpireAt int64 // unix timestamp when signature expires (0 = no expiry)
+}
+
+// KeyedTrackCallback should be called with KeyedTrackReply or error.
+type KeyedTrackCallback func(KeyedTrackReply, error)
+
+// KeyedTrackHandler is called when a client sends a track request
+// on a shared poll channel. The handler validates authorization
+// (e.g., HMAC signature in Centrifugo).
+type KeyedTrackHandler func(KeyedTrackEvent, KeyedTrackCallback)
+
+// SharedPollEvent contains fields for a shared poll refresh call.
+type SharedPollEvent struct {
+	Channel string
+	Items   []SharedPollItem
+}
+
+// SharedPollItem represents an item being refreshed.
+type SharedPollItem struct {
+	Key     string
+	Version uint64 // 0 when RefreshMode is "full"
+}
+
+// SharedPollResult contains the response from a shared poll refresh.
+type SharedPollResult struct {
+	Items []SharedPollRefreshItem
+}
+
+// SharedPollRefreshItem represents a single item in a shared poll refresh response.
+type SharedPollRefreshItem struct {
+	Key      string
+	Data     []byte
+	Version  uint64
+	Removed  bool
+	PrevData []byte
+}
+
+// SharedPollHandler is called by the refresh worker to fetch current item
+// data from the backend. Registered on Node, not per-client.
+type SharedPollHandler func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error)

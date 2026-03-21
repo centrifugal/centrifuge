@@ -93,6 +93,11 @@ type Node struct {
 	mediumLocks map[int]*sync.Mutex // Sharded locks for mediums map.
 
 	timerScheduler TimerScheduler
+
+	// keyedManager manages keyed channel state (track/untrack, reverse index).
+	keyedManager *KeyedManager
+	// sharedPollManager manages shared poll refresh workers.
+	sharedPollManager *SharedPollManager
 }
 
 const (
@@ -192,6 +197,7 @@ func New(c Config) (*Node, error) {
 		timerScheduler: c.ClientTimerScheduler,
 	}
 	n.emulationSurveyHandler = newEmulationSurveyHandler(n)
+	n.keyedManager = newKeyedManager(n)
 
 	m, err := newMetricsRegistry(c.Metrics)
 	if err != nil {
@@ -315,6 +321,14 @@ func (n *Node) Run() error {
 		n.logger.log(newErrorLogEntry(err, "error publishing node control command", map[string]any{"error": err.Error()}))
 		return err
 	}
+	// Initialize shared poll manager if configured.
+	if n.config.GetSharedPollChannelOptions != nil {
+		if n.clientEvents.sharedPollHandler == nil {
+			return errors.New("GetSharedPollChannelOptions is set but OnSharedPoll handler is not registered")
+		}
+		n.sharedPollManager = newSharedPollManager(n)
+	}
+
 	go n.sendNodePing()
 	go n.cleanNodeInfo()
 	go n.updateMetrics()
@@ -386,6 +400,11 @@ func (n *Node) Shutdown(ctx context.Context) error {
 			defer func() { _ = closer.Close(ctx) }()
 		}
 	}
+	// Stop shared poll workers before hub shutdown.
+	if n.sharedPollManager != nil {
+		n.sharedPollManager.close()
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -1831,6 +1850,7 @@ type eventHub struct {
 	commandReadHandler      CommandReadHandler
 	commandProcessedHandler CommandProcessedHandler
 	cacheEmptyHandler       CacheEmptyHandler
+	sharedPollHandler       SharedPollHandler
 }
 
 // OnConnecting allows setting ConnectingHandler.
@@ -1869,6 +1889,26 @@ func (n *Node) OnCommandProcessed(handler CommandProcessedHandler) {
 // subscribe request – keep it, or return error.
 func (n *Node) OnCacheEmpty(h CacheEmptyHandler) {
 	n.clientEvents.cacheEmptyHandler = h
+}
+
+// OnSharedPoll allows setting SharedPollHandler.
+// SharedPollHandler is called by the refresh worker to fetch current item
+// data from the backend. Called per-channel, not per-client.
+func (n *Node) OnSharedPoll(handler SharedPollHandler) {
+	n.clientEvents.sharedPollHandler = handler
+}
+
+// SharedPollNotify submits notifications that trigger immediate backend polls
+// for the specified keys. Notifications are batched per channel according to
+// SharedPollChannelOptions before triggering polls. Safe for concurrent use.
+// Notifications for unknown channels are silently dropped.
+func (n *Node) SharedPollNotify(notifications []SharedPollNotificationItem) {
+	if n.sharedPollManager == nil {
+		return
+	}
+	for i := range notifications {
+		n.sharedPollManager.notify(notifications[i].Channel, notifications[i].Key)
+	}
 }
 
 // HandlePublication coming from Broker.

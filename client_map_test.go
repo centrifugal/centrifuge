@@ -3662,3 +3662,359 @@ func TestMapSubscribe_EpochInFirstPublication(t *testing.T) {
 	require.Equal(t, uint64(2), pubs[1].Push.Pub.Offset)
 	require.Empty(t, pubs[1].Push.Pub.Epoch, "subsequent publications must not include epoch")
 }
+
+// TestStreamSubscribe_WithMapClientPresence verifies that a stream (regular) subscribe
+// with MapClientPresenceChannel sets the right flags, stores presence in MapBroker,
+// and cleans up on unsubscribe. Covers Steps 4, 6, 7 of the plan.
+func TestStreamSubscribe_WithMapClientPresence(t *testing.T) {
+	node, _ := newTestNodeWithMapBroker(t)
+
+	presenceChannel := "clients:test_channel"
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					MapClientPresenceChannel: presenceChannel,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+	subscribeClientV2(t, client, "test_channel")
+
+	// Wait for async map presence goroutine to finish.
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify flags.
+	client.mu.RLock()
+	chCtx := client.channels["test_channel"]
+	client.mu.RUnlock()
+	require.True(t, channelHasFlag(chCtx.flags, flagMapClientPresence))
+	require.False(t, channelHasFlag(chCtx.flags, flagMap), "flagMap should not be set for stream subscribe")
+	require.Equal(t, presenceChannel, chCtx.mapClientPresenceChannel)
+
+	// Verify presence added to MapBroker.
+	state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 1)
+	require.Equal(t, client.uid, state.Publications[0].Key)
+
+	// Unsubscribe — verify presence removed.
+	client.Unsubscribe("test_channel")
+	time.Sleep(50 * time.Millisecond)
+
+	state, err = node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 0)
+}
+
+// TestStreamSubscribe_WithMapPresenceDisconnect verifies that disconnect cleans up
+// map client presence for stream subscriptions.
+func TestStreamSubscribe_WithMapPresenceDisconnect(t *testing.T) {
+	node, _ := newTestNodeWithMapBroker(t)
+
+	presenceChannel := "clients:test_channel"
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					MapClientPresenceChannel: presenceChannel,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+	subscribeClientV2(t, client, "test_channel")
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify presence exists before disconnect.
+	state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 1)
+
+	// Disconnect — verify presence cleaned up.
+	_ = client.close(DisconnectForceNoReconnect)
+	time.Sleep(50 * time.Millisecond)
+
+	state, err = node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 0)
+}
+
+// TestStreamSubscribe_WithMapUserPresence verifies that user presence is NOT removed
+// on unsubscribe (TTL-based expiry by design).
+func TestStreamSubscribe_WithMapUserPresence(t *testing.T) {
+	node, _ := newTestNodeWithMapBroker(t)
+
+	presenceChannel := "users:test_channel"
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					MapUserPresenceChannel: presenceChannel,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+	subscribeClientV2(t, client, "test_channel")
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify user presence added.
+	state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 1)
+	require.Equal(t, "user1", state.Publications[0].Key)
+
+	// Unsubscribe — user presence should NOT be removed (TTL-based expiry).
+	client.Unsubscribe("test_channel")
+	time.Sleep(50 * time.Millisecond)
+
+	state, err = node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 1, "user presence should not be removed on unsubscribe")
+}
+
+// TestStreamSubscribe_WithRegularAndMapPresence verifies that regular presence and
+// map client presence can coexist on a stream subscribe.
+func TestStreamSubscribe_WithRegularAndMapPresence(t *testing.T) {
+	node, _ := newTestNodeWithMapBroker(t)
+
+	presenceChannel := "clients:test_channel"
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					EmitPresence:             true,
+					MapClientPresenceChannel: presenceChannel,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+	subscribeClientV2(t, client, "test_channel")
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify both flags set.
+	client.mu.RLock()
+	chCtx := client.channels["test_channel"]
+	client.mu.RUnlock()
+	require.True(t, channelHasFlag(chCtx.flags, flagEmitPresence))
+	require.True(t, channelHasFlag(chCtx.flags, flagMapClientPresence))
+
+	// Verify map presence added.
+	state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 1)
+
+	// Unsubscribe — both should be cleaned up.
+	client.Unsubscribe("test_channel")
+	time.Sleep(50 * time.Millisecond)
+
+	// Map client presence should be removed.
+	state, err = node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 0)
+}
+
+// TestStreamSubscribe_MapPresencePeriodicUpdate verifies that updateChannelPresence
+// works for stream channels with map presence (Step 6: flagMap gate removed).
+func TestStreamSubscribe_MapPresencePeriodicUpdate(t *testing.T) {
+	node, _ := newTestNodeWithMapBroker(t)
+
+	presenceChannel := "clients:test_channel"
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					MapClientPresenceChannel: presenceChannel,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+	subscribeClientV2(t, client, "test_channel")
+	time.Sleep(50 * time.Millisecond)
+
+	// Call updateChannelPresence directly — should not error.
+	client.mu.RLock()
+	chCtx := client.channels["test_channel"]
+	client.mu.RUnlock()
+	err := client.updateChannelPresence("test_channel", chCtx)
+	require.NoError(t, err)
+}
+
+// TestSharedPollSubscribe_WithMapPresence verifies that shared poll subscribe
+// with MapClientPresenceChannel sets up presence correctly.
+func TestSharedPollSubscribe_WithMapPresence(t *testing.T) {
+	presenceChannel := "clients:test_channel"
+
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+			return SharedPollChannelOptions{
+				RefreshInterval:      100 * time.Millisecond,
+				MaxKeysPerConnection: 100,
+			}, true
+		},
+		GetMapChannelOptions: func(channel string) MapChannelOptions {
+			return MapChannelOptions{
+				SyncMode:      MapSyncEphemeral,
+				RetentionMode: MapRetentionExpiring,
+				KeyTTL:        60 * time.Second,
+			}
+		},
+	})
+	require.NoError(t, err)
+
+	broker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	err = broker.RegisterEventHandler(nil)
+	require.NoError(t, err)
+	node.SetMapBroker(broker)
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{}, nil
+	})
+
+	err = node.Run()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					ExpireAt:                 time.Now().Unix() + 3600,
+					MapClientPresenceChannel: presenceChannel,
+				},
+				ClientSideRefresh: true,
+			}, nil)
+		})
+		client.OnKeyedTrack(func(e KeyedTrackEvent, cb KeyedTrackCallback) {
+			cb(KeyedTrackReply{}, nil)
+		})
+		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+			cb(SubRefreshReply{}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+	subscribeSharedPollClient(t, client, "test_channel")
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify flags.
+	client.mu.RLock()
+	chCtx := client.channels["test_channel"]
+	client.mu.RUnlock()
+	require.True(t, channelHasFlag(chCtx.flags, flagMapClientPresence))
+	require.True(t, channelHasFlag(chCtx.flags, flagKeyed))
+	require.Equal(t, presenceChannel, chCtx.mapClientPresenceChannel)
+
+	// Verify presence added to MapBroker.
+	state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 1)
+
+	// Unsubscribe — verify cleanup.
+	client.Unsubscribe("test_channel")
+	time.Sleep(50 * time.Millisecond)
+
+	state, err = node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 0)
+}
+
+// TestSharedPollSubscribe_WithRegularPresence verifies that shared poll subscribe
+// with EmitPresence and EmitJoinLeave sets the right flags.
+func TestSharedPollSubscribe_WithRegularPresence(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t)
+
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					ExpireAt:      time.Now().Unix() + 3600,
+					EmitPresence:  true,
+					EmitJoinLeave: true,
+				},
+				ClientSideRefresh: true,
+			}, nil)
+		})
+		client.OnKeyedTrack(func(e KeyedTrackEvent, cb KeyedTrackCallback) {
+			cb(KeyedTrackReply{}, nil)
+		})
+		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+			cb(SubRefreshReply{}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+	subscribeSharedPollClient(t, client, "test_channel")
+
+	// Verify flags.
+	client.mu.RLock()
+	chCtx := client.channels["test_channel"]
+	client.mu.RUnlock()
+	require.True(t, channelHasFlag(chCtx.flags, flagEmitPresence))
+	require.True(t, channelHasFlag(chCtx.flags, flagEmitJoinLeave))
+	require.True(t, channelHasFlag(chCtx.flags, flagKeyed))
+}
+
+// TestMapSubscribe_WithOnlyEmitPresence_Regression verifies that a map subscribe
+// with only EmitPresence (no map presence channels) still works correctly after
+// the unsubscribe refactoring (Step 7 regression test).
+func TestMapSubscribe_WithOnlyEmitPresence_Regression(t *testing.T) {
+	node, _ := newTestNodeWithMapBroker(t)
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:         SubscriptionTypeMap,
+					EmitPresence: true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Subscribe to map channel.
+	subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: "test_map",
+		Type:    1,
+	})
+
+	// Verify flags.
+	client.mu.RLock()
+	chCtx := client.channels["test_map"]
+	client.mu.RUnlock()
+	require.True(t, channelHasFlag(chCtx.flags, flagEmitPresence))
+	require.True(t, channelHasFlag(chCtx.flags, flagMap))
+	require.False(t, channelHasFlag(chCtx.flags, flagMapClientPresence))
+
+	// Unsubscribe — should work without errors.
+	client.Unsubscribe("test_map")
+}

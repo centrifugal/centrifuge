@@ -101,6 +101,8 @@ const (
 	SubscriptionTypeMapClients SubscriptionType = 2
 	// SubscriptionTypeMapUsers is a user presence subscription on a map channel.
 	SubscriptionTypeMapUsers SubscriptionType = 3
+	// SubscriptionTypeSharedPoll is a shared poll subscription.
+	SubscriptionTypeSharedPoll SubscriptionType = 4
 )
 
 // IsMapPresence reports whether t is a map presence subscription type
@@ -119,6 +121,8 @@ func (t SubscriptionType) String() string {
 		return "map_clients"
 	case SubscriptionTypeMapUsers:
 		return "map_users"
+	case SubscriptionTypeSharedPoll:
+		return "shared_poll"
 	default:
 		return "unknown"
 	}
