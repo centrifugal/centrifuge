@@ -53,7 +53,13 @@ type keyedState struct {
 	minTrackExpireAt map[string]int64
 }
 
-// handleKeyedTrack processes SubRefreshRequest with type=1 (track).
+// Keyed sub-refresh request types (wire protocol values).
+const (
+	keyedTypeTrack   int32 = 1
+	keyedTypeUntrack int32 = 2
+)
+
+// handleKeyedTrack processes SubRefreshRequest with type=keyedTypeTrack (track).
 func (c *Client) handleKeyedTrack(req *protocol.SubRefreshRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
 	channel := req.Channel
 

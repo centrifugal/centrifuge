@@ -1539,7 +1539,7 @@ func TestNodeCheckPositionMapWithMedium(t *testing.T) {
 	client := newTestConnectedClientV2(t, node, "user1")
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})

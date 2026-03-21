@@ -721,6 +721,28 @@ func (c *Client) writeEncodedPushData(data []byte, ch string, key string, frameT
 	return nil
 }
 
+// publishJoinAndPresence publishes join notification and sets up map presence
+// for a channel after subscribe. Must be called with non-nil clientInfo.
+func (c *Client) publishJoinAndPresence(channel string, chCtx ChannelContext, clientInfo *ClientInfo) {
+	if channelHasFlag(chCtx.flags, flagEmitJoinLeave) {
+		_ = c.node.publishJoin(channel, clientInfo)
+	}
+	if chCtx.mapClientPresenceChannel != "" {
+		if err := c.addMapClientPresence(chCtx.mapClientPresenceChannel, clientInfo); err != nil {
+			c.node.logger.log(newErrorLogEntry(err, "error adding map client presence", map[string]any{
+				"channel": channel, "user": c.user, "client": c.uid,
+			}))
+		}
+	}
+	if chCtx.mapUserPresenceChannel != "" {
+		if err := c.addMapUserPresence(chCtx.mapUserPresenceChannel); err != nil {
+			c.node.logger.log(newErrorLogEntry(err, "error adding map user presence", map[string]any{
+				"channel": channel, "user": c.user, "client": c.uid,
+			}))
+		}
+	}
+}
+
 // updateChannelPresence updates client presence info for channel so it
 // won't expire until client disconnect.
 func (c *Client) updateChannelPresence(ch string, chCtx ChannelContext) error {
@@ -754,7 +776,7 @@ func (c *Client) updateChannelPresence(ch string, chCtx ChannelContext) error {
 	}
 
 	if channelHasFlag(chCtx.flags, flagMapClientPresence) || channelHasFlag(chCtx.flags, flagMapUserPresence) {
-		err := c.updateMapPresence(ch, info, chCtx)
+		err := c.updateMapPresence(info, chCtx)
 		if err != nil {
 			return err
 		}
@@ -1831,18 +1853,18 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 	if c.node.config.GetSharedPollChannelOptions != nil {
 		_, isSharedPoll = c.node.config.GetSharedPollChannelOptions(req.Channel)
 	}
-	if req.Type == 4 && !isSharedPoll {
+	if req.Type == int32(SubscriptionTypeSharedPoll) && !isSharedPoll {
 		return ErrorNotAvailable
 	}
-	if isSharedPoll && req.Type != 4 {
+	if isSharedPoll && req.Type != int32(SubscriptionTypeSharedPoll) {
 		return ErrorBadRequest
 	}
-	if req.Type == 4 {
+	if req.Type == int32(SubscriptionTypeSharedPoll) {
 		return c.handleSharedPollSubscribe(req, cmd, started, rw)
 	}
 
 	// Route map subscription types (map, client presence, user presence) to map handler.
-	if req.Type == 1 || req.Type == 2 || req.Type == 3 {
+	if req.Type == int32(SubscriptionTypeMap) || req.Type == int32(SubscriptionTypeMapClients) || req.Type == int32(SubscriptionTypeMapUsers) {
 		return c.handleMapSubscribeCommand(req, cmd, started, rw)
 	}
 
@@ -1900,25 +1922,7 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 
 		if ctx.clientInfo != nil {
 			if channelHasFlag(ctx.channelContext.flags, flagEmitJoinLeave) || ctx.channelContext.mapClientPresenceChannel != "" || ctx.channelContext.mapUserPresenceChannel != "" {
-				go func() {
-					if channelHasFlag(ctx.channelContext.flags, flagEmitJoinLeave) {
-						_ = c.node.publishJoin(req.Channel, ctx.clientInfo)
-					}
-					if ctx.channelContext.mapClientPresenceChannel != "" {
-						if err := c.addMapClientPresence(ctx.channelContext.mapClientPresenceChannel, ctx.clientInfo); err != nil {
-							c.node.logger.log(newErrorLogEntry(err, "error adding map client presence", map[string]any{
-								"channel": req.Channel, "user": c.user, "client": c.uid,
-							}))
-						}
-					}
-					if ctx.channelContext.mapUserPresenceChannel != "" {
-						if err := c.addMapUserPresence(ctx.channelContext.mapUserPresenceChannel); err != nil {
-							c.node.logger.log(newErrorLogEntry(err, "error adding map user presence", map[string]any{
-								"channel": req.Channel, "user": c.user, "client": c.uid,
-							}))
-						}
-					}
-				}()
+				go c.publishJoinAndPresence(req.Channel, ctx.channelContext, ctx.clientInfo)
 			}
 		}
 	}
@@ -1951,9 +1955,9 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 	// Route by type for keyed channels (shared poll track/untrack).
 	if channelHasFlag(ctx.flags, flagKeyed) {
 		switch req.Type {
-		case 1:
+		case keyedTypeTrack:
 			return c.handleKeyedTrack(req, cmd, started, rw)
-		case 2:
+		case keyedTypeUntrack:
 			return c.handleKeyedUntrack(req, cmd, started, rw)
 		}
 	}
@@ -2872,29 +2876,9 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 
 	c.unlockServerSideSubscriptions(subCtxMap)
 
-	if len(subCtxMap) > 0 {
-		for channel, subCtx := range subCtxMap {
-			go func(channel string, subCtx subscribeContext) {
-				if subCtx.clientInfo != nil {
-					if channelHasFlag(subCtx.channelContext.flags, flagEmitJoinLeave) {
-						_ = c.node.publishJoin(channel, subCtx.clientInfo)
-					}
-					if subCtx.channelContext.mapClientPresenceChannel != "" {
-						if err := c.addMapClientPresence(subCtx.channelContext.mapClientPresenceChannel, subCtx.clientInfo); err != nil {
-							c.node.logger.log(newErrorLogEntry(err, "error adding map client presence", map[string]any{
-								"channel": channel, "user": c.user, "client": c.uid,
-							}))
-						}
-					}
-					if subCtx.channelContext.mapUserPresenceChannel != "" {
-						if err := c.addMapUserPresence(subCtx.channelContext.mapUserPresenceChannel); err != nil {
-							c.node.logger.log(newErrorLogEntry(err, "error adding map user presence", map[string]any{
-								"channel": channel, "user": c.user, "client": c.uid,
-							}))
-						}
-					}
-				}
-			}(channel, subCtx)
+	for channel, subCtx := range subCtxMap {
+		if subCtx.clientInfo != nil {
+			go c.publishJoinAndPresence(channel, subCtx.channelContext, subCtx.clientInfo)
 		}
 	}
 
@@ -3090,23 +3074,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 		return err
 	}
 	if subCtx.clientInfo != nil {
-		if channelHasFlag(subCtx.channelContext.flags, flagEmitJoinLeave) {
-			_ = c.node.publishJoin(channel, subCtx.clientInfo)
-		}
-		if subCtx.channelContext.mapClientPresenceChannel != "" {
-			if err := c.addMapClientPresence(subCtx.channelContext.mapClientPresenceChannel, subCtx.clientInfo); err != nil {
-				c.node.logger.log(newErrorLogEntry(err, "error adding map client presence", map[string]any{
-					"channel": channel, "user": c.user, "client": c.uid,
-				}))
-			}
-		}
-		if subCtx.channelContext.mapUserPresenceChannel != "" {
-			if err := c.addMapUserPresence(subCtx.channelContext.mapUserPresenceChannel); err != nil {
-				c.node.logger.log(newErrorLogEntry(err, "error adding map user presence", map[string]any{
-					"channel": channel, "user": c.user, "client": c.uid,
-				}))
-			}
-		}
+		c.publishJoinAndPresence(channel, subCtx.channelContext, subCtx.clientInfo)
 	}
 	return nil
 }
@@ -4153,18 +4121,12 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	}
 	c.mu.Unlock()
 
-	// Remove presence if any presence flag is enabled.
-	hasAnyPresence := channelHasFlag(chCtx.flags, flagEmitPresence) ||
-		channelHasFlag(chCtx.flags, flagMapClientPresence) ||
-		channelHasFlag(chCtx.flags, flagMapUserPresence)
+	// Remove presence and/or run map cleanup on unsubscribe.
+	hasMapPresenceOrCleanup := channelHasFlag(chCtx.flags, flagMapClientPresence) ||
+		channelHasFlag(chCtx.flags, flagMapUserPresence) ||
+		channelHasFlag(chCtx.flags, flagCleanupOnUnsubscribe)
 
-	// Also need to run map cleanup if MapRemoveClientOnUnsubscribe is enabled.
-	needsMapCleanup := hasAnyPresence || channelHasFlag(chCtx.flags, flagCleanupOnUnsubscribe)
-
-	if needsMapCleanup && channelHasFlag(chCtx.flags, flagSubscribed) {
-		hasMapPresenceOrCleanup := channelHasFlag(chCtx.flags, flagMapClientPresence) ||
-			channelHasFlag(chCtx.flags, flagMapUserPresence) ||
-			channelHasFlag(chCtx.flags, flagCleanupOnUnsubscribe)
+	if channelHasFlag(chCtx.flags, flagSubscribed) {
 		if hasMapPresenceOrCleanup {
 			err := c.removeMapPresence(channel, chCtx)
 			if err != nil {

@@ -35,7 +35,6 @@ type Publication struct {
 	// Used in map subscriptions to distinguish event types.
 	Removed bool
 	// Score is used for ordered map subscriptions (leaderboards, priority queues).
-	// Higher scores appear first when Ordered=true in ReadState.
 	Score int64
 }
 

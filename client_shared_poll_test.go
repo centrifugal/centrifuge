@@ -83,7 +83,7 @@ func subscribeSharedPollClient(t testing.TB, client *Client, channel string) *pr
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    4,
+		Type:    int32(SubscriptionTypeSharedPoll),
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 
@@ -99,7 +99,7 @@ func trackSharedPollClient(t testing.TB, client *Client, channel string, items [
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    keyedTypeTrack,
 		Items:   items,
 	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
@@ -115,7 +115,7 @@ func untrackSharedPollClient(t testing.TB, client *Client, channel string, keys 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel:     channel,
-		Type:        2,
+		Type:        keyedTypeUntrack,
 		UntrackKeys: keys,
 	}, &protocol.Command{Id: 3}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
@@ -150,7 +150,7 @@ func TestSharedPollSubscribe_NotConfigured(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: "test:channel",
-		Type:    4,
+		Type:    int32(SubscriptionTypeSharedPoll),
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorNotAvailable, err)
 }
@@ -165,7 +165,7 @@ func TestSharedPollSubscribe_WrongType(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: "test:channel",
-		Type:    0,
+		Type:    int32(SubscriptionTypeStream),
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorBadRequest, err)
 }
@@ -188,7 +188,7 @@ func TestSharedPollSubscribe_OnSubscribeReject(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: "test:channel",
-		Type:    4,
+		Type:    int32(SubscriptionTypeSharedPoll),
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	// Error is written to reply, not returned.
@@ -282,7 +282,7 @@ func TestSharedPollTrack_SignatureRejected(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: "test:channel",
-		Type:    1,
+		Type:    keyedTypeTrack,
 		Items:   []*protocol.KeyedItem{{Key: "key1", Version: 1}},
 	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
@@ -316,7 +316,7 @@ func TestSharedPollTrack_MaxTrackedExceeded(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: "test:channel",
-		Type:    1,
+		Type:    keyedTypeTrack,
 		Items:   []*protocol.KeyedItem{{Key: "key3", Version: 3}},
 	}, &protocol.Command{Id: 3}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorLimitExceeded, err)
@@ -419,7 +419,7 @@ func TestSharedPollTrack_EmptyItems(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: "test:channel",
-		Type:    1,
+		Type:    keyedTypeTrack,
 		Items:   nil,
 	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorBadRequest, err)
@@ -435,7 +435,7 @@ func TestSharedPollUntrack_EmptyKeys(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel:     "test:channel",
-		Type:        2,
+		Type:        keyedTypeUntrack,
 		UntrackKeys: nil,
 	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorBadRequest, err)
@@ -1138,7 +1138,7 @@ func TestSharedPollSubscribe_AlreadySubscribed(t *testing.T) {
 	// Second subscribe should fail — error returned directly.
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: "test:channel",
-		Type:    4,
+		Type:    int32(SubscriptionTypeSharedPoll),
 	}, &protocol.Command{Id: 2}, time.Now(), testReplyWriterWrapper().rw)
 	require.Equal(t, ErrorAlreadySubscribed, err)
 }
@@ -1874,7 +1874,7 @@ func subscribeSharedPollClientDelta(t testing.TB, client *Client, channel string
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    4,
+		Type:    int32(SubscriptionTypeSharedPoll),
 		Delta:   string(DeltaTypeFossil),
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)

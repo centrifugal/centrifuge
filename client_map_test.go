@@ -116,7 +116,7 @@ func TestMapSubscribe_StatePhase(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err = client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
@@ -164,7 +164,7 @@ func TestMapSubscribe_StatePagination(t *testing.T) {
 	// First page.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   5,
 	})
@@ -179,7 +179,7 @@ func TestMapSubscribe_StatePagination(t *testing.T) {
 	// Second page using cursor — streamless last page transitions to LIVE.
 	result2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   5,
 		Cursor:  result.Cursor,
@@ -226,7 +226,7 @@ func TestMapSubscribe_StreamPhase(t *testing.T) {
 	// STATE page 1 (limit=2 → 2 entries, cursor). Offset frozen at 4.
 	result1 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   2,
 	})
@@ -249,7 +249,7 @@ func TestMapSubscribe_StreamPhase(t *testing.T) {
 	// STATE page 2 (last page): state-to-live check fails (gap too large) → stays STATE.
 	result2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   2,
 		Cursor:  result1.Cursor,
@@ -262,7 +262,7 @@ func TestMapSubscribe_StreamPhase(t *testing.T) {
 	// Now do STREAM phase from frozen offset → should catch up and go LIVE.
 	result3 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseStream,
 		Offset:  frozenOffset,
 		Epoch:   epoch,
@@ -304,7 +304,7 @@ func TestMapSubscribe_LivePhase(t *testing.T) {
 	// STATE with all entries fitting on one page → state-to-live goes LIVE directly.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -348,7 +348,7 @@ func TestMapSubscribe_DirectLive(t *testing.T) {
 	// STATE phase: state fits in one page → streamless goes LIVE directly.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -391,7 +391,7 @@ func TestMapSubscribe_FullTwoPhase(t *testing.T) {
 	// STATE with all entries fitting on one page → state-to-live goes LIVE directly.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -424,7 +424,7 @@ func TestMapSubscribe_NotEnabled(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
@@ -453,7 +453,7 @@ func TestMapSubscribe_AlreadySubscribed(t *testing.T) {
 	// First subscribe.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -462,7 +462,7 @@ func TestMapSubscribe_AlreadySubscribed(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorAlreadySubscribed, err)
@@ -484,7 +484,7 @@ func TestMapSubscribe_WithPresence(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:                           SubscriptionTypeMap,
+					Type:                     SubscriptionTypeMap,
 					MapClientPresenceChannel: "clients:" + channel,
 				},
 			}, nil)
@@ -496,7 +496,7 @@ func TestMapSubscribe_WithPresence(t *testing.T) {
 	// Subscribe with keyed client presence.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -528,7 +528,7 @@ func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:                           SubscriptionTypeMap,
+					Type:                     SubscriptionTypeMap,
 					MapClientPresenceChannel: "clients:" + channel,
 				},
 			}, nil)
@@ -540,7 +540,7 @@ func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 	// Subscribe with keyed client presence.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -576,7 +576,7 @@ func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:                           SubscriptionTypeMap,
+					Type:                     SubscriptionTypeMap,
 					MapClientPresenceChannel: "clients:" + channel,
 				},
 			}, nil)
@@ -588,7 +588,7 @@ func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 	// Subscribe with keyed client presence.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -598,6 +598,7 @@ func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 	stateRes, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
+	require.NoError(t, err)
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -610,6 +611,7 @@ func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 	stateRes, err = broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
+	require.NoError(t, err)
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 0)
@@ -638,7 +640,7 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 	// Subscribe with MapRemoveClientOnUnsubscribe.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -654,8 +656,8 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
-	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
+	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.Len(t, entries, 1)
 	require.Equal(t, clientID, entries[0].Key)
 
@@ -666,8 +668,8 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
-	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
+	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.Len(t, entries, 0)
 }
 
@@ -694,7 +696,7 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 	// Subscribe with MapRemoveClientOnUnsubscribe.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -710,6 +712,7 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
+	require.NoError(t, err)
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -722,6 +725,7 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 	stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{
 		Limit: 100,
 	})
+	require.NoError(t, err)
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 0)
@@ -758,7 +762,7 @@ func TestPresenceSubscribe_State(t *testing.T) {
 	// Streamless presence: single page → LIVE.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: presenceChannel,
-		Type:    2,
+		Type:    int32(SubscriptionTypeMapClients),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -791,7 +795,7 @@ func TestPresenceSubscribe_Live(t *testing.T) {
 	// Streamless presence: single page → LIVE directly.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: presenceChannel,
-		Type:    2,
+		Type:    int32(SubscriptionTypeMapClients),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -835,7 +839,7 @@ func TestPresenceSubscribe_Positioned_TwoPhase(t *testing.T) {
 	// Positioned presence: STATE with all entries → state-to-live goes LIVE directly.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: presenceChannel,
-		Type:    2,
+		Type:    int32(SubscriptionTypeMapClients),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -869,7 +873,7 @@ func TestPresenceSubscribe_NotAllowed(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: presenceChannel,
-		Type:    2,
+		Type:    int32(SubscriptionTypeMapClients),
 		Phase:   MapPhaseState,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
@@ -892,7 +896,7 @@ func TestPresenceSubscribe_NoHandler(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: presenceChannel,
-		Type:    2,
+		Type:    int32(SubscriptionTypeMapClients),
 		Phase:   MapPhaseState,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	// When no handler is set, the error is returned directly.
@@ -915,7 +919,7 @@ func TestPresenceSubscribe_AlreadySubscribed(t *testing.T) {
 	// First subscribe (streamless, so STATE goes directly to LIVE).
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: presenceChannel,
-		Type:    2,
+		Type:    int32(SubscriptionTypeMapClients),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -924,7 +928,7 @@ func TestPresenceSubscribe_AlreadySubscribed(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: presenceChannel,
-		Type:    2,
+		Type:    int32(SubscriptionTypeMapClients),
 		Phase:   MapPhaseState,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	// When already subscribed, the error is returned directly.
@@ -959,7 +963,7 @@ func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:                           SubscriptionTypeMap,
+					Type:                     SubscriptionTypeMap,
 					MapClientPresenceChannel: "clients:" + channel,
 					MapUserPresenceChannel:   "$users:" + channel,
 				},
@@ -972,7 +976,7 @@ func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
 	// Subscribe with both client and user presence.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -982,6 +986,7 @@ func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
 	stateRes, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{
 		Limit: 100,
 	})
+	require.NoError(t, err)
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -995,6 +1000,7 @@ func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
 	stateRes, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{
 		Limit: 100,
 	})
+	require.NoError(t, err)
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -1020,7 +1026,7 @@ func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:                           SubscriptionTypeMap,
+					Type:                     SubscriptionTypeMap,
 					MapClientPresenceChannel: "clients:" + channel,
 					MapUserPresenceChannel:   "$users:" + channel,
 				},
@@ -1033,7 +1039,7 @@ func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
 	// Subscribe with both client and user presence.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -1043,11 +1049,13 @@ func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
 	usersChannel := "$users:" + channel
 
 	stateRes, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 
 	stateRes, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -1058,12 +1066,14 @@ func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
 
 	// Verify :clients presence was removed.
 	stateRes, err = broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 0)
 
 	// Verify :users presence is NOT removed (TTL-based expiration).
 	stateRes, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1) // Still there, will expire via TTL.
@@ -1079,7 +1089,7 @@ func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:                           SubscriptionTypeMap,
+					Type:                     SubscriptionTypeMap,
 					MapClientPresenceChannel: "clients:" + channel,
 					MapUserPresenceChannel:   "$users:" + channel,
 				},
@@ -1094,13 +1104,13 @@ func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
 	// Subscribe both clients.
 	subscribeMapClient(t, client1, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
 	subscribeMapClient(t, client2, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -1108,6 +1118,7 @@ func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
 	// Verify :clients has two entries (one per connection).
 	clientsChannel := "clients:" + channel
 	stateRes, err := broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
 	entries, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
@@ -1115,6 +1126,7 @@ func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
 	// Verify :users has one entry (deduplicated by userId).
 	usersChannel := "$users:" + channel
 	stateRes, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -1126,12 +1138,14 @@ func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
 
 	// :clients should have one entry.
 	stateRes, err = broker.ReadState(ctx, clientsChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 
 	// :users still has the user (TTL refresh from client2).
 	stateRes, err = broker.ReadState(ctx, usersChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
 	entries, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -1163,6 +1177,7 @@ func TestMapBroker_ReadStateByKey(t *testing.T) {
 	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{
 		Key: "key2",
 	})
+	require.NoError(t, err)
 	pubs, pos, cursor := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -1175,6 +1190,7 @@ func TestMapBroker_ReadStateByKey(t *testing.T) {
 	stateRes, err = broker.ReadState(ctx, ch, MapReadStateOptions{
 		Key: "nonexistent",
 	})
+	require.NoError(t, err)
 	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 0)
@@ -1196,6 +1212,7 @@ func TestMapBroker_CASSuccess(t *testing.T) {
 
 	// Read current state - position includes offset AND epoch
 	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	require.NoError(t, err)
 	pubs, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -1212,6 +1229,7 @@ func TestMapBroker_CASSuccess(t *testing.T) {
 
 	// Verify the value was updated
 	stateRes, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	require.NoError(t, err)
 	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -1233,6 +1251,7 @@ func TestMapBroker_CASConflict(t *testing.T) {
 
 	// Read current state
 	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	require.NoError(t, err)
 	pubs, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -1268,6 +1287,7 @@ func TestMapBroker_CASConflict(t *testing.T) {
 
 	// Verify the value was updated
 	stateRes, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	require.NoError(t, err)
 	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -1289,6 +1309,7 @@ func TestMapBroker_CASNonExistent(t *testing.T) {
 
 	// Get the epoch
 	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 1})
+	require.NoError(t, err)
 	_, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 
@@ -1318,6 +1339,7 @@ func TestMapBroker_CASWrongEpoch(t *testing.T) {
 
 	// Read current state
 	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	require.NoError(t, err)
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -1339,6 +1361,7 @@ func TestMapBroker_CASWrongEpoch(t *testing.T) {
 
 	// Verify value unchanged
 	stateRes, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	require.NoError(t, err)
 	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -1362,6 +1385,7 @@ func TestMapBroker_StreamDataDifferentPayloads(t *testing.T) {
 
 	// Read state - should have full state
 	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	require.NoError(t, err)
 	pubs, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -1386,6 +1410,7 @@ func TestMapBroker_StreamDataDifferentPayloads(t *testing.T) {
 
 	// Verify state has new full state
 	stateRes, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
+	require.NoError(t, err)
 	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -1417,6 +1442,7 @@ func TestMapBroker_StreamDataWithoutStreamData(t *testing.T) {
 
 	// Read state
 	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "item"})
+	require.NoError(t, err)
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -1490,7 +1516,7 @@ func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err = client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
@@ -1561,7 +1587,7 @@ func TestMapSubscribe_StateToLive_WithStreamPublications(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err = client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
@@ -1632,7 +1658,7 @@ func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
 	// First page - limit 5, should return STATE with cursor.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   5,
 	})
@@ -1648,7 +1674,7 @@ func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
 	// Second page (last page) - should go LIVE directly.
 	result2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   5,
 		Cursor:  result.Cursor,
@@ -1724,7 +1750,7 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination(t *testing.T) {
 	// First page: captures frozen offset.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   5,
 	})
@@ -1752,7 +1778,7 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination(t *testing.T) {
 	for i := 0; i < 20; i++ { // Safety limit to prevent infinite loop.
 		r := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 			Channel: channel,
-			Type:    1,
+			Type:    int32(SubscriptionTypeMap),
 			Phase:   MapPhaseState,
 			Limit:   5,
 			Cursor:  cursor,
@@ -1835,7 +1861,7 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination_ManyPublishes(t *testi
 	// Page 1: captures frozen offset.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   5,
 	})
@@ -1853,7 +1879,7 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination_ManyPublishes(t *testi
 	// Read page 2.
 	result2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   5,
 		Cursor:  result.Cursor,
@@ -1884,7 +1910,7 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination_ManyPublishes(t *testi
 	for i := 0; i < 20; i++ {
 		r := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 			Channel: channel,
-			Type:    1,
+			Type:    int32(SubscriptionTypeMap),
 			Phase:   MapPhaseState,
 			Limit:   5,
 			Cursor:  cursor,
@@ -1957,7 +1983,7 @@ func TestMapSubscribe_StreamPhaseRecovery(t *testing.T) {
 	// 4. Transition to LIVE
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseStream,
 		Offset:  savedOffset,
 		Epoch:   savedEpoch,
@@ -2011,7 +2037,7 @@ func TestMapSubscribe_StreamPhaseRecovery_WithoutRecoverFlag(t *testing.T) {
 	// This should fail with permission denied.
 	protoErr := subscribeMapClientExpectError(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseStream,
 		Offset:  res.Position.Offset,
 		Epoch:   res.Position.Epoch,
@@ -2062,7 +2088,7 @@ func TestMapSubscribe_StreamPhaseRecovery_LargeGap(t *testing.T) {
 	// First STREAM request with small limit - should NOT go LIVE yet.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseStream,
 		Offset:  savedOffset,
 		Epoch:   savedEpoch,
@@ -2082,7 +2108,7 @@ func TestMapSubscribe_StreamPhaseRecovery_LargeGap(t *testing.T) {
 	for result.Phase == MapPhaseStream {
 		result = subscribeMapClient(t, client, &protocol.SubscribeRequest{
 			Channel: channel,
-			Type:    1,
+			Type:    int32(SubscriptionTypeMap),
 			Phase:   MapPhaseStream,
 			Offset:  newOffset,
 			Epoch:   savedEpoch,
@@ -2144,7 +2170,7 @@ func TestMapSubscribe_LivePhaseRecovery(t *testing.T) {
 	// This is Option 1 from the recovery protocol - direct to LIVE.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseLive,
 		Offset:  savedOffset,
 		Epoch:   savedEpoch,
@@ -2192,7 +2218,7 @@ func TestMapSubscribe_Streamless_StreamPhaseRejected(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err = client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseStream,
 		Offset:  1,
 		Epoch:   "test",
@@ -2236,7 +2262,7 @@ func TestMapSubscribe_Streamless_RecoveryUsesStatePhase(t *testing.T) {
 	// In streamless mode, last state page transitions directly to LIVE.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -2283,7 +2309,7 @@ func TestMapSubscribe_Positioned_StreamEpochMismatch(t *testing.T) {
 	// STATE page 1 (limit=2): gets 2 entries, cursor.
 	result1 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   2,
 	})
@@ -2303,7 +2329,7 @@ func TestMapSubscribe_Positioned_StreamEpochMismatch(t *testing.T) {
 	// STATE page 2 (last): state-to-live fails (gap too large) → stays STATE.
 	result2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   2,
 		Cursor:  result1.Cursor,
@@ -2317,7 +2343,7 @@ func TestMapSubscribe_Positioned_StreamEpochMismatch(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseStream,
 		Offset:  frozenOffset,
 		Epoch:   "wrong-epoch",
@@ -2368,7 +2394,7 @@ func TestMapSubscribe_ConcurrentPagination(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   5,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
@@ -2440,7 +2466,7 @@ func TestMapSubscribe_RecoveryMaxPublicationLimit(t *testing.T) {
 	client1 := newTestConnectedClientV2(t, node, "user1")
 	result := subscribeMapClient(t, client1, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseLive,
 		Offset:  5,
 		Epoch:   epoch,
@@ -2454,7 +2480,7 @@ func TestMapSubscribe_RecoveryMaxPublicationLimit(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err = client2.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseLive,
 		Offset:  4,
 		Epoch:   epoch,
@@ -2498,7 +2524,7 @@ func TestMapSubscribe_Positioned_StateConsistencyFiltering(t *testing.T) {
 	// First page: get 5 entries. Server captures stream position (offset=10).
 	result1 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   5,
 	})
@@ -2519,7 +2545,7 @@ func TestMapSubscribe_Positioned_StateConsistencyFiltering(t *testing.T) {
 	// because its new offset > savedOffset. Client will get it from stream catch-up.
 	result2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 		Cursor:  result1.Cursor,
@@ -2572,7 +2598,7 @@ func TestMapSubscribe_Positioned_FullThreePhaseFlow(t *testing.T) {
 	// Phase 2 (STATE): first page.
 	result1 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   5,
 	})
@@ -2597,7 +2623,7 @@ func TestMapSubscribe_Positioned_FullThreePhaseFlow(t *testing.T) {
 	// State-to-live fails (frozenOffset=10 + limit=5 = 15 < ~110) → stays STATE.
 	result2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   5,
 		Cursor:  result1.Cursor,
@@ -2610,7 +2636,7 @@ func TestMapSubscribe_Positioned_FullThreePhaseFlow(t *testing.T) {
 	// Phase 1 (STREAM): catch up from frozen offset.
 	result3 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseStream,
 		Offset:  frozenOffset,
 		Epoch:   epoch,
@@ -2625,7 +2651,7 @@ func TestMapSubscribe_Positioned_FullThreePhaseFlow(t *testing.T) {
 	for currentPhase == MapPhaseStream {
 		res := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 			Channel: channel,
-			Type:    1,
+			Type:    int32(SubscriptionTypeMap),
 			Phase:   MapPhaseStream,
 			Offset:  currentOffset,
 			Epoch:   epoch,
@@ -2674,7 +2700,7 @@ func TestMapSubscribe_Positioned_LiveRecoveryEpochMismatch(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseLive,
 		Offset:  2,
 		Epoch:   "wrong-epoch",
@@ -2715,7 +2741,7 @@ func TestMapSubscribe_Streamless_StateToLive(t *testing.T) {
 	// STATE phase: state fits in one page → transitions to LIVE.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -2756,7 +2782,7 @@ func TestMapSubscribe_Positioned_StateToLive_SmallState(t *testing.T) {
 	// STATE phase: state fits in one page → stream close → transitions to LIVE.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -2801,7 +2827,7 @@ func TestMapSubscribe_StreamPhaseOffset(t *testing.T) {
 	// STATE phase (first page) — capture the offset.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   3,
 	})
@@ -2820,7 +2846,7 @@ func TestMapSubscribe_StreamPhaseOffset(t *testing.T) {
 	// STATE phase (subsequent page) — offset should be frozen at first page value.
 	result = subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Cursor:  result.Cursor,
 		Limit:   3,
@@ -2837,7 +2863,7 @@ func TestMapSubscribe_StreamPhaseOffset(t *testing.T) {
 	for result.Cursor != "" {
 		result = subscribeMapClient(t, client, &protocol.SubscribeRequest{
 			Channel: channel,
-			Type:    1,
+			Type:    int32(SubscriptionTypeMap),
 			Phase:   MapPhaseState,
 			Cursor:  result.Cursor,
 			Limit:   100,
@@ -2856,7 +2882,7 @@ func TestMapSubscribe_StreamPhaseOffset(t *testing.T) {
 	// STREAM phase with small limit to force multi-page.
 	result = subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseStream,
 		Limit:   2,
 		Offset:  firstPageOffset,
@@ -2906,7 +2932,7 @@ func TestMapSubscribe_CatchUpTimeout_StatePagination(t *testing.T) {
 	// First page succeeds (creates mapSubscribeState).
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   5,
 	})
@@ -2917,7 +2943,7 @@ func TestMapSubscribe_CatchUpTimeout_StatePagination(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   5,
 		Cursor:  result.Cursor,
@@ -2965,7 +2991,7 @@ func TestMapSubscribe_CatchUpTimeout_PhaseTransition(t *testing.T) {
 	// STATE page 1 (limit=2): 2 entries, cursor. Offset frozen at 4.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   2,
 	})
@@ -2983,7 +3009,7 @@ func TestMapSubscribe_CatchUpTimeout_PhaseTransition(t *testing.T) {
 	// STATE page 2 (last): state-to-live fails (gap too large) → stays STATE.
 	result2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   2,
 		Cursor:  result.Cursor,
@@ -3002,7 +3028,7 @@ func TestMapSubscribe_CatchUpTimeout_PhaseTransition(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseStream,
 		Offset:  result.Offset,
 		Epoch:   result.Epoch,
@@ -3047,7 +3073,7 @@ func TestMapSubscribe_CatchUpTimeout_Sweep(t *testing.T) {
 	// First page of ch_a (limit=1 so cursor remains).
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: "ch_a",
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   1,
 	})
@@ -3063,7 +3089,7 @@ func TestMapSubscribe_CatchUpTimeout_Sweep(t *testing.T) {
 	// clean up expired ch_a state (but ch_b itself proceeds normally).
 	result2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: "ch_b",
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -3107,7 +3133,7 @@ func TestMapSubscribe_CatchUpTimeout_Disabled(t *testing.T) {
 	// Manually set startedAt far in the past.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   5,
 	})
@@ -3120,7 +3146,7 @@ func TestMapSubscribe_CatchUpTimeout_Disabled(t *testing.T) {
 	// Should still succeed — timeout disabled.
 	result2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   5,
 		Cursor:  result.Cursor,
@@ -3158,7 +3184,7 @@ func TestMapSubscribe_WasRecovering(t *testing.T) {
 	// Should NOT have WasRecovering.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -3181,7 +3207,7 @@ func TestMapSubscribe_WasRecovering(t *testing.T) {
 	// Recovery join — should have WasRecovering and Recovered.
 	result = subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseLive,
 		Recover: true,
 		Offset:  savedOffset,
@@ -3232,7 +3258,7 @@ func TestMapSubscribe_EmptyEpochAdoption(t *testing.T) {
 	// Subscribe — MemoryMapBroker creates an epoch even for empty channels.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -3374,7 +3400,7 @@ func TestMapSubscribe_RealEpochMismatch(t *testing.T) {
 	// Subscribe — client will get the real epoch from ReadState.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -3428,7 +3454,7 @@ func TestMapSubscribe_RecoveryEmptyEpochGuard(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err = client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseLive,
 		Offset:  0,
 		Epoch:   "", // Empty epoch from original subscription when no data existed.
@@ -3471,7 +3497,7 @@ func TestMapSubscribe_RecoveryEmptyEpochGuard_StreamPhase(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err = client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseStream,
 		Offset:  0,
 		Epoch:   "", // Empty epoch.
@@ -3516,7 +3542,7 @@ func TestMapSubscribe_RecoveryMatchingEpoch(t *testing.T) {
 	// Recovery with matching epoch — should succeed.
 	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseLive,
 		Offset:  res.Position.Offset,
 		Epoch:   epoch,
@@ -3565,7 +3591,7 @@ func TestMapSubscribe_RecoveryAfterClear(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err = client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseLive,
 		Offset:  res.Position.Offset,
 		Epoch:   oldEpoch,
@@ -3608,7 +3634,7 @@ func TestMapSubscribe_EpochInFirstPublication(t *testing.T) {
 	// Subscribe to map channel (live phase, no state to catch up).
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: channel,
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 		Phase:   MapPhaseState,
 		Limit:   100,
 	})
@@ -3996,7 +4022,7 @@ func TestMapSubscribe_WithOnlyEmitPresence_Regression(t *testing.T) {
 	// Subscribe to map channel.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: "test_map",
-		Type:    1,
+		Type:    int32(SubscriptionTypeMap),
 	})
 
 	// Verify flags.

@@ -756,9 +756,9 @@ func (c *Client) handleMapTransitionToLive(
 			Offset: latestOffset,
 			Epoch:  streamPos.Epoch,
 		},
-		metaTTLSeconds:                 int64(opts.HistoryMetaTTL.Seconds()),
-		positionCheckTime:              time.Now().Unix(),
-		Source:                         opts.Source,
+		metaTTLSeconds:           int64(opts.HistoryMetaTTL.Seconds()),
+		positionCheckTime:        time.Now().Unix(),
+		Source:                   opts.Source,
 		mapClientPresenceChannel: opts.MapClientPresenceChannel,
 		mapUserPresenceChannel:   opts.MapUserPresenceChannel,
 	}
@@ -1316,7 +1316,7 @@ func (c *Client) addMapUserPresence(presenceChannel string) error {
 // updateMapPresence updates presence for a map channel using MapBroker.
 // This is called periodically by updateChannelPresence to refresh the TTL.
 // Handles presence channels based on configured prefixes.
-func (c *Client) updateMapPresence(channel string, info *ClientInfo, ctx ChannelContext) error {
+func (c *Client) updateMapPresence(info *ClientInfo, ctx ChannelContext) error {
 	// Use KeyModeIfNew with RefreshTTLOnSuppress for TTL refresh:
 	// - Since key already exists, publish is suppressed (no offset increment)
 	// - TTL is refreshed without generating stream entries
