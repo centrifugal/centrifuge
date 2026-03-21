@@ -70,7 +70,10 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 		}
 
 		// Register channel with flagKeyed | flagSubscribed | flagClientSideRefresh.
-		flags := flagSubscribed | flagKeyed | flagClientSideRefresh
+		// flagDeltaAllowed is set unconditionally because keyed channels manage
+		// per-key delta readiness in keyedWritePublication — the channel-level
+		// first-full-then-delta progression does not apply.
+		flags := flagSubscribed | flagKeyed | flagClientSideRefresh | flagDeltaAllowed
 		if reply.Options.EmitPresence {
 			flags |= flagEmitPresence
 		}

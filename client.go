@@ -3978,8 +3978,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 				c.mu.RUnlock()
 				return nil
 			}
-			isKeyed := channelHasFlag(channelContext.flags, flagKeyed)
-			deltaAllowed := isKeyed || channelHasFlag(channelContext.flags, flagDeltaAllowed)
+			deltaAllowed := channelHasFlag(channelContext.flags, flagDeltaAllowed)
 			c.mu.RUnlock()
 
 			if deltaAllowed {
@@ -3988,16 +3987,13 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 				}
 				return c.writeEncodedPushData(prep.localDeltaData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
 			}
-			// For non-keyed channels: set flagDeltaAllowed so subsequent pubs use delta.
-			// Keyed channels manage per-key delta readiness in keyedWritePublication.
-			if !isKeyed {
-				c.mu.Lock()
-				if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
-					chCtx.flags |= flagDeltaAllowed
-					c.channels[ch] = chCtx
-				}
-				c.mu.Unlock()
+			// Set flagDeltaAllowed so subsequent pubs use delta.
+			c.mu.Lock()
+			if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
+				chCtx.flags |= flagDeltaAllowed
+				c.channels[ch] = chCtx
 			}
+			c.mu.Unlock()
 		}
 
 		if c.node.logEnabled(LogLevelTrace) {
