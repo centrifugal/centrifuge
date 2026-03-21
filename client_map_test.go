@@ -3684,10 +3684,7 @@ func TestStreamSubscribe_WithMapClientPresence(t *testing.T) {
 	client := newTestConnectedClientV2(t, node, "user1")
 	subscribeClientV2(t, client, "test_channel")
 
-	// Wait for async map presence goroutine to finish.
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify flags.
+	// Verify flags (set synchronously in subscribeCmd).
 	client.mu.RLock()
 	chCtx := client.channels["test_channel"]
 	client.mu.RUnlock()
@@ -3695,19 +3692,18 @@ func TestStreamSubscribe_WithMapClientPresence(t *testing.T) {
 	require.False(t, channelHasFlag(chCtx.flags, flagMap), "flagMap should not be set for stream subscribe")
 	require.Equal(t, presenceChannel, chCtx.mapClientPresenceChannel)
 
-	// Verify presence added to MapBroker.
-	state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
-	require.NoError(t, err)
-	require.Len(t, state.Publications, 1)
-	require.Equal(t, client.uid, state.Publications[0].Key)
+	// Verify presence added to MapBroker (async goroutine).
+	require.Eventually(t, func() bool {
+		state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+		return err == nil && len(state.Publications) == 1 && state.Publications[0].Key == client.uid
+	}, time.Second, 50*time.Millisecond)
 
 	// Unsubscribe — verify presence removed.
 	client.Unsubscribe("test_channel")
-	time.Sleep(50 * time.Millisecond)
-
-	state, err = node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
-	require.NoError(t, err)
-	require.Len(t, state.Publications, 0)
+	require.Eventually(t, func() bool {
+		state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+		return err == nil && len(state.Publications) == 0
+	}, time.Second, 50*time.Millisecond)
 }
 
 // TestStreamSubscribe_WithMapPresenceDisconnect verifies that disconnect cleans up
@@ -3730,20 +3726,18 @@ func TestStreamSubscribe_WithMapPresenceDisconnect(t *testing.T) {
 	client := newTestConnectedClientV2(t, node, "user1")
 	subscribeClientV2(t, client, "test_channel")
 
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify presence exists before disconnect.
-	state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
-	require.NoError(t, err)
-	require.Len(t, state.Publications, 1)
+	// Verify presence exists before disconnect (async goroutine).
+	require.Eventually(t, func() bool {
+		state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+		return err == nil && len(state.Publications) == 1
+	}, time.Second, 50*time.Millisecond)
 
 	// Disconnect — verify presence cleaned up.
 	_ = client.close(DisconnectForceNoReconnect)
-	time.Sleep(50 * time.Millisecond)
-
-	state, err = node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
-	require.NoError(t, err)
-	require.Len(t, state.Publications, 0)
+	require.Eventually(t, func() bool {
+		state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+		return err == nil && len(state.Publications) == 0
+	}, time.Second, 50*time.Millisecond)
 }
 
 // TestStreamSubscribe_WithMapUserPresence verifies that user presence is NOT removed
@@ -3766,21 +3760,19 @@ func TestStreamSubscribe_WithMapUserPresence(t *testing.T) {
 	client := newTestConnectedClientV2(t, node, "user1")
 	subscribeClientV2(t, client, "test_channel")
 
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify user presence added.
-	state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
-	require.NoError(t, err)
-	require.Len(t, state.Publications, 1)
-	require.Equal(t, "user1", state.Publications[0].Key)
+	// Verify user presence added (async goroutine).
+	require.Eventually(t, func() bool {
+		state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+		return err == nil && len(state.Publications) == 1 && state.Publications[0].Key == "user1"
+	}, time.Second, 50*time.Millisecond)
 
 	// Unsubscribe — user presence should NOT be removed (TTL-based expiry).
 	client.Unsubscribe("test_channel")
-	time.Sleep(50 * time.Millisecond)
-
-	state, err = node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
-	require.NoError(t, err)
-	require.Len(t, state.Publications, 1, "user presence should not be removed on unsubscribe")
+	// Give unsubscribe time to process, then verify presence still exists.
+	require.Never(t, func() bool {
+		state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+		return err != nil || len(state.Publications) == 0
+	}, 100*time.Millisecond, 10*time.Millisecond, "user presence should not be removed on unsubscribe")
 }
 
 // TestStreamSubscribe_WithRegularAndMapPresence verifies that regular presence and
@@ -3804,28 +3796,25 @@ func TestStreamSubscribe_WithRegularAndMapPresence(t *testing.T) {
 	client := newTestConnectedClientV2(t, node, "user1")
 	subscribeClientV2(t, client, "test_channel")
 
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify both flags set.
+	// Verify both flags set (synchronous).
 	client.mu.RLock()
 	chCtx := client.channels["test_channel"]
 	client.mu.RUnlock()
 	require.True(t, channelHasFlag(chCtx.flags, flagEmitPresence))
 	require.True(t, channelHasFlag(chCtx.flags, flagMapClientPresence))
 
-	// Verify map presence added.
-	state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
-	require.NoError(t, err)
-	require.Len(t, state.Publications, 1)
+	// Verify map presence added (async goroutine).
+	require.Eventually(t, func() bool {
+		state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+		return err == nil && len(state.Publications) == 1
+	}, time.Second, 50*time.Millisecond)
 
 	// Unsubscribe — both should be cleaned up.
 	client.Unsubscribe("test_channel")
-	time.Sleep(50 * time.Millisecond)
-
-	// Map client presence should be removed.
-	state, err = node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
-	require.NoError(t, err)
-	require.Len(t, state.Publications, 0)
+	require.Eventually(t, func() bool {
+		state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+		return err == nil && len(state.Publications) == 0
+	}, time.Second, 50*time.Millisecond)
 }
 
 // TestStreamSubscribe_MapPresencePeriodicUpdate verifies that updateChannelPresence
@@ -3847,7 +3836,12 @@ func TestStreamSubscribe_MapPresencePeriodicUpdate(t *testing.T) {
 
 	client := newTestConnectedClientV2(t, node, "user1")
 	subscribeClientV2(t, client, "test_channel")
-	time.Sleep(50 * time.Millisecond)
+
+	// Wait for async presence setup before testing periodic update.
+	require.Eventually(t, func() bool {
+		state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+		return err == nil && len(state.Publications) == 1
+	}, time.Second, 50*time.Millisecond)
 
 	// Call updateChannelPresence directly — should not error.
 	client.mu.RLock()
@@ -3919,9 +3913,7 @@ func TestSharedPollSubscribe_WithMapPresence(t *testing.T) {
 	client := newTestConnectedClientV2(t, node, "user1")
 	subscribeSharedPollClient(t, client, "test_channel")
 
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify flags.
+	// Verify flags (synchronous).
 	client.mu.RLock()
 	chCtx := client.channels["test_channel"]
 	client.mu.RUnlock()
@@ -3929,18 +3921,18 @@ func TestSharedPollSubscribe_WithMapPresence(t *testing.T) {
 	require.True(t, channelHasFlag(chCtx.flags, flagKeyed))
 	require.Equal(t, presenceChannel, chCtx.mapClientPresenceChannel)
 
-	// Verify presence added to MapBroker.
-	state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
-	require.NoError(t, err)
-	require.Len(t, state.Publications, 1)
+	// Verify presence added to MapBroker (async goroutine).
+	require.Eventually(t, func() bool {
+		state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+		return err == nil && len(state.Publications) == 1
+	}, time.Second, 50*time.Millisecond)
 
 	// Unsubscribe — verify cleanup.
 	client.Unsubscribe("test_channel")
-	time.Sleep(50 * time.Millisecond)
-
-	state, err = node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
-	require.NoError(t, err)
-	require.Len(t, state.Publications, 0)
+	require.Eventually(t, func() bool {
+		state, err := node.MapStateRead(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+		return err == nil && len(state.Publications) == 0
+	}, time.Second, 50*time.Millisecond)
 }
 
 // TestSharedPollSubscribe_WithRegularPresence verifies that shared poll subscribe
