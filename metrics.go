@@ -66,17 +66,29 @@ type metrics struct {
 	commandDurationSubRefresh    prometheus.Observer
 	commandDurationUnknown       prometheus.Observer
 
-	broadcastDurationHistogram *prometheus.HistogramVec
-	pubSubLagHistogram         *prometheus.HistogramVec
-	pingPongDurationHistogram  *prometheus.HistogramVec
-	mapPublishSuppressedCount        *prometheus.CounterVec
-	mapBrokerCleanupLag              *prometheus.GaugeVec
-	mapBrokerCleanupKeysRemoved      *prometheus.CounterVec
-	mapBrokerCleanupErrors           *prometheus.CounterVec
+	broadcastDurationHistogram  *prometheus.HistogramVec
+	pubSubLagHistogram          *prometheus.HistogramVec
+	pingPongDurationHistogram   *prometheus.HistogramVec
+	mapPublishSuppressedCount   *prometheus.CounterVec
+	mapBrokerCleanupLag         *prometheus.GaugeVec
+	mapBrokerCleanupKeysRemoved *prometheus.CounterVec
+	mapBrokerCleanupErrors      *prometheus.CounterVec
 
 	redisBrokerPubSubErrors           *prometheus.CounterVec
 	redisBrokerPubSubDroppedMessages  *prometheus.CounterVec
 	redisBrokerPubSubBufferedMessages *prometheus.GaugeVec
+
+	// Shared poll metrics.
+	sharedPollCycleDurationHistogram     *prometheus.HistogramVec
+	sharedPollCycleWorkDurationHistogram *prometheus.HistogramVec
+	sharedPollHandlerDurationHistogram   *prometheus.HistogramVec
+	sharedPollSemWaitDurationHistogram   *prometheus.HistogramVec
+	sharedPollHandlerErrorCount          *prometheus.CounterVec
+	sharedPollItemsCount                 *prometheus.CounterVec
+	sharedPollNotifyCount                *prometheus.CounterVec
+	sharedPollPublishCount               *prometheus.CounterVec
+	sharedPollNumChannelsGauge           prometheus.Gauge
+	sharedPollNumKeysGauge               prometheus.Gauge
 
 	config MetricsConfig
 
@@ -91,8 +103,12 @@ type metrics struct {
 	messagesSentCache              sync.Map
 	messagesReceivedCache          sync.Map
 	tagsFilterDroppedCache         sync.Map
-	mapPublishSuppressedCache sync.Map
+	mapPublishSuppressedCache      sync.Map
 	pubSubLagCache                 sync.Map
+	sharedPollHandlerCache         sync.Map
+	sharedPollResultCache          sync.Map
+	sharedPollChannelCache         sync.Map
+	sharedPollPublishCache         sync.Map
 	nsCache                        *otter.Cache[string, string]
 	codeStrings                    map[uint32]string
 }
@@ -390,6 +406,93 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "Total number of cleanup errors.",
 	}, []string{"broker_name"})
 
+	sharedPollDurationBuckets := []float64{
+		0.010, 0.025, 0.050, 0.100, 0.250, 0.500, // Millisecond resolution.
+		1.0, 2.5, 5.0, 10.0, 30.0, 60.0, // Second resolution.
+	}
+	sharedPollHandlerBuckets := []float64{
+		0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, // Millisecond resolution.
+		1.0, 2.5, 5.0, 10.0, 30.0, // Second resolution.
+	}
+	sharedPollSemWaitBuckets := []float64{
+		0.0001, 0.0005, 0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, // Millisecond resolution.
+		1.0, 2.5, 5.0, 10.0, 30.0, // Second resolution.
+	}
+
+	m.sharedPollCycleDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "shared_poll",
+		Name:      "cycle_duration_seconds",
+		Help:      "Full timer cycle duration in seconds.",
+		Buckets:   sharedPollDurationBuckets,
+	}, []string{"channel_namespace"})
+
+	m.sharedPollCycleWorkDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "shared_poll",
+		Name:      "cycle_work_duration_seconds",
+		Help:      "Cycle work time in seconds (minus spread delay).",
+		Buckets:   sharedPollDurationBuckets,
+	}, []string{"channel_namespace"})
+
+	m.sharedPollHandlerDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "shared_poll",
+		Name:      "handler_duration_seconds",
+		Help:      "Handler call latency in seconds.",
+		Buckets:   sharedPollHandlerBuckets,
+	}, []string{"trigger", "channel_namespace"})
+
+	m.sharedPollSemWaitDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "shared_poll",
+		Name:      "sem_wait_duration_seconds",
+		Help:      "Semaphore wait duration in seconds.",
+		Buckets:   sharedPollSemWaitBuckets,
+	}, []string{"trigger", "channel_namespace"})
+
+	m.sharedPollHandlerErrorCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "shared_poll",
+		Name:      "handler_error_count",
+		Help:      "Number of handler errors.",
+	}, []string{"trigger", "channel_namespace"})
+
+	m.sharedPollItemsCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "shared_poll",
+		Name:      "items_count",
+		Help:      "Number of items by result.",
+	}, []string{"trigger", "result", "channel_namespace"})
+
+	m.sharedPollNotifyCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "shared_poll",
+		Name:      "notify_count",
+		Help:      "Number of notifications received.",
+	}, []string{"channel_namespace"})
+
+	m.sharedPollPublishCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "shared_poll",
+		Name:      "publish_count",
+		Help:      "Number of direct publish operations by result.",
+	}, []string{"result", "channel_namespace"})
+
+	m.sharedPollNumChannelsGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "shared_poll",
+		Name:      "num_channels",
+		Help:      "Number of active shared poll channels.",
+	})
+
+	m.sharedPollNumKeysGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "shared_poll",
+		Name:      "num_keys",
+		Help:      "Total number of tracked keys.",
+	})
+
 	m.redisBrokerPubSubErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "broker",
@@ -478,6 +581,16 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.redisBrokerPubSubErrors,
 		m.redisBrokerPubSubDroppedMessages,
 		m.redisBrokerPubSubBufferedMessages,
+		m.sharedPollCycleDurationHistogram,
+		m.sharedPollCycleWorkDurationHistogram,
+		m.sharedPollHandlerDurationHistogram,
+		m.sharedPollSemWaitDurationHistogram,
+		m.sharedPollHandlerErrorCount,
+		m.sharedPollItemsCount,
+		m.sharedPollNotifyCount,
+		m.sharedPollPublishCount,
+		m.sharedPollNumChannelsGauge,
+		m.sharedPollNumKeysGauge,
 	} {
 		if err := registerer.Register(collector); err != nil && !errors.As(err, &alreadyRegistered) {
 			return nil, err
@@ -919,6 +1032,103 @@ func (m *metrics) addMapBrokerCleanupKeysRemoved(name string, count int64) {
 
 func (m *metrics) incMapBrokerCleanupErrors(name string) {
 	m.mapBrokerCleanupErrors.WithLabelValues(name).Inc()
+}
+
+// Shared poll cached metric bundles and helpers.
+
+type sharedPollTriggerNsLabels struct {
+	Trigger          string
+	ChannelNamespace string
+}
+
+type sharedPollHandlerCached struct {
+	errorCount  prometheus.Counter
+	itemsPolled prometheus.Counter
+	duration    prometheus.Observer
+	semWait     prometheus.Observer
+}
+
+type sharedPollResultCached struct {
+	changed   prometheus.Counter
+	unchanged prometheus.Counter
+	removed   prometheus.Counter
+}
+
+type sharedPollChannelCached struct {
+	cycleDuration     prometheus.Observer
+	cycleWorkDuration prometheus.Observer
+	notifyCount       prometheus.Counter
+}
+
+type sharedPollPublishCached struct {
+	applied prometheus.Counter
+	skipped prometheus.Counter
+}
+
+func (m *metrics) getSharedPollHandlerCached(trigger, ch string) sharedPollHandlerCached {
+	channelNamespace := m.getChannelNamespaceLabel(ch)
+	labels := sharedPollTriggerNsLabels{Trigger: trigger, ChannelNamespace: channelNamespace}
+	cached, ok := m.sharedPollHandlerCache.Load(labels)
+	if !ok {
+		cached = sharedPollHandlerCached{
+			errorCount:  m.sharedPollHandlerErrorCount.WithLabelValues(trigger, channelNamespace),
+			itemsPolled: m.sharedPollItemsCount.WithLabelValues(trigger, "polled", channelNamespace),
+			duration:    m.sharedPollHandlerDurationHistogram.WithLabelValues(trigger, channelNamespace),
+			semWait:     m.sharedPollSemWaitDurationHistogram.WithLabelValues(trigger, channelNamespace),
+		}
+		m.sharedPollHandlerCache.Store(labels, cached)
+	}
+	return cached.(sharedPollHandlerCached)
+}
+
+func (m *metrics) getSharedPollResultCached(trigger, ch string) sharedPollResultCached {
+	channelNamespace := m.getChannelNamespaceLabel(ch)
+	labels := sharedPollTriggerNsLabels{Trigger: trigger, ChannelNamespace: channelNamespace}
+	cached, ok := m.sharedPollResultCache.Load(labels)
+	if !ok {
+		cached = sharedPollResultCached{
+			changed:   m.sharedPollItemsCount.WithLabelValues(trigger, "changed", channelNamespace),
+			unchanged: m.sharedPollItemsCount.WithLabelValues(trigger, "unchanged", channelNamespace),
+			removed:   m.sharedPollItemsCount.WithLabelValues(trigger, "removed", channelNamespace),
+		}
+		m.sharedPollResultCache.Store(labels, cached)
+	}
+	return cached.(sharedPollResultCached)
+}
+
+func (m *metrics) getSharedPollChannelCached(ch string) sharedPollChannelCached {
+	channelNamespace := m.getChannelNamespaceLabel(ch)
+	cached, ok := m.sharedPollChannelCache.Load(channelNamespace)
+	if !ok {
+		cached = sharedPollChannelCached{
+			cycleDuration:     m.sharedPollCycleDurationHistogram.WithLabelValues(channelNamespace),
+			cycleWorkDuration: m.sharedPollCycleWorkDurationHistogram.WithLabelValues(channelNamespace),
+			notifyCount:       m.sharedPollNotifyCount.WithLabelValues(channelNamespace),
+		}
+		m.sharedPollChannelCache.Store(channelNamespace, cached)
+	}
+	return cached.(sharedPollChannelCached)
+}
+
+func (m *metrics) getSharedPollPublishCached(ch string) sharedPollPublishCached {
+	channelNamespace := m.getChannelNamespaceLabel(ch)
+	cached, ok := m.sharedPollPublishCache.Load(channelNamespace)
+	if !ok {
+		cached = sharedPollPublishCached{
+			applied: m.sharedPollPublishCount.WithLabelValues("applied", channelNamespace),
+			skipped: m.sharedPollPublishCount.WithLabelValues("skipped", channelNamespace),
+		}
+		m.sharedPollPublishCache.Store(channelNamespace, cached)
+	}
+	return cached.(sharedPollPublishCached)
+}
+
+func (m *metrics) setSharedPollNumChannels(n float64) {
+	m.sharedPollNumChannelsGauge.Set(n)
+}
+
+func (m *metrics) setSharedPollNumKeys(n float64) {
+	m.sharedPollNumKeysGauge.Set(n)
 }
 
 // getAcceptProtocolLabel returns the transport accept protocol label based on HTTP version.

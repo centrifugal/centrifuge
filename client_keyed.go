@@ -140,17 +140,46 @@ func (c *Client) handleKeyedTrack(req *protocol.SubRefreshRequest, cmd *protocol
 		}
 		keyedOpts := opts.toKeyedChannelOptions()
 		c.node.keyedManager.getOrCreateChannel(channel, keyedOpts)
-		hub := c.node.keyedManager.getHub(channel)
 
-		// Register in keyedHub and SharedPollManager.
+		// Step 1: Register in SharedPollManager (ensures channel/key state exists).
+		// Do NOT addSubscriber yet — client must not receive broadcasts before response.
+		// Collect new (cold) keys with version=0 so we can auto-notify AFTER
+		// addSubscriber. Only version=0 ("I have no data") warrants an immediate
+		// backend call — clients with existing data can wait for the regular poll cycle.
+		var newKeys []string
 		for _, it := range req.Items {
-			hub.addSubscriber(it.Key, c)
 			if c.node.sharedPollManager != nil {
-				c.node.sharedPollManager.track(channel, opts, it.Key)
+				if c.node.sharedPollManager.track(channel, opts, it.Key) && it.Version == 0 {
+					newKeys = append(newKeys, it.Key)
+				}
 			}
 		}
 
-		// Build response.
+		// Step 2: Collect cached data for items where server has newer version.
+		var cachedItems []*protocol.Publication
+		if c.node.sharedPollManager != nil {
+			cachedItems = c.node.sharedPollManager.getCachedData(channel, items)
+		}
+
+		// Step 3: Update per-connection versions for cached items to prevent
+		// duplicate delivery via subsequent broadcasts.
+		if len(cachedItems) > 0 {
+			c.mu.Lock()
+			if c.keyed != nil {
+				chanKeys := c.keyed.trackedKeys[channel]
+				for _, pub := range cachedItems {
+					if ks, ok := chanKeys[pub.Key]; ok {
+						if pub.Version > ks.version {
+							ks.version = pub.Version
+							ks.deltaReady = true
+						}
+					}
+				}
+			}
+			c.mu.Unlock()
+		}
+
+		// Step 4: Build and write response (enqueued before any broadcasts).
 		res := &protocol.SubRefreshResult{}
 		if reply.ExpireAt > 0 {
 			nowUnix := time.Now().Unix()
@@ -158,6 +187,9 @@ func (c *Client) handleKeyedTrack(req *protocol.SubRefreshRequest, cmd *protocol
 			if reply.ExpireAt > nowUnix {
 				res.Ttl = uint32(reply.ExpireAt - nowUnix)
 			}
+		}
+		if len(cachedItems) > 0 {
+			res.Items = cachedItems
 		}
 
 		protoReply, err := c.getSubRefreshCommandReply(res)
@@ -168,6 +200,23 @@ func (c *Client) handleKeyedTrack(req *protocol.SubRefreshRequest, cmd *protocol
 		c.writeEncodedCommandReply(channel, protocol.FrameTypeSubRefresh, cmd, protoReply, rw)
 		c.handleCommandFinished(cmd, protocol.FrameTypeSubRefresh, nil, protoReply, started, channel)
 		c.releaseSubRefreshCommandReply(protoReply)
+
+		// Step 5: NOW register in hub — client starts receiving broadcasts.
+		// Response is already enqueued, so broadcasts are ordered after it.
+		// keyedWritePublication checks pubVersion <= keyState.version, so cached
+		// items won't be re-delivered.
+		hub := c.node.keyedManager.getHub(channel)
+		for _, it := range req.Items {
+			hub.addSubscriber(it.Key, c)
+		}
+
+		// Step 6: Auto-notify cold keys AFTER addSubscriber so the broadcast
+		// from the notified refresh can reach this client.
+		if c.node.sharedPollManager != nil && len(newKeys) > 0 {
+			for _, key := range newKeys {
+				c.node.sharedPollManager.notify(channel, key)
+			}
+		}
 	})
 	return nil
 }

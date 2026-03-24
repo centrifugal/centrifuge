@@ -36,6 +36,8 @@ type Publication struct {
 	Removed bool
 	// Score is used for ordered map subscriptions (leaderboards, priority queues).
 	Score int64
+	// Version of the publication. Used by SharedPoll for stale-check.
+	Version uint64
 }
 
 // ClientInfo contains information about client connection.

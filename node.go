@@ -430,6 +430,11 @@ func (n *Node) updateGauges() {
 	n.metrics.setNumSubscriptions(float64(n.hub.NumSubscriptions()))
 	n.metrics.setNumChannels(float64(n.hub.NumChannels()))
 	n.metrics.setNumNodes(float64(n.nodes.size()))
+	if n.sharedPollManager != nil {
+		numCh, numKeys := n.sharedPollManager.stats()
+		n.metrics.setSharedPollNumChannels(float64(numCh))
+		n.metrics.setSharedPollNumKeys(float64(numKeys))
+	}
 	version := n.config.Version
 	if version == "" {
 		version = "_"
@@ -1469,6 +1474,7 @@ func pubToProto(pub *Publication) *protocol.Publication {
 		Removed: pub.Removed,
 		Key:     pub.Key,
 		Score:   pub.Score,
+		Version: pub.Version,
 	}
 }
 
@@ -1487,6 +1493,7 @@ func pubFromProto(pub *protocol.Publication) *Publication {
 		Key:     pub.GetKey(),
 		Removed: pub.GetRemoved(),
 		Score:   pub.GetScore(),
+		Version: pub.GetVersion(),
 	}
 }
 
@@ -1911,10 +1918,26 @@ func (n *Node) SharedPollNotify(notifications []SharedPollNotificationItem) {
 	}
 }
 
+// SharedPollPublish pushes data directly to a SharedPoll channel for a specific key.
+// The version must be in the same space as versions returned by the OnSharedPoll handler —
+// stale versions (≤ current) are ignored. When PublishEnabled is set in channel options,
+// the publication is distributed to all nodes via Broker PUB/SUB. Otherwise, local-only.
+func (n *Node) SharedPollPublish(ctx context.Context, channel string, key string, version uint64, data []byte) error {
+	if n.sharedPollManager == nil {
+		return errors.New("shared poll manager not initialized")
+	}
+	return n.sharedPollManager.publish(ctx, channel, key, version, data)
+}
+
 // HandlePublication coming from Broker.
 func (n *Node) HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 	if pub == nil {
 		panic("nil Publication received, this must never happen")
+	}
+	// Route shared poll channel publications to SharedPollManager.
+	if n.sharedPollManager != nil && pub.Key != "" && n.sharedPollManager.hasChannel(ch) {
+		n.sharedPollManager.handlePublishedData(ch, pub.Key, pub.Version, pub.Data)
+		return nil
 	}
 	// Deliver epoch in the first publication (offset==1) so clients learn
 	// the channel epoch. This covers first-ever publish and post-Clear

@@ -108,6 +108,7 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Pub
 		Key:     opts.Key,
 		Removed: opts.Removed,
 		Score:   opts.Score,
+		Version: opts.Version,
 	}
 	var prevPub *Publication
 	if opts.HistorySize > 0 && opts.HistoryTTL > 0 {

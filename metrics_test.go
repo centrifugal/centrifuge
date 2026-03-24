@@ -262,6 +262,33 @@ func TestMetrics(t *testing.T) {
 				m.setNumUsers(300)
 				m.setNumNodes(4)
 				m.setNumSubscriptions(500)
+
+				// Shared poll metrics.
+				cc := m.getSharedPollChannelCached("channel" + strconv.Itoa(i%2))
+				cc.cycleDuration.Observe(1.5)
+				cc.cycleWorkDuration.Observe(1.0)
+				cc.notifyCount.Inc()
+
+				for _, trigger := range []string{"timer", "notification"} {
+					ch := "channel" + strconv.Itoa(i%2)
+					hc := m.getSharedPollHandlerCached(trigger, ch)
+					hc.duration.Observe(0.05)
+					hc.semWait.Observe(0.001)
+					hc.errorCount.Inc()
+					hc.itemsPolled.Add(100)
+
+					rc := m.getSharedPollResultCached(trigger, ch)
+					rc.changed.Add(5)
+					rc.unchanged.Add(90)
+					rc.removed.Add(2)
+				}
+
+				pc := m.getSharedPollPublishCached("channel" + strconv.Itoa(i%2))
+				pc.applied.Inc()
+				pc.skipped.Inc()
+
+				m.setSharedPollNumChannels(10)
+				m.setSharedPollNumKeys(500)
 			}
 		})
 	}
@@ -304,4 +331,44 @@ func Test_getHTTPTransportProto(t *testing.T) {
 			}
 		})
 	}
+}
+
+func BenchmarkSharedPollHandlerCached(b *testing.B) {
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(b, err)
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			hc := m.getSharedPollHandlerCached("timer", "channel"+strconv.Itoa(i%10))
+			hc.duration.Observe(0.05)
+			hc.itemsPolled.Add(100)
+			i++
+		}
+	})
+}
+
+func BenchmarkSharedPollResultCached(b *testing.B) {
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(b, err)
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			rc := m.getSharedPollResultCached("timer", "channel"+strconv.Itoa(i%10))
+			rc.changed.Add(5)
+			rc.unchanged.Add(90)
+			i++
+		}
+	})
 }

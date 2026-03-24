@@ -34,7 +34,7 @@ func benchRefreshCycle(b *testing.B, numKeys int, latency time.Duration) {
 	node, err := New(Config{
 		GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
 			return SharedPollChannelOptions{
-				RefreshInterval:      time.Hour, // we drive cycles manually
+				RefreshInterval:      time.Hour, // long: we drive cycles manually
 				RefreshBatchSize:     1000,
 				MaxKeysPerConnection: numKeys + 1,
 			}, true
@@ -75,12 +75,23 @@ func benchRefreshCycle(b *testing.B, numKeys int, latency time.Duration) {
 	// Ensure keyed hub exists.
 	node.keyedManager.getOrCreateChannel("bench:ch", KeyedChannelOptions{})
 
+	// Stop the background refresh worker and override RefreshInterval for
+	// spread delay calculation (time.Hour would cause multi-minute chunk delays).
+	s := mgr.channels["bench:ch"]
+	s.mu.Lock()
+	if s.workerCancel != nil {
+		s.workerCancel()
+	}
+	s.opts.RefreshInterval = time.Millisecond
+	s.mu.Unlock()
+	time.Sleep(10 * time.Millisecond) // let worker goroutine exit
+
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
 		callCount.Store(int64(i + 1))
-		mgr.channels["bench:ch"].runRefreshCycle(context.Background(), node, "bench:ch", mgr.sem)
+		s.runRefreshCycle(context.Background(), node, "bench:ch", mgr.sem)
 	}
 
 	b.ReportMetric(float64(callCount.Load()-int64(b.N)), "extra_calls")
@@ -125,7 +136,7 @@ func benchLargeChannel(b *testing.B, totalKeys, batchSize int, latency time.Dura
 		SharedPollConcurrencyLimit: concurrency,
 		GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
 			return SharedPollChannelOptions{
-				RefreshInterval:      time.Hour,
+				RefreshInterval:      time.Hour, // long: we drive cycles manually
 				RefreshBatchSize:     batchSize,
 				MaxKeysPerConnection: totalKeys + 1,
 			}, true
@@ -164,12 +175,23 @@ func benchLargeChannel(b *testing.B, totalKeys, batchSize int, latency time.Dura
 
 	node.keyedManager.getOrCreateChannel("bench:ch", KeyedChannelOptions{})
 
+	// Stop the background refresh worker and override RefreshInterval for
+	// spread delay calculation (time.Hour would cause multi-minute chunk delays).
+	s := mgr.channels["bench:ch"]
+	s.mu.Lock()
+	if s.workerCancel != nil {
+		s.workerCancel()
+	}
+	s.opts.RefreshInterval = time.Millisecond
+	s.mu.Unlock()
+	time.Sleep(10 * time.Millisecond) // let worker goroutine exit
+
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
 		batchCount.Store(0)
-		mgr.channels["bench:ch"].runRefreshCycle(context.Background(), node, "bench:ch", mgr.sem)
+		s.runRefreshCycle(context.Background(), node, "bench:ch", mgr.sem)
 	}
 
 	b.ReportMetric(float64(batchCount.Load()), "batches/poll")

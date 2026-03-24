@@ -7,6 +7,7 @@ replace github.com/centrifugal/protocol => ../protocol
 require (
 	github.com/FZambia/eagle v0.2.0
 	github.com/centrifugal/protocol v0.18.2
+	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/google/cel-go v0.27.0
 	github.com/google/uuid v1.6.0
 	github.com/maypok86/otter/v2 v2.3.0
@@ -25,7 +26,6 @@ require (
 	cel.dev/expr v0.25.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect

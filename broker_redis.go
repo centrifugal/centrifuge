@@ -632,6 +632,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		Offset:   opts.Offset,
 		Epoch:    opts.Epoch,
 		PrevData: opts.PrevData,
+		Version:  opts.Version,
 	}
 	if opts.HistorySize <= 0 || opts.HistoryTTL <= 0 {
 		// In no history case we communicate delta flag over Publication field. This field is then

@@ -96,6 +96,10 @@ func subscribeSharedPollClient(t testing.TB, client *Client, channel string) *pr
 }
 
 func trackSharedPollClient(t testing.TB, client *Client, channel string, items []*protocol.KeyedItem) {
+	trackSharedPollClientWithReply(t, client, channel, items)
+}
+
+func trackSharedPollClientWithReply(t testing.TB, client *Client, channel string, items []*protocol.KeyedItem) *protocol.SubRefreshResult {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: channel,
@@ -109,6 +113,7 @@ func trackSharedPollClient(t testing.TB, client *Client, channel string, items [
 		return len(rwWrapper.replies) > 0
 	}, time.Second, time.Millisecond)
 	require.Nil(t, rwWrapper.replies[0].Error, "track error: %v", rwWrapper.replies[0].Error)
+	return rwWrapper.replies[0].SubRefresh
 }
 
 func untrackSharedPollClient(t testing.TB, client *Client, channel string, keys []string) {
@@ -513,8 +518,8 @@ func TestSharedPollRefresh_VersionIncreased(t *testing.T) {
 	// Wait for publication delivery.
 	require.Eventually(t, func() bool {
 		client.mu.RLock()
+		defer client.mu.RUnlock()
 		ks := client.keyed.trackedKeys["test:channel"]["key1"]
-		client.mu.RUnlock()
 		return ks != nil && ks.version >= 1
 	}, 2*time.Second, 10*time.Millisecond)
 }
@@ -652,8 +657,8 @@ func TestSharedPollRefresh_PublicationFields(t *testing.T) {
 	// Verify publication is delivered by checking per-connection version update.
 	require.Eventually(t, func() bool {
 		client.mu.RLock()
+		defer client.mu.RUnlock()
 		ks := client.keyed.trackedKeys["test:channel"]["key1"]
-		client.mu.RUnlock()
 		return ks != nil && ks.version == 42
 	}, 2*time.Second, 10*time.Millisecond)
 
@@ -1298,8 +1303,8 @@ func TestSharedPollRefresh_MultipleItems(t *testing.T) {
 		// Only 2 of 5 items changed.
 		return SharedPollResult{
 			Items: []SharedPollRefreshItem{
-				{Key: "key2", Data: []byte(`v2`), Version: 1},
-				{Key: "key4", Data: []byte(`v4`), Version: 1},
+				{Key: "key2", Data: []byte(`{"v":2}`), Version: 1},
+				{Key: "key4", Data: []byte(`{"v":4}`), Version: 1},
 			},
 		}, nil
 	})
@@ -1394,12 +1399,16 @@ func TestSharedPollRefresh_PerConnectionDelivery(t *testing.T) {
 }
 
 func TestSharedPollRefresh_TwoClientsOverlap(t *testing.T) {
+	var version atomic.Uint64
+	version.Store(5) // First call returns 6, then 7, etc.
+
 	node := newTestNodeWithSharedPoll(t)
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		v := version.Add(1)
 		return SharedPollResult{
 			Items: []SharedPollRefreshItem{
-				{Key: "key1", Data: []byte(`data`), Version: 6},
+				{Key: "key1", Data: []byte(`data`), Version: v},
 			},
 		}, nil
 	})
@@ -1420,15 +1429,25 @@ func TestSharedPollRefresh_TwoClientsOverlap(t *testing.T) {
 		{Key: "key1", Version: 5},
 	})
 
-	// Both should receive publication (6 > 3 and 6 > 5).
+	// Both should receive publications (version increases each poll cycle).
+	// Auto-notify may deliver first version to client1 before client2 subscribes,
+	// but subsequent timer polls deliver newer versions to both.
 	require.Eventually(t, func() bool {
 		client1.mu.RLock()
 		ks1 := client1.keyed.trackedKeys["test:channel"]["key1"]
+		var v1 uint64
+		if ks1 != nil {
+			v1 = ks1.version
+		}
 		client1.mu.RUnlock()
 		client2.mu.RLock()
 		ks2 := client2.keyed.trackedKeys["test:channel"]["key1"]
+		var v2 uint64
+		if ks2 != nil {
+			v2 = ks2.version
+		}
 		client2.mu.RUnlock()
-		return ks1 != nil && ks1.version == 6 && ks2 != nil && ks2.version == 6
+		return v1 >= 6 && v2 >= 6
 	}, 2*time.Second, 10*time.Millisecond)
 }
 
@@ -1508,9 +1527,11 @@ func TestSharedPollRefresh_AbsenceCustomThreshold(t *testing.T) {
 		{Key: "key1", Version: 0},
 	})
 
-	// After 2 absences, key should still exist (threshold=3).
+	// After 2 timer-poll absences, key should still exist (threshold=3).
+	// Auto-notify for cold key adds 1 extra handler call (notified refresh
+	// doesn't track absences), so wait for 3 total calls (1 auto-notify + 2 timer polls).
 	require.Eventually(t, func() bool {
-		return callCount.Load() >= 2
+		return callCount.Load() >= 3
 	}, 2*time.Second, 10*time.Millisecond)
 
 	// Give time for response processing.
@@ -1982,8 +2003,8 @@ func TestSharedPollDelta_FirstPubIsFull(t *testing.T) {
 	// Wait for first publication delivery.
 	require.Eventually(t, func() bool {
 		client.mu.RLock()
+		defer client.mu.RUnlock()
 		ks := client.keyed.trackedKeys["test:channel"]["key1"]
-		client.mu.RUnlock()
 		return ks != nil && ks.version >= 1
 	}, 2*time.Second, 10*time.Millisecond)
 
@@ -2021,6 +2042,7 @@ func TestSharedPollDelta_SubsequentPubIsDelta(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
 		KeepLatestData:         true,
+		RefreshMode:            SharedPollRefreshModeFull,
 	})
 	setupSharedPollDeltaHandlers(node)
 
@@ -2055,8 +2077,8 @@ func TestSharedPollDelta_SubsequentPubIsDelta(t *testing.T) {
 	// Wait for first publication (version 1).
 	require.Eventually(t, func() bool {
 		client.mu.RLock()
+		defer client.mu.RUnlock()
 		ks := client.keyed.trackedKeys["test:channel"]["key1"]
-		client.mu.RUnlock()
 		return ks != nil && ks.version >= 1
 	}, 2*time.Second, 10*time.Millisecond)
 
@@ -2067,8 +2089,8 @@ func TestSharedPollDelta_SubsequentPubIsDelta(t *testing.T) {
 	// Wait for second publication (version 2).
 	require.Eventually(t, func() bool {
 		client.mu.RLock()
+		defer client.mu.RUnlock()
 		ks := client.keyed.trackedKeys["test:channel"]["key1"]
-		client.mu.RUnlock()
 		return ks != nil && ks.version >= 2
 	}, 2*time.Second, 10*time.Millisecond)
 
@@ -2122,16 +2144,16 @@ func TestSharedPollDelta_MultipleKeysIndependent(t *testing.T) {
 	// Wait for key1's first pub.
 	require.Eventually(t, func() bool {
 		client.mu.RLock()
+		defer client.mu.RUnlock()
 		ks := client.keyed.trackedKeys["test:channel"]["key1"]
-		client.mu.RUnlock()
 		return ks != nil && ks.version >= 1
 	}, 2*time.Second, 10*time.Millisecond)
 
 	// key1 should be deltaReady now.
 	client.mu.RLock()
-	ks1 := client.keyed.trackedKeys["test:channel"]["key1"]
+	ks1DeltaReady := client.keyed.trackedKeys["test:channel"]["key1"].deltaReady
 	client.mu.RUnlock()
-	require.True(t, ks1.deltaReady)
+	require.True(t, ks1DeltaReady)
 
 	// Now track key2.
 	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
@@ -2141,16 +2163,16 @@ func TestSharedPollDelta_MultipleKeysIndependent(t *testing.T) {
 	// Wait for key2's first pub.
 	require.Eventually(t, func() bool {
 		client.mu.RLock()
+		defer client.mu.RUnlock()
 		ks := client.keyed.trackedKeys["test:channel"]["key2"]
-		client.mu.RUnlock()
 		return ks != nil && ks.version >= 1
 	}, 2*time.Second, 10*time.Millisecond)
 
 	// key2 should now be deltaReady independently.
 	client.mu.RLock()
-	ks2 := client.keyed.trackedKeys["test:channel"]["key2"]
+	ks2DeltaReady := client.keyed.trackedKeys["test:channel"]["key2"].deltaReady
 	client.mu.RUnlock()
-	require.True(t, ks2.deltaReady)
+	require.True(t, ks2DeltaReady)
 }
 
 func TestSharedPollDelta_NoDeltaWithoutKeepLatestData(t *testing.T) {
@@ -2193,8 +2215,8 @@ func TestSharedPollDelta_NoDeltaWithoutKeepLatestData(t *testing.T) {
 	// Wait for two publications.
 	require.Eventually(t, func() bool {
 		client.mu.RLock()
+		defer client.mu.RUnlock()
 		ks := client.keyed.trackedKeys["test:channel"]["key1"]
-		client.mu.RUnlock()
 		return ks != nil && ks.version >= 2
 	}, 3*time.Second, 10*time.Millisecond)
 
@@ -2228,6 +2250,7 @@ func TestSharedPollDelta_DeltaApplicable(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
 		KeepLatestData:         true,
+		RefreshMode:            SharedPollRefreshModeFull,
 	})
 	setupSharedPollDeltaHandlers(node)
 
@@ -2262,8 +2285,8 @@ func TestSharedPollDelta_DeltaApplicable(t *testing.T) {
 	// Wait for first publication.
 	require.Eventually(t, func() bool {
 		client.mu.RLock()
+		defer client.mu.RUnlock()
 		ks := client.keyed.trackedKeys["test:channel"]["key1"]
-		client.mu.RUnlock()
 		return ks != nil && ks.version >= 1
 	}, 2*time.Second, 10*time.Millisecond)
 
@@ -2293,8 +2316,8 @@ gotFirst:
 	// Wait for second publication.
 	require.Eventually(t, func() bool {
 		client.mu.RLock()
+		defer client.mu.RUnlock()
 		ks := client.keyed.trackedKeys["test:channel"]["key1"]
-		client.mu.RUnlock()
 		return ks != nil && ks.version >= 2
 	}, 2*time.Second, 10*time.Millisecond)
 
@@ -2592,4 +2615,1100 @@ func TestSharedPollTrackExpiry_NotExpiredYet(t *testing.T) {
 	_, hasA := client.keyed.trackedKeys["test:channel"]["keyA"]
 	client.mu.RUnlock()
 	require.True(t, hasA)
+}
+
+// --- Cached Data on Track Tests ---
+
+func TestSharedPollCachedData_ReturnedOnTrack(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:        100 * time.Millisecond,
+		RefreshBatchSize:       100,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+		KeepLatestData:         true,
+		RefreshMode:            SharedPollRefreshModeFull,
+	})
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "key1", Data: []byte(`{"v":1}`), Version: 1},
+			},
+		}, nil
+	})
+
+	setupSharedPollHandlers(node)
+
+	// Client1 tracks key1 → populates itemIndex via poll.
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// Wait for itemIndex to be populated.
+	require.Eventually(t, func() bool {
+		node.sharedPollManager.mu.RLock()
+		s := node.sharedPollManager.channels["test:channel"]
+		node.sharedPollManager.mu.RUnlock()
+		if s == nil {
+			return false
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		entry := s.itemIndex["key1"]
+		return entry != nil && entry.version >= 1 && entry.data != nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Client2 tracks key1 v0 → should get cached data in response.
+	client2 := newTestClientV2(t, node, "user2")
+	connectClientV2(t, client2)
+	subscribeSharedPollClient(t, client2, "test:channel")
+	result := trackSharedPollClientWithReply(t, client2, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	require.NotNil(t, result)
+	require.Len(t, result.Items, 1)
+	require.Equal(t, "key1", result.Items[0].Key)
+	require.Equal(t, string(result.Items[0].Data), `{"v":1}`)
+	require.Equal(t, uint64(1), result.Items[0].Version)
+}
+
+func TestSharedPollCachedData_NotReturnedWhenVersionCurrent(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:        100 * time.Millisecond,
+		RefreshBatchSize:       100,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+		KeepLatestData:         true,
+	})
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "key1", Data: []byte(`{"v":1}`), Version: 1},
+			},
+		}, nil
+	})
+
+	setupSharedPollHandlers(node)
+
+	// Client1 populates cache.
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	require.Eventually(t, func() bool {
+		node.sharedPollManager.mu.RLock()
+		s := node.sharedPollManager.channels["test:channel"]
+		node.sharedPollManager.mu.RUnlock()
+		if s == nil {
+			return false
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		entry := s.itemIndex["key1"]
+		return entry != nil && entry.version >= 1
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Client2 tracks with version=1 (already current) → no cached data.
+	client2 := newTestClientV2(t, node, "user2")
+	connectClientV2(t, client2)
+	subscribeSharedPollClient(t, client2, "test:channel")
+	result := trackSharedPollClientWithReply(t, client2, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 1},
+	})
+
+	require.NotNil(t, result)
+	require.Empty(t, result.Items)
+}
+
+func TestSharedPollCachedData_NotReturnedWithoutKeepLatestData(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:        100 * time.Millisecond,
+		RefreshBatchSize:       100,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+		KeepLatestData:         false, // explicitly disabled
+	})
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "key1", Data: []byte(`{"v":1}`), Version: 1},
+			},
+		}, nil
+	})
+
+	setupSharedPollHandlers(node)
+
+	// Client1 populates itemIndex version (but no data cached).
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	require.Eventually(t, func() bool {
+		node.sharedPollManager.mu.RLock()
+		s := node.sharedPollManager.channels["test:channel"]
+		node.sharedPollManager.mu.RUnlock()
+		if s == nil {
+			return false
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		entry := s.itemIndex["key1"]
+		return entry != nil && entry.version >= 1
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Client2 tracks v0 → no cached data (KeepLatestData=false).
+	client2 := newTestClientV2(t, node, "user2")
+	connectClientV2(t, client2)
+	subscribeSharedPollClient(t, client2, "test:channel")
+	result := trackSharedPollClientWithReply(t, client2, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	require.NotNil(t, result)
+	require.Empty(t, result.Items)
+}
+
+func TestSharedPollCachedData_VersionUpdatedNoDuplicate(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:        10 * time.Second, // long interval to avoid timer poll interference
+		RefreshBatchSize:       100,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+		KeepLatestData:         true,
+		RefreshMode:            SharedPollRefreshModeFull,
+	})
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "key1", Data: []byte(`{"v":1}`), Version: 1},
+			},
+		}, nil
+	})
+
+	setupSharedPollHandlers(node)
+
+	// Client1 populates cache.
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	require.Eventually(t, func() bool {
+		node.sharedPollManager.mu.RLock()
+		s := node.sharedPollManager.channels["test:channel"]
+		node.sharedPollManager.mu.RUnlock()
+		if s == nil {
+			return false
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		entry := s.itemIndex["key1"]
+		return entry != nil && entry.version >= 1 && entry.data != nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Client2 tracks v0 → gets cached v1.
+	client2 := newTestClientV2(t, node, "user2")
+	connectClientV2(t, client2)
+	subscribeSharedPollClient(t, client2, "test:channel")
+	result := trackSharedPollClientWithReply(t, client2, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+	require.Len(t, result.Items, 1)
+	require.Equal(t, uint64(1), result.Items[0].Version)
+
+	// Verify per-connection version was updated to 1 (prevents duplicate broadcast).
+	client2.mu.RLock()
+	ks := client2.keyed.trackedKeys["test:channel"]["key1"]
+	client2.mu.RUnlock()
+	require.NotNil(t, ks)
+	require.Equal(t, uint64(1), ks.version)
+}
+
+func TestSharedPollCachedData_MultipleKeys(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:        100 * time.Millisecond,
+		RefreshBatchSize:       100,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 10,
+		KeepLatestData:         true,
+		RefreshMode:            SharedPollRefreshModeFull,
+	})
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "key1", Data: []byte(`{"k":"d1"}`), Version: 2},
+				{Key: "key2", Data: []byte(`{"k":"d2"}`), Version: 3},
+				// key3 not returned — stays cold (version=0).
+			},
+		}, nil
+	})
+
+	setupSharedPollHandlers(node)
+
+	// Client1 populates cache.
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+		{Key: "key2", Version: 0},
+		{Key: "key3", Version: 0},
+	})
+
+	// Wait for cache populated.
+	require.Eventually(t, func() bool {
+		node.sharedPollManager.mu.RLock()
+		s := node.sharedPollManager.channels["test:channel"]
+		node.sharedPollManager.mu.RUnlock()
+		if s == nil {
+			return false
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		e1 := s.itemIndex["key1"]
+		e2 := s.itemIndex["key2"]
+		return e1 != nil && e1.version >= 2 && e1.data != nil &&
+			e2 != nil && e2.version >= 3 && e2.data != nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Client2 tracks all 3 keys v0 → should get key1 and key2, not key3.
+	client2 := newTestClientV2(t, node, "user2")
+	connectClientV2(t, client2)
+	subscribeSharedPollClient(t, client2, "test:channel")
+	result := trackSharedPollClientWithReply(t, client2, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+		{Key: "key2", Version: 0},
+		{Key: "key3", Version: 0},
+	})
+
+	require.NotNil(t, result)
+	require.Len(t, result.Items, 2)
+	keyMap := map[string]*protocol.Publication{}
+	for _, pub := range result.Items {
+		keyMap[pub.Key] = pub
+	}
+	require.Contains(t, keyMap, "key1")
+	require.Contains(t, keyMap, "key2")
+	require.NotContains(t, keyMap, "key3")
+	require.Equal(t, uint64(2), keyMap["key1"].Version)
+	require.Equal(t, uint64(3), keyMap["key2"].Version)
+}
+
+func TestSharedPollCachedData_PartialVersionMatch(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:        100 * time.Millisecond,
+		RefreshBatchSize:       100,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 10,
+		KeepLatestData:         true,
+		RefreshMode:            SharedPollRefreshModeFull,
+	})
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "key1", Data: []byte(`{"k":"d1"}`), Version: 2},
+				{Key: "key2", Data: []byte(`{"k":"d2"}`), Version: 5},
+			},
+		}, nil
+	})
+
+	setupSharedPollHandlers(node)
+
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+		{Key: "key2", Version: 0},
+	})
+
+	require.Eventually(t, func() bool {
+		node.sharedPollManager.mu.RLock()
+		s := node.sharedPollManager.channels["test:channel"]
+		node.sharedPollManager.mu.RUnlock()
+		if s == nil {
+			return false
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		e1 := s.itemIndex["key1"]
+		e2 := s.itemIndex["key2"]
+		return e1 != nil && e1.version >= 2 && e2 != nil && e2.version >= 5
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Client2: key1 v2 (current), key2 v0 (behind) → only key2 returned.
+	client2 := newTestClientV2(t, node, "user2")
+	connectClientV2(t, client2)
+	subscribeSharedPollClient(t, client2, "test:channel")
+	result := trackSharedPollClientWithReply(t, client2, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 2},
+		{Key: "key2", Version: 0},
+	})
+
+	require.NotNil(t, result)
+	require.Len(t, result.Items, 1)
+	require.Equal(t, "key2", result.Items[0].Key)
+	require.Equal(t, uint64(5), result.Items[0].Version)
+}
+
+// --- Auto-Notify Cold Key Tests ---
+
+func TestSharedPollAutoNotify_ColdKey(t *testing.T) {
+	var pollCalled atomic.Int32
+	var pollMu sync.Mutex
+	var pollKeys []string
+
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:        10 * time.Second, // Long interval — only auto-notify triggers poll.
+		RefreshBatchSize:       100,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 10,
+		RefreshMode:            SharedPollRefreshModeFull,
+	})
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		pollCalled.Add(1)
+		pollMu.Lock()
+		for _, item := range event.Items {
+			pollKeys = append(pollKeys, item.Key)
+		}
+		pollMu.Unlock()
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "cold_key", Data: []byte(`data`), Version: 1},
+			},
+		}, nil
+	})
+
+	setupSharedPollHandlers(node)
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+
+	// Track a cold key — should trigger auto-notify → backend poll.
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
+		{Key: "cold_key", Version: 0},
+	})
+
+	// Verify OnSharedPoll is called with the cold key within ~200ms (not 10s).
+	require.Eventually(t, func() bool {
+		return pollCalled.Load() > 0
+	}, 500*time.Millisecond, 10*time.Millisecond)
+
+	pollMu.Lock()
+	require.Contains(t, pollKeys, "cold_key")
+	pollMu.Unlock()
+}
+
+func TestSharedPollAutoNotify_ExistingKeyNoNotify(t *testing.T) {
+	callCh := make(chan SharedPollEvent, 10)
+
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:        10 * time.Second, // Long interval.
+		RefreshBatchSize:       100,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 10,
+		RefreshMode:            SharedPollRefreshModeFull,
+	})
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		callCh <- event
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "key1", Data: []byte(`data`), Version: 1},
+			},
+		}, nil
+	})
+
+	setupSharedPollHandlers(node)
+
+	// Client1 tracks key1 → cold key → auto-notify.
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// Drain the auto-notify event.
+	select {
+	case <-callCh:
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	// Client2 tracks the same key → key already exists → no auto-notify.
+	client2 := newTestClientV2(t, node, "user2")
+	connectClientV2(t, client2)
+	subscribeSharedPollClient(t, client2, "test:channel")
+	trackSharedPollClient(t, client2, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// No additional backend call should happen.
+	select {
+	case <-callCh:
+		t.Fatal("should not auto-notify for existing key")
+	case <-time.After(300 * time.Millisecond):
+		// Expected — no extra call.
+	}
+}
+
+func TestSharedPollAutoNotify_MultipleClientsSameColdKey(t *testing.T) {
+	var pollCalled atomic.Int32
+
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:        10 * time.Second,
+		RefreshBatchSize:       100,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 10,
+		RefreshMode:            SharedPollRefreshModeFull,
+	})
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		pollCalled.Add(1)
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "key1", Data: []byte(`data`), Version: 1},
+			},
+		}, nil
+	})
+
+	setupSharedPollHandlers(node)
+
+	// Client1 tracks key1 → cold key → auto-notify.
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// Wait for auto-notify to fire.
+	require.Eventually(t, func() bool {
+		return pollCalled.Load() >= 1
+	}, 500*time.Millisecond, 10*time.Millisecond)
+
+	// Client2 tracks same key — should NOT trigger another notify (key exists).
+	pollBefore := pollCalled.Load()
+	client2 := newTestClientV2(t, node, "user2")
+	connectClientV2(t, client2)
+	subscribeSharedPollClient(t, client2, "test:channel")
+	trackSharedPollClient(t, client2, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// No additional handler call within 300ms (only the long timer would fire).
+	time.Sleep(300 * time.Millisecond)
+	require.Equal(t, pollBefore, pollCalled.Load(), "should not auto-notify for already-tracked key")
+}
+
+func TestSharedPollAutoNotify_ColdKeyNonZeroVersionNoNotify(t *testing.T) {
+	// When a client tracks a cold key with version > 0, auto-notify should NOT
+	// fire. The client already has data — the regular poll cycle will deliver
+	// any newer data.
+	var pollCalled atomic.Int32
+
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:        10 * time.Second, // Long interval — only auto-notify would trigger fast poll.
+		RefreshBatchSize:       100,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 10,
+		RefreshMode:            SharedPollRefreshModeFull,
+	})
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		pollCalled.Add(1)
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "key1", Data: []byte(`data`), Version: 5},
+			},
+		}, nil
+	})
+
+	setupSharedPollHandlers(node)
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+
+	// Track a cold key with version > 0 — should NOT trigger auto-notify.
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 3},
+	})
+
+	// No backend call should happen within 500ms (10s interval, no auto-notify).
+	time.Sleep(500 * time.Millisecond)
+	require.Equal(t, int32(0), pollCalled.Load(), "should not auto-notify for cold key with version > 0")
+}
+
+func TestSharedPollAutoNotify_ColdKeyVersionZeroTriggersNotify(t *testing.T) {
+	// When a client tracks a cold key with version 0, auto-notify SHOULD fire.
+	// Contrast with TestSharedPollAutoNotify_ColdKeyNonZeroVersionNoNotify.
+	var pollCalled atomic.Int32
+
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:        10 * time.Second,
+		RefreshBatchSize:       100,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 10,
+		RefreshMode:            SharedPollRefreshModeFull,
+	})
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		pollCalled.Add(1)
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "key1", Data: []byte(`data`), Version: 1},
+			},
+		}, nil
+	})
+
+	setupSharedPollHandlers(node)
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+
+	// Track a cold key with version 0 — should trigger auto-notify.
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// Backend should be called quickly (not waiting 10s).
+	require.Eventually(t, func() bool {
+		return pollCalled.Load() > 0
+	}, 500*time.Millisecond, 10*time.Millisecond, "should auto-notify for cold key with version 0")
+}
+
+func TestSharedPollCachedData_DeltaReadyAfterCache(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:        30 * time.Second,
+		RefreshBatchSize:       100,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 10,
+		KeepLatestData:         true,
+		RefreshMode:            SharedPollRefreshModeFull,
+		NotificationBatchMaxSize:  50,
+		NotificationBatchMaxDelay: 50 * time.Millisecond,
+	})
+	setupSharedPollDeltaHandlers(node)
+
+	version := atomic.Int64{}
+	version.Store(1)
+	dataVal := atomic.Value{}
+	dataVal.Store([]byte(`{"value":"hello world, this is version one of the data payload which is long enough for delta"}`))
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "key1", Data: dataVal.Load().([]byte), Version: uint64(version.Load())},
+			},
+		}, nil
+	})
+
+	// Client1 (regular, no sink) tracks key → trigger notification → populate cache.
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// Wait for itemIndex to be populated at v1.
+	require.Eventually(t, func() bool {
+		node.sharedPollManager.mu.RLock()
+		s := node.sharedPollManager.channels["test:channel"]
+		node.sharedPollManager.mu.RUnlock()
+		if s == nil {
+			return false
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		entry := s.itemIndex["key1"]
+		return entry != nil && entry.version >= 1 && entry.data != nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Client2 (sink transport, delta enabled) tracks key with v0 → receives cached v1.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	transport2 := newTestTransport(cancel2)
+	transport2.setProtocolVersion(ProtocolVersion2)
+	transport2.setProtocolType(ProtocolTypeJSON)
+	sink2 := make(chan []byte, 100)
+	transport2.sink = sink2
+	newCtx2 := SetCredentials(ctx2, &Credentials{UserID: "user2"})
+	client2, _ := newClient(newCtx2, node, transport2)
+	connectClientV2(t, client2)
+	subscribeSharedPollClientDelta(t, client2, "test:channel")
+	result := trackSharedPollClientWithReply(t, client2, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// Cached data must be returned in the track response.
+	require.NotNil(t, result)
+	require.Len(t, result.Items, 1)
+	require.Equal(t, "key1", result.Items[0].Key)
+	require.Equal(t, uint64(1), result.Items[0].Version)
+
+	// Fix 3: deltaReady must be true after receiving cached data.
+	client2.mu.RLock()
+	ks2 := client2.keyed.trackedKeys["test:channel"]["key1"]
+	client2.mu.RUnlock()
+	require.NotNil(t, ks2)
+	require.True(t, ks2.deltaReady, "deltaReady must be true after cached data delivery")
+
+	// Bump to v2.
+	version.Store(2)
+	dataVal.Store([]byte(`{"value":"hello world, this is version two of the data payload which is long enough for delta"}`))
+
+	// Trigger a new notification cycle by having client1 track a new cold key.
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{
+		{Key: "key_trigger", Version: 0},
+	})
+
+	// Wait for client2 to receive v2.
+	require.Eventually(t, func() bool {
+		client2.mu.RLock()
+		defer client2.mu.RUnlock()
+		ks := client2.keyed.trackedKeys["test:channel"]["key1"]
+		return ks != nil && ks.version >= 2
+	}, 5*time.Second, 10*time.Millisecond)
+
+	// Read from sink: find version 2 with Delta=true.
+	var deltaPub *protocol.Reply
+	timeout := time.After(2 * time.Second)
+	for deltaPub == nil {
+		select {
+		case d := <-sink2:
+			reply := decodeReply(t, protocol.TypeJSON, d)
+			if reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 2 {
+				deltaPub = reply
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for delta publication in sink")
+		}
+	}
+
+	require.True(t, deltaPub.Push.Pub.Delta, "second pub should be delta because deltaReady was set from cache")
+	require.Equal(t, "key1", deltaPub.Push.Pub.Key)
+}
+
+func TestSharedPollCachedData_DeltaReadyPartialKeys(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:        100 * time.Millisecond,
+		RefreshBatchSize:       100,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 10,
+		KeepLatestData:         true,
+		RefreshMode:            SharedPollRefreshModeFull,
+	})
+	setupSharedPollDeltaHandlers(node)
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		// Only return key_warm; key_cold is absent.
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "key_warm", Data: []byte(`{"status":"warm"}`), Version: 1},
+			},
+		}, nil
+	})
+
+	// Client1 tracks key_warm → populates cache.
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{
+		{Key: "key_warm", Version: 0},
+	})
+
+	// Wait for cache to be populated.
+	require.Eventually(t, func() bool {
+		node.sharedPollManager.mu.RLock()
+		s := node.sharedPollManager.channels["test:channel"]
+		node.sharedPollManager.mu.RUnlock()
+		if s == nil {
+			return false
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		entry := s.itemIndex["key_warm"]
+		return entry != nil && entry.version >= 1 && entry.data != nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Client2 tracks both key_warm (v0) and key_cold (v0) with delta.
+	client2 := newTestClientV2(t, node, "user2")
+	connectClientV2(t, client2)
+	subscribeSharedPollClientDelta(t, client2, "test:channel")
+	result := trackSharedPollClientWithReply(t, client2, "test:channel", []*protocol.KeyedItem{
+		{Key: "key_warm", Version: 0},
+		{Key: "key_cold", Version: 0},
+	})
+
+	// Cached data returned only for key_warm.
+	require.NotNil(t, result)
+	require.Len(t, result.Items, 1, "only key_warm should be in cached response")
+	require.Equal(t, "key_warm", result.Items[0].Key)
+	require.Equal(t, uint64(1), result.Items[0].Version)
+
+	// Fix 3: key_warm.deltaReady == true, key_cold.deltaReady == false.
+	client2.mu.RLock()
+	ksWarm := client2.keyed.trackedKeys["test:channel"]["key_warm"]
+	ksCold := client2.keyed.trackedKeys["test:channel"]["key_cold"]
+	client2.mu.RUnlock()
+
+	require.NotNil(t, ksWarm)
+	require.True(t, ksWarm.deltaReady, "key_warm deltaReady must be true after cached data")
+
+	require.NotNil(t, ksCold)
+	require.False(t, ksCold.deltaReady, "key_cold deltaReady must be false — no cached data")
+}
+
+func TestSharedPoll_PrevDataNotUsedWhenKeepLatestData(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:        30 * time.Second,
+		RefreshBatchSize:       100,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 10,
+		KeepLatestData:         true,
+		RefreshMode:            SharedPollRefreshModeFull,
+		NotificationBatchMaxSize:  50,
+		NotificationBatchMaxDelay: 50 * time.Millisecond,
+	})
+	setupSharedPollDeltaHandlers(node)
+
+	callCount := atomic.Int32{}
+	version := atomic.Int64{}
+	version.Store(5)
+	dataVal := atomic.Value{}
+	dataVal.Store([]byte(`{"value":"this is data_A at version five, padded to be large enough for fossil delta"}`))
+	prevDataVal := atomic.Value{}
+	prevDataVal.Store([]byte(nil))
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		callCount.Add(1)
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{
+					Key:      "key1",
+					Data:     dataVal.Load().([]byte),
+					Version:  uint64(version.Load()),
+					PrevData: prevDataVal.Load().([]byte),
+				},
+			},
+		}, nil
+	})
+
+	// Client with sink transport (delta enabled).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := newTestTransport(cancel)
+	transport.setProtocolVersion(ProtocolVersion2)
+	transport.setProtocolType(ProtocolTypeProtobuf)
+	sink := make(chan []byte, 100)
+	transport.sink = sink
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "user1"})
+	client, _ := newClient(newCtx, node, transport)
+	connectClientV2(t, client)
+	subscribeSharedPollClientDelta(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// Wait for v5 delivery.
+	require.Eventually(t, func() bool {
+		client.mu.RLock()
+		defer client.mu.RUnlock()
+		ks := client.keyed.trackedKeys["test:channel"]["key1"]
+		return ks != nil && ks.version >= 5
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Capture v5 data from sink (full, not delta).
+	var v5Data []byte
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case d := <-sink:
+			reply := &protocol.Reply{}
+			err := reply.UnmarshalVT(d)
+			if err == nil && reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 5 {
+				require.False(t, reply.Push.Pub.Delta, "first delivery should be full")
+				v5Data = reply.Push.Pub.Data
+				goto gotV5
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for v5 publication")
+		}
+	}
+gotV5:
+	require.NotEmpty(t, v5Data)
+
+	// Bump to v10 via SharedPollPublish — entry.data becomes data_B.
+	dataB := []byte(`{"value":"this is data_B at version ten, padded to be large enough for fossil delta!!"}`)
+	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 10, dataB)
+	require.NoError(t, err)
+
+	// Wait for v10 delivery.
+	require.Eventually(t, func() bool {
+		client.mu.RLock()
+		defer client.mu.RUnlock()
+		ks := client.keyed.trackedKeys["test:channel"]["key1"]
+		return ks != nil && ks.version >= 10
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Capture v10 from sink. It is a delta (from data_A to data_B) because
+	// deltaReady was set after v5 delivery.
+	var v10Reply *protocol.Reply
+	timeout = time.After(2 * time.Second)
+	for {
+		select {
+		case d := <-sink:
+			reply := &protocol.Reply{}
+			err := reply.UnmarshalVT(d)
+			if err == nil && reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 10 {
+				v10Reply = reply
+				goto gotV10
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for v10 publication")
+		}
+	}
+gotV10:
+	// Reconstruct data_B by applying the v10 delta to data_A.
+	var currentData []byte
+	if v10Reply.Push.Pub.Delta {
+		currentData, err = fdelta.Apply(v5Data, v10Reply.Push.Pub.Data)
+		require.NoError(t, err)
+	} else {
+		currentData = v10Reply.Push.Pub.Data
+	}
+	require.Equal(t, string(dataB), string(currentData), "reconstructed data at v10 must equal data_B")
+
+	// Now bump handler to v12, with PrevData set to intentionally WRONG bytes.
+	// If the code incorrectly used PrevData when KeepLatestData=true,
+	// the delta would be computed from wrong base → garbage.
+	dataC := []byte(`{"value":"this is data_C at version twelve, padded to be large enough for fossil delta"}`)
+	version.Store(12)
+	dataVal.Store(dataC)
+	prevDataVal.Store([]byte(`intentionally wrong prev data that does not match data_B at all`))
+
+	// Trigger notification by having a second client track a cold key.
+	client2 := newTestClientV2(t, node, "user2")
+	connectClientV2(t, client2)
+	subscribeSharedPollClient(t, client2, "test:channel")
+	trackSharedPollClient(t, client2, "test:channel", []*protocol.KeyedItem{
+		{Key: "key_trigger_notify", Version: 0},
+	})
+
+	// Wait for client to receive v12.
+	require.Eventually(t, func() bool {
+		client.mu.RLock()
+		defer client.mu.RUnlock()
+		ks := client.keyed.trackedKeys["test:channel"]["key1"]
+		return ks != nil && ks.version >= 12
+	}, 5*time.Second, 10*time.Millisecond)
+
+	// Read v12 from sink — should be a delta (computed from entry.data = data_B).
+	var v12Reply *protocol.Reply
+	timeout = time.After(2 * time.Second)
+	for v12Reply == nil {
+		select {
+		case d := <-sink:
+			reply := &protocol.Reply{}
+			err := reply.UnmarshalVT(d)
+			if err == nil && reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 12 {
+				v12Reply = reply
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for v12 publication")
+		}
+	}
+
+	require.True(t, v12Reply.Push.Pub.Delta, "v12 broadcast should be delta")
+
+	// Apply the fossil delta to currentData (data_B) — should produce data_C.
+	// This proves the delta was computed from entry.data (data_B), not from
+	// the handler's PrevData (which was intentionally wrong).
+	applied, err := fdelta.Apply(currentData, v12Reply.Push.Pub.Data)
+	require.NoError(t, err)
+	require.Equal(t, string(dataC), string(applied), "delta must be computed from entry.data (data_B), not PrevData")
+}
+
+func TestSharedPoll_VersionlessPerConnectionDedup(t *testing.T) {
+	// Two clients tracking same key in versionless mode.
+	// Both should receive exactly once per change.
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:           30 * time.Second,
+		RefreshBatchSize:          100,
+		MaxKeysPerConnection:      100,
+		MaxConsecutiveAbsences:    10,
+		NotificationBatchMaxSize:  50,
+		NotificationBatchMaxDelay: 50 * time.Millisecond,
+	})
+
+	data := &atomic.Value{}
+	data.Store([]byte(`{"v":"initial"}`))
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		items := make([]SharedPollRefreshItem, len(event.Items))
+		for i, item := range event.Items {
+			items[i] = SharedPollRefreshItem{
+				Key:  item.Key,
+				Data: data.Load().([]byte),
+			}
+		}
+		return SharedPollResult{Items: items}, nil
+	})
+
+	setupSharedPollHandlers(node)
+
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	client2 := newTestClientV2(t, node, "user2")
+	connectClientV2(t, client2)
+	subscribeSharedPollClient(t, client2, "test:channel")
+	trackSharedPollClient(t, client2, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// Wait for initial data delivery to both.
+	require.Eventually(t, func() bool {
+		client1.mu.RLock()
+		ks1 := client1.keyed.trackedKeys["test:channel"]["key1"]
+		var v1 uint64
+		if ks1 != nil {
+			v1 = ks1.version
+		}
+		client1.mu.RUnlock()
+		client2.mu.RLock()
+		ks2 := client2.keyed.trackedKeys["test:channel"]["key1"]
+		var v2 uint64
+		if ks2 != nil {
+			v2 = ks2.version
+		}
+		client2.mu.RUnlock()
+		return v1 == 1 && v2 == 1
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Change data and notify.
+	data.Store([]byte(`{"v":"changed"}`))
+	node.SharedPollNotify([]SharedPollNotificationItem{
+		{Channel: "test:channel", Key: "key1"},
+	})
+
+	// Both clients should receive the update.
+	require.Eventually(t, func() bool {
+		client1.mu.RLock()
+		ks1 := client1.keyed.trackedKeys["test:channel"]["key1"]
+		var v1 uint64
+		if ks1 != nil {
+			v1 = ks1.version
+		}
+		client1.mu.RUnlock()
+		client2.mu.RLock()
+		ks2 := client2.keyed.trackedKeys["test:channel"]["key1"]
+		var v2 uint64
+		if ks2 != nil {
+			v2 = ks2.version
+		}
+		client2.mu.RUnlock()
+		return v1 == 2 && v2 == 2
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+func TestSharedPoll_VersionlessReconnect(t *testing.T) {
+	// In versionless mode, wire version is always 0.
+	// When a client reconnects and re-tracks with v=0, a new data change
+	// must be delivered (pubVersion > keyState.version=0).
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:           30 * time.Second,
+		RefreshBatchSize:          100,
+		MaxKeysPerConnection:      100,
+		MaxConsecutiveAbsences:    10,
+		NotificationBatchMaxSize:  50,
+		NotificationBatchMaxDelay: 50 * time.Millisecond,
+	})
+
+	data := &atomic.Value{}
+	data.Store([]byte(`{"v":"data_v1"}`))
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		items := make([]SharedPollRefreshItem, len(event.Items))
+		for i, item := range event.Items {
+			items[i] = SharedPollRefreshItem{
+				Key:  item.Key,
+				Data: data.Load().([]byte),
+			}
+		}
+		return SharedPollResult{Items: items}, nil
+	})
+
+	setupSharedPollHandlers(node)
+
+	// Client1 keeps the key alive.
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// Wait for initial data (synthetic version=1 internally).
+	require.Eventually(t, func() bool {
+		client1.mu.RLock()
+		defer client1.mu.RUnlock()
+		k := client1.keyed.trackedKeys["test:channel"]["key1"]
+		return k != nil && k.version == 1
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Client2 connects and tracks the same key.
+	client2 := newTestClientV2(t, node, "user2")
+	connectClientV2(t, client2)
+	subscribeSharedPollClient(t, client2, "test:channel")
+	trackSharedPollClient(t, client2, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// In versionless mode: key is not cold (client1 already tracks it), getCachedData
+	// is disabled. Client2 must wait for a data change to receive a broadcast.
+	// Change data and notify.
+	data.Store([]byte(`{"v":"data_v2"}`))
+	node.SharedPollNotify([]SharedPollNotificationItem{
+		{Channel: "test:channel", Key: "key1"},
+	})
+
+	// Client2 should receive the broadcast (pubVersion=2 > keyState.version=0).
+	require.Eventually(t, func() bool {
+		client2.mu.RLock()
+		defer client2.mu.RUnlock()
+		k := client2.keyed.trackedKeys["test:channel"]["key1"]
+		return k != nil && k.version == 2
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Client1 should also get it.
+	require.Eventually(t, func() bool {
+		client1.mu.RLock()
+		defer client1.mu.RUnlock()
+		k := client1.keyed.trackedKeys["test:channel"]["key1"]
+		return k != nil && k.version == 2
+	}, 2*time.Second, 10*time.Millisecond)
 }

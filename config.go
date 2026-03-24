@@ -255,7 +255,11 @@ type SharedPollNotification struct {
 }
 
 const (
-	// SharedPollRefreshModeFull is the default refresh mode where the backend
+	// SharedPollRefreshModeVersionless is the versionless refresh mode where the backend
+	// returns {key, data} without versions. Centrifugo detects changes via content hash
+	// and generates internal synthetic versions. This is the default mode (also "").
+	SharedPollRefreshModeVersionless = "versionless"
+	// SharedPollRefreshModeFull is the refresh mode where the backend
 	// returns all items with {key, data, version}. Centrifugo filters by version.
 	SharedPollRefreshModeFull = "full"
 	// SharedPollRefreshModeDiff enables diff mode where item versions are included
@@ -275,7 +279,9 @@ type SharedPollChannelOptions struct {
 	// Zero value means 1000.
 	RefreshBatchSize int
 	// RefreshMode controls refresh request format.
-	// "full" (default, also ""): backend returns all items, Centrifugo filters by version.
+	// "versionless" (default, also ""): backend returns {key, data} without versions.
+	//   Centrifugo detects changes via content hash and generates internal versions.
+	// "full": backend returns {key, data, version}. Centrifugo filters by version.
 	// "diff": item versions included in request, backend returns only changed items.
 	RefreshMode string
 	// KeepLatestData controls whether TrackedEntry stores the last data payload
@@ -307,6 +313,15 @@ type SharedPollChannelOptions struct {
 	// after it expires. Keys not refreshed within this delay are silently removed
 	// from server state. Zero means 25 * time.Second.
 	TrackExpiredExtraDelay time.Duration
+	// PublishEnabled enables cross-node distribution for SharedPollPublish.
+	// When true, SharedPollManager subscribes to the Broker (via node.getBroker)
+	// for this channel, allowing SharedPollPublish to distribute publications
+	// to all nodes. When false, SharedPollPublish is local-only.
+	PublishEnabled bool
+}
+
+func (o SharedPollChannelOptions) isVersionless() bool {
+	return o.RefreshMode == "" || o.RefreshMode == SharedPollRefreshModeVersionless
 }
 
 func (o SharedPollChannelOptions) toKeyedChannelOptions() KeyedChannelOptions {
