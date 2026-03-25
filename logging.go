@@ -73,19 +73,9 @@ func newLogEntry(level LogLevel, message string, fields map[string]any) LogEntry
 	return buildLogEntry(level, nil, message, fields)
 }
 
-// NewLogEntry is a way to use Centrifuge Node log, but it's not recommended - use your own.
-func NewLogEntry(level LogLevel, message string, fields map[string]any) LogEntry {
-	return newLogEntry(level, message, fields)
-}
-
 // newErrorLogEntry creates new LogEntry with LogLevelError and error attached to it.
 func newErrorLogEntry(err error, message string, fields map[string]any) LogEntry {
 	return buildLogEntry(LogLevelError, err, message, fields)
-}
-
-// NewErrorLogEntry is a way to use Centrifuge Node log, but it's not recommended - use your own.
-func NewErrorLogEntry(err error, message string, fields map[string]any) LogEntry {
-	return newErrorLogEntry(err, message, fields)
 }
 
 // LogHandler handles log entries - i.e. writes into correct destination if necessary.

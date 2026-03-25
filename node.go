@@ -340,16 +340,6 @@ func (n *Node) logEnabled(level LogLevel) bool {
 	return n.logger.enabled(level)
 }
 
-// Log sends a log entry through the node's logger.
-func (n *Node) Log(entry LogEntry) {
-	n.logger.log(entry)
-}
-
-// LogEnabled returns true if logging is enabled for the given level.
-func (n *Node) LogEnabled(level LogLevel) bool {
-	return n.logEnabled(level)
-}
-
 // IncMapBrokerCleanupErrors increments the map broker cleanup error counter for observability.
 func (n *Node) IncMapBrokerCleanupErrors(name string) {
 	if n.metrics != nil {
