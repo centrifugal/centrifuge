@@ -227,6 +227,10 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		},
 	}
 
+	if conf.AuthCredentialsFn != nil {
+		options.AuthCredentialsFn = conf.AuthCredentialsFn
+	}
+
 	var isCluster bool
 	var isSentinel bool
 	replicaClientEnabled := conf.ReplicaClientEnabled
@@ -362,6 +366,12 @@ type RedisShardConfig struct {
 	// be initialized with the same options as the main client but with ReplicaOnly option
 	// set to true.
 	ReplicaClientEnabled bool
+
+	// AuthCredentialsFn is an optional function to dynamically provide auth credentials.
+	// When set, it is called by the Redis client to obtain credentials for each new connection,
+	// enabling short-lived token-based authentication (e.g. GCP IAM, AWS IAM).
+	// See rueidis.ClientOption.AuthCredentialsFn for more details.
+	AuthCredentialsFn func(rueidis.AuthCredentialsContext) (rueidis.AuthCredentials, error)
 }
 
 type RedisShardMode string
