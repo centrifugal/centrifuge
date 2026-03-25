@@ -86,6 +86,7 @@ type metrics struct {
 	sharedPollHandlerErrorCount          *prometheus.CounterVec
 	sharedPollItemsCount                 *prometheus.CounterVec
 	sharedPollNotifyCount                *prometheus.CounterVec
+	sharedPollDroppedNotifyCount         *prometheus.CounterVec
 	sharedPollPublishCount               *prometheus.CounterVec
 	sharedPollNumChannelsGauge           prometheus.Gauge
 	sharedPollNumKeysGauge               prometheus.Gauge
@@ -472,6 +473,13 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "Number of notifications received.",
 	}, []string{"channel_namespace"})
 
+	m.sharedPollDroppedNotifyCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "shared_poll",
+		Name:      "dropped_notify_count",
+		Help:      "Number of notifications dropped due to full buffer.",
+	}, []string{"channel_namespace"})
+
 	m.sharedPollPublishCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "shared_poll",
@@ -588,6 +596,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.sharedPollHandlerErrorCount,
 		m.sharedPollItemsCount,
 		m.sharedPollNotifyCount,
+		m.sharedPollDroppedNotifyCount,
 		m.sharedPollPublishCount,
 		m.sharedPollNumChannelsGauge,
 		m.sharedPollNumKeysGauge,
@@ -1055,9 +1064,10 @@ type sharedPollResultCached struct {
 }
 
 type sharedPollChannelCached struct {
-	cycleDuration     prometheus.Observer
-	cycleWorkDuration prometheus.Observer
-	notifyCount       prometheus.Counter
+	cycleDuration      prometheus.Observer
+	cycleWorkDuration  prometheus.Observer
+	notifyCount        prometheus.Counter
+	droppedNotifyCount prometheus.Counter
 }
 
 type sharedPollPublishCached struct {
@@ -1101,9 +1111,10 @@ func (m *metrics) getSharedPollChannelCached(ch string) sharedPollChannelCached 
 	cached, ok := m.sharedPollChannelCache.Load(channelNamespace)
 	if !ok {
 		cached = sharedPollChannelCached{
-			cycleDuration:     m.sharedPollCycleDurationHistogram.WithLabelValues(channelNamespace),
-			cycleWorkDuration: m.sharedPollCycleWorkDurationHistogram.WithLabelValues(channelNamespace),
-			notifyCount:       m.sharedPollNotifyCount.WithLabelValues(channelNamespace),
+			cycleDuration:      m.sharedPollCycleDurationHistogram.WithLabelValues(channelNamespace),
+			cycleWorkDuration:  m.sharedPollCycleWorkDurationHistogram.WithLabelValues(channelNamespace),
+			notifyCount:        m.sharedPollNotifyCount.WithLabelValues(channelNamespace),
+			droppedNotifyCount: m.sharedPollDroppedNotifyCount.WithLabelValues(channelNamespace),
 		}
 		m.sharedPollChannelCache.Store(channelNamespace, cached)
 	}

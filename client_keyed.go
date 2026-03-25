@@ -149,7 +149,12 @@ func (c *Client) handleKeyedTrack(req *protocol.SubRefreshRequest, cmd *protocol
 		var newKeys []string
 		for _, it := range req.Items {
 			if c.node.sharedPollManager != nil {
-				if c.node.sharedPollManager.track(channel, opts, it.Key) && it.Version == 0 {
+				isNew, err := c.node.sharedPollManager.track(channel, opts, it.Key)
+				if err != nil {
+					c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, ErrorInternal, started, rw)
+					return
+				}
+				if isNew && it.Version == 0 {
 					newKeys = append(newKeys, it.Key)
 				}
 			}

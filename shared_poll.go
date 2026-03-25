@@ -81,11 +81,11 @@ func newSharedPollManager(node *Node) *SharedPollManager {
 // track registers an item in the shared poll channel state and ensures
 // a refresh worker is running. Hub registration (addSubscriber) is handled
 // by the generic keyed layer in handleKeyedTrack — NOT here.
-func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions, key string) bool {
+func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions, key string) (bool, error) {
 	// Check global shutdown.
 	select {
 	case <-m.shutdownCh:
-		return false
+		return false, nil
 	default:
 	}
 
@@ -97,7 +97,7 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 		s = &sharedPollChannelState{
 			opts:      opts,
 			itemIndex: make(map[string]*sharedPollTrackedEntry),
-			notifCh:   make(chan string, 1000),
+			notifCh:   make(chan string, 1024),
 		}
 		m.channels[channel] = s
 	}
@@ -108,7 +108,7 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 	select {
 	case <-m.shutdownCh:
 		s.mu.Unlock()
-		return false
+		return false, nil
 	default:
 	}
 
@@ -119,7 +119,7 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 		s = &sharedPollChannelState{
 			opts:      opts,
 			itemIndex: make(map[string]*sharedPollTrackedEntry),
-			notifCh:   make(chan string, 1000),
+			notifCh:   make(chan string, 1024),
 		}
 		m.channels[channel] = s
 		isNewChannel = true
@@ -128,7 +128,7 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 		select {
 		case <-m.shutdownCh:
 			s.mu.Unlock()
-			return false
+			return false, nil
 		default:
 		}
 	}
@@ -167,10 +167,29 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 	s.mu.Unlock()
 
 	if isNewChannel && opts.PublishEnabled {
-		m.subscribeToBroker(channel)
+		if err := m.subscribeToBroker(channel); err != nil {
+			// Broker subscribe failed — clean up our key. Only tear down the channel
+			// if no other goroutine added keys in the meantime.
+			s.mu.Lock()
+			delete(s.itemIndex, key)
+			empty := len(s.itemIndex) == 0
+			if empty && s.workerCancel != nil {
+				s.workerCancel()
+			}
+			s.mu.Unlock()
+			if empty {
+				m.mu.Lock()
+				// Verify the channel wasn't replaced by another goroutine.
+				if m.channels[channel] == s {
+					delete(m.channels, channel)
+				}
+				m.mu.Unlock()
+			}
+			return false, err
+		}
 	}
 
-	return isNewKey
+	return isNewKey, nil
 }
 
 // untrack removes an item from shared poll tracking when no connections remain.
@@ -214,6 +233,7 @@ func (m *SharedPollManager) notify(channel string, key string) {
 	case s.notifCh <- key:
 		m.node.metrics.getSharedPollChannelCached(channel).notifyCount.Inc()
 	default:
+		m.node.metrics.getSharedPollChannelCached(channel).droppedNotifyCount.Inc()
 	}
 }
 
@@ -278,39 +298,59 @@ func (m *SharedPollManager) close() {
 	// Unsubscribe all broker subscriptions.
 	m.brokerSubMu.Lock()
 	for ch, broker := range m.brokerSubChans {
-		_ = broker.Unsubscribe(ch)
+		if err := broker.Unsubscribe(ch); err != nil {
+			m.node.logger.log(newLogEntry(LogLevelError, "error unsubscribing from broker for shared poll", map[string]any{"channel": ch, "error": err.Error()}))
+		}
 		delete(m.brokerSubChans, ch)
 	}
 	m.brokerSubMu.Unlock()
 }
 
-func (m *SharedPollManager) subscribeToBroker(channel string) {
+func (m *SharedPollManager) subscribeToBroker(channel string) error {
 	broker := m.node.getBroker(channel)
+	m.node.metrics.incActionCount("broker_subscribe", channel)
 	m.brokerSubMu.Lock()
-	_ = broker.Subscribe(channel)
+	err := broker.Subscribe(channel)
+	if err != nil {
+		m.brokerSubMu.Unlock()
+		return err
+	}
 	m.brokerSubChans[channel] = broker
 	m.brokerSubMu.Unlock()
+	return nil
 }
 
 func (m *SharedPollManager) unsubscribeFromBroker(channel string) {
-	m.brokerSubMu.Lock()
-	broker, ok := m.brokerSubChans[channel]
-	if !ok {
+	_ = m.node.subDissolver.Submit(func() error {
+		m.node.metrics.incActionCount("broker_unsubscribe", channel)
+		m.brokerSubMu.Lock()
+		broker, ok := m.brokerSubChans[channel]
+		if !ok {
+			m.brokerSubMu.Unlock()
+			return nil
+		}
+		// Check if channel was re-created while shutting down.
+		// This prevents a stale unsubscribe from canceling a new channel's subscription.
+		m.mu.RLock()
+		_, stillActive := m.channels[channel]
+		m.mu.RUnlock()
+		if stillActive {
+			m.brokerSubMu.Unlock()
+			return nil
+		}
+		// Unsubscribe inside the lock to prevent a concurrent subscribeToBroker
+		// from re-subscribing between our delete and unsubscribe.
+		err := broker.Unsubscribe(channel)
+		if err != nil {
+			m.brokerSubMu.Unlock()
+			// Cool down a bit since broker is not ready to process unsubscription.
+			time.Sleep(500 * time.Millisecond)
+			return err
+		}
+		delete(m.brokerSubChans, channel)
 		m.brokerSubMu.Unlock()
-		return
-	}
-	// Check if channel was re-created while shutting down.
-	// This prevents a stale unsubscribe from canceling a new channel's subscription.
-	m.mu.RLock()
-	_, stillActive := m.channels[channel]
-	m.mu.RUnlock()
-	if stillActive {
-		m.brokerSubMu.Unlock()
-		return
-	}
-	delete(m.brokerSubChans, channel)
-	m.brokerSubMu.Unlock()
-	_ = broker.Unsubscribe(channel)
+		return nil
+	})
 }
 
 func (m *SharedPollManager) publish(ctx context.Context, channel string, key string, version uint64, data []byte) error {

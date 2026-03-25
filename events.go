@@ -569,9 +569,14 @@ type CommandProcessedHandler func(*Client, CommandProcessedEvent)
 
 // KeyedTrackEvent contains fields related to a track request on a keyed channel.
 type KeyedTrackEvent struct {
-	Channel   string
-	UserID    string
-	Items     []KeyedItem
+	Channel string
+	UserID  string
+	Items   []KeyedItem
+	// Signature is an opaque string sent by the client to prove authorization for
+	// the requested channel and keys. In Centrifugo this is an HMAC token generated
+	// by the application backend. The handler MUST verify Signature before allowing
+	// the track to proceed — returning nil error without validation lets any client
+	// subscribe to arbitrary keys, bypassing access control.
 	Signature string
 }
 
@@ -583,15 +588,27 @@ type KeyedItem struct {
 
 // KeyedTrackReply contains the reaction to a keyed track event.
 type KeyedTrackReply struct {
-	ExpireAt int64 // unix timestamp when signature expires (0 = no expiry)
+	// ExpireAt is the Unix timestamp (seconds) after which the client's tracked keys
+	// for this channel are considered expired and stop receiving updates. The client
+	// must re-track with a fresh signature to continue.
+	//
+	// Setting a reasonable ExpireAt is important for proper permission control: it
+	// limits how long a client can receive data after a single authorization check.
+	// Without it (ExpireAt=0), a successfully tracked client receives updates
+	// indefinitely — even if the user's access has since been revoked.
+	// A typical value matches the signature/token TTL issued by the backend
+	// (e.g. 5–15 minutes).
+	ExpireAt int64
 }
 
 // KeyedTrackCallback should be called with KeyedTrackReply or error.
 type KeyedTrackCallback func(KeyedTrackReply, error)
 
-// KeyedTrackHandler is called when a client sends a track request
-// on a shared poll channel. The handler validates authorization
-// (e.g., HMAC signature in Centrifugo).
+// KeyedTrackHandler is called when a client sends a track request on a shared
+// poll channel. The handler MUST validate KeyedTrackEvent.Signature and return
+// an error if it is invalid — this is the sole authorization gate for which keys
+// a client may receive data for. On success, set KeyedTrackReply.ExpireAt to
+// bound how long the client may receive updates without re-authorization.
 type KeyedTrackHandler func(KeyedTrackEvent, KeyedTrackCallback)
 
 // SharedPollEvent contains fields for a shared poll refresh call.
