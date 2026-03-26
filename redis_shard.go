@@ -228,7 +228,13 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	}
 
 	if conf.AuthCredentialsFn != nil {
-		options.AuthCredentialsFn = conf.AuthCredentialsFn
+		options.AuthCredentialsFn = func(ctx rueidis.AuthCredentialsContext) (rueidis.AuthCredentials, error) {
+			creds, err := conf.AuthCredentialsFn(RedisAuthCredentialsContext{Address: ctx.Address})
+			if err != nil {
+				return rueidis.AuthCredentials{}, err
+			}
+			return rueidis.AuthCredentials{Username: creds.Username, Password: creds.Password}, nil
+		}
 	}
 
 	var isCluster bool
@@ -370,8 +376,19 @@ type RedisShardConfig struct {
 	// AuthCredentialsFn is an optional function to dynamically provide auth credentials.
 	// When set, it is called by the Redis client to obtain credentials for each new connection,
 	// enabling short-lived token-based authentication (e.g. GCP IAM, AWS IAM).
-	// See rueidis.ClientOption.AuthCredentialsFn for more details.
-	AuthCredentialsFn func(rueidis.AuthCredentialsContext) (rueidis.AuthCredentials, error)
+	AuthCredentialsFn func(RedisAuthCredentialsContext) (RedisAuthCredentials, error)
+}
+
+// RedisAuthCredentialsContext is passed to AuthCredentialsFn.
+type RedisAuthCredentialsContext struct {
+	// Address is the address of the Redis server being connected to.
+	Address net.Addr
+}
+
+// RedisAuthCredentials contains the credentials returned by AuthCredentialsFn.
+type RedisAuthCredentials struct {
+	Username string
+	Password string
 }
 
 type RedisShardMode string
