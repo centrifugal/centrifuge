@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"sync/atomic"
@@ -226,7 +227,8 @@ func TestSharedPollSubscribe_NoRecoveryFields(t *testing.T) {
 	connectClientV2(t, client)
 
 	result := subscribeSharedPollClient(t, client, "test:channel")
-	require.Equal(t, "", result.Epoch)
+	// Epoch is set for versionless channels (non-empty), but offset/publications are not.
+	require.NotEmpty(t, result.Epoch)
 	require.Equal(t, uint64(0), result.Offset)
 	require.Empty(t, result.Publications)
 }
@@ -876,9 +878,9 @@ func TestSharedPollRevokeKeys_UserFilter(t *testing.T) {
 	require.True(t, hub.hasSubscriber("shared_key", client2))
 }
 
-// 1.7 RefreshMode (Diff Mode)
+// 1.7 RefreshMode (Versioned Mode)
 
-func TestSharedPollDiffMode_VersionsInRequest(t *testing.T) {
+func TestSharedPollVersionedMode_VersionsInRequest(t *testing.T) {
 	var pollItems []SharedPollItem
 	var pollMu sync.Mutex
 	var callCount atomic.Int32
@@ -888,7 +890,7 @@ func TestSharedPollDiffMode_VersionsInRequest(t *testing.T) {
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
-		RefreshMode:            SharedPollRefreshModeDiff,
+		RefreshMode:            SharedPollRefreshModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -933,7 +935,7 @@ func TestSharedPollDiffMode_VersionsInRequest(t *testing.T) {
 	pollMu.Unlock()
 }
 
-func TestSharedPollDiffMode_ZeroWithout(t *testing.T) {
+func TestSharedPollVersionedMode_AlwaysSendsVersions(t *testing.T) {
 	var pollItems []SharedPollItem
 	var pollMu sync.Mutex
 	var callCount atomic.Int32
@@ -943,7 +945,7 @@ func TestSharedPollDiffMode_ZeroWithout(t *testing.T) {
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
-		RefreshMode:            SharedPollRefreshModeFull, // Explicitly full.
+		RefreshMode:            SharedPollRefreshModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -980,7 +982,7 @@ func TestSharedPollDiffMode_ZeroWithout(t *testing.T) {
 
 	pollMu.Lock()
 	require.Len(t, pollItems, 1)
-	require.Equal(t, uint64(0), pollItems[0].Version) // No version sent.
+	require.Equal(t, uint64(5), pollItems[0].Version) // Versioned mode always sends versions.
 	pollMu.Unlock()
 }
 
@@ -2042,7 +2044,7 @@ func TestSharedPollDelta_SubsequentPubIsDelta(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
 		KeepLatestData:         true,
-		RefreshMode:            SharedPollRefreshModeFull,
+		RefreshMode:            SharedPollRefreshModeVersioned,
 	})
 	setupSharedPollDeltaHandlers(node)
 
@@ -2250,7 +2252,7 @@ func TestSharedPollDelta_DeltaApplicable(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
 		KeepLatestData:         true,
-		RefreshMode:            SharedPollRefreshModeFull,
+		RefreshMode:            SharedPollRefreshModeVersioned,
 	})
 	setupSharedPollDeltaHandlers(node)
 
@@ -2626,7 +2628,7 @@ func TestSharedPollCachedData_ReturnedOnTrack(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
 		KeepLatestData:         true,
-		RefreshMode:            SharedPollRefreshModeFull,
+		RefreshMode:            SharedPollRefreshModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2787,7 +2789,7 @@ func TestSharedPollCachedData_VersionUpdatedNoDuplicate(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
 		KeepLatestData:         true,
-		RefreshMode:            SharedPollRefreshModeFull,
+		RefreshMode:            SharedPollRefreshModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2846,7 +2848,7 @@ func TestSharedPollCachedData_MultipleKeys(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
 		KeepLatestData:         true,
-		RefreshMode:            SharedPollRefreshModeFull,
+		RefreshMode:            SharedPollRefreshModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2917,7 +2919,7 @@ func TestSharedPollCachedData_PartialVersionMatch(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
 		KeepLatestData:         true,
-		RefreshMode:            SharedPollRefreshModeFull,
+		RefreshMode:            SharedPollRefreshModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2980,7 +2982,7 @@ func TestSharedPollAutoNotify_ColdKey(t *testing.T) {
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
-		RefreshMode:            SharedPollRefreshModeFull,
+		RefreshMode:            SharedPollRefreshModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -3025,7 +3027,7 @@ func TestSharedPollAutoNotify_ExistingKeyNoNotify(t *testing.T) {
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
-		RefreshMode:            SharedPollRefreshModeFull,
+		RefreshMode:            SharedPollRefreshModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -3053,7 +3055,8 @@ func TestSharedPollAutoNotify_ExistingKeyNoNotify(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 	}
 
-	// Client2 tracks the same key → key already exists → no auto-notify.
+	// Client2 tracks the same key with version=0 → warm key → triggers
+	// notify for near-immediate delivery (version=0 means "I have no data").
 	client2 := newTestClientV2(t, node, "user2")
 	connectClientV2(t, client2)
 	subscribeSharedPollClient(t, client2, "test:channel")
@@ -3061,10 +3064,26 @@ func TestSharedPollAutoNotify_ExistingKeyNoNotify(t *testing.T) {
 		{Key: "key1", Version: 0},
 	})
 
-	// No additional backend call should happen.
+	// Should trigger one additional backend call for the warm key.
 	select {
 	case <-callCh:
-		t.Fatal("should not auto-notify for existing key")
+		// Expected — warm key with version=0 triggers notify.
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected notify for warm key with version=0")
+	}
+
+	// Client3 tracks the same key with version > 0 → no notify (has data).
+	client3 := newTestClientV2(t, node, "user3")
+	connectClientV2(t, client3)
+	subscribeSharedPollClient(t, client3, "test:channel")
+	trackSharedPollClient(t, client3, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 1},
+	})
+
+	// No additional backend call — client already has data.
+	select {
+	case <-callCh:
+		t.Fatal("should not notify for warm key with version > 0")
 	case <-time.After(300 * time.Millisecond):
 		// Expected — no extra call.
 	}
@@ -3078,7 +3097,7 @@ func TestSharedPollAutoNotify_MultipleClientsSameColdKey(t *testing.T) {
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
-		RefreshMode:            SharedPollRefreshModeFull,
+		RefreshMode:            SharedPollRefreshModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -3105,7 +3124,8 @@ func TestSharedPollAutoNotify_MultipleClientsSameColdKey(t *testing.T) {
 		return pollCalled.Load() >= 1
 	}, 500*time.Millisecond, 10*time.Millisecond)
 
-	// Client2 tracks same key — should NOT trigger another notify (key exists).
+	// Client2 tracks same key with version=0 — triggers one additional notify
+	// (warm key, version=0 means "I have no data").
 	pollBefore := pollCalled.Load()
 	client2 := newTestClientV2(t, node, "user2")
 	connectClientV2(t, client2)
@@ -3114,9 +3134,26 @@ func TestSharedPollAutoNotify_MultipleClientsSameColdKey(t *testing.T) {
 		{Key: "key1", Version: 0},
 	})
 
-	// No additional handler call within 300ms (only the long timer would fire).
+	// One additional handler call expected for warm key notify.
+	require.Eventually(t, func() bool {
+		return pollCalled.Load() >= pollBefore+1
+	}, 500*time.Millisecond, 10*time.Millisecond, "expected notify for warm key with version=0")
+
+	// Client3 tracks same key simultaneously with version=0 —
+	// dedup should prevent a third notify (needsBroadcast already set).
+	pollBefore2 := pollCalled.Load()
+	client3 := newTestClientV2(t, node, "user3")
+	connectClientV2(t, client3)
+	subscribeSharedPollClient(t, client3, "test:channel")
+	trackSharedPollClient(t, client3, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// The dedup depends on timing — needsBroadcast may or may not be cleared
+	// by the time client3 arrives. But total extra calls should be bounded.
 	time.Sleep(300 * time.Millisecond)
-	require.Equal(t, pollBefore, pollCalled.Load(), "should not auto-notify for already-tracked key")
+	extraCalls := pollCalled.Load() - pollBefore2
+	require.LessOrEqual(t, extraCalls, int32(1), "at most one extra notify per wave")
 }
 
 func TestSharedPollAutoNotify_ColdKeyNonZeroVersionNoNotify(t *testing.T) {
@@ -3130,7 +3167,7 @@ func TestSharedPollAutoNotify_ColdKeyNonZeroVersionNoNotify(t *testing.T) {
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
-		RefreshMode:            SharedPollRefreshModeFull,
+		RefreshMode:            SharedPollRefreshModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -3167,7 +3204,7 @@ func TestSharedPollAutoNotify_ColdKeyVersionZeroTriggersNotify(t *testing.T) {
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
-		RefreshMode:            SharedPollRefreshModeFull,
+		RefreshMode:            SharedPollRefreshModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -3202,7 +3239,7 @@ func TestSharedPollCachedData_DeltaReadyAfterCache(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
 		KeepLatestData:         true,
-		RefreshMode:            SharedPollRefreshModeFull,
+		RefreshMode:            SharedPollRefreshModeVersioned,
 		NotificationBatchMaxSize:  50,
 		NotificationBatchMaxDelay: 50 * time.Millisecond,
 	})
@@ -3315,7 +3352,7 @@ func TestSharedPollCachedData_DeltaReadyPartialKeys(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
 		KeepLatestData:         true,
-		RefreshMode:            SharedPollRefreshModeFull,
+		RefreshMode:            SharedPollRefreshModeVersioned,
 	})
 	setupSharedPollDeltaHandlers(node)
 
@@ -3385,7 +3422,7 @@ func TestSharedPoll_PrevDataNotUsedWhenKeepLatestData(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
 		KeepLatestData:         true,
-		RefreshMode:            SharedPollRefreshModeFull,
+		RefreshMode:            SharedPollRefreshModeVersioned,
 		NotificationBatchMaxSize:  50,
 		NotificationBatchMaxDelay: 50 * time.Millisecond,
 	})
@@ -3711,4 +3748,149 @@ func TestSharedPoll_VersionlessReconnect(t *testing.T) {
 		k := client1.keyed.trackedKeys["test:channel"]["key1"]
 		return k != nil && k.version == 2
 	}, 2*time.Second, 10*time.Millisecond)
+}
+
+func TestSharedPollEpoch_VersionlessSubscribeReplyHasEpoch(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t)
+	setupSharedPollHandlers(node)
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+
+	result := subscribeSharedPollClient(t, client, "test:channel")
+	require.NotEmpty(t, result.Epoch, "versionless channel should have non-empty epoch")
+	require.Len(t, result.Epoch, 8, "epoch should be 8 characters")
+}
+
+func TestSharedPollEpoch_VersionedModeEmptyEpoch(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshMode:            SharedPollRefreshModeVersioned,
+		RefreshInterval:        100 * time.Millisecond,
+		RefreshBatchSize:       100,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+	})
+	setupSharedPollHandlers(node)
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+
+	result := subscribeSharedPollClient(t, client, "test:channel")
+	require.Empty(t, result.Epoch, "versioned mode channel should have empty epoch")
+}
+
+func TestSharedPollEpoch_VersionlessSendsSyntheticVersion(t *testing.T) {
+	// Versionless mode: publications should carry synthetic version on wire (not 0).
+	// We verify by checking the per-connection version which is set from the wire version.
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:           30 * time.Second,
+		RefreshBatchSize:          100,
+		MaxKeysPerConnection:      100,
+		MaxConsecutiveAbsences:    10,
+		NotificationBatchMaxSize:  50,
+		NotificationBatchMaxDelay: 50 * time.Millisecond,
+	})
+
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		items := make([]SharedPollRefreshItem, len(event.Items))
+		for i, item := range event.Items {
+			items[i] = SharedPollRefreshItem{
+				Key:  item.Key,
+				Data: []byte(`{"v":1}`),
+			}
+		}
+		return SharedPollResult{Items: items}, nil
+	})
+
+	setupSharedPollHandlers(node)
+	client := newTestClientV2(t, node, "user1")
+	sink := make(chan []byte, 100)
+	client.transport.(*testTransport).setSink(sink)
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// Notify to trigger data delivery.
+	node.SharedPollNotify([]SharedPollNotificationItem{
+		{Channel: "test:channel", Key: "key1"},
+	})
+
+	// Client per-connection version should be non-zero (synthetic version).
+	require.Eventually(t, func() bool {
+		client.mu.RLock()
+		defer client.mu.RUnlock()
+		k := client.keyed.trackedKeys["test:channel"]["key1"]
+		return k != nil && k.version > 0
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Also verify wire data contains non-zero version by checking sink.
+	found := false
+	for {
+		select {
+		case data := <-sink:
+			if len(data) > 0 && containsNonZeroKeyedVersion(data) {
+				found = true
+			}
+		default:
+			goto done
+		}
+	}
+done:
+	require.True(t, found, "wire publication should have non-zero version")
+}
+
+// containsNonZeroKeyedVersion checks if JSON data contains a keyed publication
+// with key="key1" and a non-zero version.
+func containsNonZeroKeyedVersion(data []byte) bool {
+	// Simple heuristic: check if data contains "key1" and "version" > 0.
+	// The actual wire format contains version field for the publication.
+	return len(data) > 0 &&
+		bytes.Contains(data, []byte(`"key":"key1"`)) &&
+		!bytes.Contains(data, []byte(`"version":0`)) &&
+		bytes.Contains(data, []byte(`"version"`))
+}
+
+func TestSharedPollEpoch_ChangesOnChannelStateRecreation(t *testing.T) {
+	// Versionless mode: when channel state is cleaned up (all keys untracked,
+	// shutdown delay fires) and recreated, the epoch must change. Otherwise
+	// reconnecting clients keep stale synthetic versions and miss updates
+	// until the version counter catches up.
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:        100 * time.Millisecond,
+		RefreshBatchSize:       100,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+		ChannelShutdownDelay:   0, // Immediate cleanup on last untrack.
+	})
+	setupSharedPollHandlers(node)
+
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+
+	// Track a key so the channel state is created.
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// Capture epoch from the created channel state.
+	epoch1 := node.sharedPollManager.Epoch("test:channel", true)
+	require.NotEmpty(t, epoch1)
+
+	// Untrack → triggers immediate channel state cleanup.
+	untrackSharedPollClient(t, client, "test:channel", []string{"key1"})
+
+	// Wait for channel state removal.
+	require.Eventually(t, func() bool {
+		return !node.sharedPollManager.hasChannel("test:channel")
+	}, time.Second, 10*time.Millisecond)
+
+	// Track again → channel state recreated with new epoch.
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	epoch2 := node.sharedPollManager.Epoch("test:channel", true)
+	require.NotEmpty(t, epoch2)
+	require.NotEqual(t, epoch1, epoch2, "epoch must change after channel state recreation")
 }

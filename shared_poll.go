@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/epoch"
 	"github.com/centrifugal/protocol"
 	"github.com/cespare/xxhash/v2"
 	fdelta "github.com/shadowspore/fossil-delta"
@@ -20,6 +21,7 @@ type SharedPollManager struct {
 	shutdownCh chan struct{}
 	wg         sync.WaitGroup // tracks running refresh workers for graceful shutdown
 	sem        chan struct{}   // shared concurrency limiter for backend calls
+	epoch      string         // random string generated at startup, used for versionless mode
 
 	mu       sync.RWMutex
 	channels map[string]*sharedPollChannelState
@@ -31,6 +33,13 @@ type SharedPollManager struct {
 type sharedPollChannelState struct {
 	mu   sync.Mutex // protects all fields below
 	opts SharedPollChannelOptions
+
+	// epoch is a random string generated when this channel state is created.
+	// Clients compare epochs on reconnect and reset stored versions when
+	// the epoch changes. This covers channel state recreation (e.g., after
+	// shutdown delay expires and all items are cleaned up) without requiring
+	// a full server restart.
+	epoch string
 
 	// itemIndex: key → tracked entry (version, data).
 	itemIndex map[string]*sharedPollTrackedEntry
@@ -58,6 +67,7 @@ type sharedPollTrackedEntry struct {
 	dataHash            uint64 // xxhash64 hash of data, only used in versionless mode
 	consecutiveAbsences int    // incremented when item is absent from response
 	freshFromPublish    bool   // set by SharedPollPublish, cleared each timer poll cycle
+	needsBroadcast      bool   // set when a version=0 subscriber joins an existing key; cleared after broadcast
 }
 
 func xxHash64(data []byte) uint64 {
@@ -75,17 +85,18 @@ func newSharedPollManager(node *Node) *SharedPollManager {
 		channels:       make(map[string]*sharedPollChannelState),
 		sem:            make(chan struct{}, concurrencyLimit),
 		brokerSubChans: make(map[string]Broker),
+		epoch:          epoch.Generate(),
 	}
 }
 
 // track registers an item in the shared poll channel state and ensures
 // a refresh worker is running. Hub registration (addSubscriber) is handled
 // by the generic keyed layer in handleKeyedTrack — NOT here.
-func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions, key string) (bool, error) {
+func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions, key string) (bool, uint64, error) {
 	// Check global shutdown.
 	select {
 	case <-m.shutdownCh:
-		return false, nil
+		return false, 0, nil
 	default:
 	}
 
@@ -96,6 +107,7 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 	if !ok {
 		s = &sharedPollChannelState{
 			opts:      opts,
+			epoch:     epoch.Generate(),
 			itemIndex: make(map[string]*sharedPollTrackedEntry),
 			notifCh:   make(chan string, 1024),
 		}
@@ -108,7 +120,7 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 	select {
 	case <-m.shutdownCh:
 		s.mu.Unlock()
-		return false, nil
+		return false, 0, nil
 	default:
 	}
 
@@ -118,6 +130,7 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 		m.mu.Lock()
 		s = &sharedPollChannelState{
 			opts:      opts,
+			epoch:     epoch.Generate(),
 			itemIndex: make(map[string]*sharedPollTrackedEntry),
 			notifCh:   make(chan string, 1024),
 		}
@@ -128,7 +141,7 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 		select {
 		case <-m.shutdownCh:
 			s.mu.Unlock()
-			return false, nil
+			return false, 0, nil
 		default:
 		}
 	}
@@ -142,6 +155,7 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 	if isNewKey {
 		s.itemIndex[key] = &sharedPollTrackedEntry{}
 	}
+	entryVersion := s.itemIndex[key].version
 
 	// Ensure refresh worker is running.
 	startWorker := false
@@ -185,11 +199,11 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 				}
 				m.mu.Unlock()
 			}
-			return false, err
+			return false, 0, err
 		}
 	}
 
-	return isNewKey, nil
+	return isNewKey, entryVersion, nil
 }
 
 // untrack removes an item from shared poll tracking when no connections remain.
@@ -215,6 +229,85 @@ func (m *SharedPollManager) untrack(channel string, key string) {
 
 	if empty {
 		s.scheduleShutdown(m, channel, s.opts.ChannelShutdownDelay)
+	}
+}
+
+// warmKeyData holds cached data for a warm key that can be delivered directly.
+type warmKeyData struct {
+	key             string
+	internalVersion uint64               // synthetic/real version for per-connection dedup
+	pub             *protocol.Publication // publication with wire version
+}
+
+// getWarmKeyData returns cached data for warm keys. Only returns entries when
+// KeepLatestData is enabled and the entry has data (version > 0).
+func (m *SharedPollManager) getWarmKeyData(channel string, keys []string) []warmKeyData {
+	m.mu.RLock()
+	s, ok := m.channels[channel]
+	m.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.opts.KeepLatestData || s.opts.isVersionless() {
+		return nil
+	}
+	var result []warmKeyData
+	for _, key := range keys {
+		entry := s.itemIndex[key]
+		if entry == nil || entry.version == 0 || entry.data == nil {
+			continue
+		}
+		result = append(result, warmKeyData{
+			key:             key,
+			internalVersion: entry.version,
+			pub: &protocol.Publication{
+				Key:     key,
+				Data:    entry.data,
+				Version: entry.version,
+			},
+		})
+	}
+	return result
+}
+
+// markNeedsBroadcast flags existing keys so polls re-broadcast their data even
+// if unchanged. Also triggers a notify for keys that have data (version > 0) and
+// were not already flagged — this provides near-immediate delivery via the
+// notification fast path instead of waiting for the next timer poll. The
+// at-most-once notify per key ensures mass reconnect (1000 clients, same key)
+// causes only one backend call per "wave", not one per client.
+//
+// Must be called AFTER addSubscriber so that broadcasts from the triggered notify
+// (or a concurrent timer poll) can reach the subscribing client.
+func (m *SharedPollManager) markNeedsBroadcast(channel string, keys []string) {
+	m.mu.RLock()
+	s, ok := m.channels[channel]
+	m.mu.RUnlock()
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	var toNotify []string
+	for _, key := range keys {
+		if entry := s.itemIndex[key]; entry != nil {
+			if !entry.needsBroadcast {
+				entry.needsBroadcast = true
+				// Only notify keys that already have data — version=0 keys are
+				// being handled by an in-flight cold key notify.
+				if entry.version > 0 {
+					toNotify = append(toNotify, key)
+				}
+			}
+		}
+	}
+	s.mu.Unlock()
+
+	// Notify outside the lock — triggers backend call for near-immediate delivery.
+	// Keys are combined by the worker's batch dedup when batching is configured.
+	for _, key := range toNotify {
+		m.notify(channel, key)
 	}
 }
 
@@ -276,6 +369,27 @@ func (m *SharedPollManager) hasChannel(channel string) bool {
 	_, ok := m.channels[channel]
 	m.mu.RUnlock()
 	return ok
+}
+
+// Epoch returns the epoch string for subscribe replies. For versionless
+// channels, returns a per-channel epoch that changes when channel state
+// is recreated (e.g., after shutdown delay expires and synthetic version
+// counter resets). For versioned channels, returns empty string — backend
+// versions are stable and don't need epoch-based invalidation.
+func (m *SharedPollManager) Epoch(channel string, isVersionless bool) string {
+	if !isVersionless {
+		return ""
+	}
+	m.mu.RLock()
+	s, ok := m.channels[channel]
+	m.mu.RUnlock()
+	if !ok {
+		return m.epoch
+	}
+	s.mu.Lock()
+	e := s.epoch
+	s.mu.Unlock()
+	return e
 }
 
 // close stops all refresh workers and waits for them to finish.
@@ -719,12 +833,16 @@ func (s *sharedPollChannelState) runNotifiedRefreshCycle(ctx context.Context, no
 
 	// Build event items.
 	items := make([]SharedPollItem, len(filtered))
-	if s.opts.RefreshMode == SharedPollRefreshModeDiff {
+	if !s.opts.isVersionless() {
 		s.mu.Lock()
 		for i, key := range filtered {
 			items[i] = SharedPollItem{Key: key}
 			if entry, ok := s.itemIndex[key]; ok {
-				items[i].Version = entry.version
+				if entry.needsBroadcast {
+					items[i].Version = 0
+				} else {
+					items[i].Version = entry.version
+				}
 			}
 		}
 		s.mu.Unlock()
@@ -850,12 +968,16 @@ func (s *sharedPollChannelState) runRefreshCycle(ctx context.Context, node *Node
 
 			// Build event items.
 			items := make([]SharedPollItem, len(chunk))
-			if s.opts.RefreshMode == SharedPollRefreshModeDiff {
+			if !s.opts.isVersionless() {
 				s.mu.Lock()
 				for i, key := range chunk {
 					items[i] = SharedPollItem{Key: key}
 					if entry, ok := s.itemIndex[key]; ok {
-						items[i].Version = entry.version
+						if entry.needsBroadcast {
+							items[i].Version = 0
+						} else {
+							items[i].Version = entry.version
+						}
 					}
 				}
 				s.mu.Unlock()
@@ -977,8 +1099,15 @@ func (s *sharedPollChannelState) onNotifiedRefreshResponse(channel string, items
 			}
 			if !changed {
 				unchangedCount++
+				if entry.needsBroadcast && entry.version > 0 {
+					entry.needsBroadcast = false
+					updates = append(updates, pendingUpdate{
+						key: e.Key, version: entry.version, data: e.Data,
+					})
+				}
 				continue
 			}
+			entry.needsBroadcast = false
 			changedCount++
 			s.versionCounter++
 			syntheticVersion := s.versionCounter
@@ -996,9 +1125,16 @@ func (s *sharedPollChannelState) onNotifiedRefreshResponse(channel string, items
 
 		if e.Version <= entry.version {
 			unchangedCount++
+			if entry.needsBroadcast && entry.version > 0 {
+				entry.needsBroadcast = false
+				updates = append(updates, pendingUpdate{
+					key: e.Key, version: entry.version, data: e.Data,
+				})
+			}
 			continue
 		}
 
+		entry.needsBroadcast = false
 		changedCount++
 		var prevData []byte
 		if s.opts.KeepLatestData {
@@ -1026,11 +1162,7 @@ func (s *sharedPollChannelState) onNotifiedRefreshResponse(channel string, items
 	pubs := make([]protocol.Publication, len(updates))
 	broadcasts := make([]pendingBroadcast, 0, len(updates)+len(removals))
 	for i, u := range updates {
-		wireVersion := u.version
-		if isVersionless {
-			wireVersion = 0
-		}
-		pubs[i] = protocol.Publication{Key: u.key, Data: u.data, Version: wireVersion}
+		pubs[i] = protocol.Publication{Key: u.key, Data: u.data, Version: u.version}
 		prep := buildPreparedPollData(&pubs[i], u.prevData)
 		broadcasts = append(broadcasts, pendingBroadcast{key: u.key, version: u.version, pub: &pubs[i], prep: prep})
 	}
@@ -1122,8 +1254,15 @@ func (s *sharedPollChannelState) onRefreshResponse(channel string, queriedKeys [
 			}
 			if !changed {
 				unchangedCount++
+				if entry.needsBroadcast && entry.version > 0 {
+					entry.needsBroadcast = false
+					updates = append(updates, pendingUpdate{
+						key: e.Key, version: entry.version, data: e.Data,
+					})
+				}
 				continue
 			}
+			entry.needsBroadcast = false
 			changedCount++
 			s.versionCounter++
 			syntheticVersion := s.versionCounter
@@ -1141,9 +1280,16 @@ func (s *sharedPollChannelState) onRefreshResponse(channel string, queriedKeys [
 
 		if e.Version <= entry.version {
 			unchangedCount++
+			if entry.needsBroadcast && entry.version > 0 {
+				entry.needsBroadcast = false
+				updates = append(updates, pendingUpdate{
+					key: e.Key, version: entry.version, data: e.Data,
+				})
+			}
 			continue
 		}
 
+		entry.needsBroadcast = false
 		changedCount++
 		// Capture prevData before updating — this is the delta base.
 		var prevData []byte
@@ -1180,11 +1326,7 @@ func (s *sharedPollChannelState) onRefreshResponse(channel string, queriedKeys [
 	broadcasts := make([]pendingBroadcast, 0, len(updates)+len(removals))
 	pubs := make([]protocol.Publication, len(updates))
 	for i, u := range updates {
-		wireVersion := u.version
-		if isVersionless {
-			wireVersion = 0
-		}
-		pubs[i] = protocol.Publication{Key: u.key, Data: u.data, Version: wireVersion}
+		pubs[i] = protocol.Publication{Key: u.key, Data: u.data, Version: u.version}
 		prep := buildPreparedPollData(&pubs[i], u.prevData)
 		broadcasts = append(broadcasts, pendingBroadcast{key: u.key, version: u.version, pub: &pubs[i], prep: prep})
 	}

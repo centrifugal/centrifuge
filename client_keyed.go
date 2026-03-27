@@ -143,19 +143,51 @@ func (c *Client) handleKeyedTrack(req *protocol.SubRefreshRequest, cmd *protocol
 
 		// Step 1: Register in SharedPollManager (ensures channel/key state exists).
 		// Do NOT addSubscriber yet — client must not receive broadcasts before response.
-		// Collect new (cold) keys with version=0 so we can auto-notify AFTER
-		// addSubscriber. Only version=0 ("I have no data") warrants an immediate
-		// backend call — clients with existing data can wait for the regular poll cycle.
-		var newKeys []string
+		// Classification:
+		//   cold: new to server → auto-poll (backend call) after addSubscriber.
+		//   warm: existing key, client needs data (version=0 or stale version) →
+		//         direct delivery from cache if KeepLatestData, else notify +
+		//         needsBroadcast for near-immediate backend poll.
+		//   (none): existing key, client up to date → no action.
+		var coldKeys []string
+		var warmKeys []string
 		for _, it := range req.Items {
 			if c.node.sharedPollManager != nil {
-				isNew, err := c.node.sharedPollManager.track(channel, opts, it.Key)
+				isNew, entryVersion, err := c.node.sharedPollManager.track(channel, opts, it.Key)
 				if err != nil {
 					c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, ErrorInternal, started, rw)
 					return
 				}
 				if isNew && it.Version == 0 {
-					newKeys = append(newKeys, it.Key)
+					// New to server, client has no data → cold key auto-poll.
+					coldKeys = append(coldKeys, it.Key)
+				} else if !isNew && it.Version == 0 {
+					// Existing key, client has no data → warm key.
+					warmKeys = append(warmKeys, it.Key)
+				} else if entryVersion > it.Version {
+					// Existing key, client has stale version → warm key.
+					warmKeys = append(warmKeys, it.Key)
+				}
+			}
+		}
+
+		// Compute warm key delivery plan. KeepLatestData → direct delivery
+		// from cache (zero backend calls). Otherwise → deferred via notify
+		// + needsBroadcast (one backend call per key per reconnect wave).
+		// Actual delivery happens after addSubscriber (steps 5.5 and 7).
+		var warmCachedData []warmKeyData
+		var deferredWarmKeys []string
+		if c.node.sharedPollManager != nil && len(warmKeys) > 0 {
+			warmCachedData = c.node.sharedPollManager.getWarmKeyData(channel, warmKeys)
+			if len(warmCachedData) < len(warmKeys) {
+				directKeys := make(map[string]struct{}, len(warmCachedData))
+				for _, wd := range warmCachedData {
+					directKeys[wd.key] = struct{}{}
+				}
+				for _, key := range warmKeys {
+					if _, ok := directKeys[key]; !ok {
+						deferredWarmKeys = append(deferredWarmKeys, key)
+					}
 				}
 			}
 		}
@@ -215,12 +247,28 @@ func (c *Client) handleKeyedTrack(req *protocol.SubRefreshRequest, cmd *protocol
 			hub.addSubscriber(it.Key, c)
 		}
 
+		// Step 5.5: Direct delivery for warm keys with cached data.
+		// Uses internal version for per-connection dedup — keyedWritePublication
+		// updates keyState.version to the internal version, so subsequent broadcasts
+		// with the same version are skipped (no double delivery).
+		for _, wd := range warmCachedData {
+			c.keyedWritePublication(channel, wd.key, wd.internalVersion, wd.pub, preparedData{})
+		}
+
 		// Step 6: Auto-notify cold keys AFTER addSubscriber so the broadcast
 		// from the notified refresh can reach this client.
-		if c.node.sharedPollManager != nil && len(newKeys) > 0 {
-			for _, key := range newKeys {
+		if c.node.sharedPollManager != nil && len(coldKeys) > 0 {
+			for _, key := range coldKeys {
 				c.node.sharedPollManager.notify(channel, key)
 			}
+		}
+
+		// Step 7: Deferred warm keys — flag + notify AFTER addSubscriber.
+		// markNeedsBroadcast sets the flag and sends at-most-one notify per
+		// key, triggering a backend call for near-immediate delivery. Keys
+		// already flagged by a concurrent client are skipped (deduplication).
+		if c.node.sharedPollManager != nil && len(deferredWarmKeys) > 0 {
+			c.node.sharedPollManager.markNeedsBroadcast(channel, deferredWarmKeys)
 		}
 	})
 	return nil

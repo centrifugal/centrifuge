@@ -259,12 +259,11 @@ const (
 	// returns {key, data} without versions. Centrifugo detects changes via content hash
 	// and generates internal synthetic versions. This is the default mode (also "").
 	SharedPollRefreshModeVersionless = "versionless"
-	// SharedPollRefreshModeFull is the refresh mode where the backend
-	// returns all items with {key, data, version}. Centrifugo filters by version.
-	SharedPollRefreshModeFull = "full"
-	// SharedPollRefreshModeDiff enables diff mode where item versions are included
-	// in the refresh request, allowing the backend to return only changed items.
-	SharedPollRefreshModeDiff = "diff"
+	// SharedPollRefreshModeVersioned is the versioned refresh mode where the backend
+	// returns items with {key, data, version}. Versions are included in requests,
+	// allowing the backend to skip unchanged items. Enables direct publish and
+	// cached initial data.
+	SharedPollRefreshModeVersioned = "versioned"
 )
 
 // SharedPollChannelOptions configures a shared poll channel.
@@ -281,8 +280,8 @@ type SharedPollChannelOptions struct {
 	// RefreshMode controls refresh request format.
 	// "versionless" (default, also ""): backend returns {key, data} without versions.
 	//   Centrifugo detects changes via content hash and generates internal versions.
-	// "full": backend returns {key, data, version}. Centrifugo filters by version.
-	// "diff": item versions included in request, backend returns only changed items.
+	// "versioned": backend returns {key, data, version}. Versions are included in
+	//   requests, allowing the backend to skip unchanged items.
 	RefreshMode string
 	// KeepLatestData controls whether TrackedEntry stores the last data payload
 	// per item. Default false.

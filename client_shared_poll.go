@@ -120,6 +120,9 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, ErrorNotAvailable, started, rw)
 			return
 		}
+		if c.node.sharedPollManager != nil {
+			res.Epoch = c.node.sharedPollManager.Epoch(channel, opts.isVersionless())
+		}
 		keyedOpts := opts.toKeyedChannelOptions()
 		c.node.keyedManager.getOrCreateChannel(channel, keyedOpts)
 
