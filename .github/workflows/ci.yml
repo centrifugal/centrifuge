@@ -34,9 +34,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Install redis-cli
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-tools
-
       - name: Start redis
         env:
           REDIS_VERSION: ${{ matrix.redis-version }}

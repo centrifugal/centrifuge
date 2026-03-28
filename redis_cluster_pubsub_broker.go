@@ -113,13 +113,21 @@ func (b *RedisBroker) runBrokerNodeGroupedPubSub(
 			return b.getShard(ch).shard
 		},
 	}
+	// Snapshot fields that are written by rebuildBrokerNodeGroupedPubSub under subClientsMu.
+	s.subClientsMu.Lock()
+	subClients := s.subClients
+	nodeClients := s.nodeClients
+	nodePartitions := s.nodePartitions
+	topologyDone := s.topologyDone
+	s.subClientsMu.Unlock()
+
 	runNodeGroupedPubSubLoop(
 		s.shard,
 		&s.subClientsMu,
-		s.subClients,
-		s.nodeClients,
-		s.nodePartitions,
-		s.topologyDone,
+		subClients,
+		nodeClients,
+		nodePartitions,
+		topologyDone,
 		s.topologyRebuildCh,
 		cb,
 		b.node,
