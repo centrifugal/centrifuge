@@ -780,7 +780,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		return PublishResult{}, errors.New("wrong Redis reply epoch")
 	}
 	result := PublishResult{StreamPosition: StreamPosition{Offset: uint64(offset), Epoch: epoch}}
-	if len(replies) == 3 {
+	if len(replies) >= 3 {
 		fromCacheStr, err := replies[2].ToString()
 		if err != nil {
 			return PublishResult{}, errors.New("wrong Redis reply from cache flag")
@@ -790,7 +790,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 			result.SuppressReason = SuppressReasonIdempotency
 		}
 	}
-	if len(replies) == 4 {
+	if len(replies) >= 4 {
 		skippedStr, err := replies[3].ToString()
 		if err != nil {
 			return PublishResult{}, errors.New("wrong Redis reply skipped flag")
