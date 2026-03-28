@@ -242,7 +242,7 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 			return nil, errors.New("can use sharded PUB/SUB feature (non-zero number of pub/sub partitions) only with Redis Cluster")
 		}
 		if shard.isCluster && e.conf.NumShardedPubSubPartitions == 0 {
-			return nil, errors.New("Redis Cluster requires sharded PUB/SUB (set NumShardedPubSubPartitions > 0)")
+			return nil, errors.New("redis cluster requires sharded PUB/SUB (set NumShardedPubSubPartitions > 0)")
 		}
 
 		// [node-grouped-pubsub] use per-node connections instead of per-partition.

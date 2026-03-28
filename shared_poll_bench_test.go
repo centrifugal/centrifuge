@@ -69,7 +69,7 @@ func benchRefreshCycle(b *testing.B, numKeys int, latency time.Duration) {
 	mgr := node.sharedPollManager
 	opts, _ := node.config.GetSharedPollChannelOptions("bench:ch")
 	for i := 0; i < numKeys; i++ {
-		mgr.track("bench:ch", opts, fmt.Sprintf("item_%d", i))
+		_, _, _ = mgr.track("bench:ch", opts, fmt.Sprintf("item_%d", i))
 	}
 
 	// Ensure keyed hub exists.
@@ -170,7 +170,7 @@ func benchLargeChannel(b *testing.B, totalKeys, batchSize int, latency time.Dura
 	mgr := node.sharedPollManager
 	opts, _ := node.config.GetSharedPollChannelOptions("bench:ch")
 	for i := 0; i < totalKeys; i++ {
-		mgr.track("bench:ch", opts, fmt.Sprintf("item_%d", i))
+		_, _, _ = mgr.track("bench:ch", opts, fmt.Sprintf("item_%d", i))
 	}
 
 	node.keyedManager.getOrCreateChannel("bench:ch", KeyedChannelOptions{})

@@ -18,7 +18,6 @@ type KeyedManager struct {
 }
 
 type keyedChannelState struct {
-	mu   sync.Mutex
 	hub  *keyedHub
 	opts KeyedChannelOptions
 }

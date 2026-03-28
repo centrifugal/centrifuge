@@ -3702,7 +3702,7 @@ func (c *Client) makeRecoveredMapPubsDeltaFossil(recoveredPubs []*protocol.Publi
 			// Removals are not delta-encoded (matches live behavior).
 			delete(prevByKey, key)
 			if isJSON && len(pub.Data) > 0 {
-				recoveredPubs[i] = copyMapPubWithData(pub, json.Escape(convert.BytesToString(pub.Data)), false)
+				recoveredPubs[i] = copyMapPubWithData(pub, json.Escape(convert.BytesToString(pub.Data)), false) //nolint:gosec // i is from range recoveredPubs
 			}
 			continue
 		}

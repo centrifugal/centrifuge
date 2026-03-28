@@ -2344,16 +2344,6 @@ gotFirst:
 	}
 }
 
-func drainSink(sink chan []byte) {
-	for {
-		select {
-		case <-sink:
-		default:
-			return
-		}
-	}
-}
-
 func TestBuildPreparedPollData_NoPrevData(t *testing.T) {
 	pub := &protocol.Publication{Data: []byte(`test`)}
 	prep := buildPreparedPollData(pub, nil)
