@@ -1067,7 +1067,12 @@ func TestRedisMapBroker_NodeGrouped_SlotMigration(t *testing.T) {
 
 // --- Add/Remove node helpers ---
 
-const redisServer = "/opt/homebrew/bin/redis-server"
+var redisServer = func() string {
+	if p, err := exec.LookPath("redis-server"); err == nil {
+		return p
+	}
+	return ""
+}()
 
 // startRedisNode starts a redis-server on the given port with cluster enabled.
 // Returns a cleanup function that shuts down the server.
@@ -1268,6 +1273,9 @@ func cleanupNode7004(t *testing.T) {
 // the node and verifies no panic + PubSub recovery.
 func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 	requireRedisCLI(t)
+	if redisServer == "" {
+		t.Skip("redis-server not found in PATH")
+	}
 	// Ensure clean state from any previous failed runs.
 	cleanupNode7004(t)
 
