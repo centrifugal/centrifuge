@@ -722,7 +722,19 @@ func TestRedisBroker_NodeGrouped_RebuildPreservesPartitions(t *testing.T) {
 
 // --- Slot migration helpers ---
 
-const redisCLI = "/opt/homebrew/bin/redis-cli"
+var redisCLI = func() string {
+	if p, err := exec.LookPath("redis-cli"); err == nil {
+		return p
+	}
+	return ""
+}()
+
+func requireRedisCLI(t *testing.T) {
+	t.Helper()
+	if redisCLI == "" {
+		t.Skip("redis-cli not found in PATH")
+	}
+}
 
 // clusterNodeInfo holds parsed info from CLUSTER NODES output.
 type clusterNodeInfo struct {
@@ -859,6 +871,7 @@ func migrateSlot(t *testing.T, slot int, source, target *clusterNodeInfo, allNod
 // TestRedisMapBroker_NodeGrouped_SlotMigration tests that PubSub recovers after
 // a Redis Cluster slot migration. Uses redis-cli to perform the actual migration.
 func TestRedisMapBroker_NodeGrouped_SlotMigration(t *testing.T) {
+	requireRedisCLI(t)
 	prefix := getUniquePrefix()
 	numPartitions := 128
 
@@ -1254,6 +1267,7 @@ func cleanupNode7004(t *testing.T) {
 // node, verifies the running broker discovers it and PubSub still works, then removes
 // the node and verifies no panic + PubSub recovery.
 func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
+	requireRedisCLI(t)
 	// Ensure clean state from any previous failed runs.
 	cleanupNode7004(t)
 
