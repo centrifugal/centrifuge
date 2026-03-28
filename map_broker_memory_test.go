@@ -37,8 +37,7 @@ func TestMemoryMapBroker_StatefulChannel(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -95,8 +94,7 @@ func TestMemoryMapBroker_StatefulChannelOrdered(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			Ordered:       true,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
@@ -138,8 +136,7 @@ func TestMemoryMapBroker_StateRevision(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -191,8 +188,7 @@ func TestMemoryMapBroker_StatePagination(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -253,8 +249,7 @@ func TestMemoryMapBroker_EpochHandling(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -292,8 +287,7 @@ func TestMemoryMapBroker_EpochMismatchWhenChannelNotExists(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -322,8 +316,7 @@ func TestMemoryMapBroker_NoEpochWhenChannelNotExists(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -350,8 +343,7 @@ func TestMemoryMapBroker_Idempotency(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -400,8 +392,7 @@ func TestMemoryMapBroker_VersionedPublishing(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -455,8 +446,7 @@ func TestMemoryMapBroker_PerKeyVersion(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -519,8 +509,7 @@ func TestMemoryMapBroker_MultipleChannels(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -571,8 +560,7 @@ func TestMemoryMapBroker_OrderedStateOrdering(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			Ordered:       true,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
@@ -628,8 +616,7 @@ func TestMemoryMapBroker_OrderedStatePagination(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			Ordered:       true,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
@@ -693,8 +680,7 @@ func TestMemoryMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			Ordered:       true,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
@@ -749,8 +735,7 @@ func TestMemoryMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			Ordered:       true,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
@@ -809,8 +794,7 @@ func TestMemoryMapBroker_Remove(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -885,8 +869,7 @@ func TestMemoryMapBroker_KeyModeIfNew(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -938,8 +921,7 @@ func TestMemoryMapBroker_KeyModeIfExists(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -990,8 +972,7 @@ func TestMemoryMapBroker_KeyModeReplace(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -1114,8 +1095,7 @@ func TestMemoryMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionPermanent,
+			Mode: MapModePersistent,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 		}
@@ -1215,8 +1195,7 @@ func TestMemoryMapBroker_UnorderedContinuity_EntryAdded(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionPermanent,
+			Mode: MapModePersistent,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 		}
@@ -1264,8 +1243,7 @@ func TestMemoryMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionPermanent,
+			Mode: MapModePersistent,
 			Ordered:       true,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
@@ -1326,8 +1304,7 @@ func TestMemoryMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionPermanent,
+			Mode: MapModePersistent,
 			Ordered:       true,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
@@ -1384,8 +1361,7 @@ func TestMemoryMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionPermanent,
+			Mode: MapModePersistent,
 			Ordered:       true,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
@@ -1471,8 +1447,7 @@ func TestMemoryMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionPermanent,
+			Mode: MapModePersistent,
 			Ordered:       true,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
@@ -1558,8 +1533,7 @@ func TestMemoryMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionPermanent,
+			Mode: MapModePersistent,
 			Ordered:       true,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
@@ -1652,8 +1626,7 @@ func TestMemoryMapBroker_CursorFormat(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionPermanent,
+			Mode: MapModePersistent,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 		}
@@ -1706,8 +1679,7 @@ func TestMemoryMapBroker_CursorFormat(t *testing.T) {
 
 		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionPermanent,
+				Mode: MapModePersistent,
 				Ordered:       true,
 				StreamSize:    100,
 				StreamTTL:     300 * time.Second,
@@ -1769,8 +1741,7 @@ func TestMemoryMapBroker_Delta(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -1894,8 +1865,7 @@ func TestMemoryMapBroker_Clear(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -1953,8 +1923,7 @@ func TestMemoryMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -1994,8 +1963,7 @@ func TestMemoryMapBroker_ReadStream_Table(t *testing.T) {
 		node, _ := New(Config{})
 		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				StreamSize:    100,
 				StreamTTL:     300 * time.Second,
 				KeyTTL:        300 * time.Second,
@@ -2010,8 +1978,7 @@ func TestMemoryMapBroker_EpochOnEmptyChannel(t *testing.T) {
 		node, _ := New(Config{})
 		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				StreamSize:    100,
 				StreamTTL:     300 * time.Second,
 				KeyTTL:        300 * time.Second,
@@ -2026,8 +1993,7 @@ func TestMemoryMapBroker_ReadStateAllEntries(t *testing.T) {
 		node, _ := New(Config{})
 		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				StreamSize:    100,
 				StreamTTL:     300 * time.Second,
 				KeyTTL:        300 * time.Second,
@@ -2042,8 +2008,7 @@ func TestMemoryMapBroker_RemoveEmptyKey(t *testing.T) {
 		node, _ := New(Config{})
 		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				StreamSize:    100,
 				StreamTTL:     300 * time.Second,
 				KeyTTL:        300 * time.Second,
@@ -2058,8 +2023,7 @@ func TestMemoryMapBroker_ClientInfoInState(t *testing.T) {
 		node, _ := New(Config{})
 		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				StreamSize:    100,
 				StreamTTL:     300 * time.Second,
 				KeyTTL:        300 * time.Second,
@@ -2074,8 +2038,7 @@ func TestMemoryMapBroker_ClientInfoInStream(t *testing.T) {
 		node, _ := New(Config{})
 		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				StreamSize:    100,
 				StreamTTL:     300 * time.Second,
 				KeyTTL:        300 * time.Second,
@@ -2091,8 +2054,7 @@ func TestMemoryMapBroker_ClientInfoDelivery(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        300 * time.Second,
@@ -2154,8 +2116,7 @@ func TestMemoryMapBroker_OrderedStateAsc(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			Ordered:       true,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
@@ -2217,8 +2178,7 @@ func TestMemoryMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			Ordered:       true,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
@@ -2295,8 +2255,7 @@ func TestMemoryMapBroker_OrderedStateAscSameScores(t *testing.T) {
 	node, _ := New(Config{})
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			Ordered:       true,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
@@ -2373,8 +2332,7 @@ func TestMemoryMapBroker_CleanupMetrics(t *testing.T) {
 	require.NoError(t, err)
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			StreamSize:    100,
 			StreamTTL:     300 * time.Second,
 			KeyTTL:        50 * time.Millisecond,

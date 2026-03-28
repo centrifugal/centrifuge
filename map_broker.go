@@ -369,8 +369,8 @@ type MapStateResult struct {
 type MapClearOptions struct{}
 
 // ResolveAndValidateMapChannelOptions resolves and validates map channel options
-// for a channel. Returns an error if the resolver is nil, modes are not set,
-// or the configuration is invalid. Auto-derives stream defaults for Converging mode.
+// for a channel. Returns an error if the resolver is nil, Mode is not set,
+// or the configuration is invalid. Auto-derives stream defaults for stream-backed modes.
 func ResolveAndValidateMapChannelOptions(resolver func(channel string) MapChannelOptions, channel string) (MapChannelOptions, error) {
 	if resolver == nil {
 		return MapChannelOptions{}, errors.New("map channel options resolver not configured")
@@ -378,48 +378,42 @@ func ResolveAndValidateMapChannelOptions(resolver func(channel string) MapChanne
 
 	opts := resolver(channel)
 
-	// Validate modes.
-	if opts.SyncMode == 0 {
-		return MapChannelOptions{}, errors.New("map channel not configured: set SyncMode")
+	// Validate mode.
+	if opts.Mode == 0 {
+		return MapChannelOptions{}, errors.New("map channel not configured: set Mode")
 	}
-	if opts.RetentionMode == 0 {
-		return MapChannelOptions{}, errors.New("map channel not configured: set RetentionMode")
-	}
-	if opts.SyncMode != MapSyncEphemeral && opts.SyncMode != MapSyncConverging {
-		return MapChannelOptions{}, errors.New("invalid SyncMode value")
-	}
-	if opts.RetentionMode != MapRetentionExpiring && opts.RetentionMode != MapRetentionPermanent {
-		return MapChannelOptions{}, errors.New("invalid RetentionMode value")
+	if opts.Mode != MapModeEphemeral && opts.Mode != MapModeDurable && opts.Mode != MapModePersistent {
+		return MapChannelOptions{}, errors.New("invalid Mode value")
 	}
 
-	// Validate retention.
-	if opts.RetentionMode == MapRetentionExpiring {
+	// Validate expiry/TTL.
+	if opts.Mode.HasExpiry() {
 		if opts.KeyTTL == 0 {
-			return MapChannelOptions{}, errors.New("KeyTTL required for RetentionMode Expiring")
+			return MapChannelOptions{}, errors.New("KeyTTL required for mode with expiry")
 		}
 		if opts.KeyTTL < 0 {
 			return MapChannelOptions{}, errors.New("KeyTTL must be positive")
 		}
 	}
-	if opts.RetentionMode == MapRetentionPermanent {
+	if !opts.Mode.HasExpiry() {
 		if opts.KeyTTL != 0 {
-			return MapChannelOptions{}, errors.New("KeyTTL must be 0 for RetentionMode Permanent (entries don't expire)")
+			return MapChannelOptions{}, errors.New("KeyTTL must be 0 for persistent mode (entries don't expire)")
 		}
 	}
 
-	// Validate sync.
-	if opts.SyncMode == MapSyncEphemeral {
+	// Validate stream fields.
+	if opts.Mode.IsEphemeral() {
 		if opts.StreamSize > 0 {
-			return MapChannelOptions{}, errors.New("StreamSize requires SyncMode Converging")
+			return MapChannelOptions{}, errors.New("StreamSize requires durable or persistent mode")
 		}
 		if opts.StreamTTL > 0 {
-			return MapChannelOptions{}, errors.New("StreamTTL requires SyncMode Converging")
+			return MapChannelOptions{}, errors.New("StreamTTL requires durable or persistent mode")
 		}
 		if opts.MetaTTL > 0 {
-			return MapChannelOptions{}, errors.New("MetaTTL requires SyncMode Converging")
+			return MapChannelOptions{}, errors.New("MetaTTL requires durable or persistent mode")
 		}
 	}
-	if opts.SyncMode == MapSyncConverging {
+	if opts.Mode.HasStream() {
 		if opts.StreamSize < 0 {
 			return MapChannelOptions{}, errors.New("StreamSize must be non-negative")
 		}
@@ -429,7 +423,7 @@ func ResolveAndValidateMapChannelOptions(resolver func(channel string) MapChanne
 		if opts.MetaTTL < 0 {
 			return MapChannelOptions{}, errors.New("MetaTTL must be non-negative")
 		}
-		// Auto-derive defaults for Converging mode.
+		// Auto-derive defaults for stream-backed modes.
 		if opts.StreamSize == 0 {
 			opts.StreamSize = 100
 		}
@@ -438,10 +432,10 @@ func ResolveAndValidateMapChannelOptions(resolver func(channel string) MapChanne
 		}
 		// Auto-derive MetaTTL.
 		if opts.MetaTTL == 0 {
-			if opts.RetentionMode == MapRetentionExpiring {
+			if opts.Mode.HasExpiry() {
 				opts.MetaTTL = opts.StreamTTL * 10
 			}
-			// For Permanent, MetaTTL stays 0 (permanent).
+			// For Persistent, MetaTTL stays 0 (permanent).
 		}
 		// Validate MetaTTL >= StreamTTL when both explicit.
 		if opts.MetaTTL > 0 && opts.MetaTTL < opts.StreamTTL {

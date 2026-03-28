@@ -115,12 +115,12 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 	}
 
 	// Reject CAS and Version in ephemeral mode.
-	if chOpts.SyncMode == MapSyncEphemeral {
+	if chOpts.Mode.IsEphemeral() {
 		if opts.ExpectedPosition != nil {
-			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
+			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires durable or persistent mode")
 		}
 		if opts.Version > 0 {
-			return MapUpdateResult{}, errors.New("version-based dedup requires SyncMode Converging")
+			return MapUpdateResult{}, errors.New("version-based dedup requires durable or persistent mode")
 		}
 	}
 
@@ -201,9 +201,9 @@ func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opt
 	}
 
 	// Reject CAS in ephemeral mode.
-	if chOpts.SyncMode == MapSyncEphemeral {
+	if chOpts.Mode.IsEphemeral() {
 		if opts.ExpectedPosition != nil {
-			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
+			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires durable or persistent mode")
 		}
 	}
 
@@ -641,7 +641,7 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 			var streamSize int
 			if h.channelOptionsResolver != nil {
 				chOpts, err := ResolveAndValidateMapChannelOptions(h.channelOptionsResolver, ch)
-				if err == nil && chOpts.SyncMode == MapSyncConverging {
+				if err == nil && chOpts.Mode.HasStream() {
 					streamSize = chOpts.StreamSize
 				}
 			}
@@ -840,7 +840,7 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 	var streamPosition StreamPosition
 
 	// Handle stream
-	if chOpts.SyncMode == MapSyncConverging {
+	if chOpts.Mode.HasStream() {
 		expireAt := time.Now().UnixMilli() + chOpts.StreamTTL.Milliseconds()
 		if _, ok := h.expires[ch]; !ok {
 			heap.Push(&h.expireQueue, &priority.Item{Value: ch, Priority: expireAt})
@@ -989,7 +989,7 @@ func (h *mapHub) remove(ch string, key string, chOpts MapChannelOptions, opts Ma
 	var streamPosition StreamPosition
 
 	// Add to stream if converging mode
-	if chOpts.SyncMode == MapSyncConverging {
+	if chOpts.Mode.HasStream() {
 		expireAt := time.Now().UnixMilli() + chOpts.StreamTTL.Milliseconds()
 		if _, ok := h.expires[ch]; !ok {
 			heap.Push(&h.expireQueue, &priority.Item{Value: ch, Priority: expireAt})

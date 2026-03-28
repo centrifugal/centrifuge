@@ -38,45 +38,39 @@ func main() {
 		// Map subscription sync protocol configs.
 		MapPaginationMinLimit: 1, // Set to 1 for demo purposes, default is 100.
 		// Configure channel options per channel.
-		// Each channel must specify SyncMode and RetentionMode explicitly.
+		// Each channel must specify Mode explicitly.
 		GetMapChannelOptions: func(channel string) centrifuge.MapChannelOptions {
 			if channel == "inventory" {
 				return centrifuge.MapChannelOptions{
-					SyncMode:      centrifuge.MapSyncConverging,
-					RetentionMode: centrifuge.MapRetentionPermanent,
+					Mode: centrifuge.MapModePersistent,
 				}
 			}
 			if channel == "scoreboard" {
 				return centrifuge.MapChannelOptions{
-					SyncMode:      centrifuge.MapSyncConverging,
-					RetentionMode: centrifuge.MapRetentionPermanent,
+					Mode: centrifuge.MapModePersistent,
 				}
 			}
 			if channel == "visualizer" {
 				return centrifuge.MapChannelOptions{
-					SyncMode:      centrifuge.MapSyncConverging,
-					RetentionMode: centrifuge.MapRetentionPermanent,
+					Mode: centrifuge.MapModePersistent,
 				}
 			}
 			if strings.HasPrefix(channel, "clients:") {
 				return centrifuge.MapChannelOptions{
-					SyncMode:      centrifuge.MapSyncEphemeral,
-					RetentionMode: centrifuge.MapRetentionExpiring,
-					KeyTTL:        60 * time.Second,
+					Mode:   centrifuge.MapModeEphemeral,
+					KeyTTL: 60 * time.Second,
 				}
 			}
 			if strings.HasPrefix(channel, "users:") {
 				return centrifuge.MapChannelOptions{
-					SyncMode:      centrifuge.MapSyncEphemeral,
-					RetentionMode: centrifuge.MapRetentionExpiring,
-					KeyTTL:        60 * time.Second,
+					Mode:   centrifuge.MapModeEphemeral,
+					KeyTTL: 60 * time.Second,
 				}
 			}
-			// Cursors, games, tickers — all ephemeral with expiring keys (default).
+			// Cursors, games, tickers — all ephemeral (default).
 			return centrifuge.MapChannelOptions{
-				SyncMode:      centrifuge.MapSyncEphemeral,
-				RetentionMode: centrifuge.MapRetentionExpiring,
-				KeyTTL:        1 * time.Minute,
+				Mode:   centrifuge.MapModeEphemeral,
+				KeyTTL: 1 * time.Minute,
 			}
 		},
 	})

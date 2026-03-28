@@ -20,8 +20,7 @@ func newTestNodeWithMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
 		MapPaginationMinLimit: 1, // Allow small page sizes in tests.
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncEphemeral,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeEphemeral,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -48,8 +47,7 @@ func newTestNodeWithMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
 func setTestMapChannelOptionsConverging(node *Node) {
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			KeyTTL:        60 * time.Second,
 		}
 	}
@@ -1468,8 +1466,7 @@ func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
 		MapPaginationMinLimit: 1,
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -1542,8 +1539,7 @@ func TestMapSubscribe_StateToLive_WithStreamPublications(t *testing.T) {
 		LogHandler: func(entry LogEntry) {},
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -1612,8 +1608,7 @@ func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
 		MapPaginationMinLimit: 1,
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -1704,8 +1699,7 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination(t *testing.T) {
 		MapPaginationMinLimit: 1,
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -1813,8 +1807,7 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination_ManyPublishes(t *testi
 		MapPaginationMinLimit: 1,
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -2420,8 +2413,7 @@ func TestMapSubscribe_RecoveryMaxPublicationLimit(t *testing.T) {
 		MapLiveTransitionMaxPublicationLimit: 5, // Max 5 publications during recovery.
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -3893,8 +3885,7 @@ func TestSharedPollSubscribe_WithMapPresence(t *testing.T) {
 		},
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncEphemeral,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeEphemeral,
 				KeyTTL:        60 * time.Second,
 			}
 		},

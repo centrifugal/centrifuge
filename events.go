@@ -620,7 +620,7 @@ type SharedPollEvent struct {
 // SharedPollItem represents an item being refreshed.
 type SharedPollItem struct {
 	Key     string
-	Version uint64 // 0 when RefreshMode is "full"
+	Version uint64 // 0 when Mode is "versionless"
 }
 
 // SharedPollResult contains the response from a shared poll refresh.

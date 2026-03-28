@@ -4,10 +4,6 @@ go 1.24.9
 
 replace github.com/centrifugal/centrifuge => ../
 
-replace github.com/redis/rueidis => ../../rueidis
-
-replace github.com/centrifugal/protocol => ../../protocol
-
 require (
 	github.com/centrifugal/centrifuge v0.8.2
 	github.com/centrifugal/centrifuge-go v0.10.11
@@ -40,7 +36,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bytedance/sonic v1.14.0 // indirect
 	github.com/bytedance/sonic/loader v0.3.0 // indirect
-	github.com/centrifugal/protocol v0.18.2 // indirect
+	github.com/centrifugal/protocol v0.18.3-0.20260328121911-a27cd109e49a // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect
 	github.com/charmbracelet/x/ansi v0.10.1 // indirect

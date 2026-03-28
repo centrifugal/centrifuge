@@ -1432,8 +1432,7 @@ func TestNodeCheckPositionMap(t *testing.T) {
 
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			KeyTTL:        60 * time.Second,
 		}
 	}
@@ -1498,8 +1497,7 @@ func TestNodeCheckPositionMapWithMedium(t *testing.T) {
 
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			KeyTTL:        60 * time.Second,
 		}
 	}
@@ -1619,8 +1617,7 @@ func TestGetMapBroker(t *testing.T) {
 
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			KeyTTL:        60 * time.Second,
 		}
 	}
@@ -1690,8 +1687,7 @@ func TestNode_MapStreamReadUnrecoverablePosition(t *testing.T) {
 
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			KeyTTL:        60 * time.Second,
 		}
 	}
@@ -1729,8 +1725,7 @@ func TestNode_MapRemoveEmptyKey(t *testing.T) {
 
 	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			SyncMode:      MapSyncConverging,
-			RetentionMode: MapRetentionExpiring,
+			Mode: MapModeDurable,
 			KeyTTL:        60 * time.Second,
 		}
 	}

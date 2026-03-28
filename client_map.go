@@ -38,23 +38,23 @@ import (
 //
 // Key differences from normal subscriptions:
 //
-// EnablePositioning and EnableRecovery are auto-set from the channel's SyncMode
+// EnablePositioning and EnableRecovery are auto-set from the channel's Mode
 // (configured in MapChannelOptions via GetMapChannelOptions resolver):
 //
-//   - MapSyncEphemeral: Streamless mode. No stream history is maintained.
+//   - MapModeEphemeral: Streamless mode. No stream history is maintained.
 //     State is always available, but recovery on reconnect requires a full state re-sync.
 //     CAS (ExpectedPosition) and Version-based dedup are not available.
 //     EnablePositioning and EnableRecovery are both set to false.
 //
-//   - MapSyncConverging: Stream mode. Publications are tracked with offsets, stream
-//     history is maintained, and clients can recover missed publications on reconnect.
-//     CAS and Version features are available.
+//   - MapModeDurable / MapModePersistent: Stream mode. Publications are tracked with
+//     offsets, stream history is maintained, and clients can recover missed publications
+//     on reconnect. CAS and Version features are available.
 //     EnablePositioning and EnableRecovery are both set to true.
 //
 // When Type is SubscriptionTypeMap in SubscribeOptions, the subscription gets:
 //   - State delivery (always)
-//   - Stream position tracking (if MapSyncConverging)
-//   - Stream-based recovery (if MapSyncConverging)
+//   - Stream position tracking (if Mode.HasStream())
+//   - Stream-based recovery (if Mode.HasStream())
 //   - Delta compression support for stream catch-up (if negotiated)
 //   - Tags filtering for stream and live publications (if allowed)
 //
@@ -267,13 +267,13 @@ func (c *Client) handleMapSubscribe(
 ) error {
 	channel := req.Channel
 
-	// Auto-set positioning flags from SyncMode.
+	// Auto-set positioning flags from Mode.
 	chOpts, err := c.node.ResolveMapChannelOptions(channel)
 	if err != nil {
 		c.cleanupMapSubscribing(channel)
 		return err
 	}
-	if chOpts.SyncMode == MapSyncConverging {
+	if chOpts.Mode.HasStream() {
 		reply.Options.EnablePositioning = true
 		reply.Options.EnableRecovery = true
 	} else {

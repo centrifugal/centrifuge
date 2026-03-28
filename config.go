@@ -6,61 +6,57 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// MapSyncMode controls how client state stays in sync with server state after disconnections.
-type MapSyncMode int
+// MapMode controls the synchronization, recovery, and data lifecycle behavior of a map channel.
+type MapMode int
 
 const (
-	// MapSyncEphemeral means no stream. Live updates via PUB/SUB only. Missed updates
-	// during disconnect are lost. Reconnect = full state resync.
-	MapSyncEphemeral MapSyncMode = iota + 1
-	// MapSyncConverging means stream-backed. Missed updates are recovered from stream
-	// on reconnect. Client state converges to server state via delta catch-up.
-	MapSyncConverging
+	// MapModeEphemeral: PUB/SUB only, no stream. Missed updates during disconnect
+	// are lost — reconnect triggers full state resync. Entries expire after KeyTTL.
+	MapModeEphemeral MapMode = iota + 1
+	// MapModeDurable: stream-backed with offset-based recovery. Entries expire after
+	// KeyTTL. TTL removal events are logged to the stream (durable delivery).
+	MapModeDurable
+	// MapModePersistent: stream-backed with offset-based recovery. Entries live
+	// forever (until explicitly removed). No TTL, no expiry.
+	MapModePersistent
 )
 
-// MapRetentionMode controls the data lifecycle of entries in the channel.
-type MapRetentionMode int
+// IsEphemeral returns true for MapModeEphemeral.
+func (m MapMode) IsEphemeral() bool { return m == MapModeEphemeral }
 
-const (
-	// MapRetentionExpiring means entries expire after KeyTTL. Cleanup worker removes
-	// expired entries and publishes removal events.
-	MapRetentionExpiring MapRetentionMode = iota + 1
-	// MapRetentionPermanent means entries live forever (until explicitly removed).
-	MapRetentionPermanent
-)
+// HasStream returns true for modes that maintain a recovery stream (Durable, Persistent).
+func (m MapMode) HasStream() bool { return m == MapModeDurable || m == MapModePersistent }
+
+// HasExpiry returns true for modes where entries expire via TTL (Ephemeral, Durable).
+func (m MapMode) HasExpiry() bool { return m == MapModeEphemeral || m == MapModeDurable }
 
 // MapChannelOptions contains configuration for map channels. Every map channel
-// must have SyncMode and RetentionMode explicitly set — zero values are errors.
+// must have Mode explicitly set — zero value is an error.
 //
-// Note on Ephemeral + Expiring combination: when SyncMode is Ephemeral and
-// RetentionMode is Expiring, TTL removal events are delivered via pub/sub but
-// NOT logged to a stream (there is no stream in Ephemeral mode). If a client
-// misses the removal pub/sub message (e.g., during a brief disconnect), it will
-// retain stale entries until the next full state resync. This is expected behavior
-// for ephemeral use cases like cursor tracking, but may be surprising for data
-// that requires strict consistency — use Converging mode for those cases.
+// Note on Ephemeral mode: TTL removal events are delivered via pub/sub but
+// NOT logged to a stream (there is no stream). If a client misses the removal
+// pub/sub message (e.g., during a brief disconnect), it will retain stale entries
+// until the next full state resync. This is expected behavior for ephemeral use
+// cases like cursor tracking — use Durable mode for data requiring consistency.
 type MapChannelOptions struct {
-	// SyncMode controls client-server synchronization after disconnections.
+	// Mode controls synchronization, recovery, and data lifecycle.
 	// Required. Zero value = not configured = error.
-	SyncMode MapSyncMode
-	// RetentionMode controls the data lifecycle of entries.
-	// Required. Zero value = not configured = error.
-	RetentionMode MapRetentionMode
+	Mode MapMode
 	// KeyTTL sets automatic expiration for entries in this channel.
-	// Required when RetentionMode is Expiring (must be > 0).
-	// Must be 0 when RetentionMode is Permanent.
+	// Required when Mode.HasExpiry() (must be > 0).
+	// Must be 0 when Mode is Persistent.
 	KeyTTL time.Duration
 	// Ordered enables score-based ordering in the state. When true, entries
 	// are returned sorted by Score (descending).
 	Ordered bool
 	// StreamSize sets the maximum number of entries in the recovery stream.
-	// Zero = auto-derived (100) for Converging mode. Must be 0 for Ephemeral.
+	// Zero = auto-derived (100) for Durable/Persistent. Must be 0 for Ephemeral.
 	StreamSize int
 	// StreamTTL sets how long stream entries are retained.
-	// Zero = auto-derived (1 minute) for Converging mode. Must be 0 for Ephemeral.
+	// Zero = auto-derived (1 minute) for Durable/Persistent. Must be 0 for Ephemeral.
 	StreamTTL time.Duration
 	// MetaTTL sets how long stream metadata (epoch, offset) is retained.
-	// Zero = auto-derived: Converging+Expiring: StreamTTL*10, Converging+Permanent: permanent (no expiry).
+	// Zero = auto-derived: Durable: StreamTTL*10, Persistent: permanent (no expiry).
 	// Must be 0 for Ephemeral.
 	MetaTTL time.Duration
 }
@@ -255,15 +251,15 @@ type SharedPollNotification struct {
 }
 
 const (
-	// SharedPollRefreshModeVersionless is the versionless refresh mode where the backend
+	// SharedPollModeVersionless is the versionless mode where the backend
 	// returns {key, data} without versions. Centrifugo detects changes via content hash
 	// and generates internal synthetic versions. This is the default mode (also "").
-	SharedPollRefreshModeVersionless = "versionless"
-	// SharedPollRefreshModeVersioned is the versioned refresh mode where the backend
+	SharedPollModeVersionless = "versionless"
+	// SharedPollModeVersioned is the versioned mode where the backend
 	// returns items with {key, data, version}. Versions are included in requests,
 	// allowing the backend to skip unchanged items. Enables direct publish and
 	// cached initial data.
-	SharedPollRefreshModeVersioned = "versioned"
+	SharedPollModeVersioned = "versioned"
 )
 
 // SharedPollChannelOptions configures a shared poll channel.
@@ -277,12 +273,12 @@ type SharedPollChannelOptions struct {
 	// RefreshBatchSize sets the maximum number of item keys per OnSharedPoll call.
 	// Zero value means 1000.
 	RefreshBatchSize int
-	// RefreshMode controls refresh request format.
+	// Mode controls request format.
 	// "versionless" (default, also ""): backend returns {key, data} without versions.
 	//   Centrifugo detects changes via content hash and generates internal versions.
 	// "versioned": backend returns {key, data, version}. Versions are included in
 	//   requests, allowing the backend to skip unchanged items.
-	RefreshMode string
+	Mode string
 	// KeepLatestData controls whether TrackedEntry stores the last data payload
 	// per item. Default false.
 	KeepLatestData bool
@@ -320,7 +316,7 @@ type SharedPollChannelOptions struct {
 }
 
 func (o SharedPollChannelOptions) isVersionless() bool {
-	return o.RefreshMode == "" || o.RefreshMode == SharedPollRefreshModeVersionless
+	return o.Mode == "" || o.Mode == SharedPollModeVersionless
 }
 
 func (o SharedPollChannelOptions) toKeyedChannelOptions() KeyedChannelOptions {

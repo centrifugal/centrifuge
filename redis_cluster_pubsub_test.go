@@ -54,8 +54,7 @@ func TestRedisMapBroker_NodeGrouped_ConnectionCount(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -96,8 +95,7 @@ func TestRedisMapBroker_NodeGrouped_Basic(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -136,8 +134,7 @@ func TestRedisMapBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 		LogHandler: func(entry LogEntry) {},
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -193,8 +190,7 @@ func TestRedisMapBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 	node2, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -233,8 +229,7 @@ func TestRedisMapBroker_NodeGrouped_TopologyStable(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -265,8 +260,7 @@ func TestRedisMapBroker_NodeGrouped_TopologyDoneChannel(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -316,8 +310,7 @@ func TestRedisMapBroker_NodeGrouped_QueryClusterSlots(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -361,8 +354,7 @@ func TestRedisMapBroker_NodeGrouped_RebuildPreservesPartitions(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -399,8 +391,7 @@ func TestRedisMapBroker_NodeGrouped_Cleanup(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        1 * time.Second,
 			}
 		},
@@ -508,8 +499,7 @@ func TestRedisBroker_NodeGrouped_ConnectionCount(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -556,8 +546,7 @@ func TestRedisBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 		LogHandler: func(entry LogEntry) {},
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -625,8 +614,7 @@ func TestRedisBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 	node2, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -670,8 +658,7 @@ func TestRedisBroker_NodeGrouped_TopologyStable(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -702,8 +689,7 @@ func TestRedisBroker_NodeGrouped_RebuildPreservesPartitions(t *testing.T) {
 	node, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -883,8 +869,7 @@ func TestRedisMapBroker_NodeGrouped_SlotMigration(t *testing.T) {
 		},
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -951,8 +936,7 @@ func TestRedisMapBroker_NodeGrouped_SlotMigration(t *testing.T) {
 	node2, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -1283,8 +1267,7 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 		},
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},
@@ -1320,8 +1303,7 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 	node2, _ := New(Config{
 		GetMapChannelOptions: func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				SyncMode:      MapSyncConverging,
-				RetentionMode: MapRetentionExpiring,
+				Mode: MapModeDurable,
 				KeyTTL:        60 * time.Second,
 			}
 		},

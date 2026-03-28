@@ -509,17 +509,17 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 	}
 
 	// Reject CAS and Version in ephemeral mode.
-	if chOpts.SyncMode == MapSyncEphemeral {
+	if chOpts.Mode.IsEphemeral() {
 		if opts.ExpectedPosition != nil {
-			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
+			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires durable or persistent mode")
 		}
 		if opts.Version > 0 {
-			return MapUpdateResult{}, errors.New("version-based dedup requires SyncMode Converging")
+			return MapUpdateResult{}, errors.New("version-based dedup requires durable or persistent mode")
 		}
 	}
 
 	// Fast path for non-history, non-idempotent, non-keyed publications.
-	if chOpts.SyncMode == MapSyncEphemeral && opts.IdempotencyKey == "" && key == "" {
+	if chOpts.Mode.IsEphemeral() && opts.IdempotencyKey == "" && key == "" {
 		if e.conf.SkipPubSub {
 			return MapUpdateResult{}, nil
 		}
@@ -598,7 +598,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 	}
 
 	var streamKey, metaKey, stateHashKey, stateOrderKey, stateExpireKey, stateMetaKey string
-	streamless := chOpts.SyncMode == MapSyncEphemeral
+	streamless := chOpts.Mode.IsEphemeral()
 
 	if !streamless {
 		streamKey = e.streamKey(s.shard, ch)
@@ -752,19 +752,19 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 	}
 
 	// Reject CAS in ephemeral mode.
-	if chOpts.SyncMode == MapSyncEphemeral {
+	if chOpts.Mode.IsEphemeral() {
 		if opts.ExpectedPosition != nil {
-			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires SyncMode Converging")
+			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires durable or persistent mode")
 		}
 	}
 
 	var streamKey, metaKey string
-	if chOpts.SyncMode != MapSyncEphemeral {
+	if chOpts.Mode.HasStream() {
 		streamKey = e.streamKey(s.shard, ch)
 		metaKey = e.metaKey(s.shard, ch)
 	}
 
-	streamless := chOpts.SyncMode == MapSyncEphemeral
+	streamless := chOpts.Mode.IsEphemeral()
 
 	// For unpublish, we use state keys to track which keys exist
 	stateHashKey := e.stateHashKey(s.shard, ch)
@@ -960,7 +960,7 @@ func (e *RedisMapBroker) readSingleKeyWithOpts(ctx context.Context, ch string, o
 
 	stateHashKey := e.stateHashKey(s.shard, ch)
 
-	streamless := chOpts.SyncMode == MapSyncEphemeral
+	streamless := chOpts.Mode.IsEphemeral()
 
 	if streamless {
 		// Streamless mode: just read the key, no meta needed.
@@ -1060,7 +1060,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 	}
 
 	streamlessFlag := "0"
-	if chOpts.SyncMode == MapSyncEphemeral {
+	if chOpts.Mode.IsEphemeral() {
 		streamlessFlag = "1"
 	}
 
@@ -1167,7 +1167,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 //	)
 //
 //	streamlessFlag := "0"
-//	if chOpts.SyncMode == MapSyncEphemeral {
+//	if chOpts.Mode.IsEphemeral() {
 //		streamlessFlag = "1"
 //	}
 //
@@ -1311,7 +1311,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 	}
 
 	streamlessFlag := "0"
-	if chOpts.SyncMode == MapSyncEphemeral {
+	if chOpts.Mode.IsEphemeral() {
 		streamlessFlag = "1"
 	}
 
@@ -2573,7 +2573,7 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 	// Determine streamless mode — all KEYS are always real (slot-aligned) keys,
 	// and the Lua script uses the streamless flag to skip stream/meta operations.
 	streamlessFlag := "0"
-	if chOpts.SyncMode == MapSyncEphemeral {
+	if chOpts.Mode.IsEphemeral() {
 		streamlessFlag = "1"
 	}
 
