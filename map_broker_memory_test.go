@@ -2582,3 +2582,1125 @@ func TestMapMode_Methods(t *testing.T) {
 	require.True(t, MapModeDurable.HasExpiry())
 	require.False(t, MapModePersistent.HasExpiry())
 }
+
+// TestMemoryMapBroker_CAS_Publish tests Compare-And-Swap semantics for Publish.
+func TestMemoryMapBroker_CAS_Publish(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_cas_publish"
+
+	// Publish key1
+	res1, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+	require.False(t, res1.Suppressed)
+	epoch := res1.Position.Epoch
+
+	// CAS with correct position → succeeds
+	res2, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
+		Data:             []byte("v2"),
+		ExpectedPosition: &StreamPosition{Offset: res1.Position.Offset, Epoch: epoch},
+	})
+	require.NoError(t, err)
+	require.False(t, res2.Suppressed)
+	require.Equal(t, uint64(2), res2.Position.Offset)
+
+	// CAS with stale offset → mismatch, returns CurrentPublication
+	res3, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
+		Data:             []byte("v3"),
+		ExpectedPosition: &StreamPosition{Offset: 1, Epoch: epoch}, // stale offset
+	})
+	require.NoError(t, err)
+	require.True(t, res3.Suppressed)
+	require.Equal(t, SuppressReasonPositionMismatch, res3.SuppressReason)
+	require.NotNil(t, res3.CurrentPublication)
+	require.Equal(t, []byte("v2"), res3.CurrentPublication.Data)
+	require.Equal(t, uint64(2), res3.CurrentPublication.Offset)
+
+	// CAS with wrong epoch → mismatch
+	res4, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
+		Data:             []byte("v4"),
+		ExpectedPosition: &StreamPosition{Offset: 2, Epoch: "wrong-epoch"},
+	})
+	require.NoError(t, err)
+	require.True(t, res4.Suppressed)
+	require.Equal(t, SuppressReasonPositionMismatch, res4.SuppressReason)
+
+	// CAS on non-existent key → mismatch (no current pub)
+	res5, err := broker.Publish(ctx, ch, "nonexistent", MapPublishOptions{
+		Data:             []byte("data"),
+		ExpectedPosition: &StreamPosition{Offset: 1, Epoch: epoch},
+	})
+	require.NoError(t, err)
+	require.True(t, res5.Suppressed)
+	require.Equal(t, SuppressReasonPositionMismatch, res5.SuppressReason)
+	require.Nil(t, res5.CurrentPublication)
+
+	// Verify state unchanged
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 1)
+	require.Equal(t, []byte("v2"), stateRes.Publications[0].Data)
+}
+
+// TestMemoryMapBroker_CAS_Remove tests Compare-And-Swap semantics for Remove.
+func TestMemoryMapBroker_CAS_Remove(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_cas_remove"
+
+	// Publish key1
+	res1, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+	epoch := res1.Position.Epoch
+
+	// CAS remove with wrong offset → mismatch, returns CurrentPublication
+	res2, err := broker.Remove(ctx, ch, "key1", MapRemoveOptions{
+		ExpectedPosition: &StreamPosition{Offset: 999, Epoch: epoch},
+	})
+	require.NoError(t, err)
+	require.True(t, res2.Suppressed)
+	require.Equal(t, SuppressReasonPositionMismatch, res2.SuppressReason)
+	require.NotNil(t, res2.CurrentPublication)
+	require.Equal(t, []byte("v1"), res2.CurrentPublication.Data)
+
+	// CAS remove with wrong epoch → mismatch
+	res3, err := broker.Remove(ctx, ch, "key1", MapRemoveOptions{
+		ExpectedPosition: &StreamPosition{Offset: res1.Position.Offset, Epoch: "bad-epoch"},
+	})
+	require.NoError(t, err)
+	require.True(t, res3.Suppressed)
+	require.Equal(t, SuppressReasonPositionMismatch, res3.SuppressReason)
+
+	// CAS remove with correct position → succeeds
+	res4, err := broker.Remove(ctx, ch, "key1", MapRemoveOptions{
+		ExpectedPosition: &StreamPosition{Offset: res1.Position.Offset, Epoch: epoch},
+	})
+	require.NoError(t, err)
+	require.False(t, res4.Suppressed)
+
+	// Verify key removed
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Empty(t, stateRes.Publications)
+}
+
+// TestMemoryMapBroker_EphemeralRejectsCAS tests that CAS and Version are rejected in ephemeral mode.
+func TestMemoryMapBroker_EphemeralRejectsCAS(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeEphemeral,
+			KeyTTL: 30 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_ephemeral_cas"
+
+	// CAS publish in ephemeral → error
+	_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
+		Data:             []byte("v1"),
+		ExpectedPosition: &StreamPosition{Offset: 1, Epoch: "x"},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "CAS")
+
+	// Version publish in ephemeral → error
+	_, err = broker.Publish(ctx, ch, "key1", MapPublishOptions{
+		Data:    []byte("v1"),
+		Version: 1,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "version")
+
+	// CAS remove in ephemeral → error
+	_, err = broker.Remove(ctx, ch, "key1", MapRemoveOptions{
+		ExpectedPosition: &StreamPosition{Offset: 1, Epoch: "x"},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "CAS")
+}
+
+// TestMemoryMapBroker_StreamData tests that StreamData overrides Data in stream/pub-sub.
+func TestMemoryMapBroker_StreamData(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_stream_data"
+
+	// Publish with StreamData (state gets Data, stream gets StreamData)
+	_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
+		Data:       []byte(`{"count":105}`),
+		StreamData: []byte(`{"delta":5}`),
+	})
+	require.NoError(t, err)
+
+	// State should have full Data
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 1)
+	require.Equal(t, []byte(`{"count":105}`), stateRes.Publications[0].Data)
+
+	// Stream should have StreamData
+	streamRes, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	require.Len(t, streamRes.Publications, 1)
+	require.Equal(t, []byte(`{"delta":5}`), streamRes.Publications[0].Data)
+}
+
+// TestMemoryMapBroker_RemoveIdempotency tests idempotency key for Remove operations.
+func TestMemoryMapBroker_RemoveIdempotency(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_remove_idempotency"
+
+	// Setup: create key1 and key2
+	_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+	_, err = broker.Publish(ctx, ch, "key2", MapPublishOptions{Data: []byte("v2")})
+	require.NoError(t, err)
+
+	// Remove key1 with idempotency key
+	res1, err := broker.Remove(ctx, ch, "key1", MapRemoveOptions{
+		IdempotencyKey:      "remove-1",
+		IdempotentResultTTL: 60 * time.Second,
+	})
+	require.NoError(t, err)
+	require.False(t, res1.Suppressed)
+
+	// Remove key2 with same idempotency key → suppressed
+	res2, err := broker.Remove(ctx, ch, "key2", MapRemoveOptions{
+		IdempotencyKey:      "remove-1",
+		IdempotentResultTTL: 60 * time.Second,
+	})
+	require.NoError(t, err)
+	require.True(t, res2.Suppressed)
+	require.Equal(t, SuppressReasonIdempotency, res2.SuppressReason)
+
+	// Verify key2 still exists (second remove was suppressed)
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 1)
+	require.Equal(t, "key2", stateRes.Publications[0].Key)
+}
+
+// TestMemoryMapBroker_RemoveCustomIdempotentTTL tests custom IdempotentResultTTL for Remove.
+func TestMemoryMapBroker_RemoveCustomIdempotentTTL(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_remove_custom_ttl"
+
+	_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+
+	// Remove with custom TTL
+	res, err := broker.Remove(ctx, ch, "key1", MapRemoveOptions{
+		IdempotencyKey:      "r1",
+		IdempotentResultTTL: 5 * time.Minute,
+	})
+	require.NoError(t, err)
+	require.False(t, res.Suppressed)
+
+	// Repeat → suppressed (cached)
+	res2, err := broker.Remove(ctx, ch, "key1", MapRemoveOptions{
+		IdempotencyKey:      "r1",
+		IdempotentResultTTL: 5 * time.Minute,
+	})
+	require.NoError(t, err)
+	require.True(t, res2.Suppressed)
+	require.Equal(t, res.Position, res2.Position)
+}
+
+// TestMemoryMapBroker_PublishCustomIdempotentTTL tests custom IdempotentResultTTL for Publish.
+func TestMemoryMapBroker_PublishCustomIdempotentTTL(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_publish_custom_ttl"
+
+	res1, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
+		Data:                []byte("v1"),
+		IdempotencyKey:      "p1",
+		IdempotentResultTTL: 10 * time.Minute,
+	})
+	require.NoError(t, err)
+	require.False(t, res1.Suppressed)
+
+	res2, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
+		Data:                []byte("v2"),
+		IdempotencyKey:      "p1",
+		IdempotentResultTTL: 10 * time.Minute,
+	})
+	require.NoError(t, err)
+	require.True(t, res2.Suppressed)
+	require.Equal(t, res1.Position, res2.Position)
+}
+
+// TestMemoryMapBroker_KeyTTLExpiration tests that keys expire after KeyTTL.
+func TestMemoryMapBroker_KeyTTLExpiration(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     50 * time.Millisecond,
+		}
+	}
+
+	// Register a real event handler so expireKeysIteration creates stream entries.
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, useDelta bool, prevPub *Publication) error {
+			return nil
+		},
+	}
+	e, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	err = e.RegisterEventHandler(handler)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	ctx := context.Background()
+	ch := "test_key_ttl"
+
+	_, err = e.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+	_, err = e.Publish(ctx, ch, "key2", MapPublishOptions{Data: []byte("v2")})
+	require.NoError(t, err)
+
+	// Keys should exist initially
+	stateRes, err := e.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 2)
+
+	// Wait for keys to expire AND removal events to appear in stream.
+	// The cleanup runs on a 1s timer: Phase 1 removes keys from state,
+	// Phase 2 adds removal events to the stream. Both happen in the same iteration.
+	require.Eventually(t, func() bool {
+		streamRes, err := e.ReadStream(ctx, ch, MapReadStreamOptions{
+			Filter: StreamFilter{Limit: -1},
+		})
+		if err != nil {
+			return false
+		}
+		removals := 0
+		for _, pub := range streamRes.Publications {
+			if pub.Removed {
+				removals++
+			}
+		}
+		return removals == 2
+	}, 5*time.Second, 100*time.Millisecond, "should have 2 removal events in stream")
+
+	// Verify keys are gone from state
+	stateRes, err = e.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Empty(t, stateRes.Publications)
+}
+
+// TestMemoryMapBroker_KeyTTLRefresh tests that refreshing a key extends its TTL.
+func TestMemoryMapBroker_KeyTTLRefresh(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     200 * time.Millisecond,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_key_ttl_refresh"
+
+	_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+
+	// Keep refreshing the key by re-publishing every 100ms for 500ms total.
+	// If TTL wasn't refreshed, the key would expire at ~200ms.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 4; i++ {
+			time.Sleep(100 * time.Millisecond)
+			_, _ = broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte(fmt.Sprintf("v%d", i+2))})
+		}
+	}()
+	<-done
+
+	// Key should still exist after 500ms because each publish refreshed the 200ms TTL
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 1, "key should still exist after TTL refresh")
+}
+
+// TestMemoryMapBroker_StreamTTLExpiration tests that stream entries are cleared after StreamTTL.
+func TestMemoryMapBroker_StreamTTLExpiration(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  50 * time.Millisecond,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_stream_ttl"
+
+	_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+	_, err = broker.Publish(ctx, ch, "key2", MapPublishOptions{Data: []byte("v2")})
+	require.NoError(t, err)
+
+	// Stream should have entries initially
+	streamRes, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
+	require.NoError(t, err)
+	require.Len(t, streamRes.Publications, 2)
+
+	// Wait for stream to expire
+	require.Eventually(t, func() bool {
+		streamRes, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
+		if err != nil {
+			return false
+		}
+		return len(streamRes.Publications) == 0
+	}, 5*time.Second, 100*time.Millisecond, "stream should expire")
+
+	// State should still exist (KeyTTL is long)
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 2)
+}
+
+// TestMemoryMapBroker_MetaTTLRemovesChannel tests that channel is removed after MetaTTL.
+func TestMemoryMapBroker_MetaTTLRemovesChannel(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  50 * time.Millisecond,
+			KeyTTL:     50 * time.Millisecond,
+			MetaTTL:    50 * time.Millisecond,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_meta_ttl"
+
+	_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+
+	// Wait for channel to be removed (MetaTTL expires, cleanup runs on 1s timer).
+	// Use Stats (which doesn't refresh MetaTTL, unlike ReadState).
+	// After removal, the internal channels map no longer has the channel,
+	// so Stats returns NumKeys=0. But it also returns 0 for empty channels.
+	// So first verify the key expired, then verify the channel was removed
+	// by checking that a subsequent ReadState returns a new epoch.
+	require.Eventually(t, func() bool {
+		// Check if channel was removed from the internal map.
+		broker.mapHub.RLock()
+		_, exists := broker.mapHub.channels[ch]
+		broker.mapHub.RUnlock()
+		return !exists
+	}, 10*time.Second, 200*time.Millisecond, "channel should be removed after MetaTTL")
+
+	// After removal, ReadState creates a new channel with a new epoch.
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Empty(t, stateRes.Publications)
+	require.NotEmpty(t, stateRes.Position.Epoch)
+}
+
+// TestMemoryMapBroker_IdempotencyCacheExpiration tests that idempotency cache entries expire.
+func TestMemoryMapBroker_IdempotencyCacheExpiration(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_idempotency_expire"
+
+	// Publish with very short idempotency TTL
+	_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
+		Data:                []byte("v1"),
+		IdempotencyKey:      "ik1",
+		IdempotentResultTTL: 50 * time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	// Immediately → suppressed
+	res, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
+		Data:                []byte("v2"),
+		IdempotencyKey:      "ik1",
+		IdempotentResultTTL: 50 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	require.True(t, res.Suppressed)
+
+	// Wait for cache to expire (1s timer + margin)
+	require.Eventually(t, func() bool {
+		res, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
+			Data:                []byte("v3"),
+			IdempotencyKey:      "ik1",
+			IdempotentResultTTL: 50 * time.Millisecond,
+		})
+		if err != nil {
+			return false
+		}
+		return !res.Suppressed
+	}, 5*time.Second, 200*time.Millisecond, "idempotency cache should expire")
+}
+
+// TestMemoryMapBroker_ReadStreamEpochMismatch tests epoch mismatch in ReadStream.
+func TestMemoryMapBroker_ReadStreamEpochMismatch(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_stream_epoch_mismatch"
+
+	_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+
+	// ReadStream with wrong epoch → ErrorUnrecoverablePosition
+	_, err = broker.ReadStream(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{
+			Since: &StreamPosition{Offset: 0, Epoch: "wrong-epoch"},
+			Limit: -1,
+		},
+	})
+	require.ErrorIs(t, err, ErrorUnrecoverablePosition)
+}
+
+// TestMemoryMapBroker_ReadStreamReverse tests reverse stream reads.
+func TestMemoryMapBroker_ReadStreamReverse(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_stream_reverse"
+
+	for i := 1; i <= 5; i++ {
+		_, err := broker.Publish(ctx, ch, fmt.Sprintf("key%d", i), MapPublishOptions{
+			Data: []byte(fmt.Sprintf("v%d", i)),
+		})
+		require.NoError(t, err)
+	}
+
+	// Read stream in reverse (no Since)
+	streamRes, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: 3, Reverse: true},
+	})
+	require.NoError(t, err)
+	require.Len(t, streamRes.Publications, 3)
+	// Reverse: latest first → offset 5, 4, 3
+	require.Equal(t, uint64(5), streamRes.Publications[0].Offset)
+	require.Equal(t, uint64(4), streamRes.Publications[1].Offset)
+	require.Equal(t, uint64(3), streamRes.Publications[2].Offset)
+}
+
+// TestMemoryMapBroker_ReadStreamSinceMatchingOffset tests Since with current offset.
+func TestMemoryMapBroker_ReadStreamSinceMatchingOffset(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_stream_since_matching"
+
+	res, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+
+	// Since matches current offset → no publications, just position
+	streamRes, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{
+			Since: &StreamPosition{Offset: res.Position.Offset, Epoch: res.Position.Epoch},
+			Limit: -1,
+		},
+	})
+	require.NoError(t, err)
+	require.Empty(t, streamRes.Publications)
+	require.Equal(t, res.Position.Offset, streamRes.Position.Offset)
+}
+
+// TestMemoryMapBroker_ReadStreamSinceReverse tests Since with reverse read.
+func TestMemoryMapBroker_ReadStreamSinceReverse(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_stream_since_reverse"
+
+	for i := 1; i <= 5; i++ {
+		_, err := broker.Publish(ctx, ch, fmt.Sprintf("key%d", i), MapPublishOptions{
+			Data: []byte(fmt.Sprintf("v%d", i)),
+		})
+		require.NoError(t, err)
+	}
+
+	// Get stream position
+	streamRes, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: 0},
+	})
+	require.NoError(t, err)
+
+	// Read reverse from offset 4 (should return items before offset 4)
+	streamRes, err = broker.ReadStream(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{
+			Since:   &StreamPosition{Offset: 4, Epoch: streamRes.Position.Epoch},
+			Limit:   -1,
+			Reverse: true,
+		},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, streamRes.Publications)
+	// Reverse from 4: offset 3, 2, 1
+	for _, pub := range streamRes.Publications {
+		require.Less(t, pub.Offset, uint64(4))
+	}
+}
+
+// TestMemoryMapBroker_ReadStreamNoStream tests ReadStream on a channel without a stream.
+func TestMemoryMapBroker_ReadStreamNoStream(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+
+	// ReadStream on non-existent channel → creates stream, returns empty
+	streamRes, err := broker.ReadStream(ctx, "nonexistent", MapReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	require.Empty(t, streamRes.Publications)
+	require.NotEmpty(t, streamRes.Position.Epoch)
+}
+
+// TestMemoryMapBroker_RemoveFromNonExistentChannel tests removing from non-existent channel.
+func TestMemoryMapBroker_RemoveFromNonExistentChannel(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+
+	// Remove from channel that was never created → key_not_found, empty position
+	res, err := broker.Remove(ctx, "nonexistent_ch", "key1", MapRemoveOptions{})
+	require.NoError(t, err)
+	require.True(t, res.Suppressed)
+	require.Equal(t, SuppressReasonKeyNotFound, res.SuppressReason)
+	require.Equal(t, StreamPosition{}, res.Position)
+}
+
+// TestMemoryMapBroker_RemoveKeyNotFoundWithStream tests that removing a non-existent key
+// from an existing channel returns the stream position.
+func TestMemoryMapBroker_RemoveKeyNotFoundWithStream(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_remove_key_not_found_stream"
+
+	// Create channel with a key
+	pubRes, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+
+	// Remove non-existent key from existing channel → key_not_found with stream position
+	res, err := broker.Remove(ctx, ch, "nonexistent", MapRemoveOptions{})
+	require.NoError(t, err)
+	require.True(t, res.Suppressed)
+	require.Equal(t, SuppressReasonKeyNotFound, res.SuppressReason)
+	require.Equal(t, pubRes.Position.Offset, res.Position.Offset)
+	require.Equal(t, pubRes.Position.Epoch, res.Position.Epoch)
+}
+
+// TestMemoryMapBroker_EphemeralPublishAndExpire tests ephemeral mode publish and auto-expiration.
+func TestMemoryMapBroker_EphemeralPublishAndExpire(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeEphemeral,
+			KeyTTL: 50 * time.Millisecond,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_ephemeral"
+
+	// Publish in ephemeral mode (no stream)
+	res, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+	require.False(t, res.Suppressed)
+	require.Equal(t, uint64(0), res.Position.Offset) // no stream
+
+	// Key should exist initially
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 1)
+
+	// Wait for key to expire
+	require.Eventually(t, func() bool {
+		stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+		if err != nil {
+			return false
+		}
+		return len(stateRes.Publications) == 0
+	}, 5*time.Second, 100*time.Millisecond, "ephemeral key should expire")
+}
+
+// TestMemoryMapBroker_ReadStateEpochMismatch tests epoch mismatch in ReadState with Revision.
+func TestMemoryMapBroker_ReadStateEpochMismatch(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_state_epoch_mismatch"
+
+	// Publish to create channel
+	res, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+
+	// ReadState with matching epoch → OK
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{
+		Limit:    100,
+		Revision: &StreamPosition{Offset: res.Position.Offset, Epoch: res.Position.Epoch},
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 1)
+
+	// ReadState with wrong epoch → ErrorUnrecoverablePosition
+	_, err = broker.ReadState(ctx, ch, MapReadStateOptions{
+		Limit:    100,
+		Revision: &StreamPosition{Offset: res.Position.Offset, Epoch: "wrong-epoch"},
+	})
+	require.ErrorIs(t, err, ErrorUnrecoverablePosition)
+}
+
+// TestMemoryMapBroker_ReadStateKeyFilter tests single key lookup in ReadState.
+func TestMemoryMapBroker_ReadStateKeyFilter(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_state_key_filter"
+
+	_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+	_, err = broker.Publish(ctx, ch, "key2", MapPublishOptions{Data: []byte("v2")})
+	require.NoError(t, err)
+
+	// Filter by specific key
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{
+		Key:   "key1",
+		Limit: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 1)
+	require.Equal(t, "key1", stateRes.Publications[0].Key)
+
+	// Filter by non-existent key
+	stateRes, err = broker.ReadState(ctx, ch, MapReadStateOptions{
+		Key:   "nonexistent",
+		Limit: 100,
+	})
+	require.NoError(t, err)
+	require.Empty(t, stateRes.Publications)
+}
+
+// TestMemoryMapBroker_VersionEpoch tests that version epoch scoping works correctly.
+func TestMemoryMapBroker_VersionEpoch(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_version_epoch"
+
+	// Publish version 5 with epoch "a"
+	res1, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
+		Data: []byte("v5_a"), Version: 5, VersionEpoch: "a",
+	})
+	require.NoError(t, err)
+	require.False(t, res1.Suppressed)
+
+	// Publish version 3 with same epoch → suppressed (lower version)
+	res2, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
+		Data: []byte("v3_a"), Version: 3, VersionEpoch: "a",
+	})
+	require.NoError(t, err)
+	require.True(t, res2.Suppressed)
+	require.Equal(t, SuppressReasonVersion, res2.SuppressReason)
+
+	// Publish version 3 with different epoch → accepted (different epoch resets)
+	res3, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
+		Data: []byte("v3_b"), Version: 3, VersionEpoch: "b",
+	})
+	require.NoError(t, err)
+	require.False(t, res3.Suppressed)
+}
+
+// TestMemoryMapBroker_EventHandler tests that event handler receives publications.
+func TestMemoryMapBroker_EventHandler(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+
+	var mu sync.Mutex
+	var received []*Publication
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, useDelta bool, prevPub *Publication) error {
+			mu.Lock()
+			received = append(received, pub)
+			mu.Unlock()
+			return nil
+		},
+	}
+
+	e, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	err = e.RegisterEventHandler(handler)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	ctx := context.Background()
+	ch := "test_event_handler"
+
+	// Publish
+	_, err = e.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+
+	// Remove
+	_, err = e.Remove(ctx, ch, "key1", MapRemoveOptions{})
+	require.NoError(t, err)
+
+	mu.Lock()
+	require.Len(t, received, 2)
+	require.Equal(t, []byte("v1"), received[0].Data)
+	require.True(t, received[1].Removed)
+	mu.Unlock()
+}
+
+// TestMemoryMapBroker_EventHandlerStreamData tests event handler receives StreamData.
+func TestMemoryMapBroker_EventHandlerStreamData(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+
+	var mu sync.Mutex
+	var received []*Publication
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, useDelta bool, prevPub *Publication) error {
+			mu.Lock()
+			received = append(received, pub)
+			mu.Unlock()
+			return nil
+		},
+	}
+
+	e, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	err = e.RegisterEventHandler(handler)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	ctx := context.Background()
+	ch := "test_event_handler_stream_data"
+
+	// Publish with StreamData → event handler should receive StreamData, not Data
+	_, err = e.Publish(ctx, ch, "key1", MapPublishOptions{
+		Data:       []byte(`{"count":100}`),
+		StreamData: []byte(`{"delta":5}`),
+	})
+	require.NoError(t, err)
+
+	mu.Lock()
+	require.Len(t, received, 1)
+	require.Equal(t, []byte(`{"delta":5}`), received[0].Data, "event handler should receive StreamData")
+	mu.Unlock()
+}
+
+// TestMemoryMapBroker_EphemeralNoStream tests that ephemeral mode has no stream.
+func TestMemoryMapBroker_EphemeralNoStream(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeEphemeral,
+			KeyTTL: 30 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_ephemeral_no_stream"
+
+	_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+
+	// Stream should be empty (ephemeral mode has no stream)
+	streamRes, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	require.Empty(t, streamRes.Publications)
+
+	// Remove in ephemeral mode
+	res, err := broker.Remove(ctx, ch, "key1", MapRemoveOptions{})
+	require.NoError(t, err)
+	require.False(t, res.Suppressed)
+}
+
+// TestMemoryMapBroker_PersistentNeverExpires tests that persistent mode keys don't have TTL.
+func TestMemoryMapBroker_PersistentNeverExpires(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModePersistent,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_persistent"
+
+	_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+
+	// Verify key still exists (persistent = no KeyTTL)
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 1)
+
+	// Use require.Never to verify it never disappears within a short period
+	require.Never(t, func() bool {
+		stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+		if err != nil {
+			return true
+		}
+		return len(stateRes.Publications) == 0
+	}, 500*time.Millisecond, 100*time.Millisecond, "persistent key should never expire")
+}
+
+// TestMemoryMapBroker_ParseChKey tests the parseChKey helper.
+func TestMemoryMapBroker_ParseChKey(t *testing.T) {
+	node, _ := New(Config{})
+	broker := newTestMemoryMapBroker(t, node)
+	h := broker.mapHub
+
+	// Normal case
+	ch, key := h.parseChKey("channel\x00key")
+	require.Equal(t, "channel", ch)
+	require.Equal(t, "key", key)
+
+	// No separator → empty strings
+	ch, key = h.parseChKey("noseparator")
+	require.Equal(t, "", ch)
+	require.Equal(t, "", key)
+
+	// Separator at start
+	ch, key = h.parseChKey("\x00key")
+	require.Equal(t, "", ch)
+	require.Equal(t, "key", key)
+
+	// Separator at end
+	ch, key = h.parseChKey("channel\x00")
+	require.Equal(t, "channel", ch)
+	require.Equal(t, "", key)
+
+	// Roundtrip with makeChKey
+	chKey := h.makeChKey("mychannel", "mykey")
+	ch, key = h.parseChKey(chKey)
+	require.Equal(t, "mychannel", ch)
+	require.Equal(t, "mykey", key)
+}
+
+// TestMemoryMapBroker_RemoveEphemeralNoStream tests Remove in ephemeral mode
+// where the channel has no stream but does have state.
+func TestMemoryMapBroker_RemoveEphemeralNoStream(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeEphemeral,
+			KeyTTL: 30 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_remove_ephemeral"
+
+	_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+
+	// Remove in ephemeral mode (no stream, just state)
+	res, err := broker.Remove(ctx, ch, "key1", MapRemoveOptions{})
+	require.NoError(t, err)
+	require.False(t, res.Suppressed)
+
+	// Verify key is gone
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Empty(t, stateRes.Publications)
+}
+
+// TestMemoryMapBroker_SubscribeUnsubscribeNoop tests that Subscribe and Unsubscribe are no-ops.
+func TestMemoryMapBroker_SubscribeUnsubscribeNoop(t *testing.T) {
+	node, _ := New(Config{})
+	broker := newTestMemoryMapBroker(t, node)
+
+	require.NoError(t, broker.Subscribe("ch1"))
+	require.NoError(t, broker.Unsubscribe("ch1"))
+}
+
+// TestMemoryMapBroker_Close tests that Close stops background goroutines.
+func TestMemoryMapBroker_Close(t *testing.T) {
+	node, _ := New(Config{})
+	broker := newTestMemoryMapBroker(t, node)
+
+	err := broker.Close(context.Background())
+	require.NoError(t, err)
+
+	// Double close should be safe
+	err = broker.Close(context.Background())
+	require.NoError(t, err)
+}
