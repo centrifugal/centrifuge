@@ -40,32 +40,48 @@ func (b *controllableBroker) History(_ string, _ HistoryOptions) ([]*Publication
 }
 func (b *controllableBroker) RemoveHistory(_ string) error { return nil }
 
-func (b *controllableBroker) Subscribe(ch string) error {
-	b.subscribeCount.Add(1)
-	b.subscribeMu.Lock()
-	fn := b.subscribeFunc
-	err := b.subscribeErr
-	waitCh := b.subscribeCh
-	b.subscribeMu.Unlock()
-	if waitCh != nil {
-		<-waitCh
+func (b *controllableBroker) Subscribe(channels ...string) error {
+	for _, ch := range channels {
+		b.subscribeCount.Add(1)
+		b.subscribeMu.Lock()
+		fn := b.subscribeFunc
+		err := b.subscribeErr
+		waitCh := b.subscribeCh
+		b.subscribeMu.Unlock()
+		if waitCh != nil {
+			<-waitCh
+		}
+		if fn != nil {
+			if err := fn(ch); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
 	}
-	if fn != nil {
-		return fn(ch)
-	}
-	return err
+	return nil
 }
 
-func (b *controllableBroker) Unsubscribe(ch string) error {
-	b.unsubscribeCount.Add(1)
-	b.unsubscribeMu.Lock()
-	fn := b.unsubscribeFunc
-	err := b.unsubscribeErr
-	b.unsubscribeMu.Unlock()
-	if fn != nil {
-		return fn(ch)
+func (b *controllableBroker) Unsubscribe(channels ...string) error {
+	for _, ch := range channels {
+		b.unsubscribeCount.Add(1)
+		b.unsubscribeMu.Lock()
+		fn := b.unsubscribeFunc
+		err := b.unsubscribeErr
+		b.unsubscribeMu.Unlock()
+		if fn != nil {
+			if err := fn(ch); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
 	}
-	return err
+	return nil
 }
 
 func TestSharedPollManager_TrackCreatesChannel(t *testing.T) {
@@ -1005,11 +1021,11 @@ func TestSharedPollPublish_BrokerSubscribeOnTrack(t *testing.T) {
 		{Key: "key1", Version: 0},
 	})
 
-	// Verify broker subscription exists.
+	// Verify broker subscription exists for the key-scoped channel.
 	node.sharedPollManager.brokerSubMu.Lock()
-	_, hasSub := node.sharedPollManager.brokerSubChans["test:channel"]
+	_, hasSub := node.sharedPollManager.brokerSubChans[sharedPollKeyChannel("test:channel", "key1")]
 	node.sharedPollManager.brokerSubMu.Unlock()
-	require.True(t, hasSub, "broker should be subscribed for PublishEnabled channel")
+	require.True(t, hasSub, "broker should be subscribed for PublishEnabled key channel")
 }
 
 func TestSharedPollPublish_BrokerUnsubscribeOnShutdown(t *testing.T) {
@@ -1034,20 +1050,21 @@ func TestSharedPollPublish_BrokerUnsubscribeOnShutdown(t *testing.T) {
 		{Key: "key1", Version: 0},
 	})
 
-	// Verify subscribed.
+	// Verify subscribed for key-scoped channel.
+	keyCh := sharedPollKeyChannel("test:channel", "key1")
 	node.sharedPollManager.brokerSubMu.Lock()
-	_, hasSub := node.sharedPollManager.brokerSubChans["test:channel"]
+	_, hasSub := node.sharedPollManager.brokerSubChans[keyCh]
 	node.sharedPollManager.brokerSubMu.Unlock()
 	require.True(t, hasSub)
 
 	// Untrack key1.
 	untrackSharedPollClient(t, client, "test:channel", []string{"key1"})
 
-	// Wait for channel to be removed (immediate shutdown since no delay).
+	// Wait for key-channel subscription to be removed (immediate shutdown since no delay).
 	require.Eventually(t, func() bool {
 		node.sharedPollManager.brokerSubMu.Lock()
 		defer node.sharedPollManager.brokerSubMu.Unlock()
-		_, exists := node.sharedPollManager.brokerSubChans["test:channel"]
+		_, exists := node.sharedPollManager.brokerSubChans[keyCh]
 		return !exists
 	}, 2*time.Second, 10*time.Millisecond)
 }
@@ -1887,9 +1904,9 @@ func TestSharedPollManager_ConcurrentTrackSingleBrokerSubscribe(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Only the first goroutine that creates the channel calls subscribeToBroker.
-	require.Equal(t, int32(1), broker.subscribeCount.Load(),
-		"expected exactly one broker.Subscribe for concurrent tracks on same channel")
+	// Each unique key gets its own broker.Subscribe call (per-key PUB/SUB).
+	require.Equal(t, int32(numGoroutines), broker.subscribeCount.Load(),
+		"expected one broker.Subscribe per unique key")
 
 	// All keys should be tracked.
 	m.mu.RLock()
@@ -1926,7 +1943,7 @@ func TestSharedPollManager_BrokerSubscribeFailureCleanup(t *testing.T) {
 
 	// Broker sub entry should not exist.
 	m.brokerSubMu.Lock()
-	_, hasSub := m.brokerSubChans["test:channel"]
+	_, hasSub := m.brokerSubChans[sharedPollKeyChannel("test:channel", "key1")]
 	m.brokerSubMu.Unlock()
 	require.False(t, hasSub)
 }
@@ -2012,9 +2029,10 @@ func TestSharedPollManager_BrokerUnsubscribeViaDissolver(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, isNew)
 
-	// Verify broker is subscribed.
+	// Verify broker is subscribed for key-scoped channel.
+	keyCh := sharedPollKeyChannel("test:channel", "key1")
 	m.brokerSubMu.Lock()
-	_, hasSub := m.brokerSubChans["test:channel"]
+	_, hasSub := m.brokerSubChans[keyCh]
 	m.brokerSubMu.Unlock()
 	require.True(t, hasSub)
 
@@ -2025,7 +2043,7 @@ func TestSharedPollManager_BrokerUnsubscribeViaDissolver(t *testing.T) {
 	require.Eventually(t, func() bool {
 		m.brokerSubMu.Lock()
 		defer m.brokerSubMu.Unlock()
-		_, exists := m.brokerSubChans["test:channel"]
+		_, exists := m.brokerSubChans[keyCh]
 		return !exists
 	}, 2*time.Second, 10*time.Millisecond)
 
@@ -2061,10 +2079,11 @@ func TestSharedPollManager_BrokerUnsubscribeRetryOnFailure(t *testing.T) {
 	m.untrack("test:channel", "key1")
 
 	// Wait for dissolver to eventually succeed (after 2 failures).
+	keyCh := sharedPollKeyChannel("test:channel", "key1")
 	require.Eventually(t, func() bool {
 		m.brokerSubMu.Lock()
 		defer m.brokerSubMu.Unlock()
-		_, exists := m.brokerSubChans["test:channel"]
+		_, exists := m.brokerSubChans[keyCh]
 		return !exists
 	}, 10*time.Second, 50*time.Millisecond)
 
@@ -2111,7 +2130,7 @@ func TestSharedPollManager_BrokerUnsubscribeSkipsIfResubscribed(t *testing.T) {
 		// 2. Unsubscribes, then subscribeToBroker re-subscribes
 		// Either way, the final state should be consistent.
 		m.brokerSubMu.Lock()
-		_, hasSub := m.brokerSubChans["test:channel"]
+		_, hasSub := m.brokerSubChans[sharedPollKeyChannel("test:channel", "key2")]
 		m.brokerSubMu.Unlock()
 		return hasSub
 	}, 2*time.Second, 10*time.Millisecond)
@@ -2162,8 +2181,8 @@ func TestSharedPollManager_ConcurrentTrackNoPanic(t *testing.T) {
 	require.Equal(t, numGoroutines, len(s.itemIndex))
 	s.mu.Unlock()
 
-	// Exactly one broker.Subscribe.
-	require.Equal(t, int32(1), broker.subscribeCount.Load())
+	// One broker.Subscribe per unique key.
+	require.Equal(t, int32(numGoroutines), broker.subscribeCount.Load())
 }
 
 func TestSharedPollManager_ScheduleShutdownImmediate(t *testing.T) {
@@ -2256,4 +2275,313 @@ func TestSharedPollManager_ShutdownCancelledByRetrack(t *testing.T) {
 		_, exists := m.channels["test:retrack"]
 		return !exists
 	}, 700*time.Millisecond, 50*time.Millisecond, "channel should survive because re-tracked")
+}
+
+// --- sharedPollKeyChannel / parseSharedPollKeyChannel tests ---
+
+func TestSharedPollKeyChannel_RoundTrip(t *testing.T) {
+	tests := []struct {
+		channel string
+		key     string
+	}{
+		{"ch", "k"},
+		{"test:channel", "key1"},
+		{"a", ""},                  // empty key
+		{"", "key"},                // empty channel
+		{"chan:with:colons", "k1"}, // colons in channel
+		{"ch", "key:with:colons"}, // colons in key
+		{"123", "456"},            // numeric strings
+		{"a", "b"},                // single-char
+		{string(make([]byte, 200)), "long_channel"}, // long channel name
+	}
+	for _, tt := range tests {
+		ch, key := parseSharedPollKeyChannel(sharedPollKeyChannel(tt.channel, tt.key))
+		require.Equal(t, tt.channel, ch, "channel mismatch for %q/%q", tt.channel, tt.key)
+		require.Equal(t, tt.key, key, "key mismatch for %q/%q", tt.channel, tt.key)
+	}
+}
+
+func TestParseSharedPollKeyChannel_Invalid(t *testing.T) {
+	tests := []string{
+		"normal_channel",      // no colon prefix
+		"abc:xyz",             // non-numeric prefix
+		"-1:test",             // negative length
+		"100:ab",              // length exceeds string
+		":test",               // empty prefix (IndexByte returns 0)
+		"",                    // empty string
+		"0:",                  // zero-length channel, no key
+		"99999999999999:long", // overflow
+	}
+	for _, input := range tests {
+		ch, key := parseSharedPollKeyChannel(input)
+		if input == "0:" {
+			// "0:" → channel="" key="" — this is actually valid (empty channel).
+			continue
+		}
+		require.Equal(t, "", ch, "expected empty channel for %q", input)
+		require.Equal(t, "", key, "expected empty key for %q", input)
+	}
+}
+
+// --- trackKeys tests ---
+
+func TestSharedPollManager_TrackKeys_Basic(t *testing.T) {
+	broker := &controllableBroker{}
+	opts := SharedPollChannelOptions{
+		RefreshInterval:        30 * time.Second,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+		PublishEnabled:         true,
+	}
+	node := newTestNodeWithControllableBroker(t, broker, opts)
+	m := node.sharedPollManager
+
+	results, err := m.trackKeys("test:channel", opts, []string{"key1", "key2", "key3"})
+	require.NoError(t, err)
+	require.Len(t, results, 3)
+
+	// All keys should be new.
+	for i, r := range results {
+		require.True(t, r.isNew, "key %d should be new", i)
+		require.Equal(t, uint64(0), r.entryVersion, "key %d version should be 0", i)
+	}
+
+	// Channel should exist with 3 keys.
+	m.mu.RLock()
+	s := m.channels["test:channel"]
+	m.mu.RUnlock()
+	require.NotNil(t, s)
+	s.mu.Lock()
+	require.Equal(t, 3, len(s.itemIndex))
+	require.True(t, s.workerRunning)
+	s.mu.Unlock()
+
+	// Single broker.Subscribe call with 3 key-channels.
+	// controllableBroker counts per channel in the variadic call.
+	require.Equal(t, int32(3), broker.subscribeCount.Load())
+
+	// All key-channels should be in brokerSubChans.
+	m.brokerSubMu.Lock()
+	for _, key := range []string{"key1", "key2", "key3"} {
+		_, ok := m.brokerSubChans[sharedPollKeyChannel("test:channel", key)]
+		require.True(t, ok, "broker sub missing for %s", key)
+	}
+	m.brokerSubMu.Unlock()
+}
+
+func TestSharedPollManager_TrackKeys_MixedNewAndExisting(t *testing.T) {
+	broker := &controllableBroker{}
+	opts := SharedPollChannelOptions{
+		RefreshInterval:        30 * time.Second,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+		PublishEnabled:         true,
+	}
+	node := newTestNodeWithControllableBroker(t, broker, opts)
+	m := node.sharedPollManager
+
+	// Pre-track key1.
+	_, _, err := m.track("test:channel", opts, "key1")
+	require.NoError(t, err)
+	require.Equal(t, int32(1), broker.subscribeCount.Load())
+
+	// Batch track: key1 (existing) + key2, key3 (new).
+	results, err := m.trackKeys("test:channel", opts, []string{"key1", "key2", "key3"})
+	require.NoError(t, err)
+	require.Len(t, results, 3)
+
+	require.False(t, results[0].isNew, "key1 should not be new")
+	require.True(t, results[1].isNew, "key2 should be new")
+	require.True(t, results[2].isNew, "key3 should be new")
+
+	// Only 2 new keys should trigger subscribe (key2, key3).
+	// Total: 1 (from track) + 2 (from trackKeys) = 3.
+	require.Equal(t, int32(3), broker.subscribeCount.Load())
+}
+
+func TestSharedPollManager_TrackKeys_NoPublishEnabled(t *testing.T) {
+	broker := &controllableBroker{}
+	opts := SharedPollChannelOptions{
+		RefreshInterval:        30 * time.Second,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+		PublishEnabled:         false,
+	}
+	node := newTestNodeWithControllableBroker(t, broker, opts)
+	m := node.sharedPollManager
+
+	results, err := m.trackKeys("test:channel", opts, []string{"key1", "key2"})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	require.True(t, results[0].isNew)
+	require.True(t, results[1].isNew)
+
+	// No broker.Subscribe calls when PublishEnabled=false.
+	require.Equal(t, int32(0), broker.subscribeCount.Load())
+}
+
+func TestSharedPollManager_TrackKeys_SubscribeFailureCleanup(t *testing.T) {
+	broker := &controllableBroker{subscribeErr: errors.New("broker down")}
+	opts := SharedPollChannelOptions{
+		RefreshInterval:        30 * time.Second,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+		PublishEnabled:         true,
+	}
+	node := newTestNodeWithControllableBroker(t, broker, opts)
+	m := node.sharedPollManager
+
+	results, err := m.trackKeys("test:channel", opts, []string{"key1", "key2"})
+	require.Error(t, err)
+	require.Nil(t, results)
+
+	// Channel should be cleaned up (was empty — all keys were new and removed).
+	m.mu.RLock()
+	_, exists := m.channels["test:channel"]
+	m.mu.RUnlock()
+	require.False(t, exists, "channel should be removed after total subscribe failure")
+}
+
+func TestSharedPollManager_TrackKeys_SubscribeFailurePartialCleanup(t *testing.T) {
+	// Pre-track key0 (succeeds), then batch-track key1+key2 (fails).
+	// key0 should survive, key1+key2 should be cleaned up.
+	var callCount atomic.Int32
+	broker := &controllableBroker{
+		subscribeFunc: func(ch string) error {
+			n := callCount.Add(1)
+			if n > 1 {
+				// Fail on all calls after the first (the batch call).
+				return errors.New("broker down")
+			}
+			return nil
+		},
+	}
+	opts := SharedPollChannelOptions{
+		RefreshInterval:        30 * time.Second,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+		PublishEnabled:         true,
+	}
+	node := newTestNodeWithControllableBroker(t, broker, opts)
+	m := node.sharedPollManager
+
+	// Pre-track key0 — succeeds.
+	_, _, err := m.track("test:channel", opts, "key0")
+	require.NoError(t, err)
+
+	// Batch track key1+key2 — broker fails.
+	results, err := m.trackKeys("test:channel", opts, []string{"key1", "key2"})
+	require.Error(t, err)
+	require.Nil(t, results)
+
+	// Channel should still exist (key0 is still tracked).
+	m.mu.RLock()
+	s, exists := m.channels["test:channel"]
+	m.mu.RUnlock()
+	require.True(t, exists, "channel should survive because key0 is still tracked")
+
+	s.mu.Lock()
+	_, hasKey0 := s.itemIndex["key0"]
+	_, hasKey1 := s.itemIndex["key1"]
+	_, hasKey2 := s.itemIndex["key2"]
+	s.mu.Unlock()
+	require.True(t, hasKey0, "key0 should survive")
+	require.False(t, hasKey1, "key1 should be cleaned up")
+	require.False(t, hasKey2, "key2 should be cleaned up")
+}
+
+func TestSharedPollManager_TrackKeys_DuplicateKeys(t *testing.T) {
+	broker := &controllableBroker{}
+	opts := SharedPollChannelOptions{
+		RefreshInterval:        30 * time.Second,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+		PublishEnabled:         true,
+	}
+	node := newTestNodeWithControllableBroker(t, broker, opts)
+	m := node.sharedPollManager
+
+	// Track with duplicates.
+	results, err := m.trackKeys("test:channel", opts, []string{"key1", "key1", "key2"})
+	require.NoError(t, err)
+	require.Len(t, results, 3)
+
+	// First occurrence is new, second is not.
+	require.True(t, results[0].isNew)
+	require.False(t, results[1].isNew)
+	require.True(t, results[2].isNew)
+
+	// Only 2 unique new keys should trigger subscribe.
+	require.Equal(t, int32(2), broker.subscribeCount.Load())
+
+	m.mu.RLock()
+	s := m.channels["test:channel"]
+	m.mu.RUnlock()
+	s.mu.Lock()
+	require.Equal(t, 2, len(s.itemIndex)) // 2 unique keys
+	s.mu.Unlock()
+}
+
+func TestSharedPollManager_TrackKeys_Empty(t *testing.T) {
+	broker := &controllableBroker{}
+	opts := SharedPollChannelOptions{
+		RefreshInterval:        30 * time.Second,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+		PublishEnabled:         true,
+	}
+	node := newTestNodeWithControllableBroker(t, broker, opts)
+	m := node.sharedPollManager
+
+	results, err := m.trackKeys("test:channel", opts, nil)
+	require.NoError(t, err)
+	require.Nil(t, results)
+
+	results, err = m.trackKeys("test:channel", opts, []string{})
+	require.NoError(t, err)
+	require.Nil(t, results)
+
+	// No channel state should be created.
+	m.mu.RLock()
+	_, exists := m.channels["test:channel"]
+	m.mu.RUnlock()
+	require.False(t, exists)
+
+	require.Equal(t, int32(0), broker.subscribeCount.Load())
+}
+
+func TestSharedPollManager_TrackKeys_ConcurrentBatch(t *testing.T) {
+	// Two concurrent trackKeys calls on the same channel should not lose keys.
+	broker := &controllableBroker{}
+	opts := SharedPollChannelOptions{
+		RefreshInterval:        30 * time.Second,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+		PublishEnabled:         true,
+	}
+	node := newTestNodeWithControllableBroker(t, broker, opts)
+	m := node.sharedPollManager
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = m.trackKeys("test:channel", opts, []string{"a1", "a2", "a3"})
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = m.trackKeys("test:channel", opts, []string{"b1", "b2", "b3"})
+	}()
+	wg.Wait()
+
+	m.mu.RLock()
+	s := m.channels["test:channel"]
+	m.mu.RUnlock()
+	require.NotNil(t, s)
+	s.mu.Lock()
+	require.Equal(t, 6, len(s.itemIndex))
+	s.mu.Unlock()
+
+	// 6 unique keys = 6 broker subscribe calls.
+	require.Equal(t, int32(6), broker.subscribeCount.Load())
 }

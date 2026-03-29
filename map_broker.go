@@ -101,13 +101,13 @@ type MapBroker interface {
 	// received from pub/sub. Called by Node.Run() during startup.
 	RegisterEventHandler(BrokerEventHandler) error
 
-	// Subscribe registers this server node to receive pub/sub messages for the channel.
+	// Subscribe registers this server node to receive pub/sub messages for the channels.
 	// Called when a client subscribes to a map channel on this node.
-	Subscribe(ch string) error
+	Subscribe(channels ...string) error
 
-	// Unsubscribe removes this server node from receiving pub/sub messages for the channel.
+	// Unsubscribe removes this server node from receiving pub/sub messages for the channels.
 	// Called when the last client on this node unsubscribes from the channel.
-	Unsubscribe(ch string) error
+	Unsubscribe(channels ...string) error
 
 	// Publish updates the state and broadcasts the change to subscribers.
 	//

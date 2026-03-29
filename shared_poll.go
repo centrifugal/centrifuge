@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,8 +28,9 @@ type SharedPollManager struct {
 	mu       sync.RWMutex
 	channels map[string]*sharedPollChannelState
 
-	brokerSubMu    sync.Mutex
-	brokerSubChans map[string]Broker // channel → subscribed broker
+	brokerSubMu    sync.RWMutex
+	brokerSubChans map[string]Broker              // key-channel → subscribed broker
+	brokerSubKeys  map[string]map[string]struct{} // base channel → set of key-channels
 }
 
 type sharedPollChannelState struct {
@@ -74,6 +77,27 @@ func xxHash64(data []byte) uint64 {
 	return xxhash.Sum64(data)
 }
 
+// sharedPollKeyChannel builds a PUB/SUB channel name scoped to a specific key.
+// Format: "<len>:<channel><key>" — length-prefix encoding, safe for any broker
+// (no null bytes, no special characters in the framing).
+func sharedPollKeyChannel(channel, key string) string {
+	return strconv.Itoa(len(channel)) + ":" + channel + key
+}
+
+// parseSharedPollKeyChannel splits a key-scoped PUB/SUB channel into base channel and key.
+// Returns ("", "") if the channel is not in the expected length-prefix format.
+func parseSharedPollKeyChannel(keyCh string) (string, string) {
+	i := strings.IndexByte(keyCh, ':')
+	if i <= 0 {
+		return "", ""
+	}
+	n, err := strconv.Atoi(keyCh[:i])
+	if err != nil || n < 0 || i+1+n > len(keyCh) {
+		return "", ""
+	}
+	return keyCh[i+1 : i+1+n], keyCh[i+1+n:]
+}
+
 func newSharedPollManager(node *Node) *SharedPollManager {
 	concurrencyLimit := node.config.SharedPoll.ConcurrencyLimit
 	if concurrencyLimit <= 0 {
@@ -85,6 +109,7 @@ func newSharedPollManager(node *Node) *SharedPollManager {
 		channels:       make(map[string]*sharedPollChannelState),
 		sem:            make(chan struct{}, concurrencyLimit),
 		brokerSubChans: make(map[string]Broker),
+		brokerSubKeys:  make(map[string]map[string]struct{}),
 		epoch:          epoch.Generate(),
 	}
 }
@@ -103,7 +128,6 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 	// Get or create channel state.
 	m.mu.Lock()
 	s, ok := m.channels[channel]
-	isNewChannel := !ok
 	if !ok {
 		s = &sharedPollChannelState{
 			opts:      opts,
@@ -135,7 +159,6 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 			notifCh:   make(chan string, 1024),
 		}
 		m.channels[channel] = s
-		isNewChannel = true
 		m.mu.Unlock()
 		s.mu.Lock()
 		select {
@@ -180,8 +203,8 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 	}
 	s.mu.Unlock()
 
-	if isNewChannel && opts.PublishEnabled {
-		if err := m.subscribeToBroker(channel); err != nil {
+	if isNewKey && opts.PublishEnabled {
+		if err := m.subscribeToBrokerKeys(channel, []string{key}); err != nil {
 			// Broker subscribe failed — clean up our key. Only tear down the channel
 			// if no other goroutine added keys in the meantime.
 			s.mu.Lock()
@@ -206,6 +229,137 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 	return isNewKey, entryVersion, nil
 }
 
+// trackKeyResult holds the outcome for a single key tracked via trackKeys.
+type trackKeyResult struct {
+	isNew        bool
+	entryVersion uint64
+}
+
+// trackKeys registers multiple items in the shared poll channel state in one batch.
+// It subscribes to all new keys with a single broker.Subscribe call.
+func (m *SharedPollManager) trackKeys(channel string, opts SharedPollChannelOptions, keys []string) ([]trackKeyResult, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+
+	// Check global shutdown.
+	select {
+	case <-m.shutdownCh:
+		return make([]trackKeyResult, len(keys)), nil
+	default:
+	}
+
+	// Get or create channel state.
+	m.mu.Lock()
+	s, ok := m.channels[channel]
+	if !ok {
+		s = &sharedPollChannelState{
+			opts:      opts,
+			epoch:     epoch.Generate(),
+			itemIndex: make(map[string]*sharedPollTrackedEntry),
+			notifCh:   make(chan string, 1024),
+		}
+		m.channels[channel] = s
+	}
+	m.mu.Unlock()
+
+	s.mu.Lock()
+	// Re-check shutdown under state lock.
+	select {
+	case <-m.shutdownCh:
+		s.mu.Unlock()
+		return make([]trackKeyResult, len(keys)), nil
+	default:
+	}
+
+	// If this state was removed by shutdown timer, replace it.
+	if s.removed {
+		s.mu.Unlock()
+		m.mu.Lock()
+		s = &sharedPollChannelState{
+			opts:      opts,
+			epoch:     epoch.Generate(),
+			itemIndex: make(map[string]*sharedPollTrackedEntry),
+			notifCh:   make(chan string, 1024),
+		}
+		m.channels[channel] = s
+		m.mu.Unlock()
+		s.mu.Lock()
+		select {
+		case <-m.shutdownCh:
+			s.mu.Unlock()
+			return make([]trackKeyResult, len(keys)), nil
+		default:
+		}
+	}
+
+	// Cancel any pending shutdown timer.
+	s.cancelShutdown()
+
+	// Register all keys and collect results + new keys list.
+	results := make([]trackKeyResult, len(keys))
+	var newKeys []string
+	for i, key := range keys {
+		isNewKey := s.itemIndex[key] == nil
+		if isNewKey {
+			s.itemIndex[key] = &sharedPollTrackedEntry{}
+			newKeys = append(newKeys, key)
+		}
+		results[i] = trackKeyResult{
+			isNew:        isNewKey,
+			entryVersion: s.itemIndex[key].version,
+		}
+	}
+
+	// Ensure refresh worker is running.
+	startWorker := false
+	if !s.workerRunning {
+		startWorker = true
+	} else if s.workerCtx != nil {
+		select {
+		case <-s.workerCtx.Done():
+			startWorker = true
+		default:
+		}
+	}
+	if startWorker {
+		s.workerRunning = true
+		s.workerGen++
+		ctx, cancel := context.WithCancel(context.Background())
+		s.workerCancel = cancel
+		s.workerCtx = ctx
+		gen := s.workerGen
+		m.wg.Add(1)
+		go s.runRefreshWorker(ctx, m.node, channel, gen, m)
+	}
+	s.mu.Unlock()
+
+	if len(newKeys) > 0 && opts.PublishEnabled {
+		if err := m.subscribeToBrokerKeys(channel, newKeys); err != nil {
+			// Broker subscribe failed — clean up new keys.
+			s.mu.Lock()
+			for _, key := range newKeys {
+				delete(s.itemIndex, key)
+			}
+			empty := len(s.itemIndex) == 0
+			if empty && s.workerCancel != nil {
+				s.workerCancel()
+			}
+			s.mu.Unlock()
+			if empty {
+				m.mu.Lock()
+				if m.channels[channel] == s {
+					delete(m.channels, channel)
+				}
+				m.mu.Unlock()
+			}
+			return nil, err
+		}
+	}
+
+	return results, nil
+}
+
 // untrack removes an item from shared poll tracking when no connections remain.
 func (m *SharedPollManager) untrack(channel string, key string) {
 	m.mu.RLock()
@@ -225,8 +379,12 @@ func (m *SharedPollManager) untrack(channel string, key string) {
 	}
 	delete(s.itemIndex, key)
 	empty := len(s.itemIndex) == 0
+	publishEnabled := s.opts.PublishEnabled
 	s.mu.Unlock()
 
+	if publishEnabled {
+		m.unsubscribeFromBrokerKeys(channel, []string{key})
+	}
 	if empty {
 		s.scheduleShutdown(m, channel, s.opts.ChannelShutdownDelay)
 	}
@@ -409,59 +567,152 @@ func (m *SharedPollManager) close() {
 	m.mu.Unlock()
 	m.wg.Wait()
 
-	// Unsubscribe all broker subscriptions.
+	// Unsubscribe all broker subscriptions, batched by broker.
 	m.brokerSubMu.Lock()
-	for ch, broker := range m.brokerSubChans {
-		if err := broker.Unsubscribe(ch); err != nil {
-			m.node.logger.log(newLogEntry(LogLevelError, "error unsubscribing from broker for shared poll", map[string]any{"channel": ch, "error": err.Error()}))
-		}
-		delete(m.brokerSubChans, ch)
+	brokerChannels := make(map[Broker][]string)
+	for kc, broker := range m.brokerSubChans {
+		brokerChannels[broker] = append(brokerChannels[broker], kc)
 	}
+	for broker, channels := range brokerChannels {
+		if err := broker.Unsubscribe(channels...); err != nil {
+			m.node.logger.log(newLogEntry(LogLevelError, "error unsubscribing from broker for shared poll", map[string]any{"error": err.Error()}))
+		}
+	}
+	m.brokerSubChans = make(map[string]Broker)
+	m.brokerSubKeys = make(map[string]map[string]struct{})
 	m.brokerSubMu.Unlock()
 }
 
-func (m *SharedPollManager) subscribeToBroker(channel string) error {
+func (m *SharedPollManager) subscribeToBrokerKeys(channel string, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
 	broker := m.node.getBroker(channel)
+	keyChannels := make([]string, len(keys))
+	for i, key := range keys {
+		keyChannels[i] = sharedPollKeyChannel(channel, key)
+	}
 	m.node.metrics.incActionCount("broker_subscribe", channel)
-	m.brokerSubMu.Lock()
-	err := broker.Subscribe(channel)
-	if err != nil {
-		m.brokerSubMu.Unlock()
+	if err := broker.Subscribe(keyChannels...); err != nil {
 		return err
 	}
-	m.brokerSubChans[channel] = broker
+	m.brokerSubMu.Lock()
+	if m.brokerSubKeys[channel] == nil {
+		m.brokerSubKeys[channel] = make(map[string]struct{})
+	}
+	for _, kc := range keyChannels {
+		m.brokerSubChans[kc] = broker
+		m.brokerSubKeys[channel][kc] = struct{}{}
+	}
 	m.brokerSubMu.Unlock()
 	return nil
 }
 
-func (m *SharedPollManager) unsubscribeFromBroker(channel string) {
+func (m *SharedPollManager) unsubscribeFromBrokerKeys(channel string, keys []string) {
+	if len(keys) == 0 {
+		return
+	}
+	keyChannels := make([]string, len(keys))
+	for i, key := range keys {
+		keyChannels[i] = sharedPollKeyChannel(channel, key)
+	}
 	_ = m.node.subDissolver.Submit(func() error {
 		m.node.metrics.incActionCount("broker_unsubscribe", channel)
-		m.brokerSubMu.Lock()
-		broker, ok := m.brokerSubChans[channel]
-		if !ok {
-			m.brokerSubMu.Unlock()
+		// Filter out keys that were re-tracked between queueing and execution.
+		m.mu.RLock()
+		s, chExists := m.channels[channel]
+		m.mu.RUnlock()
+		var toUnsub []string
+		if chExists {
+			s.mu.Lock()
+			for i, kc := range keyChannels {
+				if _, tracked := s.itemIndex[keys[i]]; !tracked {
+					toUnsub = append(toUnsub, kc)
+				}
+			}
+			s.mu.Unlock()
+		} else {
+			toUnsub = keyChannels
+		}
+		if len(toUnsub) == 0 {
 			return nil
 		}
+		m.brokerSubMu.RLock()
+		broker, ok := m.brokerSubChans[toUnsub[0]]
+		m.brokerSubMu.RUnlock()
+		if !ok {
+			return nil
+		}
+		if err := broker.Unsubscribe(toUnsub...); err != nil {
+			time.Sleep(500 * time.Millisecond)
+			return err
+		}
+		m.brokerSubMu.Lock()
+		for _, kc := range toUnsub {
+			delete(m.brokerSubChans, kc)
+		}
+		if ks, ok := m.brokerSubKeys[channel]; ok {
+			for _, kc := range toUnsub {
+				delete(ks, kc)
+			}
+			if len(ks) == 0 {
+				delete(m.brokerSubKeys, channel)
+			}
+		}
+		m.brokerSubMu.Unlock()
+		return nil
+	})
+}
+
+// unsubscribeAllBrokerKeys unsubscribes all key-channels for a base channel.
+// Used on channel shutdown.
+func (m *SharedPollManager) unsubscribeAllBrokerKeys(channel string) {
+	_ = m.node.subDissolver.Submit(func() error {
+		m.node.metrics.incActionCount("broker_unsubscribe", channel)
 		// Check if channel was re-created while shutting down.
-		// This prevents a stale unsubscribe from canceling a new channel's subscription.
 		m.mu.RLock()
 		_, stillActive := m.channels[channel]
 		m.mu.RUnlock()
 		if stillActive {
-			m.brokerSubMu.Unlock()
 			return nil
 		}
-		// Unsubscribe inside the lock to prevent a concurrent subscribeToBroker
-		// from re-subscribing between our delete and unsubscribe.
-		err := broker.Unsubscribe(channel)
-		if err != nil {
-			m.brokerSubMu.Unlock()
-			// Cool down a bit since broker is not ready to process unsubscription.
+		m.brokerSubMu.RLock()
+		ks, ok := m.brokerSubKeys[channel]
+		if !ok || len(ks) == 0 {
+			m.brokerSubMu.RUnlock()
+			return nil
+		}
+		keyChannels := make([]string, 0, len(ks))
+		for kc := range ks {
+			keyChannels = append(keyChannels, kc)
+		}
+		var broker Broker
+		for _, kc := range keyChannels {
+			if b, ok := m.brokerSubChans[kc]; ok {
+				broker = b
+				break
+			}
+		}
+		m.brokerSubMu.RUnlock()
+		if broker == nil {
+			return nil
+		}
+		if err := broker.Unsubscribe(keyChannels...); err != nil {
 			time.Sleep(500 * time.Millisecond)
 			return err
 		}
-		delete(m.brokerSubChans, channel)
+		m.brokerSubMu.Lock()
+		for _, kc := range keyChannels {
+			delete(m.brokerSubChans, kc)
+		}
+		if ks, ok := m.brokerSubKeys[channel]; ok {
+			for _, kc := range keyChannels {
+				delete(ks, kc)
+			}
+			if len(ks) == 0 {
+				delete(m.brokerSubKeys, channel)
+			}
+		}
 		m.brokerSubMu.Unlock()
 		return nil
 	})
@@ -481,12 +732,13 @@ func (m *SharedPollManager) publish(ctx context.Context, channel string, key str
 	}
 
 	// Check if publish is enabled for this channel (broker subscribed).
-	m.brokerSubMu.Lock()
-	broker := m.brokerSubChans[channel]
-	m.brokerSubMu.Unlock()
+	keyCh := sharedPollKeyChannel(channel, key)
+	m.brokerSubMu.RLock()
+	broker := m.brokerSubChans[keyCh]
+	m.brokerSubMu.RUnlock()
 
 	if broker != nil {
-		_, err := broker.Publish(channel, data, PublishOptions{Key: key, Version: version})
+		_, err := broker.Publish(keyCh, data, PublishOptions{Key: key, Version: version})
 		return err
 	}
 	// Local-only (PublishEnabled=false or channel not active): apply directly.
@@ -637,7 +889,7 @@ func (s *sharedPollChannelState) scheduleShutdown(m *SharedPollManager, channel 
 		} else {
 			m.mu.Unlock()
 		}
-		m.unsubscribeFromBroker(channel)
+		m.unsubscribeAllBrokerKeys(channel)
 	})
 }
 
@@ -659,7 +911,7 @@ func (s *sharedPollChannelState) doShutdown(m *SharedPollManager, channel string
 	} else {
 		m.mu.Unlock()
 	}
-	m.unsubscribeFromBroker(channel)
+	m.unsubscribeAllBrokerKeys(channel)
 
 	// Re-acquire s.mu since caller expects it held (deferred unlock).
 	s.mu.Lock()

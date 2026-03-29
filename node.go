@@ -1924,10 +1924,17 @@ func (n *Node) HandlePublication(ch string, pub *Publication, sp StreamPosition,
 	if pub == nil {
 		panic("nil Publication received, this must never happen")
 	}
-	// Route shared poll channel publications to SharedPollManager.
-	if n.sharedPollManager != nil && pub.Key != "" && n.sharedPollManager.hasChannel(ch) {
-		n.sharedPollManager.handlePublishedData(ch, pub.Key, pub.Version, pub.Data)
-		return nil
+	// Route shared poll key-scoped publications to SharedPollManager.
+	if n.sharedPollManager != nil && pub.Key != "" {
+		if baseCh, key := parseSharedPollKeyChannel(ch); baseCh != "" {
+			n.sharedPollManager.handlePublishedData(baseCh, key, pub.Version, pub.Data)
+			return nil
+		}
+		// Fallback: check if it's a direct channel match (local-only path).
+		if n.sharedPollManager.hasChannel(ch) {
+			n.sharedPollManager.handlePublishedData(ch, pub.Key, pub.Version, pub.Data)
+			return nil
+		}
 	}
 	// Deliver epoch in the first publication (offset==1) so clients learn
 	// the channel epoch. This covers first-ever publish and post-Clear

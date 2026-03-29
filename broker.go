@@ -170,10 +170,10 @@ type Broker interface {
 	// this moment node is ready to process broker events.
 	RegisterBrokerEventHandler(BrokerEventHandler) error
 
-	// Subscribe node on channel to listen all messages coming from channel.
-	Subscribe(ch string) error
-	// Unsubscribe node from channel to stop listening messages from it.
-	Unsubscribe(ch string) error
+	// Subscribe node on channels to listen all messages coming from them.
+	Subscribe(channels ...string) error
+	// Unsubscribe node from channels to stop listening messages from them.
+	Unsubscribe(channels ...string) error
 
 	// Publish allows sending data into channel. Data should be
 	// delivered to all clients subscribed to this channel at moment on any

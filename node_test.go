@@ -104,14 +104,14 @@ func (e *TestBroker) PublishControl(_ []byte, _, _ string) error {
 	return nil
 }
 
-func (e *TestBroker) Subscribe(_ string) error {
+func (e *TestBroker) Subscribe(_ ...string) error {
 	if e.errorOnSubscribe {
 		return errors.New("boom")
 	}
 	return nil
 }
 
-func (e *TestBroker) Unsubscribe(_ string) error {
+func (e *TestBroker) Unsubscribe(_ ...string) error {
 	if e.errorOnUnsubscribe {
 		return errors.New("boom")
 	}

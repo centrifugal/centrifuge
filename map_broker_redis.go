@@ -2738,9 +2738,18 @@ func (e *RedisMapBroker) handleRedisClientMessage(isCluster bool, eventHandler B
 	return nil
 }
 
-// Subscribe to a channel.
-func (e *RedisMapBroker) Subscribe(ch string) error {
-	s := e.getShard(ch)
+// Subscribe to channels.
+func (e *RedisMapBroker) Subscribe(channels ...string) error {
+	if len(channels) == 0 {
+		return nil
+	}
+	if len(channels) == 1 {
+		return e.subscribe(e.getShard(channels[0]), channels[0])
+	}
+	return e.subscribeBatch(channels, false)
+}
+
+func (e *RedisMapBroker) subscribe(s *brokerShardWrapper, ch string) error {
 	if e.node.logEnabled(LogLevelDebug) {
 		e.node.logger.log(newLogEntry(LogLevelDebug, "subscribe node on channel", map[string]any{"channel": ch}))
 	}
@@ -2771,9 +2780,122 @@ func (e *RedisMapBroker) Subscribe(ch string) error {
 	return err
 }
 
-// Unsubscribe from a channel.
-func (e *RedisMapBroker) Unsubscribe(ch string) error {
-	s := e.getShard(ch)
+type mapBrokerConnKey struct {
+	shardIdx        int
+	clusterShardIdx int
+	psShardIdx      int
+}
+
+type mapBrokerConnGroup struct {
+	shard    *brokerShardWrapper
+	channels []string
+}
+
+func (e *RedisMapBroker) subscribeBatch(channels []string, unsub bool) error {
+	groups := make(map[mapBrokerConnKey]*mapBrokerConnGroup)
+	for _, ch := range channels {
+		var shardIdx int
+		if len(e.shards) > 1 {
+			shardIdx = consistentIndex(ch, len(e.shards))
+		}
+		s := e.shards[shardIdx]
+		psShardIdx := index(ch, e.conf.numSubscribeShards)
+		clusterShardIdx := 0
+		if e.useShardedPubSub(s.shard) {
+			clusterShardIdx = consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
+		}
+		if s.partitionToNodeIdx != nil {
+			clusterShardIdx = s.partitionToNodeIdx[clusterShardIdx]
+		}
+		key := mapBrokerConnKey{shardIdx: shardIdx, clusterShardIdx: clusterShardIdx, psShardIdx: psShardIdx}
+		g, ok := groups[key]
+		if !ok {
+			g = &mapBrokerConnGroup{shard: s}
+			groups[key] = g
+		}
+		g.channels = append(g.channels, ch)
+	}
+	// Track completed groups so we can roll back on partial failure.
+	var completed []mapBrokerConnKey
+	for key, g := range groups {
+		s := g.shard
+		s.subClientsMu.Lock()
+		conn := s.subClients[key.clusterShardIdx][key.psShardIdx]
+		if conn == nil {
+			s.subClientsMu.Unlock()
+			if !unsub {
+				e.rollbackSubscribeBatch(groups, completed)
+			}
+			return errPubSubConnUnavailable
+		}
+		s.subClientsMu.Unlock()
+
+		chIDs := make([]string, len(g.channels))
+		for i, ch := range g.channels {
+			chIDs[i] = e.messageChannelID(s.shard, ch)
+		}
+
+		var err error
+		if e.useShardedPubSub(s.shard) {
+			if unsub {
+				err = conn.Do(context.Background(), conn.B().Sunsubscribe().Channel(chIDs...).Build()).Error()
+			} else {
+				err = conn.Do(context.Background(), conn.B().Ssubscribe().Channel(chIDs...).Build()).Error()
+			}
+		} else {
+			if unsub {
+				err = conn.Do(context.Background(), conn.B().Unsubscribe().Channel(chIDs...).Build()).Error()
+			} else {
+				err = conn.Do(context.Background(), conn.B().Subscribe().Channel(chIDs...).Build()).Error()
+			}
+		}
+		if err != nil {
+			if !unsub {
+				e.rollbackSubscribeBatch(groups, completed)
+			}
+			return err
+		}
+		completed = append(completed, key)
+	}
+	return nil
+}
+
+// rollbackSubscribeBatch unsubscribes channels from groups that were already
+// successfully subscribed. Best-effort: errors are ignored.
+func (e *RedisMapBroker) rollbackSubscribeBatch(groups map[mapBrokerConnKey]*mapBrokerConnGroup, completed []mapBrokerConnKey) {
+	for _, key := range completed {
+		g := groups[key]
+		s := g.shard
+		s.subClientsMu.Lock()
+		conn := s.subClients[key.clusterShardIdx][key.psShardIdx]
+		s.subClientsMu.Unlock()
+		if conn == nil {
+			continue
+		}
+		chIDs := make([]string, len(g.channels))
+		for i, ch := range g.channels {
+			chIDs[i] = e.messageChannelID(s.shard, ch)
+		}
+		if e.useShardedPubSub(s.shard) {
+			_ = conn.Do(context.Background(), conn.B().Sunsubscribe().Channel(chIDs...).Build()).Error()
+		} else {
+			_ = conn.Do(context.Background(), conn.B().Unsubscribe().Channel(chIDs...).Build()).Error()
+		}
+	}
+}
+
+// Unsubscribe from channels.
+func (e *RedisMapBroker) Unsubscribe(channels ...string) error {
+	if len(channels) == 0 {
+		return nil
+	}
+	if len(channels) == 1 {
+		return e.unsubscribe(e.getShard(channels[0]), channels[0])
+	}
+	return e.subscribeBatch(channels, true)
+}
+
+func (e *RedisMapBroker) unsubscribe(s *brokerShardWrapper, ch string) error {
 	if e.node.logEnabled(LogLevelDebug) {
 		e.node.logger.log(newLogEntry(LogLevelDebug, "unsubscribe node from channel", map[string]any{"channel": ch}))
 	}

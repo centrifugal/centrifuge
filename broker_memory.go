@@ -203,12 +203,12 @@ func (b *MemoryBroker) PublishLeave(ch string, info *ClientInfo) error {
 }
 
 // Subscribe is noop here.
-func (b *MemoryBroker) Subscribe(_ string) error {
+func (b *MemoryBroker) Subscribe(_ ...string) error {
 	return nil
 }
 
 // Unsubscribe node from channel. Noop here.
-func (b *MemoryBroker) Unsubscribe(_ string) error {
+func (b *MemoryBroker) Unsubscribe(_ ...string) error {
 	return nil
 }
 

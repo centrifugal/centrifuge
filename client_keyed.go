@@ -151,20 +151,25 @@ func (c *Client) handleKeyedTrack(req *protocol.SubRefreshRequest, cmd *protocol
 		//   (none): existing key, client up to date → no action.
 		var coldKeys []string
 		var warmKeys []string
-		for _, it := range req.Items {
-			if c.node.sharedPollManager != nil {
-				isNew, entryVersion, err := c.node.sharedPollManager.track(channel, opts, it.Key)
-				if err != nil {
-					c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, ErrorInternal, started, rw)
-					return
-				}
-				if isNew && it.Version == 0 {
+		if c.node.sharedPollManager != nil {
+			allKeys := make([]string, len(req.Items))
+			for i, it := range req.Items {
+				allKeys[i] = it.Key
+			}
+			trackResults, err := c.node.sharedPollManager.trackKeys(channel, opts, allKeys)
+			if err != nil {
+				c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, ErrorInternal, started, rw)
+				return
+			}
+			for i, it := range req.Items {
+				tr := trackResults[i]
+				if tr.isNew && it.Version == 0 {
 					// New to server, client has no data → cold key auto-poll.
 					coldKeys = append(coldKeys, it.Key)
-				} else if !isNew && it.Version == 0 {
+				} else if !tr.isNew && it.Version == 0 {
 					// Existing key, client has no data → warm key.
 					warmKeys = append(warmKeys, it.Key)
-				} else if entryVersion > it.Version {
+				} else if tr.entryVersion > it.Version {
 					// Existing key, client has stale version → warm key.
 					warmKeys = append(warmKeys, it.Key)
 				}

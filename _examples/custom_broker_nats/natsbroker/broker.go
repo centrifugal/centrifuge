@@ -226,32 +226,38 @@ func (b *NatsBroker) RegisterControlEventHandler(h centrifuge.ControlEventHandle
 }
 
 // Subscribe - see centrifuge.Broker interface description.
-func (b *NatsBroker) Subscribe(ch string) error {
-	if strings.Contains(ch, "*") || strings.Contains(ch, ">") {
-		// Do not support wildcard subscriptions.
-		return centrifuge.ErrorBadRequest
+func (b *NatsBroker) Subscribe(channels ...string) error {
+	for _, ch := range channels {
+		if strings.Contains(ch, "*") || strings.Contains(ch, ">") {
+			// Do not support wildcard subscriptions.
+			return centrifuge.ErrorBadRequest
+		}
+		b.subsMu.Lock()
+		clientChannel := b.clientChannel(ch)
+		if _, ok := b.subs[clientChannel]; ok {
+			b.subsMu.Unlock()
+			continue
+		}
+		subClient, err := b.nc.Subscribe(string(b.clientChannel(ch)), b.handleClient)
+		if err != nil {
+			b.subsMu.Unlock()
+			return err
+		}
+		b.subs[clientChannel] = subClient
+		b.subsMu.Unlock()
 	}
-	b.subsMu.Lock()
-	defer b.subsMu.Unlock()
-	clientChannel := b.clientChannel(ch)
-	if _, ok := b.subs[clientChannel]; ok {
-		return nil
-	}
-	subClient, err := b.nc.Subscribe(string(b.clientChannel(ch)), b.handleClient)
-	if err != nil {
-		return err
-	}
-	b.subs[clientChannel] = subClient
 	return nil
 }
 
 // Unsubscribe - see centrifuge.Broker interface description.
-func (b *NatsBroker) Unsubscribe(ch string) error {
+func (b *NatsBroker) Unsubscribe(channels ...string) error {
 	b.subsMu.Lock()
 	defer b.subsMu.Unlock()
-	if sub, ok := b.subs[b.clientChannel(ch)]; ok {
-		_ = sub.Unsubscribe()
-		delete(b.subs, b.clientChannel(ch))
+	for _, ch := range channels {
+		if sub, ok := b.subs[b.clientChannel(ch)]; ok {
+			_ = sub.Unsubscribe()
+			delete(b.subs, b.clientChannel(ch))
+		}
 	}
 	return nil
 }

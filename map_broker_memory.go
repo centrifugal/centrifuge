@@ -93,12 +93,12 @@ func (e *MemoryMapBroker) Clear(_ context.Context, ch string, _ MapClearOptions)
 }
 
 // Subscribe is noop here.
-func (e *MemoryMapBroker) Subscribe(_ string) error {
+func (e *MemoryMapBroker) Subscribe(_ ...string) error {
 	return nil
 }
 
 // Unsubscribe is noop here.
-func (e *MemoryMapBroker) Unsubscribe(_ string) error {
+func (e *MemoryMapBroker) Unsubscribe(_ ...string) error {
 	return nil
 }
 

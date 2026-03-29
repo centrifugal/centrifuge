@@ -853,8 +853,14 @@ func (b *RedisBroker) publishLeave(s *shardWrapper, ch string, info *ClientInfo)
 }
 
 // Subscribe - see Broker.Subscribe.
-func (b *RedisBroker) Subscribe(ch string) error {
-	return b.subscribe(b.getShard(ch), ch)
+func (b *RedisBroker) Subscribe(channels ...string) error {
+	if len(channels) == 0 {
+		return nil
+	}
+	if len(channels) == 1 {
+		return b.subscribe(b.getShard(channels[0]), channels[0])
+	}
+	return b.subscribeBatch(channels, false)
 }
 
 func (b *RedisBroker) subscribe(s *shardWrapper, ch string) error {
@@ -888,9 +894,119 @@ func (b *RedisBroker) subscribe(s *shardWrapper, ch string) error {
 	return err
 }
 
+type brokerConnKey struct {
+	shardIdx        int
+	clusterShardIdx int
+	psShardIdx      int
+}
+
+type brokerConnGroup struct {
+	shard    *shardWrapper
+	channels []string
+}
+
+func (b *RedisBroker) subscribeBatch(channels []string, unsub bool) error {
+	groups := make(map[brokerConnKey]*brokerConnGroup)
+	for _, ch := range channels {
+		var shardIdx int
+		if b.sharding {
+			shardIdx = consistentIndex(ch, len(b.shards))
+		}
+		s := b.shards[shardIdx]
+		psShardIdx := index(ch, b.config.numSubscribeShards)
+		var clusterShardIdx int
+		if b.useShardedPubSub(s.shard) {
+			clusterShardIdx = consistentIndex(ch, b.config.NumShardedPubSubPartitions)
+		}
+		if s.partitionToNodeIdx != nil {
+			clusterShardIdx = s.partitionToNodeIdx[clusterShardIdx]
+		}
+		key := brokerConnKey{shardIdx: shardIdx, clusterShardIdx: clusterShardIdx, psShardIdx: psShardIdx}
+		g, ok := groups[key]
+		if !ok {
+			g = &brokerConnGroup{shard: s}
+			groups[key] = g
+		}
+		g.channels = append(g.channels, ch)
+	}
+	// Track completed groups so we can roll back on partial failure.
+	var completed []brokerConnKey
+	for key, g := range groups {
+		s := g.shard
+		s.subClientsMu.Lock()
+		conn := s.subClients[key.clusterShardIdx][key.psShardIdx]
+		if conn == nil {
+			s.subClientsMu.Unlock()
+			if !unsub {
+				b.rollbackSubscribeBatch(groups, completed)
+			}
+			return errPubSubConnUnavailable
+		}
+		s.subClientsMu.Unlock()
+
+		chIDs := make([]string, len(g.channels))
+		for i, ch := range g.channels {
+			chIDs[i] = string(b.messageChannelID(s.shard, ch))
+		}
+
+		var err error
+		if b.useShardedPubSub(s.shard) {
+			if unsub {
+				err = conn.Do(context.Background(), conn.B().Sunsubscribe().Channel(chIDs...).Build()).Error()
+			} else {
+				err = conn.Do(context.Background(), conn.B().Ssubscribe().Channel(chIDs...).Build()).Error()
+			}
+		} else {
+			if unsub {
+				err = conn.Do(context.Background(), conn.B().Unsubscribe().Channel(chIDs...).Build()).Error()
+			} else {
+				err = conn.Do(context.Background(), conn.B().Subscribe().Channel(chIDs...).Build()).Error()
+			}
+		}
+		if err != nil {
+			if !unsub {
+				b.rollbackSubscribeBatch(groups, completed)
+			}
+			return err
+		}
+		completed = append(completed, key)
+	}
+	return nil
+}
+
+// rollbackSubscribeBatch unsubscribes channels from groups that were already
+// successfully subscribed. Best-effort: errors are ignored.
+func (b *RedisBroker) rollbackSubscribeBatch(groups map[brokerConnKey]*brokerConnGroup, completed []brokerConnKey) {
+	for _, key := range completed {
+		g := groups[key]
+		s := g.shard
+		s.subClientsMu.Lock()
+		conn := s.subClients[key.clusterShardIdx][key.psShardIdx]
+		s.subClientsMu.Unlock()
+		if conn == nil {
+			continue
+		}
+		chIDs := make([]string, len(g.channels))
+		for i, ch := range g.channels {
+			chIDs[i] = string(b.messageChannelID(s.shard, ch))
+		}
+		if b.useShardedPubSub(s.shard) {
+			_ = conn.Do(context.Background(), conn.B().Sunsubscribe().Channel(chIDs...).Build()).Error()
+		} else {
+			_ = conn.Do(context.Background(), conn.B().Unsubscribe().Channel(chIDs...).Build()).Error()
+		}
+	}
+}
+
 // Unsubscribe - see Broker.Unsubscribe.
-func (b *RedisBroker) Unsubscribe(ch string) error {
-	return b.unsubscribe(b.getShard(ch), ch)
+func (b *RedisBroker) Unsubscribe(channels ...string) error {
+	if len(channels) == 0 {
+		return nil
+	}
+	if len(channels) == 1 {
+		return b.unsubscribe(b.getShard(channels[0]), channels[0])
+	}
+	return b.subscribeBatch(channels, true)
 }
 
 func (b *RedisBroker) unsubscribe(s *shardWrapper, ch string) error {
