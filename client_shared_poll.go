@@ -114,7 +114,7 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 		c.mu.Unlock()
 
 		// Ensure keyed channel state exists.
-		opts, ok := c.node.config.GetSharedPollChannelOptions(channel)
+		opts, ok := c.node.config.SharedPoll.GetSharedPollChannelOptions(channel)
 		if !ok {
 			c.onSubscribeError(channel)
 			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, ErrorNotAvailable, started, rw)

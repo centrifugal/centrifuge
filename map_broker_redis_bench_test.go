@@ -76,15 +76,17 @@ func BenchmarkRedisMapBroker_PublishMapStateSimple(b *testing.B) {
 func BenchmarkRedisMapBroker_PublishMapStateOrdered(b *testing.B) {
 	b.Helper()
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				Ordered:       true,
-				StreamSize:    10000,
-				StreamTTL:     300 * time.Second,
-				MetaTTL:       time.Hour,
-				KeyTTL:        300 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 10000,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     300 * time.Second,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(b, node)
@@ -255,15 +257,17 @@ func BenchmarkRedisMapBroker_ReadStatePaginated(b *testing.B) {
 func BenchmarkRedisMapBroker_ReadStateOrdered(b *testing.B) {
 	b.Helper()
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				Ordered:       true,
-				StreamSize:    10000,
-				StreamTTL:     300 * time.Second,
-				MetaTTL:       time.Hour,
-				KeyTTL:        300 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 10000,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     300 * time.Second,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(b, node)
@@ -369,12 +373,14 @@ func BenchmarkRedisMapBroker_Cleanup(b *testing.B) {
 		for _, numKeys := range []int{100, 1000, 10000} {
 			b.Run(fmt.Sprintf("%s/keys_%d", orderLabel, numKeys), func(b *testing.B) {
 				node, _ := New(Config{
-					GetMapChannelOptions: func(channel string) MapChannelOptions {
-						return MapChannelOptions{
-							Mode: MapModeDurable,
-							KeyTTL:        time.Millisecond,
-							Ordered:       ordered,
-						}
+					Map: MapConfig{
+						GetMapChannelOptions: func(channel string) MapChannelOptions {
+							return MapChannelOptions{
+								Mode:    MapModeDurable,
+								KeyTTL:  time.Millisecond,
+								Ordered: ordered,
+							}
+						},
 					},
 				})
 				broker := newTestRedisMapBroker(b, node)

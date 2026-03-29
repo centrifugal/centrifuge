@@ -15,14 +15,16 @@ import (
 // newTestNodeWithMapBroker creates a test node with a memory map broker.
 func newTestNodeWithMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
 	node, err := New(Config{
-		LogLevel:              LogLevelTrace,
-		LogHandler:            func(entry LogEntry) {},
-		MapPaginationMinLimit: 1, // Allow small page sizes in tests.
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeEphemeral,
-				KeyTTL:        60 * time.Second,
-			}
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		Map: MapConfig{
+			PaginationMinLimit: 1, // Allow small page sizes in tests.
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeEphemeral,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -45,10 +47,10 @@ func newTestNodeWithMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
 }
 
 func setTestMapChannelOptionsConverging(node *Node) {
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			KeyTTL:        60 * time.Second,
+			Mode:   MapModeDurable,
+			KeyTTL: 60 * time.Second,
 		}
 	}
 }
@@ -1461,14 +1463,16 @@ func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
 	// Test that when stream is close enough, server transitions directly
 	// from STATE to LIVE on the last state page.
 	node, err := New(Config{
-		LogLevel:              LogLevelTrace,
-		LogHandler:            func(entry LogEntry) {},
-		MapPaginationMinLimit: 1,
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		Map: MapConfig{
+			PaginationMinLimit: 1,
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -1537,11 +1541,13 @@ func TestMapSubscribe_StateToLive_WithStreamPublications(t *testing.T) {
 	node, err := New(Config{
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -1603,14 +1609,16 @@ func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
 	// Test that with pagination, only the LAST page can trigger STATE→LIVE.
 	// Earlier pages should return phase=2 (STATE) with cursor.
 	node, err := New(Config{
-		LogLevel:              LogLevelTrace,
-		LogHandler:            func(entry LogEntry) {},
-		MapPaginationMinLimit: 1,
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		Map: MapConfig{
+			PaginationMinLimit: 1,
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -1694,14 +1702,16 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination(t *testing.T) {
 	//   4. On last page, server goes LIVE directly (stream catch-up since frozen N)
 	//   5. Result: 2 publications recovered in the LIVE response
 	node, err := New(Config{
-		LogLevel:              LogLevelTrace,
-		LogHandler:            func(entry LogEntry) {},
-		MapPaginationMinLimit: 1,
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		Map: MapConfig{
+			PaginationMinLimit: 1,
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -1802,14 +1812,16 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination_ManyPublishes(t *testi
 	// multi-page pagination. Verifies the frozen offset stays consistent and
 	// ALL publications during the entire pagination are recovered.
 	node, err := New(Config{
-		LogLevel:              LogLevelTrace,
-		LogHandler:            func(entry LogEntry) {},
-		MapPaginationMinLimit: 1,
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		Map: MapConfig{
+			PaginationMinLimit: 1,
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -2407,15 +2419,17 @@ func TestMapSubscribe_ConcurrentPagination(t *testing.T) {
 // When client is beyond the limit, should get ErrorUnrecoverablePosition.
 func TestMapSubscribe_RecoveryMaxPublicationLimit(t *testing.T) {
 	node, err := New(Config{
-		LogLevel:                             LogLevelTrace,
-		LogHandler:                           func(entry LogEntry) {},
-		MapPaginationMinLimit:                1,
-		MapLiveTransitionMaxPublicationLimit: 5, // Max 5 publications during recovery.
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		Map: MapConfig{
+			PaginationMinLimit:                1,
+			LiveTransitionMaxPublicationLimit: 5, // Max 5 publications during recovery.
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -2897,7 +2911,7 @@ func TestMapSubscribe_StreamPhaseOffset(t *testing.T) {
 func TestMapSubscribe_CatchUpTimeout_StatePagination(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
 	// Set a very short timeout so we can trigger it without sleeping.
-	node.config.MapSubscribeCatchUpTimeout = time.Nanosecond
+	node.config.Map.SubscribeCatchUpTimeout = time.Nanosecond
 
 	channel := "test_catchup_timeout"
 	ctx := context.Background()
@@ -2955,7 +2969,7 @@ func TestMapSubscribe_CatchUpTimeout_PhaseTransition(t *testing.T) {
 	// state-to-live doesn't kick in, then manipulate startedAt before STREAM.
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
-	node.config.MapSubscribeCatchUpTimeout = 10 * time.Second // Large enough for STATE pages.
+	node.config.Map.SubscribeCatchUpTimeout = 10 * time.Second // Large enough for STATE pages.
 
 	channel := "test_catchup_timeout_phase"
 	ctx := context.Background()
@@ -3030,8 +3044,8 @@ func TestMapSubscribe_CatchUpTimeout_PhaseTransition(t *testing.T) {
 
 func TestMapSubscribe_CatchUpTimeout_Sweep(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
-	node.config.MapSubscribeCatchUpTimeout = time.Nanosecond
-	node.config.MapPaginationMinLimit = 1
+	node.config.Map.SubscribeCatchUpTimeout = time.Nanosecond
+	node.config.Map.PaginationMinLimit = 1
 
 	ctx := context.Background()
 
@@ -3097,8 +3111,8 @@ func TestMapSubscribe_CatchUpTimeout_Sweep(t *testing.T) {
 func TestMapSubscribe_CatchUpTimeout_Disabled(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
 	// Negative timeout disables the check.
-	node.config.MapSubscribeCatchUpTimeout = -1
-	node.config.MapPaginationMinLimit = 1
+	node.config.Map.SubscribeCatchUpTimeout = -1
+	node.config.Map.PaginationMinLimit = 1
 
 	channel := "test_catchup_no_timeout"
 	ctx := context.Background()
@@ -3877,17 +3891,21 @@ func TestSharedPollSubscribe_WithMapPresence(t *testing.T) {
 	node, err := New(Config{
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
-		GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
-			return SharedPollChannelOptions{
-				RefreshInterval:      100 * time.Millisecond,
-				MaxKeysPerConnection: 100,
-			}, true
+		SharedPoll: SharedPollConfig{
+			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+				return SharedPollChannelOptions{
+					RefreshInterval:      100 * time.Millisecond,
+					MaxKeysPerConnection: 100,
+				}, true
+			},
 		},
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeEphemeral,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeEphemeral,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	require.NoError(t, err)

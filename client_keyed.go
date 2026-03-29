@@ -133,7 +133,7 @@ func (c *Client) handleKeyedTrack(req *protocol.SubRefreshRequest, cmd *protocol
 		c.mu.Unlock()
 
 		// Get or create keyed channel state.
-		opts, ok := c.node.config.GetSharedPollChannelOptions(channel)
+		opts, ok := c.node.config.SharedPoll.GetSharedPollChannelOptions(channel)
 		if !ok {
 			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, ErrorNotAvailable, started, rw)
 			return

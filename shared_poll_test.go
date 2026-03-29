@@ -19,8 +19,8 @@ type controllableBroker struct {
 	unsubscribeCount atomic.Int32
 
 	subscribeMu   sync.Mutex
-	subscribeErr  error              // returned by Subscribe when non-nil
-	subscribeCh   chan struct{}       // if non-nil, Subscribe blocks until this is closed
+	subscribeErr  error                 // returned by Subscribe when non-nil
+	subscribeCh   chan struct{}         // if non-nil, Subscribe blocks until this is closed
 	subscribeFunc func(ch string) error // if non-nil, called instead of default behavior
 
 	unsubscribeMu   sync.Mutex
@@ -32,9 +32,9 @@ func (b *controllableBroker) RegisterBrokerEventHandler(_ BrokerEventHandler) er
 func (b *controllableBroker) Publish(_ string, _ []byte, _ PublishOptions) (PublishResult, error) {
 	return PublishResult{}, nil
 }
-func (b *controllableBroker) PublishJoin(_ string, _ *ClientInfo) error   { return nil }
-func (b *controllableBroker) PublishLeave(_ string, _ *ClientInfo) error  { return nil }
-func (b *controllableBroker) PublishControl(_ []byte, _, _ string) error  { return nil }
+func (b *controllableBroker) PublishJoin(_ string, _ *ClientInfo) error  { return nil }
+func (b *controllableBroker) PublishLeave(_ string, _ *ClientInfo) error { return nil }
+func (b *controllableBroker) PublishControl(_ []byte, _, _ string) error { return nil }
 func (b *controllableBroker) History(_ string, _ HistoryOptions) ([]*Publication, StreamPosition, error) {
 	return nil, StreamPosition{}, nil
 }
@@ -154,12 +154,14 @@ func TestSharedPollManager_Close(t *testing.T) {
 	node, err := New(Config{
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
-		GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
-			return SharedPollChannelOptions{
-				RefreshInterval:        100 * time.Millisecond,
-				MaxKeysPerConnection:   100,
-				MaxConsecutiveAbsences: 2,
-			}, true
+		SharedPoll: SharedPollConfig{
+			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+				return SharedPollChannelOptions{
+					RefreshInterval:        100 * time.Millisecond,
+					MaxKeysPerConnection:   100,
+					MaxConsecutiveAbsences: 2,
+				}, true
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -396,7 +398,7 @@ func TestSharedPollNotify_FullFlow_DataDelivered(t *testing.T) {
 	// (per-connection version updated). Timer interval is long so
 	// only the notification path triggers the backend call.
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:               SharedPollModeVersioned,
+		Mode:                      SharedPollModeVersioned,
 		RefreshInterval:           30 * time.Second, // Won't fire during test.
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
@@ -456,7 +458,7 @@ func TestSharedPollNotify_FullFlow_TwoClients(t *testing.T) {
 	// Two clients track the same key. Notification triggers backend poll.
 	// Both clients should receive the update.
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:               SharedPollModeVersioned,
+		Mode:                      SharedPollModeVersioned,
 		RefreshInterval:           30 * time.Second,
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
@@ -521,7 +523,7 @@ func TestSharedPollNotify_FullFlow_Removal(t *testing.T) {
 	// Backend returns Removed=true for a notified key.
 	// Client should see the item removed.
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:               SharedPollModeVersioned,
+		Mode:                      SharedPollModeVersioned,
 		RefreshInterval:           30 * time.Second,
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
@@ -672,7 +674,7 @@ func TestKeyedManager_RemoveChannel(t *testing.T) {
 func TestSharedPollPublish_LocalOnly(t *testing.T) {
 	// Publish without PublishEnabled — data delivered locally to subscriber.
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 		RefreshInterval:        30 * time.Second, // Won't fire during test.
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
@@ -709,7 +711,7 @@ func TestSharedPollPublish_FreshFromPublish_SkipsTimerPoll(t *testing.T) {
 	callCh := make(chan SharedPollEvent, 10)
 
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 		RefreshInterval:        200 * time.Millisecond,
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
@@ -775,7 +777,7 @@ func TestSharedPollPublish_FreshFromPublish_NotSkippedByNotify(t *testing.T) {
 	callCh := make(chan SharedPollEvent, 10)
 
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:               SharedPollModeVersioned,
+		Mode:                      SharedPollModeVersioned,
 		RefreshInterval:           30 * time.Second, // Won't fire during test.
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
@@ -848,7 +850,7 @@ func TestSharedPollPublish_UnknownChannel(t *testing.T) {
 
 func TestSharedPollPublish_UntrackedKey(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
@@ -874,7 +876,7 @@ func TestSharedPollPublish_UntrackedKey(t *testing.T) {
 func TestSharedPollPublish_DeltaWithKeepLatestData(t *testing.T) {
 	// With KeepLatestData=true, two publishes → second should use delta.
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 		RefreshInterval:        30 * time.Second,
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
@@ -931,7 +933,7 @@ func TestSharedPollPublish_DeltaWithKeepLatestData(t *testing.T) {
 func TestSharedPollPublish_MultipleClients(t *testing.T) {
 	// Two clients tracking same key, publish delivers to both.
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 		RefreshInterval:        30 * time.Second,
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
@@ -984,7 +986,7 @@ func TestSharedPollPublish_MultipleClients(t *testing.T) {
 func TestSharedPollPublish_BrokerSubscribeOnTrack(t *testing.T) {
 	// With PublishEnabled=true, track key → verify broker subscription.
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
@@ -1013,7 +1015,7 @@ func TestSharedPollPublish_BrokerSubscribeOnTrack(t *testing.T) {
 func TestSharedPollPublish_BrokerUnsubscribeOnShutdown(t *testing.T) {
 	// With PublishEnabled=true, track → untrack all → verify broker unsubscription after shutdown.
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
@@ -1053,7 +1055,7 @@ func TestSharedPollPublish_BrokerUnsubscribeOnShutdown(t *testing.T) {
 func TestSharedPollPublish_CrossNode_ViaHandlePublication(t *testing.T) {
 	// Call HandlePublication with keyed pub matching shared poll channel → routes to handlePublishedData.
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
@@ -1092,7 +1094,7 @@ func TestSharedPollPublish_CrossNode_ViaHandlePublication(t *testing.T) {
 func TestSharedPollPublish_VersionIncrementsConsecutive(t *testing.T) {
 	// Multiple publishes → version strictly increases, each delivered.
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
@@ -1153,7 +1155,7 @@ func TestSharedPoll_StaleResponseDoesNotOverwriteData(t *testing.T) {
 	data.Store([]byte(`{"v":2}`))
 
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:               SharedPollModeVersioned,
+		Mode:                      SharedPollModeVersioned,
 		RefreshInterval:           30 * time.Second, // Won't fire during test.
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
@@ -1241,7 +1243,7 @@ func TestSharedPoll_StaleResponseDoesNotOverwriteData(t *testing.T) {
 func TestSharedPoll_EqualVersionPublishNoOverwrite(t *testing.T) {
 	// Verify: equal-version publish does NOT overwrite entry.data.
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:               SharedPollModeVersioned,
+		Mode:                      SharedPollModeVersioned,
 		RefreshInterval:           30 * time.Second,
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
@@ -1839,8 +1841,10 @@ func newTestNodeWithControllableBroker(t *testing.T, broker *controllableBroker,
 	node, err := New(Config{
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
-		GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
-			return opts, true
+		SharedPoll: SharedPollConfig{
+			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+				return opts, true
+			},
 		},
 	})
 	require.NoError(t, err)

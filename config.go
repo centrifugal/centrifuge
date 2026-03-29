@@ -170,13 +170,6 @@ type Config struct {
 	// custom Broker instances. When GetBroker returns false as the second argument then Node will
 	// use the default Broker for the channel.
 	GetBroker func(channel string) (Broker, bool)
-	// GetMapBroker when set allows returning a custom MapBroker to use for a specific channel.
-	// This enables sharding map state across multiple databases based on channel. If not set
-	// then the default Node's MapBroker (set via SetMapBroker) is always used for all channels.
-	// It's the responsibility of an application to properly initialize and shutdown all MapBroker
-	// instances. When GetMapBroker returns false as the second argument then Node will use the
-	// default MapBroker for the channel.
-	GetMapBroker func(channel string) (MapBroker, bool)
 	// GetPresenceManager when set allows returning a custom PresenceManager to use for a specific
 	// channel. If not set then the default Node's PresenceManager is always used for all channels.
 	// A proper PresenceManager shutdown is the responsibility of application because Node does not
@@ -199,41 +192,61 @@ type Config struct {
 	// This is an EXPERIMENTAL API.
 	ClientTimerScheduler TimerScheduler
 
+	// Map contains options for map subscriptions.
+	// This is an EXPERIMENTAL API.
+	Map MapConfig
+	// SharedPoll contains options for shared poll subscriptions.
+	// This is an EXPERIMENTAL API.
+	SharedPoll SharedPollConfig
+}
+
+type MapConfig struct {
+	// GetMapBroker when set allows returning a custom MapBroker to use for a specific channel.
+	// This enables sharding map state across multiple databases based on channel. If not set
+	// then the default Node's MapBroker (set via SetMapBroker) is always used for all channels.
+	// It's the responsibility of an application to properly initialize and shutdown all MapBroker
+	// instances. When GetMapBroker returns false as the second argument then Node will use the
+	// default MapBroker for the channel.
+	GetMapBroker func(channel string) (MapBroker, bool)
 	// GetMapChannelOptions returns channel options for map channels.
 	// Required for map channel operations. If nil, any map operation returns an error.
 	// Each channel must have SyncMode and RetentionMode explicitly set.
 	// NOTE: this callback is invoked on every broker operation (Publish, Remove,
 	// ReadState, ReadStream, etc.) — it must be fast and should not perform I/O.
+	// This is an EXPERIMENTAL API.
 	GetMapChannelOptions func(channel string) MapChannelOptions
-	// MapPaginationDefaultLimit sets the default number of items per page when
+	// PaginationDefaultLimit sets the default number of items per page when
 	// the client does not specify a limit. Zero means default (100).
-	MapPaginationDefaultLimit int
-	// MapPaginationMinLimit sets the minimum number of items per page in map
+	PaginationDefaultLimit int
+	// PaginationMinLimit sets the minimum number of items per page in map
 	// subscription pagination requests. This prevents excessive round trips when
 	// clients send very small limits. Zero means default (100).
-	MapPaginationMinLimit int
-	// MapPaginationMaxLimit sets the maximum number of items a client can request
+	PaginationMinLimit int
+	// PaginationMaxLimit sets the maximum number of items a client can request
 	// per page in map subscription pagination requests. Zero means default (1000).
-	MapPaginationMaxLimit int
-	// MapLiveTransitionMaxPublicationLimit sets the maximum number of stream publications
+	PaginationMaxLimit int
+	// LiveTransitionMaxPublicationLimit sets the maximum number of stream publications
 	// to recover during map subscription live transition. If limit is reached,
 	// ErrorUnrecoverablePosition is returned. Zero means no limit.
-	MapLiveTransitionMaxPublicationLimit int
-	// MapSubscribeCatchUpTimeout sets the maximum time a client can spend paginating
+	LiveTransitionMaxPublicationLimit int
+	// SubscribeCatchUpTimeout sets the maximum time a client can spend paginating
 	// through state and stream phases before going live. If exceeded, the client is
 	// disconnected with DisconnectSlow. Zero means 5 seconds (default). Negative
 	// means no timeout.
-	MapSubscribeCatchUpTimeout time.Duration
+	SubscribeCatchUpTimeout time.Duration
+}
 
+type SharedPollConfig struct {
 	// GetSharedPollChannelOptions returns per-channel options for shared poll
 	// channels. Required for shared poll operations — if nil, any shared poll
 	// subscribe returns an error. Called when a new channel first appears in
 	// SharedPollManager. Must be fast, no I/O.
+	// This is an EXPERIMENTAL API.
 	GetSharedPollChannelOptions func(channel string) (SharedPollChannelOptions, bool)
-	// SharedPollConcurrencyLimit sets the maximum number of concurrent backend
+	// ConcurrencyLimit sets the maximum number of concurrent backend
 	// calls across all shared poll channels. All channels share this pool.
 	// Zero means 64.
-	SharedPollConcurrencyLimit int
+	ConcurrencyLimit int
 }
 
 // SharedPollNotificationItem represents a lightweight notification that a specific

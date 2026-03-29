@@ -11,11 +11,13 @@ import (
 func setupMemoryMapBrokerBench(b *testing.B) (*MemoryMapBroker, func()) {
 	b.Helper()
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	broker, _ := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
@@ -81,13 +83,13 @@ func BenchmarkMemoryMapBroker_PublishMapStateSimple(b *testing.B) {
 // BenchmarkMemoryMapBroker_PublishMapStateOrdered benchmarks ordered keyed state.
 func BenchmarkMemoryMapBroker_PublishMapStateOrdered(b *testing.B) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			Ordered:       true,
-			StreamSize:    10000,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			Ordered:    true,
+			StreamSize: 10000,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker, _ := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
@@ -260,13 +262,13 @@ func BenchmarkMemoryMapBroker_ReadStatePaginated(b *testing.B) {
 // BenchmarkMemoryMapBroker_ReadStateOrdered benchmarks reading ordered state.
 func BenchmarkMemoryMapBroker_ReadStateOrdered(b *testing.B) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			Ordered:       true,
-			StreamSize:    10000,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			Ordered:    true,
+			StreamSize: 10000,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker, _ := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
@@ -483,12 +485,14 @@ func BenchmarkMemoryMapBroker_Cleanup(b *testing.B) {
 		for _, numKeys := range []int{1000, 10000, 100000} {
 			b.Run(fmt.Sprintf("%s/keys_%d", orderLabel, numKeys), func(b *testing.B) {
 				node, _ := New(Config{
-					GetMapChannelOptions: func(channel string) MapChannelOptions {
-						return MapChannelOptions{
-							Mode: MapModeDurable,
-							KeyTTL:        time.Millisecond,
-							Ordered:       ordered,
-						}
+					Map: MapConfig{
+						GetMapChannelOptions: func(channel string) MapChannelOptions {
+							return MapChannelOptions{
+								Mode:    MapModeDurable,
+								KeyTTL:  time.Millisecond,
+								Ordered: ordered,
+							}
+						},
 					},
 				})
 				broker, _ := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})

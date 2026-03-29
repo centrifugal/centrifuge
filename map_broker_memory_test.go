@@ -35,12 +35,12 @@ func stateToMapMemory(pubs []*Publication) map[string][]byte {
 // TestMemoryMapBroker_StatefulChannel tests stateful channel with keyed state and revisions.
 func TestMemoryMapBroker_StatefulChannel(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -92,13 +92,13 @@ func TestMemoryMapBroker_StatefulChannel(t *testing.T) {
 // TestMemoryMapBroker_StatefulChannelOrdered tests ordered stateful channel.
 func TestMemoryMapBroker_StatefulChannelOrdered(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			Ordered:       true,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -134,12 +134,12 @@ func TestMemoryMapBroker_StatefulChannelOrdered(t *testing.T) {
 // TestMemoryMapBroker_StateRevision tests that state values include revisions.
 func TestMemoryMapBroker_StateRevision(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -186,12 +186,12 @@ func TestMemoryMapBroker_StateRevision(t *testing.T) {
 // TestMemoryMapBroker_StatePagination tests cursor-based state pagination.
 func TestMemoryMapBroker_StatePagination(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -247,12 +247,12 @@ func TestMemoryMapBroker_StatePagination(t *testing.T) {
 // TestMemoryMapBroker_EpochHandling tests epoch changes and state invalidation.
 func TestMemoryMapBroker_EpochHandling(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -285,12 +285,12 @@ func TestMemoryMapBroker_EpochHandling(t *testing.T) {
 // (e.g., after server restart). This is the server restart recovery scenario.
 func TestMemoryMapBroker_EpochMismatchWhenChannelNotExists(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -314,12 +314,12 @@ func TestMemoryMapBroker_EpochMismatchWhenChannelNotExists(t *testing.T) {
 // when client doesn't send an epoch and the channel doesn't exist (fresh subscription).
 func TestMemoryMapBroker_NoEpochWhenChannelNotExists(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -341,12 +341,12 @@ func TestMemoryMapBroker_NoEpochWhenChannelNotExists(t *testing.T) {
 // TestMemoryMapBroker_Idempotency tests idempotent publishing.
 func TestMemoryMapBroker_Idempotency(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -390,12 +390,12 @@ func TestMemoryMapBroker_Idempotency(t *testing.T) {
 // TestMemoryMapBroker_VersionedPublishing tests version-based idempotency.
 func TestMemoryMapBroker_VersionedPublishing(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -444,12 +444,12 @@ func TestMemoryMapBroker_VersionedPublishing(t *testing.T) {
 // TestMemoryMapBroker_PerKeyVersion tests that version tracking is per-key independent.
 func TestMemoryMapBroker_PerKeyVersion(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -507,12 +507,12 @@ func TestMemoryMapBroker_PerKeyVersion(t *testing.T) {
 // TestMemoryMapBroker_MultipleChannels tests multiple channels independently.
 func TestMemoryMapBroker_MultipleChannels(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -558,13 +558,13 @@ func TestMemoryMapBroker_MultipleChannels(t *testing.T) {
 // in correct score order (descending by score).
 func TestMemoryMapBroker_OrderedStateOrdering(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			Ordered:       true,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -614,13 +614,13 @@ func TestMemoryMapBroker_OrderedStateOrdering(t *testing.T) {
 // maintains correct ordering across pages.
 func TestMemoryMapBroker_OrderedStatePagination(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			Ordered:       true,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -678,13 +678,13 @@ func TestMemoryMapBroker_OrderedStatePagination(t *testing.T) {
 // TestMemoryMapBroker_OrderedStateWithNegativeScores tests ordering with negative scores.
 func TestMemoryMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			Ordered:       true,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -733,13 +733,13 @@ func TestMemoryMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 // changes its position in the ordered state.
 func TestMemoryMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			Ordered:       true,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -792,12 +792,12 @@ func TestMemoryMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 // TestMemoryMapBroker_Remove tests removing keys from state.
 func TestMemoryMapBroker_Remove(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -867,12 +867,12 @@ func TestMemoryMapBroker_Remove(t *testing.T) {
 // TestMemoryMapBroker_KeyModeIfNew tests KeyModeIfNew - only write if key doesn't exist.
 func TestMemoryMapBroker_KeyModeIfNew(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -919,12 +919,12 @@ func TestMemoryMapBroker_KeyModeIfNew(t *testing.T) {
 // TestMemoryMapBroker_KeyModeIfExists tests KeyModeIfExists - only write if key exists.
 func TestMemoryMapBroker_KeyModeIfExists(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -970,12 +970,12 @@ func TestMemoryMapBroker_KeyModeIfExists(t *testing.T) {
 // TestMemoryMapBroker_KeyModeReplace tests default KeyModeReplace behavior.
 func TestMemoryMapBroker_KeyModeReplace(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -1093,11 +1093,11 @@ func simulateClientRecovery(
 // an entry during unordered pagination doesn't cause data loss.
 func TestMemoryMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModePersistent,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
+			Mode:       MapModePersistent,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -1193,11 +1193,11 @@ func TestMemoryMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
 // an entry during unordered pagination doesn't cause issues.
 func TestMemoryMapBroker_UnorderedContinuity_EntryAdded(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModePersistent,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
+			Mode:       MapModePersistent,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -1241,12 +1241,12 @@ func TestMemoryMapBroker_UnorderedContinuity_EntryAdded(t *testing.T) {
 // an entry with higher score during ordered pagination doesn't cause data loss.
 func TestMemoryMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModePersistent,
-			Ordered:       true,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
+			Mode:       MapModePersistent,
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -1302,12 +1302,12 @@ func TestMemoryMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 // an entry with lower score during ordered pagination works correctly.
 func TestMemoryMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModePersistent,
-			Ordered:       true,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
+			Mode:       MapModePersistent,
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -1359,12 +1359,12 @@ func TestMemoryMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 // an entry's score during pagination (causing reordering) doesn't lose data.
 func TestMemoryMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModePersistent,
-			Ordered:       true,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
+			Mode:       MapModePersistent,
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -1445,12 +1445,12 @@ func TestMemoryMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 // an entry during ordered pagination doesn't cause data loss.
 func TestMemoryMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModePersistent,
-			Ordered:       true,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
+			Mode:       MapModePersistent,
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -1531,12 +1531,12 @@ func TestMemoryMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 // with multiple concurrent changes during pagination.
 func TestMemoryMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModePersistent,
-			Ordered:       true,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
+			Mode:       MapModePersistent,
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -1624,11 +1624,11 @@ func TestMemoryMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 // TestMemoryMapBroker_CursorFormat tests that cursor format is correct.
 func TestMemoryMapBroker_CursorFormat(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModePersistent,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
+			Mode:       MapModePersistent,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -1677,12 +1677,12 @@ func TestMemoryMapBroker_CursorFormat(t *testing.T) {
 	t.Run("ordered cursor is score:key format", func(t *testing.T) {
 		channel := "test_cursor_ordered"
 
-		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				Mode: MapModePersistent,
-				Ordered:       true,
-				StreamSize:    100,
-				StreamTTL:     300 * time.Second,
+				Mode:       MapModePersistent,
+				Ordered:    true,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
 			}
 		}
 
@@ -1739,12 +1739,12 @@ func TestMemoryMapBroker_CursorFormat(t *testing.T) {
 // TestMemoryMapBroker_Delta tests key-based delta delivery via HandlePublication.
 func TestMemoryMapBroker_Delta(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 
@@ -1863,12 +1863,12 @@ func TestMemoryMapBroker_Delta(t *testing.T) {
 
 func TestMemoryMapBroker_Clear(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -1921,12 +1921,12 @@ func TestMemoryMapBroker_Clear(t *testing.T) {
 
 func TestMemoryMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -1961,12 +1961,12 @@ func TestMemoryMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 func TestMemoryMapBroker_ReadStream_Table(t *testing.T) {
 	testMapBrokerReadStream(t, func(t *testing.T) MapBroker {
 		node, _ := New(Config{})
-		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				Mode: MapModeDurable,
-				StreamSize:    100,
-				StreamTTL:     300 * time.Second,
-				KeyTTL:        300 * time.Second,
+				Mode:       MapModeDurable,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				KeyTTL:     300 * time.Second,
 			}
 		}
 		return newTestMemoryMapBroker(t, node)
@@ -1976,12 +1976,12 @@ func TestMemoryMapBroker_ReadStream_Table(t *testing.T) {
 func TestMemoryMapBroker_EpochOnEmptyChannel(t *testing.T) {
 	testMapBrokerEpochOnEmptyChannel(t, func(t *testing.T) MapBroker {
 		node, _ := New(Config{})
-		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				Mode: MapModeDurable,
-				StreamSize:    100,
-				StreamTTL:     300 * time.Second,
-				KeyTTL:        300 * time.Second,
+				Mode:       MapModeDurable,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				KeyTTL:     300 * time.Second,
 			}
 		}
 		return newTestMemoryMapBroker(t, node)
@@ -1991,12 +1991,12 @@ func TestMemoryMapBroker_EpochOnEmptyChannel(t *testing.T) {
 func TestMemoryMapBroker_ReadStateAllEntries(t *testing.T) {
 	testMapBrokerReadStateAllEntries(t, func(t *testing.T) MapBroker {
 		node, _ := New(Config{})
-		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				Mode: MapModeDurable,
-				StreamSize:    100,
-				StreamTTL:     300 * time.Second,
-				KeyTTL:        300 * time.Second,
+				Mode:       MapModeDurable,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				KeyTTL:     300 * time.Second,
 			}
 		}
 		return newTestMemoryMapBroker(t, node)
@@ -2006,12 +2006,12 @@ func TestMemoryMapBroker_ReadStateAllEntries(t *testing.T) {
 func TestMemoryMapBroker_RemoveEmptyKey(t *testing.T) {
 	testMapBrokerRemoveEmptyKey(t, func(t *testing.T) MapBroker {
 		node, _ := New(Config{})
-		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				Mode: MapModeDurable,
-				StreamSize:    100,
-				StreamTTL:     300 * time.Second,
-				KeyTTL:        300 * time.Second,
+				Mode:       MapModeDurable,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				KeyTTL:     300 * time.Second,
 			}
 		}
 		return newTestMemoryMapBroker(t, node)
@@ -2021,12 +2021,12 @@ func TestMemoryMapBroker_RemoveEmptyKey(t *testing.T) {
 func TestMemoryMapBroker_ClientInfoInState(t *testing.T) {
 	testMapBrokerClientInfoInState(t, func(t *testing.T) MapBroker {
 		node, _ := New(Config{})
-		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				Mode: MapModeDurable,
-				StreamSize:    100,
-				StreamTTL:     300 * time.Second,
-				KeyTTL:        300 * time.Second,
+				Mode:       MapModeDurable,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				KeyTTL:     300 * time.Second,
 			}
 		}
 		return newTestMemoryMapBroker(t, node)
@@ -2036,12 +2036,12 @@ func TestMemoryMapBroker_ClientInfoInState(t *testing.T) {
 func TestMemoryMapBroker_ClientInfoInStream(t *testing.T) {
 	testMapBrokerClientInfoInStream(t, func(t *testing.T) MapBroker {
 		node, _ := New(Config{})
-		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				Mode: MapModeDurable,
-				StreamSize:    100,
-				StreamTTL:     300 * time.Second,
-				KeyTTL:        300 * time.Second,
+				Mode:       MapModeDurable,
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+				KeyTTL:     300 * time.Second,
 			}
 		}
 		return newTestMemoryMapBroker(t, node)
@@ -2052,12 +2052,12 @@ func TestMemoryMapBroker_ClientInfoInStream(t *testing.T) {
 // to the event handler when publishing with ClientInfo.
 func TestMemoryMapBroker_ClientInfoDelivery(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 
@@ -2114,13 +2114,13 @@ func TestMemoryMapBroker_ClientInfoDelivery(t *testing.T) {
 // TestMemoryMapBroker_OrderedStateAsc tests ascending sort direction.
 func TestMemoryMapBroker_OrderedStateAsc(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			Ordered:       true,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -2176,13 +2176,13 @@ func TestMemoryMapBroker_OrderedStateAsc(t *testing.T) {
 // TestMemoryMapBroker_OrderedStatePaginationAsc tests pagination with ascending sort.
 func TestMemoryMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			Ordered:       true,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -2253,13 +2253,13 @@ func TestMemoryMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 // same-score entries — secondary sort by key ascending.
 func TestMemoryMapBroker_OrderedStateAscSameScores(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			Ordered:       true,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        300 * time.Second,
+			Mode:       MapModeDurable,
+			Ordered:    true,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -2330,12 +2330,12 @@ func TestMemoryMapBroker_CleanupMetrics(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			StreamSize:    100,
-			StreamTTL:     300 * time.Second,
-			KeyTTL:        50 * time.Millisecond,
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     50 * time.Millisecond,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -2586,7 +2586,7 @@ func TestMapMode_Methods(t *testing.T) {
 // TestMemoryMapBroker_CAS_Publish tests Compare-And-Swap semantics for Publish.
 func TestMemoryMapBroker_CAS_Publish(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -2654,7 +2654,7 @@ func TestMemoryMapBroker_CAS_Publish(t *testing.T) {
 // TestMemoryMapBroker_CAS_Remove tests Compare-And-Swap semantics for Remove.
 func TestMemoryMapBroker_CAS_Remove(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -2705,7 +2705,7 @@ func TestMemoryMapBroker_CAS_Remove(t *testing.T) {
 // TestMemoryMapBroker_EphemeralRejectsCAS tests that CAS and Version are rejected in ephemeral mode.
 func TestMemoryMapBroker_EphemeralRejectsCAS(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:   MapModeEphemeral,
 			KeyTTL: 30 * time.Second,
@@ -2742,7 +2742,7 @@ func TestMemoryMapBroker_EphemeralRejectsCAS(t *testing.T) {
 // TestMemoryMapBroker_StreamData tests that StreamData overrides Data in stream/pub-sub.
 func TestMemoryMapBroker_StreamData(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -2779,7 +2779,7 @@ func TestMemoryMapBroker_StreamData(t *testing.T) {
 // TestMemoryMapBroker_RemoveIdempotency tests idempotency key for Remove operations.
 func TestMemoryMapBroker_RemoveIdempotency(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -2824,7 +2824,7 @@ func TestMemoryMapBroker_RemoveIdempotency(t *testing.T) {
 // TestMemoryMapBroker_RemoveCustomIdempotentTTL tests custom IdempotentResultTTL for Remove.
 func TestMemoryMapBroker_RemoveCustomIdempotentTTL(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -2860,7 +2860,7 @@ func TestMemoryMapBroker_RemoveCustomIdempotentTTL(t *testing.T) {
 // TestMemoryMapBroker_PublishCustomIdempotentTTL tests custom IdempotentResultTTL for Publish.
 func TestMemoryMapBroker_PublishCustomIdempotentTTL(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -2893,7 +2893,7 @@ func TestMemoryMapBroker_PublishCustomIdempotentTTL(t *testing.T) {
 // TestMemoryMapBroker_KeyTTLExpiration tests that keys expire after KeyTTL.
 func TestMemoryMapBroker_KeyTTLExpiration(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -2955,7 +2955,7 @@ func TestMemoryMapBroker_KeyTTLExpiration(t *testing.T) {
 // TestMemoryMapBroker_KeyTTLRefresh tests that refreshing a key extends its TTL.
 func TestMemoryMapBroker_KeyTTLRefresh(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -2991,7 +2991,7 @@ func TestMemoryMapBroker_KeyTTLRefresh(t *testing.T) {
 // TestMemoryMapBroker_StreamTTLExpiration tests that stream entries are cleared after StreamTTL.
 func TestMemoryMapBroker_StreamTTLExpiration(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -3031,7 +3031,7 @@ func TestMemoryMapBroker_StreamTTLExpiration(t *testing.T) {
 // TestMemoryMapBroker_MetaTTLRemovesChannel tests that channel is removed after MetaTTL.
 func TestMemoryMapBroker_MetaTTLRemovesChannel(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -3071,7 +3071,7 @@ func TestMemoryMapBroker_MetaTTLRemovesChannel(t *testing.T) {
 // TestMemoryMapBroker_IdempotencyCacheExpiration tests that idempotency cache entries expire.
 func TestMemoryMapBroker_IdempotencyCacheExpiration(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -3117,7 +3117,7 @@ func TestMemoryMapBroker_IdempotencyCacheExpiration(t *testing.T) {
 // TestMemoryMapBroker_ReadStreamEpochMismatch tests epoch mismatch in ReadStream.
 func TestMemoryMapBroker_ReadStreamEpochMismatch(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -3145,7 +3145,7 @@ func TestMemoryMapBroker_ReadStreamEpochMismatch(t *testing.T) {
 // TestMemoryMapBroker_ReadStreamReverse tests reverse stream reads.
 func TestMemoryMapBroker_ReadStreamReverse(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -3179,7 +3179,7 @@ func TestMemoryMapBroker_ReadStreamReverse(t *testing.T) {
 // TestMemoryMapBroker_ReadStreamSinceMatchingOffset tests Since with current offset.
 func TestMemoryMapBroker_ReadStreamSinceMatchingOffset(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -3209,7 +3209,7 @@ func TestMemoryMapBroker_ReadStreamSinceMatchingOffset(t *testing.T) {
 // TestMemoryMapBroker_ReadStreamSinceReverse tests Since with reverse read.
 func TestMemoryMapBroker_ReadStreamSinceReverse(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -3253,7 +3253,7 @@ func TestMemoryMapBroker_ReadStreamSinceReverse(t *testing.T) {
 // TestMemoryMapBroker_ReadStreamNoStream tests ReadStream on a channel without a stream.
 func TestMemoryMapBroker_ReadStreamNoStream(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -3276,7 +3276,7 @@ func TestMemoryMapBroker_ReadStreamNoStream(t *testing.T) {
 // TestMemoryMapBroker_RemoveFromNonExistentChannel tests removing from non-existent channel.
 func TestMemoryMapBroker_RemoveFromNonExistentChannel(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -3299,7 +3299,7 @@ func TestMemoryMapBroker_RemoveFromNonExistentChannel(t *testing.T) {
 // from an existing channel returns the stream position.
 func TestMemoryMapBroker_RemoveKeyNotFoundWithStream(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -3327,7 +3327,7 @@ func TestMemoryMapBroker_RemoveKeyNotFoundWithStream(t *testing.T) {
 // TestMemoryMapBroker_EphemeralPublishAndExpire tests ephemeral mode publish and auto-expiration.
 func TestMemoryMapBroker_EphemeralPublishAndExpire(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:   MapModeEphemeral,
 			KeyTTL: 50 * time.Millisecond,
@@ -3361,7 +3361,7 @@ func TestMemoryMapBroker_EphemeralPublishAndExpire(t *testing.T) {
 // TestMemoryMapBroker_ReadStateEpochMismatch tests epoch mismatch in ReadState with Revision.
 func TestMemoryMapBroker_ReadStateEpochMismatch(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -3396,7 +3396,7 @@ func TestMemoryMapBroker_ReadStateEpochMismatch(t *testing.T) {
 // TestMemoryMapBroker_ReadStateKeyFilter tests single key lookup in ReadState.
 func TestMemoryMapBroker_ReadStateKeyFilter(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -3434,7 +3434,7 @@ func TestMemoryMapBroker_ReadStateKeyFilter(t *testing.T) {
 // TestMemoryMapBroker_VersionEpoch tests that version epoch scoping works correctly.
 func TestMemoryMapBroker_VersionEpoch(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -3472,7 +3472,7 @@ func TestMemoryMapBroker_VersionEpoch(t *testing.T) {
 // TestMemoryMapBroker_EventHandler tests that event handler receives publications.
 func TestMemoryMapBroker_EventHandler(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -3519,7 +3519,7 @@ func TestMemoryMapBroker_EventHandler(t *testing.T) {
 // TestMemoryMapBroker_EventHandlerStreamData tests event handler receives StreamData.
 func TestMemoryMapBroker_EventHandlerStreamData(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeDurable,
 			StreamSize: 100,
@@ -3564,7 +3564,7 @@ func TestMemoryMapBroker_EventHandlerStreamData(t *testing.T) {
 // TestMemoryMapBroker_EphemeralNoStream tests that ephemeral mode has no stream.
 func TestMemoryMapBroker_EphemeralNoStream(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:   MapModeEphemeral,
 			KeyTTL: 30 * time.Second,
@@ -3593,7 +3593,7 @@ func TestMemoryMapBroker_EphemeralNoStream(t *testing.T) {
 // TestMemoryMapBroker_PersistentNeverExpires tests that persistent mode keys don't have TTL.
 func TestMemoryMapBroker_PersistentNeverExpires(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModePersistent,
 			StreamSize: 100,
@@ -3659,7 +3659,7 @@ func TestMemoryMapBroker_ParseChKey(t *testing.T) {
 // where the channel has no stream but does have state.
 func TestMemoryMapBroker_RemoveEphemeralNoStream(t *testing.T) {
 	node, _ := New(Config{})
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:   MapModeEphemeral,
 			KeyTTL: 30 * time.Second,

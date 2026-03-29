@@ -570,8 +570,8 @@ func (c *Client) handleMapTransitionToLive(
 	if positioning {
 		// Positioned mode: read stream from sincePosition to catch any updates.
 		streamLimit := -1 // No limit by default.
-		if c.node.config.MapLiveTransitionMaxPublicationLimit > 0 {
-			streamLimit = c.node.config.MapLiveTransitionMaxPublicationLimit
+		if c.node.config.Map.LiveTransitionMaxPublicationLimit > 0 {
+			streamLimit = c.node.config.Map.LiveTransitionMaxPublicationLimit
 		}
 
 		// Read limit+1 to distinguish "exactly at limit" from "too far behind".
@@ -970,15 +970,15 @@ func (c *Client) handleMapStreamPhase(
 
 func (c *Client) getMapPaginationLimit(req *protocol.SubscribeRequest) int {
 	limit := int(req.Limit)
-	defaultLimit := c.node.config.MapPaginationDefaultLimit
+	defaultLimit := c.node.config.Map.PaginationDefaultLimit
 	if defaultLimit <= 0 {
 		defaultLimit = defaultMapPaginationDefaultLimit
 	}
-	minLimit := c.node.config.MapPaginationMinLimit
+	minLimit := c.node.config.Map.PaginationMinLimit
 	if minLimit <= 0 {
 		minLimit = defaultMapPaginationMinLimit
 	}
-	maxLimit := c.node.config.MapPaginationMaxLimit
+	maxLimit := c.node.config.Map.PaginationMaxLimit
 	if maxLimit <= 0 {
 		maxLimit = defaultMapPaginationMaxLimit
 	}
@@ -1190,7 +1190,7 @@ func (c *Client) writeMapSubscribeReply(
 
 // isMapCatchUpExpired checks whether the map catch-up has exceeded the configured timeout.
 func (c *Client) isMapCatchUpExpired(state *mapSubscribeState) bool {
-	timeout := c.node.config.MapSubscribeCatchUpTimeout
+	timeout := c.node.config.Map.SubscribeCatchUpTimeout
 	if timeout == 0 {
 		timeout = 5 * time.Second
 	}

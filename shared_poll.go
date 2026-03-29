@@ -20,7 +20,7 @@ type SharedPollManager struct {
 	node       *Node
 	shutdownCh chan struct{}
 	wg         sync.WaitGroup // tracks running refresh workers for graceful shutdown
-	sem        chan struct{}   // shared concurrency limiter for backend calls
+	sem        chan struct{}  // shared concurrency limiter for backend calls
 	epoch      string         // random string generated at startup, used for versionless mode
 
 	mu       sync.RWMutex
@@ -75,7 +75,7 @@ func xxHash64(data []byte) uint64 {
 }
 
 func newSharedPollManager(node *Node) *SharedPollManager {
-	concurrencyLimit := node.config.SharedPollConcurrencyLimit
+	concurrencyLimit := node.config.SharedPoll.ConcurrencyLimit
 	if concurrencyLimit <= 0 {
 		concurrencyLimit = 64
 	}
@@ -235,7 +235,7 @@ func (m *SharedPollManager) untrack(channel string, key string) {
 // warmKeyData holds cached data for a warm key that can be delivered directly.
 type warmKeyData struct {
 	key             string
-	internalVersion uint64               // synthetic/real version for per-connection dedup
+	internalVersion uint64                // synthetic/real version for per-connection dedup
 	pub             *protocol.Publication // publication with wire version
 }
 

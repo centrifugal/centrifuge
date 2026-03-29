@@ -34,7 +34,7 @@ func newNodeGroupedMapBrokerPrefix(t *testing.T, n *Node, numPartitions int, pre
 		Shards:                     []*RedisShard{shard},
 		Prefix:                     prefix,
 		NumShardedPubSubPartitions: numPartitions,
-		GroupShardedPubSubByNode:          true,
+		GroupShardedPubSubByNode:   true,
 	})
 	require.NoError(t, err)
 
@@ -52,11 +52,13 @@ func newNodeGroupedMapBrokerPrefix(t *testing.T, n *Node, numPartitions int, pre
 // not the number of partitions.
 func TestRedisMapBroker_NodeGrouped_ConnectionCount(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	numPartitions := 32
@@ -93,11 +95,13 @@ func TestRedisMapBroker_NodeGrouped_ConnectionCount(t *testing.T) {
 // TestRedisMapBroker_NodeGrouped_Basic tests basic Publish + ReadState with node-grouped PubSub.
 func TestRedisMapBroker_NodeGrouped_Basic(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	e := newNodeGroupedMapBroker(t, node, 16)
@@ -116,6 +120,7 @@ func TestRedisMapBroker_NodeGrouped_Basic(t *testing.T) {
 
 	// Read state back.
 	stateRes, err := e.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -132,11 +137,13 @@ func TestRedisMapBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 	node1, _ := New(Config{
 		LogLevel:   LogLevelDebug,
 		LogHandler: func(entry LogEntry) {},
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	e1 := newNodeGroupedMapBrokerPrefix(t, node1, 16, prefix)
@@ -188,11 +195,13 @@ func TestRedisMapBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 
 	// Setup a second broker to publish (same prefix).
 	node2, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	e2 := newNodeGroupedMapBrokerPrefix(t, node2, 16, prefix)
@@ -227,11 +236,13 @@ func TestRedisMapBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 // returns false when the cluster topology hasn't changed.
 func TestRedisMapBroker_NodeGrouped_TopologyStable(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	e := newNodeGroupedMapBroker(t, node, 32)
@@ -258,11 +269,13 @@ func TestRedisMapBroker_NodeGrouped_TopologyStable(t *testing.T) {
 // closeTopologyDone properly signals goroutines and can be called multiple times.
 func TestRedisMapBroker_NodeGrouped_TopologyDoneChannel(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	e := newNodeGroupedMapBroker(t, node, 16)
@@ -308,11 +321,13 @@ func TestRedisMapBroker_NodeGrouped_TopologyDoneChannel(t *testing.T) {
 // returns valid slot ranges from the live cluster.
 func TestRedisMapBroker_NodeGrouped_QueryClusterSlots(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	redisConf := RedisShardConfig{
@@ -352,11 +367,13 @@ func TestRedisMapBroker_NodeGrouped_QueryClusterSlots(t *testing.T) {
 // rebuildNodeGroupedPubSub produces the same mapping on a stable cluster.
 func TestRedisMapBroker_NodeGrouped_RebuildPreservesPartitions(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	e := newNodeGroupedMapBroker(t, node, 64)
@@ -389,11 +406,13 @@ func TestRedisMapBroker_NodeGrouped_RebuildPreservesPartitions(t *testing.T) {
 // correctly with node-grouped PubSub connections.
 func TestRedisMapBroker_NodeGrouped_Cleanup(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        1 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 1 * time.Second,
+				}
+			},
 		},
 	})
 	redisConf := RedisShardConfig{
@@ -409,7 +428,7 @@ func TestRedisMapBroker_NodeGrouped_Cleanup(t *testing.T) {
 		Shards:                     []*RedisShard{shard},
 		Prefix:                     prefix,
 		NumShardedPubSubPartitions: 16,
-		GroupShardedPubSubByNode:          true,
+		GroupShardedPubSubByNode:   true,
 		CleanupInterval:            500 * time.Millisecond,
 		CleanupBatchSize:           100,
 	})
@@ -444,6 +463,7 @@ func TestRedisMapBroker_NodeGrouped_Cleanup(t *testing.T) {
 
 	// Verify key exists.
 	stateRes, err := e.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
 	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 1)
@@ -453,6 +473,7 @@ func TestRedisMapBroker_NodeGrouped_Cleanup(t *testing.T) {
 
 	// Key should be cleaned up.
 	stateRes, err = e.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
 	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
 	require.NoError(t, err)
 	require.Len(t, pubs, 0, "expired key should be cleaned up")
@@ -497,11 +518,13 @@ func newNodeGroupedBrokerPrefix(t *testing.T, n *Node, numPartitions int, prefix
 // first-dimension subClients entries equals the number of Redis Cluster nodes.
 func TestRedisBroker_NodeGrouped_ConnectionCount(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	numPartitions := 32
@@ -544,11 +567,13 @@ func TestRedisBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 	node1, _ := New(Config{
 		LogLevel:   LogLevelDebug,
 		LogHandler: func(entry LogEntry) {},
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	b1 := newNodeGroupedBrokerPrefix(t, node1, 16, prefix)
@@ -612,11 +637,13 @@ func TestRedisBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 
 	// Setup a second broker to publish (same prefix).
 	node2, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	b2 := newNodeGroupedBrokerPrefix(t, node2, 16, prefix)
@@ -656,11 +683,13 @@ func TestRedisBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 // returns false when the cluster topology hasn't changed.
 func TestRedisBroker_NodeGrouped_TopologyStable(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	b := newNodeGroupedBroker(t, node, 32)
@@ -687,11 +716,13 @@ func TestRedisBroker_NodeGrouped_TopologyStable(t *testing.T) {
 // rebuildBrokerNodeGroupedPubSub produces the same mapping on a stable cluster.
 func TestRedisBroker_NodeGrouped_RebuildPreservesPartitions(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	b := newNodeGroupedBroker(t, node, 64)
@@ -880,11 +911,13 @@ func TestRedisMapBroker_NodeGrouped_SlotMigration(t *testing.T) {
 		LogHandler: func(entry LogEntry) {
 			t.Logf("[node1] %s %v", entry.Message, entry.Fields)
 		},
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	e1 := newNodeGroupedMapBrokerPrefix(t, node1, numPartitions, prefix)
@@ -947,11 +980,13 @@ func TestRedisMapBroker_NodeGrouped_SlotMigration(t *testing.T) {
 
 	// Second broker to publish.
 	node2, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	e2 := newNodeGroupedMapBrokerPrefix(t, node2, numPartitions, prefix)
@@ -1287,11 +1322,13 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 		LogHandler: func(entry LogEntry) {
 			t.Logf("[e1] %s %v", entry.Message, entry.Fields)
 		},
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	e1 := newNodeGroupedMapBrokerPrefix(t, node1, numPartitions, prefix)
@@ -1323,11 +1360,13 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 
 	// Publisher broker (same prefix).
 	node2, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode: MapModeDurable,
-				KeyTTL:        60 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeDurable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
 		},
 	})
 	e2 := newNodeGroupedMapBrokerPrefix(t, node2, numPartitions, prefix)

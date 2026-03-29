@@ -879,8 +879,8 @@ func (c *Client) updatePresence() {
 			}
 		})
 
-		if channelHasFlag(channelContext.flags, flagKeyed) && config.GetSharedPollChannelOptions != nil {
-			if spOpts, ok := config.GetSharedPollChannelOptions(channel); ok {
+		if channelHasFlag(channelContext.flags, flagKeyed) && config.SharedPoll.GetSharedPollChannelOptions != nil {
+			if spOpts, ok := config.SharedPoll.GetSharedPollChannelOptions(channel); ok {
 				trackExpiredDelay := spOpts.TrackExpiredExtraDelay
 				if trackExpiredDelay <= 0 {
 					trackExpiredDelay = 25 * time.Second
@@ -1850,8 +1850,8 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 
 	// Shared poll check — must be before map routing.
 	var isSharedPoll bool
-	if c.node.config.GetSharedPollChannelOptions != nil {
-		_, isSharedPoll = c.node.config.GetSharedPollChannelOptions(req.Channel)
+	if c.node.config.SharedPoll.GetSharedPollChannelOptions != nil {
+		_, isSharedPoll = c.node.config.SharedPoll.GetSharedPollChannelOptions(req.Channel)
 	}
 	if req.Type == int32(SubscriptionTypeSharedPoll) && !isSharedPoll {
 		return ErrorNotAvailable

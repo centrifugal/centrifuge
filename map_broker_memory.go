@@ -51,7 +51,7 @@ func NewMemoryMapBroker(n *Node, _ MemoryMapBrokerConfig) (*MemoryMapBroker, err
 	}
 	closeCh := make(chan struct{})
 	mapHub := newMapHub(n, pubLocks, closeCh)
-	mapHub.setChannelOptionsResolver(n.config.GetMapChannelOptions)
+	mapHub.setChannelOptionsResolver(n.config.Map.GetMapChannelOptions)
 	e := &MemoryMapBroker{
 		node:        n,
 		mapHub:      mapHub,
@@ -109,7 +109,7 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 	defer mu.Unlock()
 
 	// Resolve and validate channel options.
-	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapUpdateResult{}, err
 	}
@@ -195,7 +195,7 @@ func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opt
 	defer mu.Unlock()
 
 	// Resolve and validate channel options.
-	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapUpdateResult{}, err
 	}

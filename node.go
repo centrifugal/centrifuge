@@ -287,7 +287,7 @@ func (n *Node) SetMapBroker(e MapBroker) {
 // Returns an error if GetMapChannelOptions is not configured or the channel
 // options are invalid.
 func (n *Node) ResolveMapChannelOptions(channel string) (MapChannelOptions, error) {
-	return ResolveAndValidateMapChannelOptions(n.config.GetMapChannelOptions, channel)
+	return ResolveAndValidateMapChannelOptions(n.config.Map.GetMapChannelOptions, channel)
 }
 
 // Hub returns node's Hub.
@@ -322,7 +322,7 @@ func (n *Node) Run() error {
 		return err
 	}
 	// Initialize shared poll manager if configured.
-	if n.config.GetSharedPollChannelOptions != nil {
+	if n.config.SharedPoll.GetSharedPollChannelOptions != nil {
 		if n.clientEvents.sharedPollHandler == nil {
 			return errors.New("GetSharedPollChannelOptions is set but OnSharedPoll handler is not registered")
 		}
@@ -1534,8 +1534,8 @@ func (n *Node) getBroker(ch string) Broker {
 }
 
 func (n *Node) getMapBroker(ch string) MapBroker {
-	if n.config.GetMapBroker != nil {
-		if broker, ok := n.config.GetMapBroker(ch); ok {
+	if n.config.Map.GetMapBroker != nil {
+		if broker, ok := n.config.Map.GetMapBroker(ch); ok {
 			return broker
 		}
 	}

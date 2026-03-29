@@ -1430,10 +1430,10 @@ func TestNodeCheckPositionMap(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			KeyTTL:        60 * time.Second,
+			Mode:   MapModeDurable,
+			KeyTTL: 60 * time.Second,
 		}
 	}
 
@@ -1495,10 +1495,10 @@ func TestNodeCheckPositionMapWithMedium(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			KeyTTL:        60 * time.Second,
+			Mode:   MapModeDurable,
+			KeyTTL: 60 * time.Second,
 		}
 	}
 	node.config.GetChannelMediumOptions = func(channel string) ChannelMediumOptions {
@@ -1615,10 +1615,10 @@ func TestGetMapBroker(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			KeyTTL:        60 * time.Second,
+			Mode:   MapModeDurable,
+			KeyTTL: 60 * time.Second,
 		}
 	}
 
@@ -1635,7 +1635,7 @@ func TestGetMapBroker(t *testing.T) {
 	node.SetMapBroker(defaultBroker)
 
 	// Configure GetMapBroker to route "custom:*" channels to customBroker
-	node.config.GetMapBroker = func(channel string) (MapBroker, bool) {
+	node.config.Map.GetMapBroker = func(channel string) (MapBroker, bool) {
 		if len(channel) >= 7 && channel[:7] == "custom:" {
 			return customBroker, true
 		}
@@ -1685,10 +1685,10 @@ func TestNode_MapStreamReadUnrecoverablePosition(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			KeyTTL:        60 * time.Second,
+			Mode:   MapModeDurable,
+			KeyTTL: 60 * time.Second,
 		}
 	}
 
@@ -1723,10 +1723,10 @@ func TestNode_MapRemoveEmptyKey(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode: MapModeDurable,
-			KeyTTL:        60 * time.Second,
+			Mode:   MapModeDurable,
+			KeyTTL: 60 * time.Second,
 		}
 	}
 
@@ -1812,7 +1812,7 @@ func TestNode_MapStats(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:   MapModeDurable,
 			KeyTTL: 60 * time.Second,
@@ -1836,7 +1836,7 @@ func TestNode_MapClear(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:   MapModeDurable,
 			KeyTTL: 60 * time.Second,
@@ -1864,7 +1864,7 @@ func TestNode_MapPublishEmptyKey(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:   MapModeDurable,
 			KeyTTL: 60 * time.Second,
@@ -1884,7 +1884,7 @@ func TestNode_MapPublish(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:   MapModeDurable,
 			KeyTTL: 60 * time.Second,
@@ -1901,7 +1901,7 @@ func TestNode_MapRemove(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:   MapModeDurable,
 			KeyTTL: 60 * time.Second,

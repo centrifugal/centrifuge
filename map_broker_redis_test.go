@@ -198,8 +198,8 @@ func testMapBrokerRedisConf() RedisMapBrokerConfig {
 }
 
 func newTestRedisMapBrokerWithHandler(tb testing.TB, n *Node, h BrokerEventHandler) *RedisMapBroker {
-	if n.config.GetMapChannelOptions == nil {
-		n.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	if n.config.Map.GetMapChannelOptions == nil {
+		n.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
 				Mode:       MapModeDurable,
 				StreamSize: 100,
@@ -231,8 +231,8 @@ func randomChannel(prefix string) string {
 
 func newTestRedisMapBroker(tb testing.TB, n *Node) *RedisMapBroker {
 	// Configure stream-enabled channel options for tests that use StreamSize in Publish.
-	if n.config.GetMapChannelOptions == nil {
-		n.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+	if n.config.Map.GetMapChannelOptions == nil {
+		n.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
 				Mode:       MapModeDurable,
 				StreamSize: 100,
@@ -319,15 +319,17 @@ func TestRedisMapBroker_StatefulChannel(t *testing.T) {
 // TestRedisMapBroker_StatefulChannelOrdered tests ordered stateful channel.
 func TestRedisMapBroker_StatefulChannelOrdered(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     time.Minute,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(t, node)
@@ -965,14 +967,16 @@ func TestRedisMapBroker_ReadStream2(t *testing.T) {
 // correctly generates removal events (key + removed + timestamp) when entries expire by TTL.
 func TestRedisMapBroker_CleanupGeneratesRemovalEvents(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    3600 * time.Second,
-				KeyTTL:     30 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    3600 * time.Second,
+					KeyTTL:     30 * time.Second,
+				}
+			},
 		},
 	})
 
@@ -1076,23 +1080,25 @@ func TestRedisMapBroker_CleanupExpiry(t *testing.T) {
 	shortChannel := randomChannel("test_cleanup_short")
 	longChannel := randomChannel("test_cleanup_long")
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			if channel == shortChannel {
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				if channel == shortChannel {
+					return MapChannelOptions{
+						Mode:       MapModeDurable,
+						StreamSize: 100,
+						StreamTTL:  300 * time.Second,
+						MetaTTL:    3600 * time.Second,
+						KeyTTL:     10 * time.Second,
+					}
+				}
 				return MapChannelOptions{
 					Mode:       MapModeDurable,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
 					MetaTTL:    3600 * time.Second,
-					KeyTTL:     10 * time.Second,
+					KeyTTL:     600 * time.Second,
 				}
-			}
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    3600 * time.Second,
-				KeyTTL:     600 * time.Second,
-			}
+			},
 		},
 	})
 
@@ -1160,14 +1166,16 @@ func TestRedisMapBroker_CleanupExpiry(t *testing.T) {
 // (by re-publishing with a longer TTL) prevents it from being cleaned up.
 func TestRedisMapBroker_CleanupRefreshedTTL(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    3600 * time.Second,
-				KeyTTL:     600 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    3600 * time.Second,
+					KeyTTL:     600 * time.Second,
+				}
+			},
 		},
 	})
 
@@ -1232,14 +1240,16 @@ func TestRedisMapBroker_CleanupRefreshedTTL(t *testing.T) {
 // is properly maintained (entries added on publish, removed when channel is fully cleaned).
 func TestRedisMapBroker_CleanupRegistration(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    3600 * time.Second,
-				KeyTTL:     30 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    3600 * time.Second,
+					KeyTTL:     30 * time.Second,
+				}
+			},
 		},
 	})
 
@@ -1300,15 +1310,17 @@ func TestRedisMapBroker_CleanupRegistration(t *testing.T) {
 // in correct score order (ascending by score).
 func TestRedisMapBroker_OrderedStateOrdering(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     time.Minute,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(t, node)
@@ -1359,15 +1371,17 @@ func TestRedisMapBroker_OrderedStateOrdering(t *testing.T) {
 // maintains correct ordering across pages.
 func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     time.Minute,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(t, node)
@@ -1476,15 +1490,17 @@ func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
 // TestRedisMapBroker_OrderedStateWithNegativeScores tests ordering with negative scores.
 func TestRedisMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     time.Minute,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(t, node)
@@ -1533,15 +1549,17 @@ func TestRedisMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 // TestRedisMapBroker_OrderedStateWithSameScores tests ordering stability when scores are equal.
 func TestRedisMapBroker_OrderedStateWithSameScores(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     time.Minute,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(t, node)
@@ -1582,15 +1600,17 @@ func TestRedisMapBroker_OrderedStateWithSameScores(t *testing.T) {
 // TestRedisMapBroker_OrderedStatePaginationBoundaries tests edge cases in cursor-based pagination.
 func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     time.Minute,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(t, node)
@@ -1683,15 +1703,17 @@ func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
 // TestRedisMapBroker_OrderedStateFullPagination tests complete cursor-based pagination loop.
 func TestRedisMapBroker_OrderedStateFullPagination(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     time.Minute,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(t, node)
@@ -1758,15 +1780,17 @@ func TestRedisMapBroker_OrderedStateFullPagination(t *testing.T) {
 // changes its position in the ordered state.
 func TestRedisMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     time.Minute,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(t, node)
@@ -2088,15 +2112,17 @@ func TestRedisMapBroker_UnorderedContinuity_EntryAdded(t *testing.T) {
 // an entry with higher score during ordered pagination doesn't cause data loss.
 func TestRedisMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     time.Minute,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(t, node)
@@ -2153,15 +2179,17 @@ func TestRedisMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 // an entry with lower score during ordered pagination works correctly.
 func TestRedisMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     time.Minute,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(t, node)
@@ -2215,15 +2243,17 @@ func TestRedisMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 // an entry's score during pagination (causing reordering) doesn't lose data.
 func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     time.Minute,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(t, node)
@@ -2306,15 +2336,17 @@ func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 // an entry during ordered pagination doesn't cause data loss.
 func TestRedisMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     time.Minute,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(t, node)
@@ -2397,15 +2429,17 @@ func TestRedisMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 // with multiple concurrent changes during pagination.
 func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     time.Minute,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(t, node)
@@ -2698,7 +2732,7 @@ func TestRedisMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 func TestRedisMapBroker_ReadStream_Table(t *testing.T) {
 	testMapBrokerReadStream(t, func(t *testing.T) MapBroker {
 		node, _ := New(Config{})
-		node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
 				Mode:       MapModeDurable,
 				StreamSize: 100,
@@ -2802,15 +2836,17 @@ func TestRedisMapBroker_ClientInfoDelivery(t *testing.T) {
 // in ascending score order (lowest score first).
 func TestRedisMapBroker_OrderedStateAsc(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     time.Minute,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(t, node)
@@ -2868,15 +2904,17 @@ func TestRedisMapBroker_OrderedStateAsc(t *testing.T) {
 // with ASC ordering across multiple pages.
 func TestRedisMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     time.Minute,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(t, node)
@@ -2940,15 +2978,17 @@ func TestRedisMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 // same-score entries — secondary sort by key ascending.
 func TestRedisMapBroker_OrderedStateAscSameScores(t *testing.T) {
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				Ordered:    true,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    time.Hour,
-				KeyTTL:     time.Minute,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					Ordered:    true,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
 		},
 	})
 	broker := newTestRedisMapBroker(t, node)
@@ -3010,14 +3050,16 @@ func TestRedisMapBroker_OrderedStateAscSameScores(t *testing.T) {
 func TestRedisMapBroker_CleanupMetrics(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	node, _ := New(Config{
-		GetMapChannelOptions: func(channel string) MapChannelOptions {
-			return MapChannelOptions{
-				Mode:       MapModeDurable,
-				StreamSize: 100,
-				StreamTTL:  300 * time.Second,
-				MetaTTL:    3600 * time.Second,
-				KeyTTL:     30 * time.Second,
-			}
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    3600 * time.Second,
+					KeyTTL:     30 * time.Second,
+				}
+			},
 		},
 		Metrics: MetricsConfig{
 			RegistererGatherer: registry,

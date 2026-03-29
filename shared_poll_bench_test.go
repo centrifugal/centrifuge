@@ -32,12 +32,14 @@ func benchRefreshCycle(b *testing.B, numKeys int, latency time.Duration) {
 	data := json.RawMessage(`{"votes":42,"title":"hello world"}`)
 
 	node, err := New(Config{
-		GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
-			return SharedPollChannelOptions{
-				RefreshInterval:      time.Hour, // long: we drive cycles manually
-				RefreshBatchSize:     1000,
-				MaxKeysPerConnection: numKeys + 1,
-			}, true
+		SharedPoll: SharedPollConfig{
+			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+				return SharedPollChannelOptions{
+					RefreshInterval:      time.Hour, // long: we drive cycles manually
+					RefreshBatchSize:     1000,
+					MaxKeysPerConnection: numKeys + 1,
+				}, true
+			},
 		},
 	})
 	if err != nil {
@@ -67,7 +69,7 @@ func benchRefreshCycle(b *testing.B, numKeys int, latency time.Duration) {
 
 	// Populate channel state with items.
 	mgr := node.sharedPollManager
-	opts, _ := node.config.GetSharedPollChannelOptions("bench:ch")
+	opts, _ := node.config.SharedPoll.GetSharedPollChannelOptions("bench:ch")
 	for i := 0; i < numKeys; i++ {
 		_, _, _ = mgr.track("bench:ch", opts, fmt.Sprintf("item_%d", i))
 	}
@@ -133,13 +135,15 @@ func benchLargeChannel(b *testing.B, totalKeys, batchSize int, latency time.Dura
 	data := json.RawMessage(`{"votes":42}`)
 
 	node, err := New(Config{
-		SharedPollConcurrencyLimit: concurrency,
-		GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
-			return SharedPollChannelOptions{
-				RefreshInterval:      time.Hour, // long: we drive cycles manually
-				RefreshBatchSize:     batchSize,
-				MaxKeysPerConnection: totalKeys + 1,
-			}, true
+		SharedPoll: SharedPollConfig{
+			ConcurrencyLimit: concurrency,
+			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+				return SharedPollChannelOptions{
+					RefreshInterval:      time.Hour, // long: we drive cycles manually
+					RefreshBatchSize:     batchSize,
+					MaxKeysPerConnection: totalKeys + 1,
+				}, true
+			},
 		},
 	})
 	if err != nil {
@@ -168,7 +172,7 @@ func benchLargeChannel(b *testing.B, totalKeys, batchSize int, latency time.Dura
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	mgr := node.sharedPollManager
-	opts, _ := node.config.GetSharedPollChannelOptions("bench:ch")
+	opts, _ := node.config.SharedPoll.GetSharedPollChannelOptions("bench:ch")
 	for i := 0; i < totalKeys; i++ {
 		_, _, _ = mgr.track("bench:ch", opts, fmt.Sprintf("item_%d", i))
 	}

@@ -29,8 +29,10 @@ func newTestNodeWithSharedPoll(t *testing.T, opts ...SharedPollChannelOptions) *
 	node, err := New(Config{
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
-		GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
-			return spOpts, true
+		SharedPoll: SharedPollConfig{
+			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+				return spOpts, true
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -890,7 +892,7 @@ func TestSharedPollVersionedMode_VersionsInRequest(t *testing.T) {
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -945,7 +947,7 @@ func TestSharedPollVersionedMode_AlwaysSendsVersions(t *testing.T) {
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -1121,8 +1123,10 @@ func TestSharedPollNode_MissingOnSharedPoll(t *testing.T) {
 	node, err := New(Config{
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
-		GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
-			return SharedPollChannelOptions{}, true
+		SharedPoll: SharedPollConfig{
+			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+				return SharedPollChannelOptions{}, true
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -2044,7 +2048,7 @@ func TestSharedPollDelta_SubsequentPubIsDelta(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
 		KeepLatestData:         true,
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 	})
 	setupSharedPollDeltaHandlers(node)
 
@@ -2252,7 +2256,7 @@ func TestSharedPollDelta_DeltaApplicable(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
 		KeepLatestData:         true,
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 	})
 	setupSharedPollDeltaHandlers(node)
 
@@ -2618,7 +2622,7 @@ func TestSharedPollCachedData_ReturnedOnTrack(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
 		KeepLatestData:         true,
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2779,7 +2783,7 @@ func TestSharedPollCachedData_VersionUpdatedNoDuplicate(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 2,
 		KeepLatestData:         true,
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2838,7 +2842,7 @@ func TestSharedPollCachedData_MultipleKeys(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
 		KeepLatestData:         true,
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2909,7 +2913,7 @@ func TestSharedPollCachedData_PartialVersionMatch(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
 		KeepLatestData:         true,
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2972,7 +2976,7 @@ func TestSharedPollAutoNotify_ColdKey(t *testing.T) {
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -3017,7 +3021,7 @@ func TestSharedPollAutoNotify_ExistingKeyNoNotify(t *testing.T) {
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -3087,7 +3091,7 @@ func TestSharedPollAutoNotify_MultipleClientsSameColdKey(t *testing.T) {
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -3157,7 +3161,7 @@ func TestSharedPollAutoNotify_ColdKeyNonZeroVersionNoNotify(t *testing.T) {
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -3194,7 +3198,7 @@ func TestSharedPollAutoNotify_ColdKeyVersionZeroTriggersNotify(t *testing.T) {
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -3224,12 +3228,12 @@ func TestSharedPollAutoNotify_ColdKeyVersionZeroTriggersNotify(t *testing.T) {
 
 func TestSharedPollCachedData_DeltaReadyAfterCache(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        30 * time.Second,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 10,
-		KeepLatestData:         true,
-		Mode:            SharedPollModeVersioned,
+		RefreshInterval:           30 * time.Second,
+		RefreshBatchSize:          100,
+		MaxKeysPerConnection:      100,
+		MaxConsecutiveAbsences:    10,
+		KeepLatestData:            true,
+		Mode:                      SharedPollModeVersioned,
 		NotificationBatchMaxSize:  50,
 		NotificationBatchMaxDelay: 50 * time.Millisecond,
 	})
@@ -3342,7 +3346,7 @@ func TestSharedPollCachedData_DeltaReadyPartialKeys(t *testing.T) {
 		MaxKeysPerConnection:   100,
 		MaxConsecutiveAbsences: 10,
 		KeepLatestData:         true,
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 	})
 	setupSharedPollDeltaHandlers(node)
 
@@ -3407,12 +3411,12 @@ func TestSharedPollCachedData_DeltaReadyPartialKeys(t *testing.T) {
 
 func TestSharedPoll_PrevDataNotUsedWhenKeepLatestData(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        30 * time.Second,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 10,
-		KeepLatestData:         true,
-		Mode:            SharedPollModeVersioned,
+		RefreshInterval:           30 * time.Second,
+		RefreshBatchSize:          100,
+		MaxKeysPerConnection:      100,
+		MaxConsecutiveAbsences:    10,
+		KeepLatestData:            true,
+		Mode:                      SharedPollModeVersioned,
 		NotificationBatchMaxSize:  50,
 		NotificationBatchMaxDelay: 50 * time.Millisecond,
 	})
@@ -3753,7 +3757,7 @@ func TestSharedPollEpoch_VersionlessSubscribeReplyHasEpoch(t *testing.T) {
 
 func TestSharedPollEpoch_VersionedModeEmptyEpoch(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:            SharedPollModeVersioned,
+		Mode:                   SharedPollModeVersioned,
 		RefreshInterval:        100 * time.Millisecond,
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,

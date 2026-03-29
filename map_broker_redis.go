@@ -503,7 +503,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 	shardClient := s.shard.client
 
 	// Resolve channel options once for this operation.
-	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapUpdateResult{}, err
 	}
@@ -746,7 +746,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 	shardClient := s.shard.client
 
 	// Resolve channel options once for this operation.
-	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapUpdateResult{}, err
 	}
@@ -900,7 +900,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 // Cursor "0" or "" means end of iteration.
 func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
 	// Resolve channel options once for this operation.
-	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapStateResult{}, err
 	}
@@ -927,7 +927,7 @@ func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadS
 
 //func (e *RedisMapBroker) ReadStateZero(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
 //	// Resolve channel options once for this operation.
-//	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+//	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
 //	if err != nil {
 //		return MapStateResult{}, err
 //	}
@@ -1412,7 +1412,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 //) (MapStreamResult, error) {
 //	s := e.getShard(ch)
 //
-//	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+//	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
 //	if err != nil {
 //		return MapStreamResult{}, err
 //	}
@@ -1640,7 +1640,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 //func (e *RedisMapBroker) ReadStreamZero2(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 //	s := e.getShard(ch)
 //
-//	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+//	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
 //	if err != nil {
 //		return MapStreamResult{}, err
 //	}
@@ -1883,7 +1883,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 	s := e.getShard(ch)
 
-	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapStreamResult{}, err
 	}
@@ -2046,7 +2046,7 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 	s := e.getShard(ch)
 
-	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapStreamResult{}, err
 	}
@@ -2560,7 +2560,7 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 	}
 
 	// Get channel options for this channel.
-	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.GetMapChannelOptions, ch)
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
 	if err != nil {
 		return err
 	}
