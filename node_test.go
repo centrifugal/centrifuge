@@ -1738,3 +1738,192 @@ func TestNode_MapRemoveEmptyKey(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "key is required")
 }
+
+func TestNode_Config(t *testing.T) {
+	cfg := Config{
+		LogLevel: LogLevelInfo,
+	}
+	n, err := New(cfg)
+	require.NoError(t, err)
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	require.Equal(t, LogLevelInfo, n.Config().LogLevel)
+}
+
+func TestNode_MapMetricMethods(t *testing.T) {
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	// These should not panic even when metrics are initialized.
+	n.IncMapBrokerCleanupErrors("test")
+	n.AddMapBrokerCleanupKeysRemoved("test", 5)
+	n.SetMapBrokerCleanupLag("test", 1.5)
+}
+
+func TestNode_MapMetricMethods_NilMetrics(t *testing.T) {
+	n, err := New(Config{})
+	require.NoError(t, err)
+	// Before Run(), metrics may be nil — should not panic.
+	n.IncMapBrokerCleanupErrors("test")
+	n.AddMapBrokerCleanupKeysRemoved("test", 5)
+	n.SetMapBrokerCleanupLag("test", 1.5)
+}
+
+func TestNode_mapStateKey(t *testing.T) {
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	key := n.mapStateKey("ch1", MapReadStateOptions{})
+	require.Contains(t, key, "ch1")
+
+	key = n.mapStateKey("ch1", MapReadStateOptions{
+		Cursor: "abc", Limit: 10, Key: "k1", Asc: true, AllowCached: true,
+		Revision: &StreamPosition{Offset: 42, Epoch: "e1"},
+	})
+	require.Contains(t, key, "cursor:abc")
+	require.Contains(t, key, "limit:10")
+	require.Contains(t, key, "key:k1")
+	require.Contains(t, key, "asc:1")
+	require.Contains(t, key, "cached:1")
+	require.Contains(t, key, "rev_offset:42")
+	require.Contains(t, key, "rev_epoch:e1")
+}
+
+func TestNode_mapStreamKey(t *testing.T) {
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	key := n.mapStreamKey("ch1", MapReadStreamOptions{})
+	require.Contains(t, key, "ch1")
+	require.Contains(t, key, "limit:0")
+
+	key = n.mapStreamKey("ch1", MapReadStreamOptions{
+		Filter: StreamFilter{
+			Since:   &StreamPosition{Offset: 5, Epoch: "e2"},
+			Limit:   20,
+			Reverse: true,
+		},
+	})
+	require.Contains(t, key, "since_offset:5")
+	require.Contains(t, key, "since_epoch:e2")
+	require.Contains(t, key, "limit:20")
+	require.Contains(t, key, "reverse:true")
+}
+
+func TestNode_MapStats(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeDurable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	ctx := context.Background()
+	_, err = mapBroker.Publish(ctx, "ch", "k1", MapPublishOptions{Data: []byte(`"v"`)})
+	require.NoError(t, err)
+
+	stats, err := node.MapStats(ctx, "ch")
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.NumKeys)
+}
+
+func TestNode_MapClear(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeDurable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	ctx := context.Background()
+	_, err = mapBroker.Publish(ctx, "ch", "k1", MapPublishOptions{Data: []byte(`"v"`)})
+	require.NoError(t, err)
+
+	err = node.MapClear(ctx, "ch", MapClearOptions{})
+	require.NoError(t, err)
+
+	// Verify state is empty after clear.
+	stats, err := node.MapStats(ctx, "ch")
+	require.NoError(t, err)
+	require.Equal(t, 0, stats.NumKeys)
+}
+
+func TestNode_MapPublishEmptyKey(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeDurable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	_, err = node.MapPublish(context.Background(), "ch", "", MapPublishOptions{Data: []byte(`"v"`)})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "key is required")
+}
+
+func TestNode_MapPublish(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeDurable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	ctx := context.Background()
+	result, err := node.MapPublish(ctx, "ch", "k1", MapPublishOptions{Data: []byte(`"val"`)})
+	require.NoError(t, err)
+	require.True(t, result.Position.Offset > 0)
+}
+
+func TestNode_MapRemove(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeDurable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	ctx := context.Background()
+	_, err := node.MapPublish(ctx, "ch", "k1", MapPublishOptions{Data: []byte(`"val"`)})
+	require.NoError(t, err)
+
+	_, err = node.MapRemove(ctx, "ch", "k1", MapRemoveOptions{})
+	require.NoError(t, err)
+
+	stats, err := node.MapStats(ctx, "ch")
+	require.NoError(t, err)
+	require.Equal(t, 0, stats.NumKeys)
+}
+
+func TestHub_Connections(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	conns := node.Hub().Connections()
+	require.Empty(t, conns)
+}

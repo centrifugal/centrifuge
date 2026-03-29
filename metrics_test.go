@@ -333,6 +333,21 @@ func Test_getHTTPTransportProto(t *testing.T) {
 	}
 }
 
+func TestMetrics_MapBrokerAndRedisBrokerCounters(t *testing.T) {
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test_map",
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(t, err)
+	// These were previously uncovered.
+	m.incRedisBrokerPubSubErrors("test_broker", "subscribe")
+	m.incMapBrokerCleanupErrors("test_broker")
+	m.addMapBrokerCleanupKeysRemoved("test_broker", 10)
+	m.setMapBrokerCleanupLag("test_broker", 2.5)
+}
+
 func BenchmarkSharedPollHandlerCached(b *testing.B) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
