@@ -3074,7 +3074,18 @@ func TestRedisMapBroker_CleanupMetrics(t *testing.T) {
 // TestRedisMapBroker_Unsubscribe tests Unsubscribe after Subscribe.
 func TestRedisMapBroker_Unsubscribe(t *testing.T) {
 	node, _ := New(Config{})
-	broker := newTestRedisMapBroker(t, node)
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			return nil
+		},
+	}
+	broker := newTestRedisMapBrokerWithHandler(t, node, handler)
+
+	// Wait for pub/sub connections to establish.
+	require.Eventually(t, func() bool {
+		ch := randomChannel("test_unsub_probe")
+		return broker.Subscribe(ch) == nil
+	}, 5*time.Second, 100*time.Millisecond, "pub/sub connections should be ready")
 
 	ch := randomChannel("test_unsubscribe")
 
@@ -3090,7 +3101,18 @@ func TestRedisMapBroker_Unsubscribe(t *testing.T) {
 // TestRedisMapBroker_UnsubscribeWithoutSubscribe tests Unsubscribe on a channel not subscribed.
 func TestRedisMapBroker_UnsubscribeWithoutSubscribe(t *testing.T) {
 	node, _ := New(Config{})
-	broker := newTestRedisMapBroker(t, node)
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			return nil
+		},
+	}
+	broker := newTestRedisMapBrokerWithHandler(t, node, handler)
+
+	// Wait for pub/sub connections to establish.
+	require.Eventually(t, func() bool {
+		ch := randomChannel("test_unsub_probe2")
+		return broker.Subscribe(ch) == nil
+	}, 5*time.Second, 100*time.Millisecond, "pub/sub connections should be ready")
 
 	ch := randomChannel("test_unsub_no_sub")
 
