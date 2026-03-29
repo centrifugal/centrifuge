@@ -162,13 +162,15 @@ func main() {
 	node, err := centrifuge.New(centrifuge.Config{
 		LogLevel:   centrifuge.LogLevelInfo,
 		LogHandler: handleLog,
-		GetSharedPollChannelOptions: func(ch string) (centrifuge.SharedPollChannelOptions, bool) {
-			if ch == flagsChannel {
-				return centrifuge.SharedPollChannelOptions{
-					RefreshInterval: 5 * time.Second,
-				}, true
-			}
-			return centrifuge.SharedPollChannelOptions{}, false
+		SharedPoll: centrifuge.SharedPollConfig{
+			GetSharedPollChannelOptions: func(ch string) (centrifuge.SharedPollChannelOptions, bool) {
+				if ch == flagsChannel {
+					return centrifuge.SharedPollChannelOptions{
+						RefreshInterval: 5 * time.Second,
+					}, true
+				}
+				return centrifuge.SharedPollChannelOptions{}, false
+			},
 		},
 	})
 	if err != nil {

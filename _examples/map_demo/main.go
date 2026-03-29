@@ -35,43 +35,44 @@ func main() {
 				SharedPositionSync: true,
 			}
 		},
-		// Map subscription sync protocol configs.
-		MapPaginationMinLimit: 1, // Set to 1 for demo purposes, default is 100.
-		// Configure channel options per channel.
-		// Each channel must specify Mode explicitly.
-		GetMapChannelOptions: func(channel string) centrifuge.MapChannelOptions {
-			if channel == "inventory" {
-				return centrifuge.MapChannelOptions{
-					Mode: centrifuge.MapModePersistent,
+		Map: centrifuge.MapConfig{
+			PaginationMinLimit: 1, // Set to 1 for demo purposes, default is 100.
+			// Configure channel options per channel.
+			// Each channel must specify Mode explicitly.
+			GetMapChannelOptions: func(channel string) centrifuge.MapChannelOptions {
+				if channel == "inventory" {
+					return centrifuge.MapChannelOptions{
+						Mode: centrifuge.MapModePersistent,
+					}
 				}
-			}
-			if channel == "scoreboard" {
-				return centrifuge.MapChannelOptions{
-					Mode: centrifuge.MapModePersistent,
+				if channel == "scoreboard" {
+					return centrifuge.MapChannelOptions{
+						Mode: centrifuge.MapModePersistent,
+					}
 				}
-			}
-			if channel == "visualizer" {
-				return centrifuge.MapChannelOptions{
-					Mode: centrifuge.MapModePersistent,
+				if channel == "visualizer" {
+					return centrifuge.MapChannelOptions{
+						Mode: centrifuge.MapModePersistent,
+					}
 				}
-			}
-			if strings.HasPrefix(channel, "clients:") {
+				if strings.HasPrefix(channel, "clients:") {
+					return centrifuge.MapChannelOptions{
+						Mode:   centrifuge.MapModeEphemeral,
+						KeyTTL: 60 * time.Second,
+					}
+				}
+				if strings.HasPrefix(channel, "users:") {
+					return centrifuge.MapChannelOptions{
+						Mode:   centrifuge.MapModeEphemeral,
+						KeyTTL: 60 * time.Second,
+					}
+				}
+				// Cursors, games, tickers — all ephemeral (default).
 				return centrifuge.MapChannelOptions{
 					Mode:   centrifuge.MapModeEphemeral,
-					KeyTTL: 60 * time.Second,
+					KeyTTL: 1 * time.Minute,
 				}
-			}
-			if strings.HasPrefix(channel, "users:") {
-				return centrifuge.MapChannelOptions{
-					Mode:   centrifuge.MapModeEphemeral,
-					KeyTTL: 60 * time.Second,
-				}
-			}
-			// Cursors, games, tickers — all ephemeral (default).
-			return centrifuge.MapChannelOptions{
-				Mode:   centrifuge.MapModeEphemeral,
-				KeyTTL: 1 * time.Minute,
-			}
+			},
 		},
 	})
 	if err != nil {
