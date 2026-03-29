@@ -3814,19 +3814,16 @@ func TestSharedPollEpoch_VersionlessSendsSyntheticVersion(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond)
 
 	// Also verify wire data contains non-zero version by checking sink.
-	found := false
-	for {
+	// Use Eventually because the transport write may arrive slightly after
+	// the internal version is updated.
+	require.Eventually(t, func() bool {
 		select {
 		case data := <-sink:
-			if len(data) > 0 && containsNonZeroKeyedVersion(data) {
-				found = true
-			}
+			return len(data) > 0 && containsNonZeroKeyedVersion(data)
 		default:
-			goto done
+			return false
 		}
-	}
-done:
-	require.True(t, found, "wire publication should have non-zero version")
+	}, 2*time.Second, 10*time.Millisecond, "wire publication should have non-zero version")
 }
 
 // containsNonZeroKeyedVersion checks if JSON data contains a keyed publication
