@@ -57,6 +57,9 @@ func testSingleRedisConf(port int) RedisShardConfig {
 		Address:        "127.0.0.1:" + strconv.Itoa(port),
 		IOTimeout:      10 * time.Second,
 		ConnectTimeout: 10 * time.Second,
+		AuthCredentialsFn: func(_ RedisAuthCredentialsContext) (RedisAuthCredentials, error) {
+			return RedisAuthCredentials{}, nil
+		},
 	}
 }
 
