@@ -2161,3 +2161,95 @@ func TestSharedPollManager_ConcurrentTrackNoPanic(t *testing.T) {
 	// Exactly one broker.Subscribe.
 	require.Equal(t, int32(1), broker.subscribeCount.Load())
 }
+
+func TestSharedPollManager_ScheduleShutdownImmediate(t *testing.T) {
+	// When ChannelShutdownDelay is 0, scheduleShutdown calls doShutdown immediately.
+	broker := &controllableBroker{}
+	opts := SharedPollChannelOptions{
+		RefreshInterval:        30 * time.Second,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+		ChannelShutdownDelay:   0, // immediate
+	}
+	node := newTestNodeWithControllableBroker(t, broker, opts)
+	m := node.sharedPollManager
+
+	// Track a key so channel gets created.
+	_, _, _ = m.track("test:shutdown_imm", opts, "k1")
+	m.mu.RLock()
+	_, exists := m.channels["test:shutdown_imm"]
+	m.mu.RUnlock()
+	require.True(t, exists)
+
+	// Untrack the key — should trigger immediate shutdown.
+	m.untrack("test:shutdown_imm", "k1")
+
+	// Channel should be removed.
+	require.Eventually(t, func() bool {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		_, exists := m.channels["test:shutdown_imm"]
+		return !exists
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+func TestSharedPollManager_ScheduleShutdownDelayed(t *testing.T) {
+	// When ChannelShutdownDelay > 0, scheduleShutdown defers shutdown.
+	// doShutdownLocked is called from the timer callback.
+	broker := &controllableBroker{}
+	opts := SharedPollChannelOptions{
+		RefreshInterval:        30 * time.Second,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+		ChannelShutdownDelay:   100 * time.Millisecond,
+	}
+	node := newTestNodeWithControllableBroker(t, broker, opts)
+	m := node.sharedPollManager
+
+	// Track and untrack.
+	_, _, _ = m.track("test:shutdown_delay", opts, "k1")
+	m.untrack("test:shutdown_delay", "k1")
+
+	// Channel should still exist immediately after untrack (delay pending).
+	m.mu.RLock()
+	_, exists := m.channels["test:shutdown_delay"]
+	m.mu.RUnlock()
+	require.True(t, exists, "channel should still exist during shutdown delay")
+
+	// After delay, doShutdownLocked fires and channel is removed.
+	require.Eventually(t, func() bool {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		_, exists := m.channels["test:shutdown_delay"]
+		return !exists
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+func TestSharedPollManager_ShutdownCancelledByRetrack(t *testing.T) {
+	// If a key is re-tracked during shutdown delay, shutdown is cancelled.
+	broker := &controllableBroker{}
+	opts := SharedPollChannelOptions{
+		RefreshInterval:        30 * time.Second,
+		MaxKeysPerConnection:   100,
+		MaxConsecutiveAbsences: 2,
+		ChannelShutdownDelay:   500 * time.Millisecond,
+	}
+	node := newTestNodeWithControllableBroker(t, broker, opts)
+	m := node.sharedPollManager
+
+	_, _, _ = m.track("test:retrack", opts, "k1")
+	m.untrack("test:retrack", "k1")
+
+	// Re-track before delay fires.
+	_, _, _ = m.track("test:retrack", opts, "k2")
+
+	// Channel should still exist after the shutdown delay would have fired.
+	// Use Eventually with inverted check: keep asserting existence over a window
+	// that exceeds the original delay.
+	require.Never(t, func() bool {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		_, exists := m.channels["test:retrack"]
+		return !exists
+	}, 700*time.Millisecond, 50*time.Millisecond, "channel should survive because re-tracked")
+}

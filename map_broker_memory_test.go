@@ -2382,3 +2382,203 @@ func TestMemoryMapBroker_CleanupMetrics(t *testing.T) {
 	}
 	require.True(t, foundLag, "cleanup_lag_seconds metric should exist")
 }
+
+func TestResolveAndValidateMapChannelOptions(t *testing.T) {
+	t.Run("nil resolver", func(t *testing.T) {
+		_, err := ResolveAndValidateMapChannelOptions(nil, "ch")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "resolver not configured")
+	})
+
+	t.Run("mode not set", func(t *testing.T) {
+		resolver := func(string) MapChannelOptions { return MapChannelOptions{} }
+		_, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "set Mode")
+	})
+
+	t.Run("invalid mode", func(t *testing.T) {
+		resolver := func(string) MapChannelOptions { return MapChannelOptions{Mode: 99} }
+		_, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid Mode")
+	})
+
+	t.Run("ephemeral requires KeyTTL", func(t *testing.T) {
+		resolver := func(string) MapChannelOptions { return MapChannelOptions{Mode: MapModeEphemeral} }
+		_, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "KeyTTL required")
+	})
+
+	t.Run("ephemeral negative KeyTTL", func(t *testing.T) {
+		resolver := func(string) MapChannelOptions {
+			return MapChannelOptions{Mode: MapModeEphemeral, KeyTTL: -1}
+		}
+		_, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "KeyTTL must be positive")
+	})
+
+	t.Run("persistent rejects KeyTTL", func(t *testing.T) {
+		resolver := func(string) MapChannelOptions {
+			return MapChannelOptions{Mode: MapModePersistent, KeyTTL: time.Second}
+		}
+		_, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "KeyTTL must be 0 for persistent")
+	})
+
+	t.Run("ephemeral rejects StreamSize", func(t *testing.T) {
+		resolver := func(string) MapChannelOptions {
+			return MapChannelOptions{Mode: MapModeEphemeral, KeyTTL: time.Second, StreamSize: 10}
+		}
+		_, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "StreamSize requires durable")
+	})
+
+	t.Run("ephemeral rejects StreamTTL", func(t *testing.T) {
+		resolver := func(string) MapChannelOptions {
+			return MapChannelOptions{Mode: MapModeEphemeral, KeyTTL: time.Second, StreamTTL: time.Minute}
+		}
+		_, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "StreamTTL requires durable")
+	})
+
+	t.Run("ephemeral rejects MetaTTL", func(t *testing.T) {
+		resolver := func(string) MapChannelOptions {
+			return MapChannelOptions{Mode: MapModeEphemeral, KeyTTL: time.Second, MetaTTL: time.Minute}
+		}
+		_, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "MetaTTL requires durable")
+	})
+
+	t.Run("durable negative StreamSize", func(t *testing.T) {
+		resolver := func(string) MapChannelOptions {
+			return MapChannelOptions{Mode: MapModeDurable, KeyTTL: time.Second, StreamSize: -1}
+		}
+		_, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "StreamSize must be non-negative")
+	})
+
+	t.Run("durable negative StreamTTL", func(t *testing.T) {
+		resolver := func(string) MapChannelOptions {
+			return MapChannelOptions{Mode: MapModeDurable, KeyTTL: time.Second, StreamTTL: -1}
+		}
+		_, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "StreamTTL must be non-negative")
+	})
+
+	t.Run("durable negative MetaTTL", func(t *testing.T) {
+		resolver := func(string) MapChannelOptions {
+			return MapChannelOptions{Mode: MapModeDurable, KeyTTL: time.Second, MetaTTL: -1}
+		}
+		_, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "MetaTTL must be non-negative")
+	})
+
+	t.Run("MetaTTL less than StreamTTL", func(t *testing.T) {
+		resolver := func(string) MapChannelOptions {
+			return MapChannelOptions{
+				Mode: MapModeDurable, KeyTTL: time.Second,
+				StreamTTL: 10 * time.Minute, MetaTTL: time.Minute,
+			}
+		}
+		_, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "MetaTTL must be >= StreamTTL")
+	})
+
+	t.Run("durable auto defaults", func(t *testing.T) {
+		resolver := func(string) MapChannelOptions {
+			return MapChannelOptions{Mode: MapModeDurable, KeyTTL: time.Second}
+		}
+		opts, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.NoError(t, err)
+		require.Equal(t, 100, opts.StreamSize, "auto StreamSize")
+		require.Equal(t, time.Minute, opts.StreamTTL, "auto StreamTTL")
+		require.Equal(t, 10*time.Minute, opts.MetaTTL, "auto MetaTTL for durable")
+	})
+
+	t.Run("persistent auto defaults no MetaTTL", func(t *testing.T) {
+		resolver := func(string) MapChannelOptions {
+			return MapChannelOptions{Mode: MapModePersistent}
+		}
+		opts, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.NoError(t, err)
+		require.Equal(t, 100, opts.StreamSize)
+		require.Equal(t, time.Minute, opts.StreamTTL)
+		require.Equal(t, time.Duration(0), opts.MetaTTL, "persistent: MetaTTL stays 0")
+	})
+
+	t.Run("ephemeral valid", func(t *testing.T) {
+		resolver := func(string) MapChannelOptions {
+			return MapChannelOptions{Mode: MapModeEphemeral, KeyTTL: 5 * time.Second}
+		}
+		opts, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.NoError(t, err)
+		require.Equal(t, MapModeEphemeral, opts.Mode)
+		require.Equal(t, 5*time.Second, opts.KeyTTL)
+	})
+}
+
+func TestParseOrderedCursor(t *testing.T) {
+	t.Run("valid cursor", func(t *testing.T) {
+		score, key := ParseOrderedCursor("100\x00mykey")
+		require.Equal(t, "100", score)
+		require.Equal(t, "mykey", key)
+	})
+
+	t.Run("empty cursor", func(t *testing.T) {
+		score, key := ParseOrderedCursor("")
+		require.Equal(t, "", score)
+		require.Equal(t, "", key)
+	})
+
+	t.Run("no separator", func(t *testing.T) {
+		score, key := ParseOrderedCursor("noseparator")
+		require.Equal(t, "", score)
+		require.Equal(t, "", key)
+	})
+
+	t.Run("roundtrip", func(t *testing.T) {
+		cursor := MakeOrderedCursor("42", "testkey")
+		score, key := ParseOrderedCursor(cursor)
+		require.Equal(t, "42", score)
+		require.Equal(t, "testkey", key)
+	})
+
+	t.Run("negative score", func(t *testing.T) {
+		cursor := MakeOrderedCursor("-5", "k")
+		score, key := ParseOrderedCursor(cursor)
+		require.Equal(t, "-5", score)
+		require.Equal(t, "k", key)
+	})
+
+	t.Run("empty key part", func(t *testing.T) {
+		cursor := MakeOrderedCursor("10", "")
+		score, key := ParseOrderedCursor(cursor)
+		require.Equal(t, "10", score)
+		require.Equal(t, "", key)
+	})
+}
+
+func TestMapMode_Methods(t *testing.T) {
+	require.True(t, MapModeEphemeral.IsEphemeral())
+	require.False(t, MapModeDurable.IsEphemeral())
+	require.False(t, MapModePersistent.IsEphemeral())
+
+	require.False(t, MapModeEphemeral.HasStream())
+	require.True(t, MapModeDurable.HasStream())
+	require.True(t, MapModePersistent.HasStream())
+
+	require.True(t, MapModeEphemeral.HasExpiry())
+	require.True(t, MapModeDurable.HasExpiry())
+	require.False(t, MapModePersistent.HasExpiry())
+}

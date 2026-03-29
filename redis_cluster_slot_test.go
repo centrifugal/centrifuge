@@ -125,6 +125,153 @@ func TestFindSlotOwner_PartitionDistribution(t *testing.T) {
 	t.Logf("partition distribution across 3 nodes: %v", nodeCounts)
 }
 
+func TestBuildNodePartitions(t *testing.T) {
+	// 3 nodes, 6 partitions: 0→node0, 1→node1, 2→node2, 3→node0, 4→node1, 5→node2
+	partitionToNodeIdx := []int{0, 1, 2, 0, 1, 2}
+	np := buildNodePartitions(partitionToNodeIdx, 3)
+	if len(np) != 3 {
+		t.Fatalf("expected 3 nodes, got %d", len(np))
+	}
+	if len(np[0]) != 2 || np[0][0] != 0 || np[0][1] != 3 {
+		t.Errorf("node 0 partitions: got %v, want [0 3]", np[0])
+	}
+	if len(np[1]) != 2 || np[1][0] != 1 || np[1][1] != 4 {
+		t.Errorf("node 1 partitions: got %v, want [1 4]", np[1])
+	}
+	if len(np[2]) != 2 || np[2][0] != 2 || np[2][1] != 5 {
+		t.Errorf("node 2 partitions: got %v, want [2 5]", np[2])
+	}
+}
+
+func TestBuildNodePartitions_AllOnOneNode(t *testing.T) {
+	partitionToNodeIdx := []int{0, 0, 0}
+	np := buildNodePartitions(partitionToNodeIdx, 1)
+	if len(np) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(np))
+	}
+	if len(np[0]) != 3 {
+		t.Errorf("expected 3 partitions on node 0, got %d", len(np[0]))
+	}
+}
+
+func TestBuildNodePartitions_EmptyNode(t *testing.T) {
+	// 2 nodes but all partitions on node 0 — node 1 has empty slice.
+	partitionToNodeIdx := []int{0, 0}
+	np := buildNodePartitions(partitionToNodeIdx, 2)
+	if len(np) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(np))
+	}
+	if len(np[0]) != 2 {
+		t.Errorf("expected 2 partitions on node 0, got %d", len(np[0]))
+	}
+	if np[1] != nil && len(np[1]) != 0 {
+		t.Errorf("expected 0 partitions on node 1, got %d", len(np[1]))
+	}
+}
+
+func TestAllocPubSubArrays(t *testing.T) {
+	subClients, starts := allocPubSubArrays(3, 2)
+	if len(subClients) != 3 {
+		t.Fatalf("expected 3 node entries for subClients, got %d", len(subClients))
+	}
+	if len(starts) != 3 {
+		t.Fatalf("expected 3 node entries for starts, got %d", len(starts))
+	}
+	for i := 0; i < 3; i++ {
+		if len(subClients[i]) != 2 {
+			t.Errorf("node %d: expected 2 shard entries, got %d", i, len(subClients[i]))
+		}
+		if len(starts[i]) != 2 {
+			t.Errorf("node %d: expected 2 start entries, got %d", i, len(starts[i]))
+		}
+		for j := 0; j < 2; j++ {
+			if starts[i][j] == nil {
+				t.Errorf("node %d shard %d: pubSubStart is nil", i, j)
+			}
+			if cap(starts[i][j].errCh) != 1 {
+				t.Errorf("node %d shard %d: errCh capacity should be 1", i, j)
+			}
+		}
+	}
+}
+
+func TestTopologyChanged(t *testing.T) {
+	tests := []struct {
+		name     string
+		old      []int
+		new_     []int
+		oldNodes int
+		newNodes int
+		want     bool
+	}{
+		{"identical", []int{0, 1, 2}, []int{0, 1, 2}, 3, 3, false},
+		{"node count changed", []int{0, 1}, []int{0, 1}, 2, 3, true},
+		{"mapping changed", []int{0, 1, 2}, []int{0, 2, 1}, 3, 3, true},
+		{"length changed", []int{0, 1}, []int{0, 1, 2}, 3, 3, true},
+		{"empty same", []int{}, []int{}, 0, 0, false},
+		{"single same", []int{0}, []int{0}, 1, 1, false},
+		{"single diff", []int{0}, []int{1}, 2, 2, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := topologyChanged(tt.old, tt.new_, tt.oldNodes, tt.newNodes)
+			if got != tt.want {
+				t.Errorf("topologyChanged() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildPartitionMapping(t *testing.T) {
+	ranges := []slotRange{
+		{start: 0, end: 5460, addr: "node1:6379"},
+		{start: 5461, end: 10922, addr: "node2:6379"},
+		{start: 10923, end: 16383, addr: "node3:6379"},
+	}
+	addrToIdx := map[string]int{
+		"node1:6379": 0,
+		"node2:6379": 1,
+		"node3:6379": 2,
+	}
+
+	mapping, err := buildPartitionMapping(ranges, addrToIdx, 128)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mapping) != 128 {
+		t.Fatalf("expected 128 entries, got %d", len(mapping))
+	}
+	// All values should be 0, 1, or 2.
+	for i, v := range mapping {
+		if v < 0 || v > 2 {
+			t.Errorf("partition %d mapped to invalid node idx %d", i, v)
+		}
+	}
+	// All three nodes should be represented.
+	seen := map[int]bool{}
+	for _, v := range mapping {
+		seen[v] = true
+	}
+	if len(seen) != 3 {
+		t.Errorf("expected all 3 nodes represented, got %d", len(seen))
+	}
+}
+
+func TestBuildPartitionMapping_MissingOwner(t *testing.T) {
+	ranges := []slotRange{
+		{start: 0, end: 100, addr: "node1:6379"},
+	}
+	addrToIdx := map[string]int{
+		"node1:6379": 0,
+	}
+	// Some partitions will have slots outside range 0-100, so findSlotOwner returns "".
+	// buildPartitionMapping should return an error for those.
+	_, err := buildPartitionMapping(ranges, addrToIdx, 128)
+	if err == nil {
+		t.Fatal("expected error for missing slot owner")
+	}
+}
+
 func TestRedisSlot_PartitionHashTags(t *testing.T) {
 	// Verify that partition hash tags {0}, {1}, ... map to different slots.
 	seen := make(map[uint16]bool)
