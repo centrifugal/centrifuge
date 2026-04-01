@@ -12,7 +12,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/quagmt/udecimal v1.9.0
 	github.com/redis/rueidis v1.0.71
-	github.com/segmentio/encoding v0.5.3
+	github.com/segmentio/encoding v0.5.4
 	github.com/shadowspore/fossil-delta v0.0.0-20241213113458-1d797d70cbe3
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/sync v0.19.0
