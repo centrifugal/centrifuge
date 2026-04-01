@@ -1,6 +1,6 @@
 module github.com/centrifugal/centrifuge
 
-go 1.24.9
+go 1.25.0
 
 require (
 	github.com/FZambia/eagle v0.2.0
@@ -15,7 +15,7 @@ require (
 	github.com/segmentio/encoding v0.5.3
 	github.com/shadowspore/fossil-delta v0.0.0-20241213113458-1d797d70cbe3
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/sync v0.19.0
+	golang.org/x/sync v0.20.0
 	google.golang.org/protobuf v1.36.11
 )
 
