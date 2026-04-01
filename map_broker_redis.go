@@ -518,6 +518,22 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		}
 	}
 
+	// ExternalState: broker has no state — reject operations that depend on it.
+	if chOpts.ExternalState {
+		if opts.UseDelta {
+			return MapUpdateResult{}, errors.New("delta not supported with ExternalState")
+		}
+		if opts.ExpectedPosition != nil {
+			return MapUpdateResult{}, errors.New("CAS not supported with ExternalState")
+		}
+		if opts.Version > 0 {
+			return MapUpdateResult{}, errors.New("version dedup not supported with ExternalState")
+		}
+		if opts.KeyMode != KeyModeReplace {
+			return MapUpdateResult{}, errors.New("key mode conditions not supported with ExternalState")
+		}
+	}
+
 	// Fast path for non-history, non-idempotent, non-keyed publications.
 	if chOpts.Mode.IsEphemeral() && opts.IdempotencyKey == "" && key == "" {
 		if e.conf.SkipPubSub {
@@ -607,7 +623,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 
 	ordered := chOpts.Ordered
 
-	if key != "" {
+	if key != "" && !chOpts.ExternalState {
 		stateHashKey = e.stateHashKey(s.shard, ch)
 		if !streamless {
 			// State meta key tracks epoch for consistency between state and stream.
@@ -623,7 +639,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 	metaExpire := millis(chOpts.MetaTTL)
 
 	useDelta := "0"
-	if opts.UseDelta && len(opts.StreamData) == 0 {
+	if opts.UseDelta && len(opts.StreamData) == 0 && !chOpts.ExternalState {
 		useDelta = "1"
 	}
 
@@ -758,6 +774,13 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 		}
 	}
 
+	// ExternalState: broker has no state — reject operations that depend on it.
+	if chOpts.ExternalState {
+		if opts.ExpectedPosition != nil {
+			return MapUpdateResult{}, errors.New("CAS not supported with ExternalState")
+		}
+	}
+
 	var streamKey, metaKey string
 	if chOpts.Mode.HasStream() {
 		streamKey = e.streamKey(s.shard, ch)
@@ -766,14 +789,16 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 
 	streamless := chOpts.Mode.IsEphemeral()
 
-	// For unpublish, we use state keys to track which keys exist
-	stateHashKey := e.stateHashKey(s.shard, ch)
-	stateExpireKey := e.stateExpireKey(s.shard, ch)
-	var stateMetaKey string
-	if !streamless {
-		// State meta key tracks epoch for consistency between state and stream.
-		// In streamless mode, skip it to prevent multi-node epoch mismatch clearing state.
-		stateMetaKey = e.stateMetaKey(s.shard, ch)
+	var stateHashKey, stateExpireKey, stateMetaKey string
+	if !chOpts.ExternalState {
+		// For unpublish, we use state keys to track which keys exist
+		stateHashKey = e.stateHashKey(s.shard, ch)
+		stateExpireKey = e.stateExpireKey(s.shard, ch)
+		if !streamless {
+			// State meta key tracks epoch for consistency between state and stream.
+			// In streamless mode, skip it to prevent multi-node epoch mismatch clearing state.
+			stateMetaKey = e.stateMetaKey(s.shard, ch)
+		}
 	}
 
 	metaExpire := millis(chOpts.MetaTTL)
@@ -890,7 +915,18 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 		return MapUpdateResult{}, err
 	}
 
-	return parseAddScriptResult(replies)
+	result, err := parseAddScriptResult(replies)
+	if err != nil {
+		return result, err
+	}
+	// ExternalState: there is no state hash, so Lua may return SuppressReasonKeyNotFound
+	// because HGET on empty/nil key fails. Treat this as not suppressed — the remove
+	// should always write to the stream when ExternalState is true.
+	if chOpts.ExternalState && result.SuppressReason == SuppressReasonKeyNotFound {
+		result.Suppressed = false
+		result.SuppressReason = SuppressReasonNone
+	}
+	return result, nil
 }
 
 // ReadState retrieves state entries with per-entry revisions for a channel.
@@ -903,6 +939,17 @@ func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadS
 	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapStateResult{}, err
+	}
+
+	if chOpts.ExternalState {
+		// ExternalState: return only stream position, no state entries.
+		streamResult, err := e.ReadStream(ctx, ch, MapReadStreamOptions{
+			Filter: StreamFilter{Limit: 0},
+		})
+		if err != nil {
+			return MapStateResult{}, err
+		}
+		return MapStateResult{Position: streamResult.Position}, nil
 	}
 
 	// Handle single key lookup (Key filter) — takes priority over Limit.

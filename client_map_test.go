@@ -4045,3 +4045,431 @@ func TestMapSubscribe_WithOnlyEmitPresence_Regression(t *testing.T) {
 	// Unsubscribe — should work without errors.
 	client.Unsubscribe("test_map")
 }
+
+// =============================================================================
+// ExternalState Client Subscription Tests
+//
+// These tests verify the ExternalState subscription flow where the application's
+// database is the source of truth for state. Clients skip the STATE phase and
+// start directly with STREAM phase. The broker manages only the stream and
+// PUB/SUB — no state hash, no ordering, no TTL tracking.
+// =============================================================================
+
+// newTestNodeWithExternalStateMapBroker creates a test node with ExternalState config.
+func newTestNodeWithExternalStateMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		Map: MapConfig{
+			PaginationMinLimit: 1,
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:          MapModePersistent,
+					ExternalState: true,
+				}
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	broker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	err = broker.RegisterEventHandler(nil)
+	require.NoError(t, err)
+
+	node.SetMapBroker(broker)
+
+	err = node.Run()
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+	})
+
+	return node, broker
+}
+
+// TestExternalState_StreamPhaseAsInitial verifies that Phase=Stream as the first
+// request for an ExternalState channel succeeds and transitions to LIVE.
+func TestExternalState_StreamPhaseAsInitial(t *testing.T) {
+	node, broker := newTestNodeWithExternalStateMapBroker(t)
+
+	channel := "test_ext_stream_initial"
+	ctx := context.Background()
+
+	// Pre-populate some stream entries.
+	var lastEpoch string
+	var lastOffset uint64
+	for i := 0; i < 3; i++ {
+		res, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+			Data: []byte(fmt.Sprintf(`{"v":"data%d"}`, i)),
+		})
+		require.NoError(t, err)
+		lastEpoch = res.Position.Epoch
+		lastOffset = res.Position.Offset
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Send Phase=Stream as the initial request with recover=true (ExternalState
+	// uses the same server path as recovery — "I have state + position, catch me up").
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseStream,
+		Offset:  0,
+		Epoch:   lastEpoch,
+		Limit:   100,
+		Recover: true,
+	})
+
+	// Verify the server allows it and transitions to LIVE.
+	require.Equal(t, MapPhaseLive, result.Phase, "should transition to LIVE")
+	require.Len(t, result.Publications, 3, "should receive all 3 stream publications")
+	require.Equal(t, lastOffset, result.Offset, "offset should match last published")
+	require.Equal(t, lastEpoch, result.Epoch, "epoch should match")
+	require.True(t, result.Recoverable, "ExternalState with stream should be recoverable")
+	require.True(t, result.Recovered, "should report recovered=true")
+
+	// Client should be subscribed.
+	require.Contains(t, client.channels, channel)
+	chCtx := client.channels[channel]
+	require.True(t, channelHasFlag(chCtx.flags, flagMap))
+	require.True(t, channelHasFlag(chCtx.flags, flagSubscribed))
+}
+
+// TestExternalState_StatePhaseRejected verifies that Phase=State for an
+// ExternalState channel returns ErrorBadRequest (code 102).
+func TestExternalState_StatePhaseRejected(t *testing.T) {
+	node, _ := newTestNodeWithExternalStateMapBroker(t)
+
+	channel := "test_ext_state_rejected"
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Send Phase=State — should be rejected for ExternalState channels.
+	protoErr := subscribeMapClientExpectError(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+
+	require.Equal(t, ErrorBadRequest.Code, protoErr.Code,
+		"State phase should return ErrorBadRequest for ExternalState channel")
+}
+
+// TestExternalState_FullFlow verifies the full ExternalState flow:
+// Publish entries -> client joins with offset -> stream catch-up -> LIVE -> receives live updates.
+func TestExternalState_FullFlow(t *testing.T) {
+	node, broker := newTestNodeWithExternalStateMapBroker(t)
+
+	channel := "test_ext_full_flow"
+	ctx := context.Background()
+
+	// Phase 1: Publish several entries before the client connects.
+	var epoch string
+	for i := 0; i < 5; i++ {
+		res, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+			Data: []byte(fmt.Sprintf(`{"v":"initial_%d"}`, i)),
+		})
+		require.NoError(t, err)
+		epoch = res.Position.Epoch
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+	})
+
+	// Phase 2: Create client with transport sink to capture live publications.
+	transport := newTestTransport(func() {})
+	transport.sink = make(chan []byte, 100)
+	newCtx := SetCredentials(context.Background(), &Credentials{UserID: "user1"})
+	client, err := newClient(newCtx, node, transport)
+	require.NoError(t, err)
+	connectClientV2(t, client)
+
+	// Phase 3: Client joins with Phase=Stream from offset=2 (catch up from middle).
+	// ExternalState uses recover=true (same server path as recovery).
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseStream,
+		Offset:  2,
+		Epoch:   epoch,
+		Limit:   100,
+		Recover: true,
+	})
+
+	// Verify catch-up: should get publications 3, 4, 5 (offsets 3-5).
+	require.Equal(t, MapPhaseLive, result.Phase, "should transition to LIVE")
+	require.Len(t, result.Publications, 3, "should receive 3 catch-up publications")
+	require.Equal(t, uint64(5), result.Offset)
+	require.True(t, result.Recoverable)
+
+	// Phase 4: Publish more entries after client is LIVE.
+	_, err = broker.Publish(ctx, channel, "key_live1", MapPublishOptions{
+		Data: []byte(`{"v":"live_1"}`),
+	})
+	require.NoError(t, err)
+	_, err = broker.Publish(ctx, channel, "key_live2", MapPublishOptions{
+		Data: []byte(`{"v":"live_2"}`),
+	})
+	require.NoError(t, err)
+
+	// Phase 5: Verify live publications are received by the client via transport sink.
+	type pubMsg struct {
+		Push struct {
+			Pub struct {
+				Offset uint64 `json:"offset"`
+				Key    string `json:"key"`
+			} `json:"pub"`
+		} `json:"push"`
+	}
+
+	var livePubs []pubMsg
+	timeout := time.After(2 * time.Second)
+	for len(livePubs) < 2 {
+		select {
+		case data := <-transport.sink:
+			dec := json.NewDecoder(strings.NewReader(string(data)))
+			for {
+				var p pubMsg
+				if err := dec.Decode(&p); err != nil {
+					break
+				}
+				if p.Push.Pub.Key != "" {
+					livePubs = append(livePubs, p)
+				}
+			}
+		case <-timeout:
+			require.Fail(t, "timeout waiting for live publications, got %d", len(livePubs))
+		}
+	}
+
+	require.Len(t, livePubs, 2, "should receive 2 live publications")
+	require.Equal(t, "key_live1", livePubs[0].Push.Pub.Key)
+	require.Equal(t, "key_live2", livePubs[1].Push.Pub.Key)
+}
+
+// TestExternalState_Recovery verifies disconnect -> reconnect with saved offset/epoch
+// -> stream catch-up -> LIVE for ExternalState channels.
+func TestExternalState_Recovery(t *testing.T) {
+	node, broker := newTestNodeWithExternalStateMapBroker(t)
+
+	channel := "test_ext_recovery"
+	ctx := context.Background()
+
+	// Publish initial entries.
+	var epoch string
+	for i := 0; i < 5; i++ {
+		res, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+			Data: []byte(fmt.Sprintf(`{"v":"data_%d"}`, i)),
+		})
+		require.NoError(t, err)
+		epoch = res.Position.Epoch
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+	})
+
+	// First client session — subscribe with recover=true and get LIVE at offset 5.
+	client1 := newTestConnectedClientV2(t, node, "user1")
+	result1 := subscribeMapClient(t, client1, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseStream,
+		Offset:  0,
+		Epoch:   epoch,
+		Limit:   100,
+		Recover: true,
+	})
+	require.Equal(t, MapPhaseLive, result1.Phase)
+	savedOffset := result1.Offset
+	savedEpoch := result1.Epoch
+
+	// Simulate disconnect: just close the first client.
+	client1.Disconnect(DisconnectForceNoReconnect)
+
+	// More entries published while client is disconnected.
+	for i := 5; i < 8; i++ {
+		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+			Data: []byte(fmt.Sprintf(`{"v":"data_%d"}`, i)),
+		})
+		require.NoError(t, err)
+	}
+
+	// Second client session — reconnect with saved position.
+	client2 := newTestConnectedClientV2(t, node, "user2")
+	result2 := subscribeMapClient(t, client2, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseStream,
+		Offset:  savedOffset,
+		Epoch:   savedEpoch,
+		Recover: true,
+		Limit:   100,
+	})
+
+	// Should catch up with 3 missed publications and transition to LIVE.
+	require.Equal(t, MapPhaseLive, result2.Phase, "should transition to LIVE after recovery")
+	require.Len(t, result2.Publications, 3, "should receive 3 missed publications")
+	require.Equal(t, uint64(8), result2.Offset, "offset should be at latest")
+	require.Equal(t, epoch, result2.Epoch, "epoch should match")
+	require.True(t, result2.Recoverable)
+	require.Contains(t, client2.channels, channel)
+}
+
+// TestExternalState_EpochMismatch verifies that a client sending a stale/wrong
+// epoch in the Stream phase receives ErrorUnrecoverablePosition (code 112).
+func TestExternalState_EpochMismatch(t *testing.T) {
+	node, broker := newTestNodeWithExternalStateMapBroker(t)
+
+	channel := "test_ext_epoch_mismatch"
+	ctx := context.Background()
+
+	// Publish something to establish the channel epoch.
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"v":"data1"}`),
+	})
+	require.NoError(t, err)
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Send Phase=Stream with recover=true but a wrong/stale epoch.
+	rwWrapper := testReplyWriterWrapper()
+	err = client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseStream,
+		Offset:  0,
+		Epoch:   "wrong-stale-epoch",
+		Limit:   100,
+		Recover: true,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.NotNil(t, rwWrapper.replies[0].Error,
+		"should return error for epoch mismatch")
+	require.Equal(t, ErrorUnrecoverablePosition.Code, rwWrapper.replies[0].Error.Code,
+		"should return ErrorUnrecoverablePosition (code 112)")
+}
+
+// TestExternalState_DeltaRejected verifies that delta encoding is not negotiated
+// for ExternalState channels even when the client requests it and the server config
+// allows it.
+func TestExternalState_DeltaRejected(t *testing.T) {
+	// Create node with ExternalState config that also allows delta.
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		Map: MapConfig{
+			PaginationMinLimit: 1,
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:          MapModePersistent,
+					ExternalState: true,
+				}
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	broker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	err = broker.RegisterEventHandler(nil)
+	require.NoError(t, err)
+	node.SetMapBroker(broker)
+
+	err = node.Run()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+	})
+
+	channel := "test_ext_delta_rejected"
+	ctx := context.Background()
+
+	// Publish entries to establish the stream.
+	var epoch string
+	for i := 0; i < 3; i++ {
+		res, pubErr := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+			Data: []byte(fmt.Sprintf(`{"v":"data%d"}`, i)),
+		})
+		require.NoError(t, pubErr)
+		epoch = res.Position.Epoch
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:             SubscriptionTypeMap,
+					AllowedDeltaTypes: []DeltaType{DeltaTypeFossil},
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Subscribe with delta=fossil and recover=true — delta should be ignored for ExternalState.
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseStream,
+		Offset:  0,
+		Epoch:   epoch,
+		Limit:   100,
+		Delta:   "fossil",
+		Recover: true,
+	})
+
+	require.Equal(t, MapPhaseLive, result.Phase, "should transition to LIVE")
+	require.False(t, result.Delta, "delta should not be negotiated for ExternalState")
+	require.Len(t, result.Publications, 3)
+	require.Contains(t, client.channels, channel)
+}

@@ -3704,3 +3704,409 @@ func TestMemoryMapBroker_Close(t *testing.T) {
 	err = broker.Close(context.Background())
 	require.NoError(t, err)
 }
+
+// =============================================================================
+// ExternalState Tests
+//
+// These tests verify the ExternalState feature where the application's database
+// is the source of truth for state. The broker manages only the stream and
+// PUB/SUB — no state hash, no ordering, no TTL tracking.
+// =============================================================================
+
+// TestMemoryMapBroker_ExternalState_PublishStreamOnly verifies that Publish with
+// ExternalState writes to stream but state map stays empty.
+func TestMemoryMapBroker_ExternalState_PublishStreamOnly(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:          MapModePersistent,
+			ExternalState: true,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := "test_ext_publish_stream"
+
+	// Publish with key.
+	res, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte("data1"),
+	})
+	require.NoError(t, err)
+	require.False(t, res.Suppressed)
+	require.Equal(t, uint64(1), res.Position.Offset)
+
+	// ReadStream should contain the publication.
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	require.Len(t, streamResult.Publications, 1)
+	require.Equal(t, "key1", streamResult.Publications[0].Key)
+	require.Equal(t, []byte("data1"), streamResult.Publications[0].Data)
+
+	// ReadState should return position but no entries.
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit: 100,
+	})
+	require.NoError(t, err)
+	require.Empty(t, stateRes.Publications)
+	require.NotEmpty(t, stateRes.Position.Epoch)
+	require.Equal(t, uint64(1), stateRes.Position.Offset)
+}
+
+// TestMemoryMapBroker_ExternalState_RemoveStreamOnly verifies that Remove with
+// ExternalState writes removal to stream without state check.
+func TestMemoryMapBroker_ExternalState_RemoveStreamOnly(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:          MapModePersistent,
+			ExternalState: true,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := "test_ext_remove_stream"
+
+	// Publish a key.
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte("data1"),
+	})
+	require.NoError(t, err)
+
+	// Remove the key.
+	removeRes, err := broker.Remove(ctx, channel, "key1", MapRemoveOptions{})
+	require.NoError(t, err)
+	require.False(t, removeRes.Suppressed, "ExternalState remove should not be suppressed")
+
+	// ReadStream should have both publications (add + remove).
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	require.Len(t, streamResult.Publications, 2)
+	require.False(t, streamResult.Publications[0].Removed) // add
+	require.True(t, streamResult.Publications[1].Removed)  // remove
+	require.Equal(t, "key1", streamResult.Publications[1].Key)
+
+	// ReadState should still be empty.
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit: 100,
+	})
+	require.NoError(t, err)
+	require.Empty(t, stateRes.Publications)
+}
+
+// TestMemoryMapBroker_ExternalState_RemoveNoChannel verifies that Remove on a
+// non-existent channel creates channel+stream when ExternalState is set.
+func TestMemoryMapBroker_ExternalState_RemoveNoChannel(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:          MapModePersistent,
+			ExternalState: true,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := "test_ext_remove_no_channel"
+
+	// Remove on a key before any Publish — should succeed (no error, not suppressed).
+	res, err := broker.Remove(ctx, channel, "key1", MapRemoveOptions{})
+	require.NoError(t, err)
+	require.False(t, res.Suppressed, "ExternalState remove should create channel and not be suppressed")
+	require.Equal(t, uint64(1), res.Position.Offset)
+
+	// Verify stream has the removal entry.
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	require.Len(t, streamResult.Publications, 1)
+	require.True(t, streamResult.Publications[0].Removed)
+	require.Equal(t, "key1", streamResult.Publications[0].Key)
+}
+
+// TestMemoryMapBroker_ExternalState_ReadStateEmpty verifies that ReadState returns
+// position but no entries even after multiple publishes.
+func TestMemoryMapBroker_ExternalState_ReadStateEmpty(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:          MapModePersistent,
+			ExternalState: true,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := "test_ext_read_state_empty"
+
+	// Publish several keys.
+	for i := 0; i < 5; i++ {
+		_, err := broker.Publish(ctx, channel, fmt.Sprintf("key%d", i), MapPublishOptions{
+			Data: []byte(fmt.Sprintf("data%d", i)),
+		})
+		require.NoError(t, err)
+	}
+
+	// ReadState should return position but zero entries.
+	stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{
+		Limit: 100,
+	})
+	require.NoError(t, err)
+	require.Empty(t, stateRes.Publications)
+	require.NotEmpty(t, stateRes.Position.Epoch)
+	require.Equal(t, uint64(5), stateRes.Position.Offset)
+	require.Empty(t, stateRes.Cursor)
+}
+
+// TestMemoryMapBroker_ExternalState_RejectDelta verifies that UseDelta=true
+// returns an error with ExternalState.
+func TestMemoryMapBroker_ExternalState_RejectDelta(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:          MapModePersistent,
+			ExternalState: true,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := "test_ext_reject_delta"
+
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:     []byte("data1"),
+		UseDelta: true,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "delta not supported with ExternalState")
+}
+
+// TestMemoryMapBroker_ExternalState_RejectCAS verifies that ExpectedPosition on
+// Publish and Remove returns an error with ExternalState.
+func TestMemoryMapBroker_ExternalState_RejectCAS(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:          MapModePersistent,
+			ExternalState: true,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := "test_ext_reject_cas"
+
+	// Publish with CAS should fail.
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:             []byte("data1"),
+		ExpectedPosition: &StreamPosition{Offset: 0, Epoch: "e1"},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "CAS not supported with ExternalState")
+
+	// Remove with CAS should fail.
+	_, err = broker.Remove(ctx, channel, "key1", MapRemoveOptions{
+		ExpectedPosition: &StreamPosition{Offset: 0, Epoch: "e1"},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "CAS not supported with ExternalState")
+}
+
+// TestMemoryMapBroker_ExternalState_RejectVersion verifies that Version > 0
+// returns an error with ExternalState.
+func TestMemoryMapBroker_ExternalState_RejectVersion(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:          MapModePersistent,
+			ExternalState: true,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := "test_ext_reject_version"
+
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:    []byte("data1"),
+		Version: 1,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "version dedup not supported with ExternalState")
+}
+
+// TestMemoryMapBroker_ExternalState_RejectKeyMode verifies that KeyModeIfNew and
+// KeyModeIfExists return errors with ExternalState.
+func TestMemoryMapBroker_ExternalState_RejectKeyMode(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:          MapModePersistent,
+			ExternalState: true,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := "test_ext_reject_keymode"
+
+	// KeyModeIfNew should fail.
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:    []byte("data1"),
+		KeyMode: KeyModeIfNew,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "key mode conditions not supported with ExternalState")
+
+	// KeyModeIfExists should fail.
+	_, err = broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:    []byte("data1"),
+		KeyMode: KeyModeIfExists,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "key mode conditions not supported with ExternalState")
+}
+
+// TestMemoryMapBroker_ExternalState_Idempotency verifies that idempotency keys
+// still work at the stream level with ExternalState.
+func TestMemoryMapBroker_ExternalState_Idempotency(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:          MapModePersistent,
+			ExternalState: true,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := "test_ext_idempotency"
+
+	// First publish with idempotency key.
+	res1, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:                []byte("data1"),
+		IdempotencyKey:      "idem-1",
+		IdempotentResultTTL: 60 * time.Second,
+	})
+	require.NoError(t, err)
+	require.False(t, res1.Suppressed)
+	require.Equal(t, uint64(1), res1.Position.Offset)
+
+	// Second publish with same idempotency key — should be suppressed.
+	res2, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:                []byte("data1_different"),
+		IdempotencyKey:      "idem-1",
+		IdempotentResultTTL: 60 * time.Second,
+	})
+	require.NoError(t, err)
+	require.True(t, res2.Suppressed)
+	require.Equal(t, SuppressReasonIdempotency, res2.SuppressReason)
+	require.Equal(t, res1.Position.Offset, res2.Position.Offset)
+	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch)
+
+	// Stream should have only 1 entry.
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	require.Len(t, streamResult.Publications, 1)
+}
+
+// TestMemoryMapBroker_ExternalState_StreamData verifies that StreamData override
+// works with ExternalState — stream entry uses StreamData instead of Data.
+func TestMemoryMapBroker_ExternalState_StreamData(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:          MapModePersistent,
+			ExternalState: true,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	channel := "test_ext_stream_data"
+
+	// Publish with both Data and StreamData.
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data:       []byte("full_state_data"),
+		StreamData: []byte("incremental_delta"),
+	})
+	require.NoError(t, err)
+
+	// Stream entry should have StreamData (not Data).
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	require.Len(t, streamResult.Publications, 1)
+	require.Equal(t, []byte("incremental_delta"), streamResult.Publications[0].Data)
+}
+
+// =============================================================================
+// ExternalState Validation Tests
+// =============================================================================
+
+// TestResolveAndValidateMapChannelOptions_ExternalState_RequiresPersistent verifies
+// that ExternalState with Ephemeral or Durable mode returns an error.
+func TestResolveAndValidateMapChannelOptions_ExternalState_RequiresPersistent(t *testing.T) {
+	// ExternalState with Ephemeral should fail.
+	_, err := ResolveAndValidateMapChannelOptions(func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:          MapModeEphemeral,
+			KeyTTL:        60 * time.Second,
+			ExternalState: true,
+		}
+	}, "ch1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ExternalState requires persistent mode")
+
+	// ExternalState with Durable should fail.
+	_, err = ResolveAndValidateMapChannelOptions(func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:          MapModeDurable,
+			KeyTTL:        60 * time.Second,
+			ExternalState: true,
+		}
+	}, "ch1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ExternalState requires persistent mode")
+}
+
+// TestResolveAndValidateMapChannelOptions_ExternalState_RejectsOrdered verifies
+// that ExternalState with Ordered=true returns an error.
+func TestResolveAndValidateMapChannelOptions_ExternalState_RejectsOrdered(t *testing.T) {
+	_, err := ResolveAndValidateMapChannelOptions(func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:          MapModePersistent,
+			Ordered:       true,
+			ExternalState: true,
+		}
+	}, "ch1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ExternalState requires Ordered == false")
+}
+
+// TestResolveAndValidateMapChannelOptions_ExternalState_Valid verifies that
+// ExternalState with Persistent mode and Ordered=false succeeds.
+func TestResolveAndValidateMapChannelOptions_ExternalState_Valid(t *testing.T) {
+	opts, err := ResolveAndValidateMapChannelOptions(func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:          MapModePersistent,
+			ExternalState: true,
+		}
+	}, "ch1")
+	require.NoError(t, err)
+	require.True(t, opts.ExternalState)
+	require.Equal(t, MapModePersistent, opts.Mode)
+	require.False(t, opts.Ordered)
+	// StreamSize and StreamTTL should be auto-derived.
+	require.Equal(t, 100, opts.StreamSize)
+	require.Equal(t, time.Minute, opts.StreamTTL)
+}
