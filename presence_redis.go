@@ -132,6 +132,30 @@ func (m *RedisPresenceManager) Close(_ context.Context) error {
 	return nil
 }
 
+// SupportsBatchPresence implements the PresenceManager interface. It returns
+// false when any configured shard is operating in Redis Cluster mode.
+//
+// The primary reason is a hard Redis Cluster constraint: a pipeline (DoMulti)
+// that contains EVALSHA commands whose keys hash to different cluster slots is
+// rejected by Redis with:
+//
+//	CROSSSLOT Keys in request don't hash to the same slot
+//
+// Because each presence update targets a distinct channel, and channels are
+// intentionally distributed across slots for load-balancing, a single DoMulti
+// batch will almost always span multiple slots and trigger this error.
+//
+// When this method returns false the node falls back to calling AddPresence
+// individually for each item.
+func (m *RedisPresenceManager) SupportsBatchPresence() bool {
+	for _, s := range m.shards {
+		if s.isCluster {
+			return false
+		}
+	}
+	return true
+}
+
 func (m *RedisPresenceManager) getShard(channel string) *RedisShard {
 	if !m.sharding {
 		return m.shards[0]
@@ -151,8 +175,8 @@ func (m *RedisPresenceManager) addPresenceScriptKeysArgs(s *RedisShard, ch strin
 		return nil, nil, err
 	}
 
-	setKey := m.presenceSetKey(s, ch)
 	hashKey := m.presenceHashKey(s, ch)
+	setKey := m.presenceSetKey(s, ch)
 	userSetKey := m.userSetKey(s, ch)
 	userHashKey := m.userHashKey(s, ch)
 	keys := []string{string(setKey), string(hashKey), string(userSetKey), string(userHashKey)}
@@ -193,6 +217,93 @@ func (m *RedisPresenceManager) addPresence(s *RedisShard, ch string, uid string,
 		return nil
 	}
 	return resp.Error()
+}
+
+// AddPresenceBatch - see PresenceManager interface description.
+// Items are grouped by shard first; each shard's updates are then dispatched
+// in a single ExecMulti call, which pipelines all EVALSHA commands in one
+// network round trip instead of issuing one round trip per item.
+func (m *RedisPresenceManager) AddPresenceBatch(items []PresenceBatchItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	// Group items by shard so that each ExecMulti targets a single Redis instance.
+	shardGroups := make(map[*RedisShard][]PresenceBatchItem)
+	for _, item := range items {
+		shard := m.getShard(item.Channel)
+		shardGroups[shard] = append(shardGroups[shard], item)
+	}
+
+	ctx := context.Background()
+	for shard, shardItems := range shardGroups {
+		if err := m.addPresenceBatchForShard(ctx, shard, shardItems); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (m *RedisPresenceManager) addPresenceBatchForShard(ctx context.Context, shard *RedisShard, items []PresenceBatchItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	scriptCalls := make([]presenceScriptCall, 0, len(items))
+	for _, item := range items {
+		keys, args, err := m.addPresenceScriptKeysArgs(shard, item.Channel, item.ClientID, item.Info)
+		if err != nil {
+			continue
+		}
+		scriptCalls = append(scriptCalls, presenceScriptCall{
+			keys:    keys,
+			args:    args,
+			channel: item.Channel,
+		})
+	}
+
+	if len(scriptCalls) == 0 {
+		return nil
+	}
+
+	results := m.execScriptBatch(ctx, shard, scriptCalls)
+	return m.checkBatchResults(results, scriptCalls)
+}
+
+// checkBatchResults scans ExecMulti results and returns the first non-nil error.
+// A nil Redis reply (rueidis.IsRedisNil) is treated as success, consistent with
+// how addPresence handles the single-item path.
+func (m *RedisPresenceManager) checkBatchResults(results []rueidis.RedisResult, scriptCalls []presenceScriptCall) error {
+	for i, result := range results {
+		if result.Error() != nil && !rueidis.IsRedisNil(result.Error()) {
+			return fmt.Errorf("error adding presence for channel %s: %w", scriptCalls[i].channel, result.Error())
+		}
+	}
+	return nil
+}
+
+// presenceScriptCall holds the keys, args, and channel name for one Lua invocation.
+// The channel field is kept solely for error attribution in checkBatchResults.
+type presenceScriptCall struct {
+	keys    []string
+	args    []string
+	channel string
+}
+
+// execScriptBatch executes the add-presence Lua script for every call in the slice
+// using rueidis Lua.ExecMulti. ExecMulti issues a SCRIPT LOAD to every cluster node
+// before pipelining the EVALSHA commands, which avoids both the NOSCRIPT problem and
+// the need for any manual SHA1 management on our side.
+func (m *RedisPresenceManager) execScriptBatch(ctx context.Context, shard *RedisShard, calls []presenceScriptCall) []rueidis.RedisResult {
+	execs := make([]rueidis.LuaExec, 0, len(calls))
+	for _, call := range calls {
+		execs = append(execs, rueidis.LuaExec{
+			Keys: call.keys,
+			Args: call.args,
+		})
+	}
+	return m.addPresenceScript.ExecMulti(ctx, shard.client, execs...)
 }
 
 // RemovePresence - see PresenceManager interface description.

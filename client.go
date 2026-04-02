@@ -702,6 +702,50 @@ func (c *Client) updateChannelPresence(ch string, chCtx ChannelContext) error {
 	})
 }
 
+// updateChannelPresenceBatch updates client presence info for multiple channels in batch,
+// reducing Redis network round trips. This is more efficient than calling updateChannelPresence
+// multiple times.
+func (c *Client) updateChannelPresenceBatch(channels map[string]ChannelContext) error {
+	if len(channels) == 0 {
+		return nil
+	}
+
+	// Collect channels that need presence update
+	presenceBatchItems := make([]PresenceBatchItem, 0, len(channels))
+
+	c.mu.RLock()
+	for ch, chCtx := range channels {
+		// Skip channels without presence emission
+		if !channelHasFlag(chCtx.flags, flagEmitPresence) {
+			continue
+		}
+
+		// Verify channel still exists
+		if _, ok := c.channels[ch]; !ok {
+			continue
+		}
+
+		presenceBatchItems = append(presenceBatchItems, PresenceBatchItem{
+			Channel:  ch,
+			ClientID: c.uid,
+			Info: &ClientInfo{
+				ClientID: c.uid,
+				UserID:   c.user,
+				ConnInfo: c.info,
+				ChanInfo: chCtx.info,
+			},
+		})
+	}
+	c.mu.RUnlock()
+
+	if len(presenceBatchItems) == 0 {
+		return nil
+	}
+
+	// Batch submit to Redis
+	return c.node.addPresenceBatch(presenceBatchItems)
+}
+
 // Context returns client Context. This context will be canceled
 // as soon as client connection closes.
 func (c *Client) Context() context.Context {
@@ -779,39 +823,97 @@ func (c *Client) updatePresence() {
 		c.eventHub.aliveHandler()
 	}
 
+	// Determine the maximum number of channels to process per batch.
+	// A non-positive value means the feature is disabled; fall back to the
+	// legacy per-channel path instead (handled by the caller via config check).
+	batchSize := config.ClientPresenceUpdateBatchSize
+	if batchSize <= 0 {
+		batchSize = 1000 // Default to 1000 channels per batch.
+	}
+
+	// Convert the channel map to a slice so it can be split into fixed-size batches.
+	type channelItem struct {
+		channel string
+		context ChannelContext
+	}
+	channelSlice := make([]channelItem, 0, len(channels))
 	for channel, channelContext := range channels {
-		err := c.updateChannelPresence(channel, channelContext)
-		if err != nil {
-			c.node.logger.log(newErrorLogEntry(err, "error updating presence for channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+		channelSlice = append(channelSlice, channelItem{
+			channel: channel,
+			context: channelContext,
+		})
+	}
+
+	// Process channels in batches to reduce Redis network round trips.
+	for i := 0; i < len(channelSlice); i += batchSize {
+		end := i + batchSize
+		if end > len(channelSlice) {
+			end = len(channelSlice)
+		}
+		batch := channelSlice[i:end]
+
+		// Re-build a map for the current batch to pass to updateChannelPresenceBatch.
+		batchChannels := make(map[string]ChannelContext, len(batch))
+		for _, item := range batch {
+			batchChannels[item.channel] = item.context
 		}
 
-		c.checkSubscriptionExpiration(channel, channelContext, config.ClientExpiredSubCloseDelay, func(result bool) {
-			if !result {
+		// Submit presence updates for this batch. The underlying PresenceManager
+		// may pipeline the commands to reduce network round trips. If the manager
+		// reports that batch operations are not supported (e.g. Redis Cluster mode),
+		// node.addPresenceBatch automatically falls back to individual AddPresence calls.
+		err := c.updateChannelPresenceBatch(batchChannels)
+		if err != nil {
+			c.node.logger.log(newErrorLogEntry(err, "error batch updating presence", map[string]any{"user": c.user, "client": c.uid, "batch_size": len(batchChannels), "error": err.Error()}))
+		}
+
+		// Run subscription expiration and position checks serially within each batch.
+		// checkSubscriptionExpiration may invoke the async subRefreshHandler; running
+		// these checks concurrently would make callback ordering non-deterministic and
+		// could lead to inconsistent state.
+		for _, item := range batch {
+			channel := item.channel
+			channelContext := item.context
+
+			// Check whether the subscription has expired.
+			c.checkSubscriptionExpiration(channel, channelContext, config.ClientExpiredSubCloseDelay, func(result bool) {
+				if !result {
+					serverSide := channelHasFlag(channelContext.flags, flagServerSide)
+					if c.isAsyncUnsubscribe(serverSide) {
+						go func(ch string) { c.handleAsyncUnsubscribe(ch, unsubscribeExpired) }(channel)
+					} else {
+						go func() { _ = c.close(DisconnectSubExpired) }()
+					}
+				}
+			})
+
+			// Check stream position integrity if a check delay is configured.
+			checkDelay := config.ClientChannelPositionCheckDelay
+			if checkDelay > 0 && !c.checkPosition(checkDelay, channel, channelContext) {
 				serverSide := channelHasFlag(channelContext.flags, flagServerSide)
+				if c.node.logger.enabled(LogLevelDebug) {
+					c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state from periodic check", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+				}
 				if c.isAsyncUnsubscribe(serverSide) {
-					go func(ch string) { c.handleAsyncUnsubscribe(ch, unsubscribeExpired) }(channel)
+					go func(ch string) { c.handleAsyncUnsubscribe(ch, unsubscribeInsufficientState) }(channel)
+					continue
 				} else {
-					go func() { _ = c.close(DisconnectSubExpired) }()
+					go func() { c.handleInsufficientStateDisconnect() }()
+					// No need to proceed after close.
+					return
 				}
 			}
-		})
-
-		checkDelay := config.ClientChannelPositionCheckDelay
-		if checkDelay > 0 && !c.checkPosition(checkDelay, channel, channelContext) {
-			serverSide := channelHasFlag(channelContext.flags, flagServerSide)
-			if c.node.logger.enabled(LogLevelDebug) {
-				c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state from periodic check", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-			}
-			if c.isAsyncUnsubscribe(serverSide) {
-				go func(ch string) { c.handleAsyncUnsubscribe(ch, unsubscribeInsufficientState) }(channel)
-				continue
-			} else {
-				go func() { c.handleInsufficientStateDisconnect() }()
-				// No need to proceed after close.
-				return
-			}
 		}
+
+		// If the client was closed during batch processing, stop immediately.
+		c.mu.Lock()
+		if c.status == statusClosed {
+			c.mu.Unlock()
+			return
+		}
+		c.mu.Unlock()
 	}
+
 	c.mu.Lock()
 	c.addPresenceUpdate(false, true)
 	c.mu.Unlock()

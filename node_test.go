@@ -136,10 +136,11 @@ func (e *TestBroker) RemoveHistory(_ string) error {
 }
 
 type TestPresenceManager struct {
-	errorOnPresence       bool
-	errorOnPresenceStats  bool
-	errorOnAddPresence    bool
-	errorOnRemovePresence bool
+	errorOnPresence         bool
+	errorOnPresenceStats    bool
+	errorOnAddPresence      bool
+	errorOnAddPresenceBatch bool
+	errorOnRemovePresence   bool
 }
 
 func NewTestPresenceManager() *TestPresenceManager {
@@ -151,6 +152,17 @@ func (e *TestPresenceManager) AddPresence(_ string, _ string, _ *ClientInfo) err
 		return errors.New("boom")
 	}
 	return nil
+}
+
+func (e *TestPresenceManager) AddPresenceBatch(_ []PresenceBatchItem) error {
+	if e.errorOnAddPresenceBatch {
+		return errors.New("boom")
+	}
+	return nil
+}
+
+func (e *TestPresenceManager) SupportsBatchPresence() bool {
+	return true
 }
 
 func (e *TestPresenceManager) RemovePresence(_ string, _ string, _ string) error {
