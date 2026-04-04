@@ -36,7 +36,6 @@ func main() {
 			}
 		},
 		Map: centrifuge.MapConfig{
-			PaginationMinLimit: 1, // Set to 1 for demo purposes, default is 100.
 			// Configure channel options per channel.
 			// Each channel must specify Mode explicitly.
 			GetMapChannelOptions: func(channel string) centrifuge.MapChannelOptions {
@@ -52,7 +51,8 @@ func main() {
 				}
 				if channel == "visualizer" {
 					return centrifuge.MapChannelOptions{
-						Mode: centrifuge.MapModePersistent,
+						Mode:               centrifuge.MapModePersistent,
+						MinPageSize: 1, // Set to 1 for demo purposes, default is 100.
 					}
 				}
 				if strings.HasPrefix(channel, "clients:") {

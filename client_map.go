@@ -101,12 +101,12 @@ const (
 const subscribeResultTypeMap = 1
 
 const (
-	// defaultMapPaginationDefaultLimit is the default page size when client does not specify a limit.
-	defaultMapPaginationDefaultLimit = 100
-	// defaultMapPaginationMinLimit is the default minimum page size for map pagination.
-	defaultMapPaginationMinLimit = 100
-	// defaultMapPaginationMaxLimit is the default maximum page size for map pagination.
-	defaultMapPaginationMaxLimit = 1000
+	// defaultMapPageSize is the default page size when client does not specify one.
+	defaultMapPageSize = 100
+	// defaultMapMinPageSize is the default minimum page size for map pagination.
+	defaultMapMinPageSize = 100
+	// defaultMapMaxPageSize is the default maximum page size for map pagination.
+	defaultMapMaxPageSize = 1000
 )
 
 // validateAndCreateTagsFilter validates the tags filter from the request and creates a tagsFilter.
@@ -197,7 +197,8 @@ func (c *Client) handleMapSubscribeCommand(
 		if !hasState {
 			return ErrorPermissionDenied
 		}
-		if c.isMapCatchUpExpired(state) {
+		catchUpChOpts, _ := c.node.ResolveMapChannelOptions(req.Channel)
+		if c.isMapCatchUpExpired(state, catchUpChOpts) {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "map subscribe catch-up timeout", map[string]any{
 				"channel": req.Channel, "user": c.user, "client": c.uid,
 			}))
@@ -212,7 +213,8 @@ func (c *Client) handleMapSubscribeCommand(
 	}
 
 	if req.Phase != MapPhaseState && hasState {
-		if c.isMapCatchUpExpired(state) {
+		catchUpChOpts, _ := c.node.ResolveMapChannelOptions(req.Channel)
+		if c.isMapCatchUpExpired(state, catchUpChOpts) {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "map subscribe catch-up timeout", map[string]any{
 				"channel": req.Channel, "user": c.user, "client": c.uid,
 			}))
@@ -355,7 +357,8 @@ func (c *Client) handleMapStatePhase(
 	}
 
 	// Build read options.
-	limit := c.getMapPaginationLimit(req)
+	chOpts, _ = c.node.ResolveMapChannelOptions(channel)
+	limit := c.getMapPageSize(req, chOpts)
 
 	opts := MapReadStateOptions{
 		AllowCached: true, // Use cache for subscription state delivery
@@ -584,9 +587,18 @@ func (c *Client) handleMapTransitionToLive(
 
 	if positioning {
 		// Positioned mode: read stream from sincePosition to catch any updates.
+		chOpts, _ := c.node.ResolveMapChannelOptions(channel)
+		liveTransitionLimit := chOpts.LiveTransitionMaxPublicationLimit
+		if liveTransitionLimit == 0 {
+			// Default to MaxPageSize.
+			liveTransitionLimit = chOpts.MaxPageSize
+			if liveTransitionLimit <= 0 {
+				liveTransitionLimit = defaultMapMaxPageSize
+			}
+		}
 		streamLimit := -1 // No limit by default.
-		if c.node.config.Map.LiveTransitionMaxPublicationLimit > 0 {
-			streamLimit = c.node.config.Map.LiveTransitionMaxPublicationLimit
+		if liveTransitionLimit > 0 {
+			streamLimit = liveTransitionLimit
 		}
 
 		// Read limit+1 to distinguish "exactly at limit" from "too far behind".
@@ -904,7 +916,8 @@ func (c *Client) handleMapStreamPhase(
 		c.mu.Unlock()
 	}
 
-	limit := c.getMapPaginationLimit(req)
+	chOpts, _ := c.node.ResolveMapChannelOptions(channel)
+	limit := c.getMapPageSize(req, chOpts)
 
 	// Check if close enough to go LIVE: offset + limit >= streamStart
 	// This means client can catch up to streamStart in one more read.
@@ -982,19 +995,19 @@ func (c *Client) handleMapStreamPhase(
 	return c.writeMapSubscribeReply(channel, cmd, res, started, rw)
 }
 
-func (c *Client) getMapPaginationLimit(req *protocol.SubscribeRequest) int {
+func (c *Client) getMapPageSize(req *protocol.SubscribeRequest, chOpts MapChannelOptions) int {
 	limit := int(req.Limit)
-	defaultLimit := c.node.config.Map.PaginationDefaultLimit
+	defaultLimit := chOpts.DefaultPageSize
 	if defaultLimit <= 0 {
-		defaultLimit = defaultMapPaginationDefaultLimit
+		defaultLimit = defaultMapPageSize
 	}
-	minLimit := c.node.config.Map.PaginationMinLimit
+	minLimit := chOpts.MinPageSize
 	if minLimit <= 0 {
-		minLimit = defaultMapPaginationMinLimit
+		minLimit = defaultMapMinPageSize
 	}
-	maxLimit := c.node.config.Map.PaginationMaxLimit
+	maxLimit := chOpts.MaxPageSize
 	if maxLimit <= 0 {
-		maxLimit = defaultMapPaginationMaxLimit
+		maxLimit = defaultMapMaxPageSize
 	}
 	if limit <= 0 {
 		limit = defaultLimit
@@ -1203,8 +1216,8 @@ func (c *Client) writeMapSubscribeReply(
 }
 
 // isMapCatchUpExpired checks whether the map catch-up has exceeded the configured timeout.
-func (c *Client) isMapCatchUpExpired(state *mapSubscribeState) bool {
-	timeout := c.node.config.Map.SubscribeCatchUpTimeout
+func (c *Client) isMapCatchUpExpired(state *mapSubscribeState, chOpts MapChannelOptions) bool {
+	timeout := chOpts.SubscribeCatchUpTimeout
 	if timeout == 0 {
 		timeout = 5 * time.Second
 	}
@@ -1254,7 +1267,8 @@ func (c *Client) sweepExpiredMapSubscribing(skipChannel string) {
 		if ch == skipChannel {
 			continue
 		}
-		if c.isMapCatchUpExpired(state) {
+		sweepChOpts, _ := c.node.ResolveMapChannelOptions(ch)
+		if c.isMapCatchUpExpired(state, sweepChOpts) {
 			if state.subscribingCh != nil {
 				close(state.subscribingCh)
 			}

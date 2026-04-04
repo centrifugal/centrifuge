@@ -65,6 +65,25 @@ type MapChannelOptions struct {
 	// and ReadState returns only the current stream position (no entries).
 	// Requires Mode == MapModePersistent and Ordered == false.
 	ExternalState bool
+	// DefaultPageSize sets the default number of items per page when
+	// the client does not specify a page size. Zero means default (100).
+	DefaultPageSize int
+	// MinPageSize sets the minimum number of items per page in map
+	// subscription pagination requests. This prevents excessive round trips when
+	// clients send very small page sizes. Zero means default (100).
+	MinPageSize int
+	// MaxPageSize sets the maximum number of items a client can request
+	// per page in map subscription pagination requests. Zero means default (1000).
+	MaxPageSize int
+	// LiveTransitionMaxPublicationLimit sets the maximum number of stream publications
+	// to recover during map subscription live transition. If limit is reached,
+	// ErrorUnrecoverablePosition is returned. Zero means MaxPageSize.
+	LiveTransitionMaxPublicationLimit int
+	// SubscribeCatchUpTimeout sets the maximum time a client can spend paginating
+	// through state and stream phases before going live. If exceeded, the client is
+	// disconnected with DisconnectSlow. Zero means 5 seconds (default). Negative
+	// means no timeout.
+	SubscribeCatchUpTimeout time.Duration
 }
 
 // Config contains Node configuration options.
@@ -221,25 +240,6 @@ type MapConfig struct {
 	// ReadState, ReadStream, etc.) — it must be fast and should not perform I/O.
 	// This is an EXPERIMENTAL API.
 	GetMapChannelOptions func(channel string) MapChannelOptions
-	// PaginationDefaultLimit sets the default number of items per page when
-	// the client does not specify a limit. Zero means default (100).
-	PaginationDefaultLimit int
-	// PaginationMinLimit sets the minimum number of items per page in map
-	// subscription pagination requests. This prevents excessive round trips when
-	// clients send very small limits. Zero means default (100).
-	PaginationMinLimit int
-	// PaginationMaxLimit sets the maximum number of items a client can request
-	// per page in map subscription pagination requests. Zero means default (1000).
-	PaginationMaxLimit int
-	// LiveTransitionMaxPublicationLimit sets the maximum number of stream publications
-	// to recover during map subscription live transition. If limit is reached,
-	// ErrorUnrecoverablePosition is returned. Zero means no limit.
-	LiveTransitionMaxPublicationLimit int
-	// SubscribeCatchUpTimeout sets the maximum time a client can spend paginating
-	// through state and stream phases before going live. If exceeded, the client is
-	// disconnected with DisconnectSlow. Zero means 5 seconds (default). Negative
-	// means no timeout.
-	SubscribeCatchUpTimeout time.Duration
 }
 
 type SharedPollConfig struct {

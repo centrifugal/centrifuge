@@ -18,11 +18,11 @@ func newTestNodeWithMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
 		Map: MapConfig{
-			PaginationMinLimit: 1, // Allow small page sizes in tests.
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeEphemeral,
-					KeyTTL: 60 * time.Second,
+					Mode:               MapModeEphemeral,
+					KeyTTL:             60 * time.Second,
+					MinPageSize: 1, // Allow small page sizes in tests.
 				}
 			},
 		},
@@ -49,8 +49,9 @@ func newTestNodeWithMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
 func setTestMapChannelOptionsConverging(node *Node) {
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode:   MapModeDurable,
-			KeyTTL: 60 * time.Second,
+			Mode:               MapModeDurable,
+			KeyTTL:             60 * time.Second,
+			MinPageSize: 1, // Allow small page sizes in tests.
 		}
 	}
 }
@@ -1466,11 +1467,11 @@ func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
 		Map: MapConfig{
-			PaginationMinLimit: 1,
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
-					KeyTTL: 60 * time.Second,
+					Mode:               MapModeDurable,
+					KeyTTL:             60 * time.Second,
+					MinPageSize: 1,
 				}
 			},
 		},
@@ -1612,11 +1613,11 @@ func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
 		Map: MapConfig{
-			PaginationMinLimit: 1,
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
-					KeyTTL: 60 * time.Second,
+					Mode:               MapModeDurable,
+					KeyTTL:             60 * time.Second,
+					MinPageSize: 1,
 				}
 			},
 		},
@@ -1705,11 +1706,11 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination(t *testing.T) {
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
 		Map: MapConfig{
-			PaginationMinLimit: 1,
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
-					KeyTTL: 60 * time.Second,
+					Mode:               MapModeDurable,
+					KeyTTL:             60 * time.Second,
+					MinPageSize: 1,
 				}
 			},
 		},
@@ -1815,11 +1816,11 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination_ManyPublishes(t *testi
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
 		Map: MapConfig{
-			PaginationMinLimit: 1,
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
-					KeyTTL: 60 * time.Second,
+					Mode:               MapModeDurable,
+					KeyTTL:             60 * time.Second,
+					MinPageSize: 1,
 				}
 			},
 		},
@@ -2422,12 +2423,12 @@ func TestMapSubscribe_RecoveryMaxPublicationLimit(t *testing.T) {
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
 		Map: MapConfig{
-			PaginationMinLimit:                1,
-			LiveTransitionMaxPublicationLimit: 5, // Max 5 publications during recovery.
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
-					KeyTTL: 60 * time.Second,
+					Mode:                             MapModeDurable,
+					KeyTTL:                           60 * time.Second,
+					MinPageSize:               1,
+					LiveTransitionMaxPublicationLimit: 5, // Max 5 publications during recovery.
 				}
 			},
 		},
@@ -2911,7 +2912,14 @@ func TestMapSubscribe_StreamPhaseOffset(t *testing.T) {
 func TestMapSubscribe_CatchUpTimeout_StatePagination(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
 	// Set a very short timeout so we can trigger it without sleeping.
-	node.config.Map.SubscribeCatchUpTimeout = time.Nanosecond
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:                    MapModeEphemeral,
+			KeyTTL:                  60 * time.Second,
+			MinPageSize:      1,
+			SubscribeCatchUpTimeout: time.Nanosecond,
+		}
+	}
 
 	channel := "test_catchup_timeout"
 	ctx := context.Background()
@@ -2968,8 +2976,14 @@ func TestMapSubscribe_CatchUpTimeout_PhaseTransition(t *testing.T) {
 	// We use multi-page STATE with stream advancing between pages so that
 	// state-to-live doesn't kick in, then manipulate startedAt before STREAM.
 	node, broker := newTestNodeWithMapBroker(t)
-	setTestMapChannelOptionsConverging(node)
-	node.config.Map.SubscribeCatchUpTimeout = 10 * time.Second // Large enough for STATE pages.
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:                    MapModeDurable,
+			KeyTTL:                  60 * time.Second,
+			MinPageSize:      1,
+			SubscribeCatchUpTimeout: 10 * time.Second, // Large enough for STATE pages.
+		}
+	}
 
 	channel := "test_catchup_timeout_phase"
 	ctx := context.Background()
@@ -3044,8 +3058,14 @@ func TestMapSubscribe_CatchUpTimeout_PhaseTransition(t *testing.T) {
 
 func TestMapSubscribe_CatchUpTimeout_Sweep(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
-	node.config.Map.SubscribeCatchUpTimeout = time.Nanosecond
-	node.config.Map.PaginationMinLimit = 1
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:                    MapModeEphemeral,
+			KeyTTL:                  60 * time.Second,
+			MinPageSize:      1,
+			SubscribeCatchUpTimeout: time.Nanosecond,
+		}
+	}
 
 	ctx := context.Background()
 
@@ -3111,8 +3131,14 @@ func TestMapSubscribe_CatchUpTimeout_Sweep(t *testing.T) {
 func TestMapSubscribe_CatchUpTimeout_Disabled(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
 	// Negative timeout disables the check.
-	node.config.Map.SubscribeCatchUpTimeout = -1
-	node.config.Map.PaginationMinLimit = 1
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:                    MapModeEphemeral,
+			KeyTTL:                  60 * time.Second,
+			MinPageSize:      1,
+			SubscribeCatchUpTimeout: -1,
+		}
+	}
 
 	channel := "test_catchup_no_timeout"
 	ctx := context.Background()
@@ -4061,11 +4087,11 @@ func newTestNodeWithExternalStateMapBroker(t *testing.T) (*Node, *MemoryMapBroke
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
 		Map: MapConfig{
-			PaginationMinLimit: 1,
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:          MapModePersistent,
-					ExternalState: true,
+					Mode:               MapModePersistent,
+					ExternalState:      true,
+					MinPageSize: 1,
 				}
 			},
 		},
@@ -4407,11 +4433,11 @@ func TestExternalState_DeltaRejected(t *testing.T) {
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
 		Map: MapConfig{
-			PaginationMinLimit: 1,
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:          MapModePersistent,
-					ExternalState: true,
+					Mode:               MapModePersistent,
+					ExternalState:      true,
+					MinPageSize: 1,
 				}
 			},
 		},
