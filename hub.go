@@ -184,7 +184,8 @@ func (h *Hub) addSub(ch string, sub subInfo) (int64, bool, error) {
 }
 
 // removeSub removes connection from clientHub subscriptions registry.
-func (h *Hub) removeSub(ch string, c *Client) (bool, bool) {
+// Returns (isEmpty, wasRemoved, wasKeyed).
+func (h *Hub) removeSub(ch string, c *Client) (bool, bool, bool) {
 	return h.subShards[index(ch, numHubShards)].removeSub(ch, c)
 }
 
@@ -550,6 +551,7 @@ type subInfo struct {
 	deltaType  DeltaType
 	useID      bool
 	tagsFilter *tagsFilter
+	isMap      bool // true for map subscriptions.
 }
 
 type subShard struct {
@@ -561,8 +563,9 @@ type subShard struct {
 	metrics         *metrics
 	shardIndex      int
 
-	chanIDs    map[string]int64
-	lastChanID atomic.Int64
+	chanIDs     map[string]int64
+	lastChanID  atomic.Int64
+	mapChannels map[string]bool // tracks which channels are keyed subscriptions
 }
 
 func newSubShard(logger *logger, metrics *metrics, maxTimeLagMilli int64, shardIndex int) *subShard {
@@ -573,10 +576,12 @@ func newSubShard(logger *logger, metrics *metrics, maxTimeLagMilli int64, shardI
 		maxTimeLagMilli: maxTimeLagMilli,
 		shardIndex:      shardIndex,
 		chanIDs:         make(map[string]int64),
+		mapChannels:     make(map[string]bool),
 	}
 }
 
 // addSub adds connection into clientHub subscriptions registry.
+// Returns (chanID, isFirst, error) where isFirst is true if this is the first subscriber.
 func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -586,6 +591,10 @@ func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
 	_, ok := s.subs[ch]
 	if !ok {
 		s.subs[ch] = make(map[string]subInfo)
+		// Track if this channel is keyed (first subscriber determines this).
+		if sub.isMap {
+			s.mapChannels[ch] = true
+		}
 	}
 	s.subs[ch][uid] = sub
 
@@ -616,9 +625,11 @@ func (s *subShard) removeSubID(ch string) {
 }
 
 // removeSub removes connection from clientHub subscriptions registry.
-// Returns true if channel does not have any subscribers left in first return value.
-// Returns true if found and really removed from registry in second return value.
-func (s *subShard) removeSub(ch string, c *Client) (bool, bool) {
+// Returns (isEmpty, wasRemoved, wasKeyed) where:
+// - isEmpty: true if channel has no subscribers left
+// - wasRemoved: true if subscription was found and removed
+// - wasMap: true if the now-empty channel was a keyed subscription channel
+func (s *subShard) removeSub(ch string, c *Client) (bool, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -626,10 +637,10 @@ func (s *subShard) removeSub(ch string, c *Client) (bool, bool) {
 
 	// try to find subscription to delete, return early if not found.
 	if _, ok := s.subs[ch]; !ok {
-		return true, false
+		return true, false, false
 	}
 	if _, ok := s.subs[ch][uid]; !ok {
-		return true, false
+		return true, false, false
 	}
 
 	// actually remove subscription from hub.
@@ -638,10 +649,12 @@ func (s *subShard) removeSub(ch string, c *Client) (bool, bool) {
 	// clean up subs map if it's needed.
 	if len(s.subs[ch]) == 0 {
 		delete(s.subs, ch)
-		return true, true
+		wasMap := s.mapChannels[ch]
+		delete(s.mapChannels, ch)
+		return true, true, wasMap
 	}
 
-	return false, true
+	return false, true, false
 }
 
 type encodeError struct {
@@ -665,6 +678,9 @@ type preparedData struct {
 	deltaSub        bool
 	wasFiltered     bool
 	filteredPub     *protocol.Publication
+	// For keyed channel lazy delta encoding (set by buildPreparedPollData).
+	keyedDeltaPatch  []byte // raw fossil delta data (patch or full data if patch >= full)
+	keyedDeltaIsReal bool   // true when the patch is a real delta (smaller than full)
 }
 
 func getDeltaPub(prevPub *Publication, fullPub *protocol.Publication, key preparedKey) *protocol.Publication {
@@ -681,19 +697,27 @@ func getDeltaPub(prevPub *Publication, fullPub *protocol.Publication, key prepar
 			deltaData = json.Escape(convert.BytesToString(deltaData))
 		}
 		deltaPub = &protocol.Publication{
-			Offset: fullPub.Offset,
-			Data:   deltaData,
-			Info:   fullPub.Info,
-			Tags:   fullPub.Tags,
-			Delta:  delta,
+			Offset:  fullPub.Offset,
+			Data:    deltaData,
+			Info:    fullPub.Info,
+			Tags:    fullPub.Tags,
+			Delta:   delta,
+			Key:     fullPub.Key,
+			Removed: fullPub.Removed,
+			Score:   fullPub.Score,
+			Channel: fullPub.Channel,
 		}
 	} else if prevPub == nil && key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
 		// In JSON and Fossil case we need to send full state in JSON string format.
 		deltaPub = &protocol.Publication{
-			Offset: fullPub.Offset,
-			Data:   json.Escape(convert.BytesToString(fullPub.Data)),
-			Info:   fullPub.Info,
-			Tags:   fullPub.Tags,
+			Offset:  fullPub.Offset,
+			Data:    json.Escape(convert.BytesToString(fullPub.Data)),
+			Info:    fullPub.Info,
+			Tags:    fullPub.Tags,
+			Key:     fullPub.Key,
+			Removed: fullPub.Removed,
+			Score:   fullPub.Score,
+			Channel: fullPub.Channel,
 		}
 	}
 	return deltaPub
@@ -786,7 +810,7 @@ func (s *subShard) broadcastPublication(
 		if s.maxTimeLagMilli > 0 && timeLagMilli > s.maxTimeLagMilli {
 			maxLagExceeded = true
 		}
-		s.metrics.observePubSubDeliveryLag(timeLagMilli)
+		s.metrics.observePubSubDeliveryLag(timeLagMilli, channel)
 	}
 
 	fullPub := pubToProto(pub)
@@ -809,7 +833,6 @@ func (s *subShard) broadcastPublication(
 	var (
 		jsonEncodeErr     *encodeError
 		tagsFilterDropped int
-		jsonClientFound   bool
 	)
 
 	// Get subID for this channel if it exists
@@ -868,6 +891,9 @@ func (s *subShard) broadcastPublication(
 							Info:    fullPub.Info,
 							Tags:    fullPub.Tags,
 							Channel: fullPub.Channel,
+							Key:     fullPub.Key,
+							Removed: fullPub.Removed,
+							Score:   fullPub.Score,
 						}
 					}
 					push := getPush()
@@ -892,6 +918,9 @@ func (s *subShard) broadcastPublication(
 							Info:    fullPub.Info,
 							Tags:    fullPub.Tags,
 							Channel: fullPub.Channel,
+							Key:     fullPub.Key,
+							Removed: fullPub.Removed,
+							Score:   fullPub.Score,
 						}
 					}
 					push := getPush()
@@ -963,8 +992,7 @@ func (s *subShard) broadcastPublication(
 			preparedDataByKey[key] = prepValue
 		}
 		if sub.client.transport.Protocol() == ProtocolTypeJSON {
-			jsonClientFound = true
-			if jsonEncodeErr != nil || len(pub.Data) == 0 {
+			if jsonEncodeErr != nil {
 				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 				continue
 			}
@@ -981,12 +1009,6 @@ func (s *subShard) broadcastPublication(
 			"user":    jsonEncodeErr.user,
 			"client":  jsonEncodeErr.client,
 			"error":   jsonEncodeErr.error,
-		}))
-	}
-	if jsonClientFound && len(pub.Data) == 0 {
-		// Log that we had clients disconnected due to empty data – which is not supported in a JSON protocol case.
-		s.logger.log(newLogEntry(LogLevelWarn, "inappropriate protocol publication – empty data for JSON client", map[string]any{
-			"channel": channel,
 		}))
 	}
 

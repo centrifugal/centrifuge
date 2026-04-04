@@ -10,6 +10,8 @@ type Publication struct {
 	// Offset is an incremental position number inside a history stream.
 	// Zero value means that channel does not maintain Publication stream.
 	Offset uint64
+	// Epoch is the stream epoch. Used together with Offset for position tracking.
+	Epoch string
 	// Data to be published to a channel (to be delivered to subscribers).
 	Data []byte
 	// Info is optional information about client connection published this data.
@@ -25,6 +27,17 @@ type Publication struct {
 	// This is a case for wildcard subscriptions. Client SDK then should use this channel
 	// in PublicationContext.
 	Channel string
+	// Key is used for map subscriptions (state and presence/membership).
+	// For presence: Key = ClientID.
+	// For map state: Key = arbitrary string key.
+	Key string
+	// Removed indicates this is a remove/leave event (true) vs add/join event (false).
+	// Used in map subscriptions to distinguish event types.
+	Removed bool
+	// Score is used for ordered map subscriptions (leaderboards, priority queues).
+	Score int64
+	// Version of the publication. Used by SharedPoll for stale-check.
+	Version uint64
 }
 
 // ClientInfo contains information about client connection.
@@ -114,7 +127,7 @@ type PublishOptions struct {
 	// the returned result is the same as from the previous publication with the same key.
 	IdempotencyKey string
 	// IdempotentResultTTL sets the time of expiration for results of idempotent publications
-	// (publications with idempotency key provided). Memory and Redis engines implement this TTL
+	// (publications with idempotency key provided). Memory and Redis brokers implement this TTL
 	// with second precision, so don't set something less than one second here. By default,
 	// Centrifuge uses 5 minutes as idempotent result TTL.
 	IdempotentResultTTL time.Duration
@@ -128,6 +141,27 @@ type PublishOptions struct {
 	// publication. Use it if version may be reused in the future. For example, if
 	// version comes from in-memory system which can lose data, or due to eviction, etc.
 	VersionEpoch string
+	// Key associates the publication with a specific key within the channel.
+	// For stream subscriptions: enables per-key debouncing via DebouncingBroker
+	// and is delivered to subscribers on the Publication for client-side use.
+	// For map subscriptions: plays central role – state is compacted by key,
+	// delta compression per key, channel batching latest publication is per key.
+	Key string
+
+	// Removed indicates this is a removal event in map subscriptions.
+	Removed bool
+	// Score is used for ordered map subscriptions (leaderboards, priority queues).
+	Score int64
+	// Offset is the stream offset for map publications. When set, this offset
+	// is used instead of broker-assigned offset (used for map broker fan-out).
+	Offset uint64
+	// Epoch is the stream epoch for map publications. When set along with Offset,
+	// the broker will include position information in the message for fan-out.
+	Epoch string
+	// PrevData carries previous publication data for delta computation.
+	// Used when map broker fans out through a standard Broker (e.g. Redis).
+	// The receiving node uses this as prevPub in HandlePublication.
+	PrevData []byte
 }
 
 // Broker is responsible for PUB/SUB mechanics.
@@ -136,10 +170,10 @@ type Broker interface {
 	// this moment node is ready to process broker events.
 	RegisterBrokerEventHandler(BrokerEventHandler) error
 
-	// Subscribe node on channel to listen all messages coming from channel.
-	Subscribe(ch string) error
-	// Unsubscribe node from channel to stop listening messages from it.
-	Unsubscribe(ch string) error
+	// Subscribe node on channels to listen all messages coming from them.
+	Subscribe(channels ...string) error
+	// Unsubscribe node from channels to stop listening messages from them.
+	Unsubscribe(channels ...string) error
 
 	// Publish allows sending data into channel. Data should be
 	// delivered to all clients subscribed to this channel at moment on any
@@ -155,13 +189,11 @@ type Broker interface {
 	// after another. Otherwise, the order of publications and stable behaviour of
 	// subscribers with positioning/recovery enabled can't be guaranteed.
 	//
-	// StreamPosition returned here describes stream epoch and offset assigned to
-	// the publication. For channels without history this StreamPosition should be
-	// zero value.
-	// Second bool value returned here means whether Publish was suppressed due to
-	// the use of PublishOptions.IdempotencyKey. In this case StreamPosition is
-	// returned from the cache maintained by Broker.
-	Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, bool, error)
+	// PublishResult.StreamPosition describes stream epoch and offset assigned to
+	// the publication. For channels without history this should be zero value.
+	// PublishResult.Suppressed and PublishResult.SuppressReason indicate whether
+	// publication was suppressed and why (e.g. idempotency deduplication, version skip).
+	Publish(ch string, data []byte, opts PublishOptions) (PublishResult, error)
 	// PublishJoin publishes Join Push message into channel.
 	PublishJoin(ch string, info *ClientInfo) error
 	// PublishLeave publishes Leave Push message into channel.

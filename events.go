@@ -190,6 +190,9 @@ type SubscribeEvent struct {
 	Recoverable bool
 	// JoinLeave is true when Client wants to receive join/leave messages.
 	JoinLeave bool
+	// Type is the subscription type requested by the client (map, presence, etc.).
+	// For regular subscriptions this is SubscriptionTypeStream (zero value).
+	Type SubscriptionType
 }
 
 // SubscribeCallback should be called as soon as handler decides what to do
@@ -248,6 +251,65 @@ type PublishCallback func(PublishReply, error)
 
 // PublishHandler called when client publishes into channel.
 type PublishHandler func(PublishEvent, PublishCallback)
+
+// MapPublishEvent contains fields related to map publish event.
+type MapPublishEvent struct {
+	// Channel client wants to publish data to.
+	Channel string
+	// Key sent by the client (may be empty if server assigns keys).
+	Key string
+	// Data client wants to publish.
+	Data []byte
+	// ClientInfo about client connection.
+	ClientInfo *ClientInfo
+}
+
+// MapPublishReply contains fields determining the result on map publish.
+type MapPublishReply struct {
+	// Key overrides the key from the client request. If set, this key is used
+	// instead of the one sent by the client. This allows the server to control
+	// key assignment (e.g., set key to client ID for cursor channels).
+	Key string
+	// Options to control map publication.
+	Options MapPublishOptions
+	// Result if set will tell Centrifuge that message already published to
+	// channel by handler code. In this case Centrifuge won't try to publish
+	// into channel again after handler returned MapPublishReply.
+	Result *MapUpdateResult
+}
+
+// MapPublishCallback should be called with MapPublishReply or error.
+type MapPublishCallback func(MapPublishReply, error)
+
+// MapPublishHandler called when client publishes into map channel.
+type MapPublishHandler func(MapPublishEvent, MapPublishCallback)
+
+// MapRemoveEvent contains fields related to map remove event.
+type MapRemoveEvent struct {
+	// Channel client wants to remove a key from.
+	Channel string
+	// Key sent by the client (may be empty if server assigns keys).
+	Key string
+	// ClientInfo about client connection.
+	ClientInfo *ClientInfo
+}
+
+// MapRemoveReply contains fields determining the result on map remove.
+type MapRemoveReply struct {
+	// Key overrides the key from the client request.
+	Key string
+	// Options to control map removal.
+	Options MapRemoveOptions
+	// Result if set will tell Centrifuge that removal already performed
+	// by handler code. In this case Centrifuge won't try to remove again.
+	Result *MapUpdateResult
+}
+
+// MapRemoveCallback should be called with MapRemoveReply or error.
+type MapRemoveCallback func(MapRemoveReply, error)
+
+// MapRemoveHandler called when client wants to remove a key from map channel.
+type MapRemoveHandler func(MapRemoveEvent, MapRemoveCallback)
 
 // SubRefreshEvent contains fields related to subscription refresh event.
 type SubRefreshEvent struct {
@@ -443,6 +505,8 @@ type TransportWriteEvent struct {
 	Data []byte
 	// Channel will be set if TransportWriteEvent relates to some channel.
 	Channel string
+	// Key of Publication (optional).
+	Key string
 	// FrameType tells what is being sent inside Data.
 	FrameType protocol.FrameType
 }
@@ -502,3 +566,77 @@ func newCommandProcessedEvent(command *protocol.Command, err error, reply *proto
 // purposes this seems tolerable as commands and replies may be matched by id.
 // Also, carefully read docs for CommandProcessedEvent to avoid possible bugs.
 type CommandProcessedHandler func(*Client, CommandProcessedEvent)
+
+// KeyedTrackEvent contains fields related to a track request on a keyed channel.
+type KeyedTrackEvent struct {
+	Channel string
+	UserID  string
+	Items   []KeyedItem
+	// Signature is an opaque string sent by the client to prove authorization for
+	// the requested channel and keys. In Centrifugo this is an HMAC token generated
+	// by the application backend. The handler MUST verify Signature before allowing
+	// the track to proceed — returning nil error without validation lets any client
+	// subscribe to arbitrary keys, bypassing access control.
+	Signature string
+}
+
+// KeyedItem represents a single item being tracked (key + version).
+type KeyedItem struct {
+	Key     string
+	Version uint64
+}
+
+// KeyedTrackReply contains the reaction to a keyed track event.
+type KeyedTrackReply struct {
+	// ExpireAt is the Unix timestamp (seconds) after which the client's tracked keys
+	// for this channel are considered expired and stop receiving updates. The client
+	// must re-track with a fresh signature to continue.
+	//
+	// Setting a reasonable ExpireAt is important for proper permission control: it
+	// limits how long a client can receive data after a single authorization check.
+	// Without it (ExpireAt=0), a successfully tracked client receives updates
+	// indefinitely — even if the user's access has since been revoked.
+	// A typical value matches the signature/token TTL issued by the backend
+	// (e.g. 5–15 minutes).
+	ExpireAt int64
+}
+
+// KeyedTrackCallback should be called with KeyedTrackReply or error.
+type KeyedTrackCallback func(KeyedTrackReply, error)
+
+// KeyedTrackHandler is called when a client sends a track request on a shared
+// poll channel. The handler MUST validate KeyedTrackEvent.Signature and return
+// an error if it is invalid — this is the sole authorization gate for which keys
+// a client may receive data for. On success, set KeyedTrackReply.ExpireAt to
+// bound how long the client may receive updates without re-authorization.
+type KeyedTrackHandler func(KeyedTrackEvent, KeyedTrackCallback)
+
+// SharedPollEvent contains fields for a shared poll refresh call.
+type SharedPollEvent struct {
+	Channel string
+	Items   []SharedPollItem
+}
+
+// SharedPollItem represents an item being refreshed.
+type SharedPollItem struct {
+	Key     string
+	Version uint64 // 0 when Mode is "versionless"
+}
+
+// SharedPollResult contains the response from a shared poll refresh.
+type SharedPollResult struct {
+	Items []SharedPollRefreshItem
+}
+
+// SharedPollRefreshItem represents a single item in a shared poll refresh response.
+type SharedPollRefreshItem struct {
+	Key      string
+	Data     []byte
+	Version  uint64
+	Removed  bool
+	PrevData []byte
+}
+
+// SharedPollHandler is called by the refresh worker to fetch current item
+// data from the backend. Registered on Node, not per-client.
+type SharedPollHandler func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error)
