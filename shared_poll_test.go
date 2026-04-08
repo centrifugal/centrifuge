@@ -173,9 +173,8 @@ func TestSharedPollManager_Close(t *testing.T) {
 		SharedPoll: SharedPollConfig{
 			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
 				return SharedPollChannelOptions{
-					RefreshInterval:        100 * time.Millisecond,
-					MaxKeysPerConnection:   100,
-					MaxConsecutiveAbsences: 2,
+					RefreshInterval:      100 * time.Millisecond,
+					MaxKeysPerConnection: 100,
 				}, true
 			},
 		},
@@ -207,42 +206,6 @@ func TestSharedPollManager_Close(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestSharedPollRefresh_EmptyResponse(t *testing.T) {
-	node := newTestNodeWithSharedPoll(t)
-
-	var callCount int32
-
-	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
-		callCount++
-		return SharedPollResult{Items: nil}, nil
-	})
-
-	setupSharedPollHandlers(node)
-	client := newTestClientV2(t, node, "user1")
-	connectClientV2(t, client)
-	subscribeSharedPollClient(t, client, "test:channel")
-	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
-		{Key: "key1", Version: 0},
-	})
-
-	// Wait for absence to take effect (needs 2 consecutive absences).
-	require.Eventually(t, func() bool {
-		node.sharedPollManager.mu.RLock()
-		s, ok := node.sharedPollManager.channels["test:channel"]
-		node.sharedPollManager.mu.RUnlock()
-		if !ok {
-			return true
-		}
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		entry, exists := s.itemIndex["key1"]
-		if !exists {
-			return true
-		}
-		return entry.consecutiveAbsences >= 1
-	}, 2*time.Second, 10*time.Millisecond)
-}
-
 func TestSharedPollNotify_TriggersRefresh(t *testing.T) {
 	callCh := make(chan SharedPollEvent, 10)
 
@@ -250,7 +213,6 @@ func TestSharedPollNotify_TriggersRefresh(t *testing.T) {
 		RefreshInterval:           10 * time.Second, // Long interval so timer doesn't fire.
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
-		MaxConsecutiveAbsences:    2,
 		NotificationBatchMaxSize:  10,
 		NotificationBatchMaxDelay: 50 * time.Millisecond,
 	})
@@ -305,7 +267,6 @@ func TestSharedPollNotify_BatchBySize(t *testing.T) {
 		RefreshInterval:           10 * time.Second,
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
-		MaxConsecutiveAbsences:    2,
 		NotificationBatchMaxSize:  3,
 		NotificationBatchMaxDelay: 5 * time.Second, // Long delay — batch should fire by size.
 	})
@@ -355,7 +316,6 @@ func TestSharedPollNotify_DeduplicatesKeys(t *testing.T) {
 		RefreshInterval:           10 * time.Second,
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
-		MaxConsecutiveAbsences:    2,
 		NotificationBatchMaxSize:  50,
 		NotificationBatchMaxDelay: 50 * time.Millisecond,
 	})
@@ -418,7 +378,6 @@ func TestSharedPollNotify_FullFlow_DataDelivered(t *testing.T) {
 		RefreshInterval:           30 * time.Second, // Won't fire during test.
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
-		MaxConsecutiveAbsences:    2,
 		NotificationBatchMaxSize:  50,
 		NotificationBatchMaxDelay: 50 * time.Millisecond,
 	})
@@ -478,7 +437,6 @@ func TestSharedPollNotify_FullFlow_TwoClients(t *testing.T) {
 		RefreshInterval:           30 * time.Second,
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
-		MaxConsecutiveAbsences:    2,
 		NotificationBatchMaxSize:  50,
 		NotificationBatchMaxDelay: 50 * time.Millisecond,
 	})
@@ -543,7 +501,6 @@ func TestSharedPollNotify_FullFlow_Removal(t *testing.T) {
 		RefreshInterval:           30 * time.Second,
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
-		MaxConsecutiveAbsences:    2,
 		NotificationBatchMaxSize:  50,
 		NotificationBatchMaxDelay: 50 * time.Millisecond,
 	})
@@ -599,7 +556,6 @@ func TestSharedPollNotify_UntrackedKeyFiltered(t *testing.T) {
 		RefreshInterval:           10 * time.Second,
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
-		MaxConsecutiveAbsences:    2,
 		NotificationBatchMaxSize:  50,
 		NotificationBatchMaxDelay: 50 * time.Millisecond,
 	})
@@ -694,7 +650,6 @@ func TestSharedPollPublish_LocalOnly(t *testing.T) {
 		RefreshInterval:        30 * time.Second, // Won't fire during test.
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		KeepLatestData:         true,
 	})
 
@@ -731,7 +686,6 @@ func TestSharedPollPublish_FreshFromPublish_SkipsTimerPoll(t *testing.T) {
 		RefreshInterval:        200 * time.Millisecond,
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 10, // High to avoid removals.
 		KeepLatestData:         true,
 	})
 
@@ -797,7 +751,6 @@ func TestSharedPollPublish_FreshFromPublish_NotSkippedByNotify(t *testing.T) {
 		RefreshInterval:           30 * time.Second, // Won't fire during test.
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
-		MaxConsecutiveAbsences:    2,
 		KeepLatestData:            true,
 		NotificationBatchMaxSize:  50,
 		NotificationBatchMaxDelay: 50 * time.Millisecond,
@@ -869,7 +822,6 @@ func TestSharedPollPublish_UntrackedKey(t *testing.T) {
 		Mode:                   SharedPollModeVersioned,
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -896,7 +848,6 @@ func TestSharedPollPublish_DeltaWithKeepLatestData(t *testing.T) {
 		RefreshInterval:        30 * time.Second,
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		KeepLatestData:         true,
 	})
 
@@ -953,7 +904,6 @@ func TestSharedPollPublish_MultipleClients(t *testing.T) {
 		RefreshInterval:        30 * time.Second,
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -1005,7 +955,6 @@ func TestSharedPollPublish_BrokerSubscribeOnTrack(t *testing.T) {
 		Mode:                   SharedPollModeVersioned,
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	})
 
@@ -1034,7 +983,6 @@ func TestSharedPollPublish_BrokerUnsubscribeOnShutdown(t *testing.T) {
 		Mode:                   SharedPollModeVersioned,
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	})
 
@@ -1075,7 +1023,6 @@ func TestSharedPollPublish_CrossNode_ViaHandlePublication(t *testing.T) {
 		Mode:                   SharedPollModeVersioned,
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	})
 
@@ -1114,7 +1061,6 @@ func TestSharedPollPublish_VersionIncrementsConsecutive(t *testing.T) {
 		Mode:                   SharedPollModeVersioned,
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -1176,7 +1122,6 @@ func TestSharedPoll_StaleResponseDoesNotOverwriteData(t *testing.T) {
 		RefreshInterval:           30 * time.Second, // Won't fire during test.
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
-		MaxConsecutiveAbsences:    10,
 		KeepLatestData:            true,
 		NotificationBatchMaxSize:  50,
 		NotificationBatchMaxDelay: 50 * time.Millisecond,
@@ -1264,7 +1209,6 @@ func TestSharedPoll_EqualVersionPublishNoOverwrite(t *testing.T) {
 		RefreshInterval:           30 * time.Second,
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
-		MaxConsecutiveAbsences:    10,
 		KeepLatestData:            true,
 		NotificationBatchMaxSize:  50,
 		NotificationBatchMaxDelay: 50 * time.Millisecond,
@@ -1336,7 +1280,6 @@ func TestSharedPoll_VersionlessBasic(t *testing.T) {
 		RefreshInterval:        100 * time.Millisecond,
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 10,
 	})
 
 	callCount := &atomic.Int32{}
@@ -1432,7 +1375,6 @@ func TestSharedPoll_VersionlessUnchangedWithKeepLatestData(t *testing.T) {
 		RefreshInterval:        100 * time.Millisecond,
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 10,
 		KeepLatestData:         true,
 	})
 
@@ -1485,7 +1427,6 @@ func TestSharedPoll_VersionlessPublishRejected(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -1511,7 +1452,6 @@ func TestSharedPoll_VersionlessNoCachedData(t *testing.T) {
 		RefreshInterval:        100 * time.Millisecond,
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 10,
 		KeepLatestData:         true,
 	})
 
@@ -1557,7 +1497,6 @@ func TestSharedPoll_VersionlessNotification(t *testing.T) {
 		RefreshInterval:           30 * time.Second,
 		RefreshBatchSize:          100,
 		MaxKeysPerConnection:      100,
-		MaxConsecutiveAbsences:    10,
 		NotificationBatchMaxSize:  50,
 		NotificationBatchMaxDelay: 50 * time.Millisecond,
 	})
@@ -1643,7 +1582,6 @@ func TestSharedPoll_VersionlessMultipleKeys(t *testing.T) {
 		RefreshInterval:        100 * time.Millisecond,
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 10,
 	})
 
 	callCount := &atomic.Int32{}
@@ -1716,78 +1654,12 @@ func TestSharedPoll_VersionlessMultipleKeys(t *testing.T) {
 	s.mu.Unlock()
 }
 
-func TestSharedPoll_VersionlessAbsenceTracking(t *testing.T) {
-	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
-	})
-
-	returnKey := &atomic.Bool{}
-	returnKey.Store(true)
-
-	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
-		if !returnKey.Load() {
-			return SharedPollResult{}, nil
-		}
-		items := make([]SharedPollRefreshItem, len(event.Items))
-		for i, item := range event.Items {
-			items[i] = SharedPollRefreshItem{
-				Key:  item.Key,
-				Data: []byte(`{"present":true}`),
-			}
-		}
-		return SharedPollResult{Items: items}, nil
-	})
-
-	setupSharedPollHandlers(node)
-	client := newTestClientV2(t, node, "user1")
-	connectClientV2(t, client)
-	subscribeSharedPollClient(t, client, "test:channel")
-	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
-		{Key: "key1", Version: 0},
-	})
-
-	// Wait for initial data.
-	require.Eventually(t, func() bool {
-		node.sharedPollManager.mu.RLock()
-		s := node.sharedPollManager.channels["test:channel"]
-		node.sharedPollManager.mu.RUnlock()
-		if s == nil {
-			return false
-		}
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		entry := s.itemIndex["key1"]
-		return entry != nil && entry.version > 0
-	}, 2*time.Second, 10*time.Millisecond)
-
-	// Stop returning the key.
-	returnKey.Store(false)
-
-	// key1 should be removed after MaxConsecutiveAbsences=2 polls.
-	require.Eventually(t, func() bool {
-		node.sharedPollManager.mu.RLock()
-		s, ok := node.sharedPollManager.channels["test:channel"]
-		node.sharedPollManager.mu.RUnlock()
-		if !ok {
-			return true
-		}
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		_, exists := s.itemIndex["key1"]
-		return !exists
-	}, 2*time.Second, 10*time.Millisecond)
-}
-
 func TestSharedPoll_VersionlessDelta(t *testing.T) {
 	// Versionless + KeepLatestData enables delta compression.
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
 		RefreshInterval:        100 * time.Millisecond,
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 10,
 		KeepLatestData:         true,
 	})
 
@@ -1887,7 +1759,6 @@ func TestSharedPollManager_ConcurrentTrackSingleBrokerSubscribe(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -1925,7 +1796,6 @@ func TestSharedPollManager_BrokerSubscribeFailureCleanup(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -1968,7 +1838,6 @@ func TestSharedPollManager_BrokerSubscribeFailureNoOrphanConcurrent(t *testing.T
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -2019,7 +1888,6 @@ func TestSharedPollManager_BrokerUnsubscribeViaDissolver(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -2065,7 +1933,6 @@ func TestSharedPollManager_BrokerUnsubscribeRetryOnFailure(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -2106,7 +1973,6 @@ func TestSharedPollManager_BrokerUnsubscribeSkipsIfResubscribed(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -2153,7 +2019,6 @@ func TestSharedPollManager_ConcurrentTrackNoPanic(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -2191,7 +2056,6 @@ func TestSharedPollManager_ScheduleShutdownImmediate(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		ChannelShutdownDelay:   0, // immediate
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -2223,7 +2087,6 @@ func TestSharedPollManager_ScheduleShutdownDelayed(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		ChannelShutdownDelay:   100 * time.Millisecond,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -2254,7 +2117,6 @@ func TestSharedPollManager_ShutdownCancelledByRetrack(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		ChannelShutdownDelay:   500 * time.Millisecond,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -2330,7 +2192,6 @@ func TestSharedPollManager_TrackKeys_Basic(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -2374,7 +2235,6 @@ func TestSharedPollManager_TrackKeys_MixedNewAndExisting(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -2404,7 +2264,6 @@ func TestSharedPollManager_TrackKeys_NoPublishEnabled(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         false,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -2425,7 +2284,6 @@ func TestSharedPollManager_TrackKeys_SubscribeFailureCleanup(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -2459,7 +2317,6 @@ func TestSharedPollManager_TrackKeys_SubscribeFailurePartialCleanup(t *testing.T
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -2495,7 +2352,6 @@ func TestSharedPollManager_TrackKeys_DuplicateKeys(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -2527,7 +2383,6 @@ func TestSharedPollManager_TrackKeys_Empty(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
@@ -2556,7 +2411,6 @@ func TestSharedPollManager_TrackKeys_ConcurrentBatch(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		MaxConsecutiveAbsences: 2,
 		PublishEnabled:         true,
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)

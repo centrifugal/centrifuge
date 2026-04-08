@@ -308,9 +308,6 @@ type SharedPollChannelOptions struct {
 	// CallTimeout sets the maximum duration for each OnSharedPoll callback invocation.
 	// Zero value means 30 * time.Second.
 	CallTimeout time.Duration
-	// MaxConsecutiveAbsences sets how many consecutive refresh cycles an item can
-	// be absent from the response before it's treated as removed. Zero means 2.
-	MaxConsecutiveAbsences int
 	// ChannelShutdownDelay is the delay before shutting down a channel
 	// state after the last item is untracked. Zero means no delay (immediate shutdown).
 	ChannelShutdownDelay time.Duration

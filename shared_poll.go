@@ -68,8 +68,7 @@ type sharedPollTrackedEntry struct {
 	version             uint64 // last version from backend (or synthetic in versionless mode)
 	data                []byte // only when KeepLatestData is true
 	dataHash            uint64 // xxhash64 hash of data, only used in versionless mode
-	consecutiveAbsences int    // incremented when item is absent from response
-	freshFromPublish    bool   // set by SharedPollPublish, cleared each timer poll cycle
+	freshFromPublish bool // set by SharedPollPublish, cleared each timer poll cycle
 	needsBroadcast      bool   // set when a version=0 subscriber joins an existing key; cleared after broadcast
 }
 
@@ -791,7 +790,6 @@ func (m *SharedPollManager) handlePublishedData(channel string, key string, vers
 	}
 	entry.version = version
 	entry.freshFromPublish = true
-	entry.consecutiveAbsences = 0
 	var prevData []byte
 	if s.opts.KeepLatestData {
 		prevData = entry.data
@@ -1458,24 +1456,7 @@ func (s *sharedPollChannelState) onRefreshResponse(channel string, queriedKeys [
 
 	isVersionless := s.opts.isVersionless()
 
-	// Track absent items: pre-increment absences for all queried keys.
-	// Responded keys will be reset to 0 during the items loop below.
-	maxAbsences := s.opts.MaxConsecutiveAbsences
-	if maxAbsences <= 0 {
-		maxAbsences = 2
-	}
-	for _, key := range queriedKeys {
-		if entry := s.itemIndex[key]; entry != nil {
-			entry.consecutiveAbsences++
-		}
-	}
-
 	for _, e := range items {
-		// Reset absences for all responded keys (including removed ones).
-		if entry := s.itemIndex[e.Key]; entry != nil {
-			entry.consecutiveAbsences = 0
-		}
-
 		if e.Removed {
 			removals = append(removals, e.Key)
 			continue
@@ -1557,13 +1538,6 @@ func (s *sharedPollChannelState) onRefreshResponse(channel string, queriedKeys [
 		updates = append(updates, pendingUpdate{
 			key: e.Key, version: e.Version, data: e.Data, prevData: prevData,
 		})
-	}
-
-	// Check for absence-based removals.
-	for _, key := range queriedKeys {
-		if entry := s.itemIndex[key]; entry != nil && entry.consecutiveAbsences >= maxAbsences {
-			removals = append(removals, key)
-		}
 	}
 
 	s.mu.Unlock()
