@@ -373,9 +373,7 @@
         });
 
         // Subscribe to inventory channel with map mode.
-        const sub = centrifuge.newMapSubscription('inventory', {
-            limit: 50
-        });
+        const sub = centrifuge.newMapSubscription('inventory');
 
         sub.on('sync', (ctx) => {
             console.log('Synced inventory channel');

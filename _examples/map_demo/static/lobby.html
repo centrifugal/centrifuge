@@ -492,9 +492,7 @@
 
         // Subscribe to games list (map channel)
         // Fetches state in pages, then catches up from stream if needed.
-        const gamesSub = centrifuge.newMapSubscription('games', {
-            limit: 50
-        });
+        const gamesSub = centrifuge.newMapSubscription('games');
 
         gamesSub.on('sync', (ctx) => {
             console.log('Synced games list');
@@ -598,9 +596,7 @@
             if (gameSubscriptions.has(gameId)) return;
 
             const channel = 'game:' + gameId;
-            const sub = centrifuge.newMapSubscription(channel, {
-                limit: 10
-            });
+            const sub = centrifuge.newMapSubscription(channel);
 
             const gameState = {
                 sub: sub,

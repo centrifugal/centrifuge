@@ -604,7 +604,7 @@
         const ws = protocols !== undefined ? new _OrigWS(url, protocols) : new _OrigWS(url);
         window.__wsInterceptor.ws = ws;
 
-        // Intercept send by wrapping the method — supports artificial latency
+        // Intercept send — supports artificial latency on outgoing frames.
         const origSend = ws.send.bind(ws);
         ws.send = function(data) {
             const doSend = () => {
@@ -628,20 +628,36 @@
             }
         };
 
-        // Intercept incoming data via addEventListener — this works alongside
-        // centrifuge-js's ws.onmessage = ... without interfering with it.
-        ws.addEventListener('message', function(event) {
-            if (typeof event.data === 'string' && window.__wsInterceptor.onMessage) {
-                try {
-                    const lines = event.data.trim().split('\n');
-                    for (const line of lines) {
-                        if (line.trim()) {
-                            window.__wsInterceptor.onMessage(JSON.parse(line));
-                        }
+        // Intercept incoming data — delay delivery to centrifuge-js's onmessage
+        // handler by the configured latency to simulate real round-trip delay.
+        let _userOnMessage = null;
+        Object.defineProperty(ws, 'onmessage', {
+            get() { return _userOnMessage; },
+            set(fn) {
+                _userOnMessage = fn;
+                // Real handler on the underlying WS delivers with delay.
+                Object.getOwnPropertyDescriptor(_OrigWS.prototype, 'onmessage').set.call(ws, function(event) {
+                    // Log interceptor (always immediate).
+                    if (typeof event.data === 'string' && window.__wsInterceptor.onMessage) {
+                        try {
+                            const lines = event.data.trim().split('\n');
+                            for (const line of lines) {
+                                if (line.trim()) {
+                                    window.__wsInterceptor.onMessage(JSON.parse(line));
+                                }
+                            }
+                        } catch(e) { /* binary or unparseable */ }
                     }
-                } catch(e) { /* binary or unparseable */ }
+                    const delay = window.__wsInterceptor.latency || 0;
+                    if (delay > 0 && _userOnMessage) {
+                        setTimeout(() => _userOnMessage(event), delay);
+                    } else if (_userOnMessage) {
+                        _userOnMessage(event);
+                    }
+                });
             }
         });
+
         ws.addEventListener('open', function(e) {
             if (window.__wsInterceptor.onOpen) window.__wsInterceptor.onOpen(e);
         });
@@ -1000,7 +1016,7 @@ window.__wsInterceptor.onClose = function(e) {
 // ─── Client lifecycle ───
 // Creates a brand-new Centrifuge client + subscription (no stale state).
 function createClient(opts) {
-    const limit = (opts && opts.limit) || pageSize;
+    const limit = (opts && opts.pageSize) || pageSize;
 
     // Tear down previous client completely.
     if (centrifuge) {
@@ -1032,7 +1048,7 @@ function createClient(opts) {
     });
 
     sub = centrifuge.newMapSubscription('visualizer', {
-        limit: limit,
+        pageSize: limit,
         unrecoverableStrategy: 'from_scratch'
     });
 
@@ -1165,7 +1181,7 @@ function doRecreate() {
     updateInfoPanel();
 
     sub = centrifuge.newMapSubscription('visualizer', {
-        limit: pageSize,
+        pageSize: pageSize,
         unrecoverableStrategy: 'from_scratch'
     });
     sub.on('subscribed', onSubscribed);
@@ -1276,7 +1292,7 @@ async function scenarioPaginatedJoin() {
     await sleep(300);
 
     addStep('Creating new client with limit=10 (expect: ~5 STATE pages, then LIVE)', 'client');
-    createClient({ limit: 10 });
+    createClient({ pageSize: 10 });
     await waitSubscribed(8000);
 }
 

@@ -277,7 +277,7 @@
         let currentSector = '';
 
         // Create a single map subscription — use setTagsFilter + resubscribe to change filter.
-        const sub = centrifuge.newMapSubscription('tickers', { limit: 50 });
+        const sub = centrifuge.newMapSubscription('tickers');
 
         sub.on('sync', (ctx) => {
             console.log('Synced tickers channel, sector:', currentSector || 'all');
