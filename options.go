@@ -2,6 +2,8 @@ package centrifuge
 
 import (
 	"time"
+
+	"github.com/centrifugal/protocol"
 )
 
 // PublishOption is a type to represent various Publish options.
@@ -128,6 +130,10 @@ func (t SubscriptionType) String() string {
 	}
 }
 
+// FilterNode is a filter expression tree for matching against key-value tags.
+// Used for server-side publication filtering (ServerTagsFilter in SubscribeOptions).
+type FilterNode = protocol.FilterNode
+
 // SubscribeOptions define per-subscription options.
 type SubscribeOptions struct {
 	// clientID to subscribe.
@@ -194,6 +200,12 @@ type SubscribeOptions struct {
 	// Important note here, since channel permissions are managed on channel level, tags filtering
 	// must be used as a bandwidth optimization, not an access control mechanism.
 	AllowTagsFilter bool
+	// ServerTagsFilter is a server-controlled tags filter applied to publications before delivery.
+	// Unlike AllowTagsFilter (which enables client-side filtering), this filter is set by the server
+	// (via subscribe proxy or JWT) and cannot be overridden by the client. When both server and
+	// client filters are set, they are applied independently (AND semantics). ServerTagsFilter
+	// can not be used together with Delta Compression in subscription.
+	ServerTagsFilter *FilterNode
 
 	// Type defines the subscription type. Use SubscriptionTypeMap for map subscriptions.
 	// For regular subscriptions this can be left as zero value (SubscriptionTypeStream).

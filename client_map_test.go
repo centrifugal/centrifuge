@@ -66,6 +66,19 @@ func subscribeMapClient(t testing.TB, client *Client, req *protocol.SubscribeReq
 	return rwWrapper.replies[0].Subscribe
 }
 
+// drainSink reads all available messages from a transport sink channel.
+func drainSink(sink chan []byte) [][]byte {
+	var messages [][]byte
+	for {
+		select {
+		case msg := <-sink:
+			messages = append(messages, msg)
+		default:
+			return messages
+		}
+	}
+}
+
 // subscribeMapClientExpectError performs a keyed subscribe request expecting an error.
 func subscribeMapClientExpectError(t testing.TB, client *Client, req *protocol.SubscribeRequest) *protocol.Error {
 	rwWrapper := testReplyWriterWrapper()
@@ -4498,4 +4511,268 @@ func TestExternalState_DeltaRejected(t *testing.T) {
 	require.False(t, result.Delta, "delta should not be negotiated for ExternalState")
 	require.Len(t, result.Publications, 3)
 	require.Contains(t, client.channels, channel)
+}
+
+func TestMapSubscribe_ServerTagsFilter_StatePhase(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_server_tags_state"
+	ctx := context.Background()
+
+	// Publish entries with different tags.
+	_, err := broker.Publish(ctx, channel, "admin_item", MapPublishOptions{
+		Data: []byte(`{"v":"admin"}`),
+		Tags: map[string]string{"role": "admin"},
+	})
+	require.NoError(t, err)
+	_, err = broker.Publish(ctx, channel, "viewer_item", MapPublishOptions{
+		Data: []byte(`{"v":"viewer"}`),
+		Tags: map[string]string{"role": "viewer"},
+	})
+	require.NoError(t, err)
+	_, err = broker.Publish(ctx, channel, "no_tags_item", MapPublishOptions{
+		Data: []byte(`{"v":"notags"}`),
+	})
+	require.NoError(t, err)
+
+	// Subscribe with ServerTagsFilter = role:admin.
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+					ServerTagsFilter: &FilterNode{
+						Key: "role", Cmp: "eq", Val: "admin",
+					},
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+
+	// Only the admin_item should be in state — viewer and no_tags filtered out.
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.Len(t, result.State, 1)
+	require.Equal(t, "admin_item", result.State[0].Key)
+}
+
+func TestMapSubscribe_ServerTagsFilter_LiveDelivery(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_server_tags_live"
+	ctx := context.Background()
+
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{Credentials: &Credentials{UserID: "user1"}}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+					ServerTagsFilter: &FilterNode{
+						Key: "team", Cmp: "eq", Val: "eng",
+					},
+				},
+			}, nil)
+		})
+	})
+
+	transport := newTestTransport(func() {})
+	transport.sink = make(chan []byte, 100)
+	transport.setProtocolVersion(ProtocolVersion2)
+	newCtx := SetCredentials(context.Background(), &Credentials{UserID: "user1"})
+	client, _ := newClient(newCtx, node, transport)
+	connectClientV2(t, client)
+
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+	require.Equal(t, MapPhaseLive, result.Phase)
+
+	// Drain subscribe reply from sink.
+	drainSink(transport.sink)
+
+	// Publish matching entry.
+	_, err := broker.Publish(ctx, channel, "eng_item", MapPublishOptions{
+		Data: []byte(`{"v":"eng"}`),
+		Tags: map[string]string{"team": "eng"},
+	})
+	require.NoError(t, err)
+
+	// Publish non-matching entry.
+	_, err = broker.Publish(ctx, channel, "sales_item", MapPublishOptions{
+		Data: []byte(`{"v":"sales"}`),
+		Tags: map[string]string{"team": "sales"},
+	})
+	require.NoError(t, err)
+
+	// Wait for delivery.
+	time.Sleep(50 * time.Millisecond)
+
+	// Check what was delivered — only eng_item should arrive.
+	messages := drainSink(transport.sink)
+	engFound := false
+	salesFound := false
+	for _, msg := range messages {
+		s := string(msg)
+		if strings.Contains(s, "eng_item") {
+			engFound = true
+		}
+		if strings.Contains(s, "sales_item") {
+			salesFound = true
+		}
+	}
+	require.True(t, engFound, "eng_item should be delivered")
+	require.False(t, salesFound, "sales_item should be filtered out")
+}
+
+func TestMapSubscribe_ServerAndClientTagsFilter_AND(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_both_filters"
+	ctx := context.Background()
+
+	// Publish entries with multiple tags.
+	_, err := broker.Publish(ctx, channel, "eng_admin", MapPublishOptions{
+		Data: []byte(`{"v":"eng_admin"}`),
+		Tags: map[string]string{"team": "eng", "role": "admin"},
+	})
+	require.NoError(t, err)
+	_, err = broker.Publish(ctx, channel, "eng_viewer", MapPublishOptions{
+		Data: []byte(`{"v":"eng_viewer"}`),
+		Tags: map[string]string{"team": "eng", "role": "viewer"},
+	})
+	require.NoError(t, err)
+	_, err = broker.Publish(ctx, channel, "sales_admin", MapPublishOptions{
+		Data: []byte(`{"v":"sales_admin"}`),
+		Tags: map[string]string{"team": "sales", "role": "admin"},
+	})
+	require.NoError(t, err)
+
+	// Server filter: team=eng (security boundary).
+	// Client filter: role=admin (bandwidth optimization).
+	// AND semantics: only eng_admin should pass.
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:             SubscriptionTypeMap,
+					AllowTagsFilter:  true,
+					ServerTagsFilter: &FilterNode{
+						Key: "team", Cmp: "eq", Val: "eng",
+					},
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+		Tf: &protocol.FilterNode{
+			Key: "role", Cmp: "eq", Val: "admin",
+		},
+	})
+
+	// Only eng_admin passes both filters.
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.Len(t, result.State, 1)
+	require.Equal(t, "eng_admin", result.State[0].Key)
+}
+
+func TestMapSubscribe_ServerTagsFilter_RemovalFiltering(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_server_tags_removal"
+	ctx := context.Background()
+
+	// Publish entries with different tags.
+	_, err := broker.Publish(ctx, channel, "eng_item", MapPublishOptions{
+		Data: []byte(`{"v":"eng"}`),
+		Tags: map[string]string{"team": "eng"},
+	})
+	require.NoError(t, err)
+	_, err = broker.Publish(ctx, channel, "sales_item", MapPublishOptions{
+		Data: []byte(`{"v":"sales"}`),
+		Tags: map[string]string{"team": "sales"},
+	})
+	require.NoError(t, err)
+
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{Credentials: &Credentials{UserID: "user1"}}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type: SubscriptionTypeMap,
+					ServerTagsFilter: &FilterNode{
+						Key: "team", Cmp: "eq", Val: "eng",
+					},
+				},
+			}, nil)
+		})
+	})
+
+	transport := newTestTransport(func() {})
+	transport.sink = make(chan []byte, 100)
+	transport.setProtocolVersion(ProtocolVersion2)
+	newCtx := SetCredentials(context.Background(), &Credentials{UserID: "user1"})
+	client, _ := newClient(newCtx, node, transport)
+	connectClientV2(t, client)
+
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.Len(t, result.State, 1) // Only eng_item.
+
+	drainSink(transport.sink)
+
+	// Remove eng_item (tags from state auto-populated on memory broker).
+	_, err = broker.Remove(ctx, channel, "eng_item", MapRemoveOptions{})
+	require.NoError(t, err)
+
+	// Remove sales_item.
+	_, err = broker.Remove(ctx, channel, "sales_item", MapRemoveOptions{})
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Subscriber should receive removal for eng_item but NOT for sales_item.
+	messages := drainSink(transport.sink)
+	engRemoval := false
+	salesRemoval := false
+	for _, msg := range messages {
+		s := string(msg)
+		if strings.Contains(s, "eng_item") {
+			engRemoval = true
+		}
+		if strings.Contains(s, "sales_item") {
+			salesRemoval = true
+		}
+	}
+	require.True(t, engRemoval, "eng_item removal should be delivered")
+	require.False(t, salesRemoval, "sales_item removal should be filtered out")
 }

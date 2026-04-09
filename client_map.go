@@ -159,7 +159,8 @@ type mapSubscribeState struct {
 	streamStartCaptured bool             // True after streamStart is captured (since 0 is valid offset)
 	isPresence          bool             // True if this is a presence subscription
 	subscribingCh       chan struct{}    // Closed when subscription completes (for race handling)
-	tagsFilter          *tagsFilter      // Tags filter for state/stream publications
+	tagsFilter          *tagsFilter      // Client tags filter for state/stream publications
+	serverTagsFilter    *tagsFilter      // Server tags filter for state/stream publications
 }
 
 // handleMapSubscribeCommand handles the full map subscribe command flow:
@@ -333,12 +334,20 @@ func (c *Client) handleMapStatePhase(
 		if c.mapSubscribing == nil {
 			c.mapSubscribing = make(map[string]*mapSubscribeState)
 		}
+		var stf *tagsFilter
+		if reply.Options.ServerTagsFilter != nil {
+			stf = &tagsFilter{
+				filter: reply.Options.ServerTagsFilter,
+				hash:   filter.Hash(reply.Options.ServerTagsFilter),
+			}
+		}
 		c.mapSubscribing[channel] = &mapSubscribeState{
-			options:       reply.Options,
-			startedAt:     time.Now().UnixNano(),
-			isPresence:    reply.Options.Type.IsMapPresence(),
-			subscribingCh: make(chan struct{}),
-			tagsFilter:    tf,
+			options:          reply.Options,
+			startedAt:        time.Now().UnixNano(),
+			isPresence:       reply.Options.Type.IsMapPresence(),
+			subscribingCh:    make(chan struct{}),
+			tagsFilter:       tf,
+			serverTagsFilter: stf,
 		}
 		c.mu.Unlock()
 	} else {
@@ -423,7 +432,18 @@ func (c *Client) handleMapStatePhase(
 		pubs = filteredPubs
 	}
 
-	// Apply tags filter to state publications.
+	// Apply server tags filter to state publications.
+	if state != nil && state.serverTagsFilter != nil {
+		filteredPubs := make([]*Publication, 0, len(pubs))
+		for _, pub := range pubs {
+			match, _ := filter.Match(state.serverTagsFilter.filter, pub.Tags)
+			if match {
+				filteredPubs = append(filteredPubs, pub)
+			}
+		}
+		pubs = filteredPubs
+	}
+	// Apply client tags filter to state publications.
 	if state != nil && state.tagsFilter != nil {
 		filteredPubs := make([]*Publication, 0, len(pubs))
 		for _, pub := range pubs {
@@ -503,12 +523,13 @@ func (c *Client) handleMapStatePhase(
 // protocol (buffer -> subscribe -> stream-read -> merge -> respond -> finalize)
 // is implemented once in handleMapTransitionToLive.
 type mapTransitionToLiveParams struct {
-	sincePosition       StreamPosition // Stream position to read from
-	statePubs           []*Publication // State publications for the response (nil when not applicable)
-	allowStreamless     bool           // Whether streamless mode is allowed
-	isRecovery          bool           // Whether this is a recovery (sets WasRecovering/Recovered)
-	tagsFilterFromState *tagsFilter    // Inherited tags filter from prior phase
-	metricsAction       string         // Metrics action string
+	sincePosition             StreamPosition // Stream position to read from
+	statePubs                 []*Publication // State publications for the response (nil when not applicable)
+	allowStreamless           bool           // Whether streamless mode is allowed
+	isRecovery                bool           // Whether this is a recovery (sets WasRecovering/Recovered)
+	tagsFilterFromState       *tagsFilter    // Inherited client tags filter from prior phase
+	serverTagsFilterFromState *tagsFilter    // Inherited server tags filter from prior phase
+	metricsAction             string         // Metrics action string
 }
 
 // handleMapTransitionToLive implements the shared buffer-subscribe-read-merge protocol
@@ -541,6 +562,10 @@ func (c *Client) handleMapTransitionToLive(
 	} else if params.tagsFilterFromState != nil {
 		// Use tags filter from prior phase if not provided in this request.
 		sub.tagsFilter = params.tagsFilterFromState
+	}
+	// Server tags filter is always inherited from the state set at subscribe time.
+	if params.serverTagsFilterFromState != nil {
+		sub.serverTagsFilter = params.serverTagsFilterFromState
 	}
 
 	// Negotiate delta type if requested.
@@ -683,7 +708,18 @@ func (c *Client) handleMapTransitionToLive(
 			}
 		}
 
-		// Apply tags filter to stream publications (after offset calculation).
+		// Apply server tags filter to stream publications (after offset calculation).
+		if sub.serverTagsFilter != nil {
+			filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
+			for _, pub := range recoveredPubs {
+				match, _ := filter.Match(sub.serverTagsFilter.filter, pub.Tags)
+				if match {
+					filteredPubs = append(filteredPubs, pub)
+				}
+			}
+			recoveredPubs = filteredPubs
+		}
+		// Apply client tags filter to stream publications.
 		if sub.tagsFilter != nil {
 			filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
 			for _, pub := range recoveredPubs {
@@ -823,12 +859,13 @@ func (c *Client) handleMapStateToLive(
 	statePos StreamPosition,
 ) error {
 	return c.handleMapTransitionToLive(req, reply, state.options, state.isPresence, cmd, started, rw, mapTransitionToLiveParams{
-		sincePosition:       statePos,
-		statePubs:           statePubs,
-		allowStreamless:     true,
-		isRecovery:          false,
-		tagsFilterFromState: state.tagsFilter,
-		metricsAction:       "map_subscribe_state_to_live",
+		sincePosition:             statePos,
+		statePubs:                 statePubs,
+		allowStreamless:           true,
+		isRecovery:                false,
+		tagsFilterFromState:       state.tagsFilter,
+		serverTagsFilterFromState: state.serverTagsFilter,
+		metricsAction:             "map_subscribe_state_to_live",
 	})
 }
 
@@ -876,6 +913,12 @@ func (c *Client) handleMapStreamPhase(
 			return err
 		}
 		state.tagsFilter = tf
+		if reply.Options.ServerTagsFilter != nil {
+			state.serverTagsFilter = &tagsFilter{
+				filter: reply.Options.ServerTagsFilter,
+				hash:   filter.Hash(reply.Options.ServerTagsFilter),
+			}
+		}
 		c.mu.Lock()
 		if c.mapSubscribing == nil {
 			c.mapSubscribing = make(map[string]*mapSubscribeState)
@@ -1032,12 +1075,13 @@ func (c *Client) handleMapStreamToLive(
 	rw *replyWriter,
 ) error {
 	return c.handleMapTransitionToLive(req, reply, state.options, state.isPresence, cmd, started, rw, mapTransitionToLiveParams{
-		sincePosition:       StreamPosition{Offset: req.Offset, Epoch: req.Epoch},
-		statePubs:           nil,
-		allowStreamless:     false,
-		isRecovery:          true,
-		tagsFilterFromState: state.tagsFilter,
-		metricsAction:       "map_subscribe_stream_to_live",
+		sincePosition:             StreamPosition{Offset: req.Offset, Epoch: req.Epoch},
+		statePubs:                 nil,
+		allowStreamless:           false,
+		isRecovery:                true,
+		tagsFilterFromState:       state.tagsFilter,
+		serverTagsFilterFromState: state.serverTagsFilter,
+		metricsAction:             "map_subscribe_stream_to_live",
 	})
 }
 
@@ -1060,6 +1104,7 @@ func (c *Client) handleMapLivePhase(
 	var opts SubscribeOptions
 	var isPresence bool
 	var tagsFilterFromState *tagsFilter
+	var serverTagsFilterFromState *tagsFilter
 	c.mu.RLock()
 	state, hasState := c.mapSubscribing[channel]
 	c.mu.RUnlock()
@@ -1068,6 +1113,7 @@ func (c *Client) handleMapLivePhase(
 		opts = state.options
 		isPresence = state.isPresence
 		tagsFilterFromState = state.tagsFilter
+		serverTagsFilterFromState = state.serverTagsFilter
 		// Validate epoch if client provided one.
 		if req.Epoch != "" && state.epoch != "" && req.Epoch != state.epoch {
 			c.cleanupMapSubscribing(channel)
@@ -1079,7 +1125,7 @@ func (c *Client) handleMapLivePhase(
 	}
 
 	// Recovery or paginated join - stream catch-up needed.
-	return c.handleMapRecoveryJoin(req, reply, opts, isPresence, tagsFilterFromState, cmd, started, rw)
+	return c.handleMapRecoveryJoin(req, reply, opts, isPresence, tagsFilterFromState, serverTagsFilterFromState, cmd, started, rw)
 }
 
 // handleMapRecoveryJoin handles recovery or paginated join (stream catch-up only).
@@ -1089,17 +1135,19 @@ func (c *Client) handleMapRecoveryJoin(
 	opts SubscribeOptions,
 	isPresence bool,
 	tagsFilterFromState *tagsFilter,
+	serverTagsFilterFromState *tagsFilter,
 	cmd *protocol.Command,
 	started time.Time,
 	rw *replyWriter,
 ) error {
 	return c.handleMapTransitionToLive(req, reply, opts, isPresence, cmd, started, rw, mapTransitionToLiveParams{
-		sincePosition:       StreamPosition{Offset: req.Offset, Epoch: req.Epoch},
-		statePubs:           nil,
-		allowStreamless:     false,
-		isRecovery:          true,
-		tagsFilterFromState: tagsFilterFromState,
-		metricsAction:       "map_subscribe_recovery_join",
+		sincePosition:             StreamPosition{Offset: req.Offset, Epoch: req.Epoch},
+		statePubs:                 nil,
+		allowStreamless:           false,
+		isRecovery:                true,
+		tagsFilterFromState:       tagsFilterFromState,
+		serverTagsFilterFromState: serverTagsFilterFromState,
+		metricsAction:             "map_subscribe_recovery_join",
 	})
 }
 

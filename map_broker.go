@@ -227,6 +227,12 @@ type MapRemoveOptions struct {
 	// If set, remove only succeeds if the key's current position (offset+epoch) matches.
 	// Returns Suppressed=true with SuppressReasonPositionMismatch on mismatch.
 	ExpectedPosition *StreamPosition
+
+	// Tags to include in the removal publication. When not set, tags are automatically
+	// read from the existing state entry (if available). For external state mode where
+	// the broker has no state table, tags must be provided explicitly for server-side
+	// tags filtering to work correctly.
+	Tags map[string]string
 }
 
 // StreamFilter controls which publications are returned from ReadStream.

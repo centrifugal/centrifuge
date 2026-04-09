@@ -1073,6 +1073,131 @@ func TestRedisMapBroker_CleanupGeneratesRemovalEvents(t *testing.T) {
 	require.Equal(t, 0, stats.NumKeys, "Stats should show 0 keys")
 }
 
+func TestRedisMapBroker_CleanupPreservesTags(t *testing.T) {
+	node, _ := New(Config{
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeDurable,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    3600 * time.Second,
+					KeyTTL:     30 * time.Second,
+				}
+			},
+		},
+	})
+
+	redisConf := testMapBrokerRedisShardConf()
+	shard, err := NewRedisShard(node, redisConf)
+	require.NoError(t, err)
+	brokerConf := testMapBrokerRedisConf()
+	brokerConf.Shards = []*RedisShard{shard}
+	brokerConf.CleanupBatchSize = 100
+	broker, err := NewRedisMapBroker(node, brokerConf)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+	})
+
+	ctx := context.Background()
+	channel := randomChannel("test_cleanup_tags")
+
+	// Publish entries with tags.
+	_, err = broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"v":1}`),
+		Tags: map[string]string{"role": "admin", "team": "platform"},
+	})
+	require.NoError(t, err)
+
+	_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{
+		Data: []byte(`{"v":2}`),
+		Tags: map[string]string{"role": "viewer"},
+	})
+	require.NoError(t, err)
+
+	// Simulate TTL expiry.
+	shardWrapper := broker.shards[0]
+	cleanupKey := broker.cleanupRegistrationKeyForChannel(shardWrapper.shard, channel)
+	futureNow := time.Now().UnixMilli() + 31_000
+
+	err = broker.cleanupChannel(ctx, shardWrapper.shard, channel, cleanupKey, futureNow)
+	require.NoError(t, err)
+
+	// Read stream — removal events should carry the original tags.
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+
+	tagsByKey := map[string]map[string]string{}
+	for _, pub := range streamResult.Publications {
+		if pub.Removed {
+			tagsByKey[pub.Key] = pub.Tags
+		}
+	}
+	require.Len(t, tagsByKey, 2)
+	require.Equal(t, map[string]string{"role": "admin", "team": "platform"}, tagsByKey["key1"])
+	require.Equal(t, map[string]string{"role": "viewer"}, tagsByKey["key2"])
+}
+
+func TestRedisMapBroker_RemovePreservesTags(t *testing.T) {
+	node, _ := New(Config{
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModePersistent,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    3600 * time.Second,
+				}
+			},
+		},
+	})
+
+	redisConf := testMapBrokerRedisShardConf()
+	shard, err := NewRedisShard(node, redisConf)
+	require.NoError(t, err)
+	brokerConf := testMapBrokerRedisConf()
+	brokerConf.Shards = []*RedisShard{shard}
+	broker, err := NewRedisMapBroker(node, brokerConf)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+	})
+
+	ctx := context.Background()
+	channel := randomChannel("test_remove_tags")
+
+	// Publish with tags.
+	_, err = broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"v":1}`),
+		Tags: map[string]string{"role": "admin"},
+	})
+	require.NoError(t, err)
+
+	// Remove with explicit tags.
+	_, err = broker.Remove(ctx, channel, "key1", MapRemoveOptions{
+		Tags: map[string]string{"role": "admin"},
+	})
+	require.NoError(t, err)
+
+	// Read stream — removal should have the tags.
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+
+	var removal *Publication
+	for _, pub := range streamResult.Publications {
+		if pub.Removed {
+			removal = pub
+		}
+	}
+	require.NotNil(t, removal)
+	require.Equal(t, map[string]string{"role": "admin"}, removal.Tags)
+}
+
 // TestRedisMapBroker_CleanupExpiry verifies that cleanup removes expired entries
 // and publishes removal events to the stream. Uses two channels with different
 // TTLs to verify that only expired channel entries are cleaned up.
@@ -1734,7 +1859,7 @@ func TestRedisMapBroker_OrderedStateFullPagination(t *testing.T) {
 	}
 
 	// Paginate through all entries using cursor
-	allKeys := []string{}
+	var allKeys []string
 	cursor := ""
 	iterations := 0
 

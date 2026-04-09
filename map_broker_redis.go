@@ -32,8 +32,10 @@ var (
 	brokerStateReadMetaScriptSource string
 	//go:embed internal/redis_lua/map_broker_stats.lua
 	brokerStateStatsScriptSource string
-	//go:embed internal/redis_lua/map_broker_cleanup.lua
-	brokerStateCleanupScriptSource string
+	//go:embed internal/redis_lua/map_broker_find_expired.lua
+	brokerStateFindExpiredScriptSource string
+	//go:embed internal/redis_lua/map_broker_batch_remove.lua
+	brokerStateBatchRemoveScriptSource string
 )
 
 type brokerShardWrapper struct {
@@ -96,7 +98,8 @@ type RedisMapBroker struct {
 	readStreamScript    *rueidis.Lua
 	readMetaScript      *rueidis.Lua
 	presenceStatsScript *rueidis.Lua
-	cleanupScript       *rueidis.Lua
+	findExpiredScript   *rueidis.Lua
+	batchRemoveScript   *rueidis.Lua
 
 	closeCh       chan struct{}
 	closeOnce     sync.Once
@@ -227,8 +230,12 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 			brokerStateStatsScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
 		),
-		cleanupScript: rueidis.NewLuaScript(
-			brokerStateCleanupScriptSource,
+		findExpiredScript: rueidis.NewLuaScript(
+			brokerStateFindExpiredScriptSource,
+			rueidis.WithLoadSHA1(conf.LoadSHA1),
+		),
+		batchRemoveScript: rueidis.NewLuaScript(
+			brokerStateBatchRemoveScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
 		),
 		closeCh: make(chan struct{}),
@@ -815,11 +822,13 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 
 	now := time.Now().UnixMilli()
 
-	// Create a Publication with key and removed=true to signal removal
+	// Create a Publication with key and removed=true to signal removal.
+	// Include opts.Tags so server-side tags filtering can route the removal correctly.
 	protoPub := &protocol.Publication{
 		Key:     key,
 		Removed: true,
 		Time:    now,
+		Tags:    opts.Tags,
 	}
 	pubBytes, err := protoPub.MarshalVT()
 	if err != nil {
@@ -2592,8 +2601,116 @@ func (e *RedisMapBroker) getChannelsForCleanup(ctx context.Context, client rueid
 	return result, nil
 }
 
-// cleanupChannel runs the cleanup script for a single channel.
+// cleanupChannel runs the 2-phase cleanup for a single channel:
+// Phase 1: find expired keys and read their state values (read-only Lua)
+// Phase 2: construct removal protobufs in Go (with tags), then batch-remove atomically (Lua)
 func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, ch string, cleanupKey string, now int64) error {
+	// Get channel options for this channel.
+	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
+	if err != nil {
+		return err
+	}
+
+	// Phase 1: find expired keys and read their state values.
+	expiredEntries, err := e.findExpiredKeys(ctx, shard, ch, now)
+	if err != nil {
+		return err
+	}
+	if len(expiredEntries) == 0 {
+		return nil
+	}
+
+	// Phase 2: construct removal protobufs in Go (with tags from state), then batch-remove.
+	removals := make([]cleanupRemovalEntry, 0, len(expiredEntries))
+	for _, entry := range expiredEntries {
+		// Extract tags from the stored publication protobuf.
+		var tags map[string]string
+		if len(entry.stateValue) > 0 {
+			_, _, payload, parseErr := parseStateValue(entry.stateValue)
+			if parseErr == nil && len(payload) > 0 {
+				var pub protocol.Publication
+				if unmarshalErr := pub.UnmarshalVT(payload); unmarshalErr == nil {
+					tags = pub.Tags
+				}
+			}
+		}
+
+		// Construct removal protobuf with tags.
+		removePub := &protocol.Publication{
+			Key:     entry.key,
+			Removed: true,
+			Time:    now,
+			Tags:    tags,
+		}
+		pubBytes, marshalErr := removePub.MarshalVT()
+		if marshalErr != nil {
+			continue
+		}
+		removals = append(removals, cleanupRemovalEntry{
+			key:         entry.key,
+			payload:     pubBytes,
+			expireScore: entry.expireScore,
+		})
+	}
+
+	if len(removals) == 0 {
+		return nil
+	}
+
+	return e.batchRemoveExpired(ctx, shard, ch, cleanupKey, chOpts, removals)
+}
+
+// expiredKeyEntry holds data returned from the find-expired Lua script.
+type expiredKeyEntry struct {
+	key         string
+	stateValue  []byte
+	expireScore string
+}
+
+// cleanupRemovalEntry holds a pre-constructed removal protobuf for the batch-remove script.
+type cleanupRemovalEntry struct {
+	key         string
+	payload     []byte
+	expireScore string
+}
+
+// findExpiredKeys runs the read-only Lua script to find expired keys and their state values.
+func (e *RedisMapBroker) findExpiredKeys(ctx context.Context, shard *RedisShard, ch string, now int64) ([]expiredKeyEntry, error) {
+	result, err := e.findExpiredScript.Exec(ctx, shard.client,
+		[]string{
+			e.stateHashKey(shard, ch),   // KEYS[1]: state hash key
+			e.stateExpireKey(shard, ch), // KEYS[2]: state expire zset key
+		},
+		[]string{
+			strconv.FormatInt(now, 10),            // ARGV[1]: now
+			strconv.Itoa(e.conf.CleanupBatchSize), // ARGV[2]: batch_size
+		},
+	).ToArray()
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse triplets: (key, state_value, expire_score)
+	if len(result) < 3 {
+		return nil, nil
+	}
+	entries := make([]expiredKeyEntry, 0, len(result)/3)
+	for i := 0; i+2 < len(result); i += 3 {
+		key, _ := result[i].ToString()
+		stateVal, _ := result[i+1].ToString()
+		expireScore, _ := result[i+2].ToString()
+		entries = append(entries, expiredKeyEntry{
+			key:         key,
+			stateValue:  []byte(stateVal),
+			expireScore: expireScore,
+		})
+	}
+	return entries, nil
+}
+
+// batchRemoveExpired runs the batch-remove Lua script to atomically delete expired entries,
+// write removal events to stream, and publish via PUB/SUB.
+func (e *RedisMapBroker) batchRemoveExpired(ctx context.Context, shard *RedisShard, ch string, cleanupKey string, chOpts MapChannelOptions, removals []cleanupRemovalEntry) error {
 	// Determine publish command
 	publishCommand := ""
 	chID := ""
@@ -2606,51 +2723,48 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 		chID = e.messageChannelID(shard, ch)
 	}
 
-	// Get channel options for this channel.
-	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
-	if err != nil {
-		return err
-	}
-
 	metaExpire := "0"
 	if chOpts.MetaTTL > 0 {
 		metaExpire = millis(chOpts.MetaTTL)
 	}
 
-	// Determine streamless mode — all KEYS are always real (slot-aligned) keys,
-	// and the Lua script uses the streamless flag to skip stream/meta operations.
 	streamlessFlag := "0"
 	if chOpts.Mode.IsEphemeral() {
 		streamlessFlag = "1"
 	}
 
-	result, err := e.cleanupScript.Exec(ctx, shard.client,
+	// Build ARGV: fixed args + triplets per entry
+	argv := make([]string, 0, 9+len(removals)*3)
+	argv = append(argv,
+		strconv.Itoa(len(removals)),   // ARGV[1]: num_entries
+		chID,                          // ARGV[2]: channel
+		publishCommand,                // ARGV[3]: publish_command
+		strconv.Itoa(chOpts.StreamSize), // ARGV[4]: stream_size
+		millis(chOpts.StreamTTL),      // ARGV[5]: stream_ttl
+		metaExpire,                    // ARGV[6]: meta_expire
+		e.node.ID(),                   // ARGV[7]: new_epoch_if_empty
+		ch,                            // ARGV[8]: channel_for_cleanup
+		streamlessFlag,                // ARGV[9]: streamless
+	)
+	for _, r := range removals {
+		argv = append(argv, r.key, convert.BytesToString(r.payload), r.expireScore)
+	}
+
+	result, err := e.batchRemoveScript.Exec(ctx, shard.client,
 		[]string{
-			e.stateHashKey(shard, ch),   // KEYS[1]: state hash key
-			e.stateExpireKey(shard, ch), // KEYS[2]: state expire zset key
-			e.streamKey(shard, ch),      // KEYS[3]: stream key
-			e.metaKey(shard, ch),        // KEYS[4]: stream meta key
-			cleanupKey,                  // KEYS[5]: cleanup registration zset key
-			e.stateOrderKey(shard, ch),  // KEYS[6]: state order zset key
-			e.stateMetaKey(shard, ch),   // KEYS[7]: state meta key (for per-key version cleanup)
+			e.stateHashKey(shard, ch),   // KEYS[1]
+			e.stateExpireKey(shard, ch), // KEYS[2]
+			e.streamKey(shard, ch),      // KEYS[3]
+			e.metaKey(shard, ch),        // KEYS[4]
+			cleanupKey,                  // KEYS[5]
+			e.stateOrderKey(shard, ch),  // KEYS[6]
+			e.stateMetaKey(shard, ch),   // KEYS[7]
 		},
-		[]string{
-			strconv.FormatInt(now, 10),            // ARGV[1]: now
-			strconv.Itoa(e.conf.CleanupBatchSize), // ARGV[2]: batch_size
-			chID,                                  // ARGV[3]: channel (for PUBLISH)
-			publishCommand,                        // ARGV[4]: publish_command
-			strconv.Itoa(chOpts.StreamSize),       // ARGV[5]: stream_size
-			millis(chOpts.StreamTTL),              // ARGV[6]: stream_ttl
-			metaExpire,                            // ARGV[7]: meta_expire
-			e.node.ID(),                           // ARGV[8]: new_epoch_if_empty
-			ch,                                    // ARGV[9]: channel_for_cleanup
-			streamlessFlag,                        // ARGV[10]: streamless ("1" = skip stream/meta, "0" = normal)
-		},
+		argv,
 	).ToArray()
 	if err != nil {
 		return err
 	}
-	// Parse removed_count from Lua result (first element).
 	if len(result) > 0 {
 		if removedCount, parseErr := result[0].AsInt64(); parseErr == nil && removedCount > 0 {
 			if e.node.metrics != nil {

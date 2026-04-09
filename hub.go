@@ -547,11 +547,12 @@ type tagsFilter struct {
 }
 
 type subInfo struct {
-	client     *Client
-	deltaType  DeltaType
-	useID      bool
-	tagsFilter *tagsFilter
-	isMap      bool // true for map subscriptions.
+	client           *Client
+	deltaType        DeltaType
+	useID            bool
+	tagsFilter       *tagsFilter
+	serverTagsFilter *tagsFilter
+	isMap            bool // true for map subscriptions.
 }
 
 type subShard struct {
@@ -842,10 +843,17 @@ func (s *subShard) broadcastPublication(
 		useChannelID := sub.useID && hasSubID
 
 		wasFiltered := false
-		if sub.tagsFilter != nil {
+		if sub.serverTagsFilter != nil {
+			match, _ := filter.Match(sub.serverTagsFilter.filter, pub.Tags)
+			if !match {
+				wasFiltered = true
+				tagsFilterDropped++
+			}
+		}
+		if !wasFiltered && sub.tagsFilter != nil {
 			match, _ := filter.Match(sub.tagsFilter.filter, pub.Tags)
-			wasFiltered = !match
-			if wasFiltered {
+			if !match {
+				wasFiltered = true
 				tagsFilterDropped++
 			}
 		}

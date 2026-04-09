@@ -864,6 +864,138 @@ func TestMemoryMapBroker_Remove(t *testing.T) {
 	require.Len(t, streamResult.Publications, 3) // Still 3 - no entry for nonexistent key
 }
 
+func TestMemoryMapBroker_RemovePreservesTags(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModePersistent,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	channel := "test_remove_tags"
+
+	// Publish with tags.
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"v":1}`),
+		Tags: map[string]string{"role": "admin", "team": "eng"},
+	})
+	require.NoError(t, err)
+
+	// Remove without explicit tags — should auto-read from state.
+	_, err = broker.Remove(ctx, channel, "key1", MapRemoveOptions{})
+	require.NoError(t, err)
+
+	// Read stream — removal should have the original tags.
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	var removal *Publication
+	for _, pub := range streamResult.Publications {
+		if pub.Removed {
+			removal = pub
+		}
+	}
+	require.NotNil(t, removal)
+	require.Equal(t, map[string]string{"role": "admin", "team": "eng"}, removal.Tags)
+}
+
+func TestMemoryMapBroker_RemoveExplicitTagsOverride(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModePersistent,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	channel := "test_remove_explicit_tags"
+
+	// Publish with tags.
+	_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"v":1}`),
+		Tags: map[string]string{"role": "admin"},
+	})
+	require.NoError(t, err)
+
+	// Remove with explicit tags — should override state tags.
+	_, err = broker.Remove(ctx, channel, "key1", MapRemoveOptions{
+		Tags: map[string]string{"role": "viewer"},
+	})
+	require.NoError(t, err)
+
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	var removal *Publication
+	for _, pub := range streamResult.Publications {
+		if pub.Removed {
+			removal = pub
+		}
+	}
+	require.NotNil(t, removal)
+	require.Equal(t, map[string]string{"role": "viewer"}, removal.Tags)
+}
+
+func TestMemoryMapBroker_CleanupPreservesTags(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeDurable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     50 * time.Millisecond,
+		}
+	}
+
+	handler := &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, useDelta bool, prevPub *Publication) error {
+			return nil
+		},
+	}
+	broker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	err = broker.RegisterEventHandler(handler)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	ctx := context.Background()
+	channel := "test_cleanup_tags"
+
+	// Publish with tags.
+	_, err = broker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"v":1}`),
+		Tags: map[string]string{"role": "admin"},
+	})
+	require.NoError(t, err)
+
+	// Wait for expiry + trigger cleanup.
+	time.Sleep(100 * time.Millisecond)
+	var nextCheck int64
+	broker.mapHub.expireKeysIteration(&nextCheck)
+
+	// Read stream — removal should have original tags.
+	streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	var removal *Publication
+	for _, pub := range streamResult.Publications {
+		if pub.Removed {
+			removal = pub
+		}
+	}
+	require.NotNil(t, removal)
+	require.Equal(t, "key1", removal.Key)
+	require.Equal(t, map[string]string{"role": "admin"}, removal.Tags)
+}
+
 // TestMemoryMapBroker_KeyModeIfNew tests KeyModeIfNew - only write if key doesn't exist.
 func TestMemoryMapBroker_KeyModeIfNew(t *testing.T) {
 	node, _ := New(Config{})

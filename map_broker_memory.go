@@ -570,6 +570,7 @@ func (h *mapHub) removeChannels() {
 type expiredKeyEvent struct {
 	channel    string
 	key        string
+	tags       map[string]string
 	streamSize int
 }
 
@@ -685,6 +686,7 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 			expiredEvents = append(expiredEvents, expiredKeyEvent{
 				channel:    ch,
 				key:        key,
+				tags:       entry.Publication.Tags,
 				streamSize: streamSize,
 			})
 		}
@@ -738,6 +740,7 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 			Key:     event.key,
 			Removed: true,
 			Time:    time.Now().UnixMilli(),
+			Tags:    event.tags,
 		}
 		var streamPos StreamPosition
 
@@ -993,6 +996,7 @@ func (h *mapHub) remove(ch string, key string, chOpts MapChannelOptions, opts Ma
 		}
 	}
 
+	var removeTags map[string]string
 	if !externalState {
 		entry, keyExists := channel.state[key]
 		if !keyExists {
@@ -1019,6 +1023,9 @@ func (h *mapHub) remove(ch string, key string, chOpts MapChannelOptions, opts Ma
 			}
 		}
 
+		// Capture tags before deletion for the removal publication.
+		removeTags = entry.Publication.Tags
+
 		// Remove from state
 		delete(channel.state, key)
 		channel.sortedKeysDirty = true // Mark dirty for any removal
@@ -1030,12 +1037,16 @@ func (h *mapHub) remove(ch string, key string, chOpts MapChannelOptions, opts Ma
 		chKey := h.makeChKey(ch, key)
 		delete(h.keyExpires, chKey)
 	}
+	if opts.Tags != nil {
+		removeTags = opts.Tags
+	}
 
 	// Create removal publication (reused for both stream and eventHandler).
 	removePub := &Publication{
 		Key:     key,
 		Removed: true,
 		Time:    time.Now().UnixMilli(),
+		Tags:    removeTags,
 	}
 
 	var streamPosition StreamPosition

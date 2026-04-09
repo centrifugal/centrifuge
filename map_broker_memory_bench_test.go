@@ -482,7 +482,7 @@ func BenchmarkMemoryMapBroker_Cleanup(b *testing.B) {
 		if ordered {
 			orderLabel = "ordered"
 		}
-		for _, numKeys := range []int{1000, 10000, 100000} {
+		for _, numKeys := range []int{100, 1000, 10000} {
 			b.Run(fmt.Sprintf("%s/keys_%d", orderLabel, numKeys), func(b *testing.B) {
 				node, _ := New(Config{
 					Map: MapConfig{
@@ -496,16 +496,16 @@ func BenchmarkMemoryMapBroker_Cleanup(b *testing.B) {
 					},
 				})
 				broker, _ := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
-				// Set handler directly to avoid starting background cleanup workers via RegisterEventHandler.
 				broker.mapHub.setEventHandler(&testBrokerEventHandler{})
 				b.Cleanup(func() { _ = node.Shutdown(context.Background()) })
 
 				ctx := context.Background()
-				ch := "bench_cleanup"
 
 				b.ReportAllocs()
+				b.ReportMetric(float64(numKeys), "keys/op")
 				for i := 0; i < b.N; i++ {
 					b.StopTimer()
+					ch := fmt.Sprintf("bench_cleanup_%d", i)
 					for k := 0; k < numKeys; k++ {
 						_, _ = broker.Publish(ctx, ch, fmt.Sprintf("key%d", k), MapPublishOptions{
 							Data:  []byte("data"),
@@ -518,7 +518,6 @@ func BenchmarkMemoryMapBroker_Cleanup(b *testing.B) {
 					var check int64
 					broker.mapHub.expireKeysIteration(&check)
 				}
-				b.ReportMetric(float64(numKeys), "keys/op")
 			})
 		}
 	}

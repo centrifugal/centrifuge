@@ -3313,6 +3313,12 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			hash:   filter.Hash(req.Tf),
 		}
 	}
+	if reply.Options.ServerTagsFilter != nil {
+		sub.serverTagsFilter = &tagsFilter{
+			filter: reply.Options.ServerTagsFilter,
+			hash:   filter.Hash(reply.Options.ServerTagsFilter),
+		}
+	}
 
 	needPubSubSync := reply.Options.EnablePositioning || reply.Options.EnableRecovery
 	if needPubSubSync {

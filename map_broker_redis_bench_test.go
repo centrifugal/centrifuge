@@ -370,15 +370,16 @@ func BenchmarkRedisMapBroker_Cleanup(b *testing.B) {
 		if ordered {
 			orderLabel = "ordered"
 		}
-		for _, numKeys := range []int{100, 1000, 10000} {
+		for _, numKeys := range []int{100, 1000} {
 			b.Run(fmt.Sprintf("%s/keys_%d", orderLabel, numKeys), func(b *testing.B) {
 				node, _ := New(Config{
 					Map: MapConfig{
 						GetMapChannelOptions: func(channel string) MapChannelOptions {
 							return MapChannelOptions{
-								Mode:    MapModeDurable,
-								KeyTTL:  time.Millisecond,
-								Ordered: ordered,
+								Mode:       MapModeDurable,
+								KeyTTL:     30 * time.Second,
+								StreamSize: numKeys * 3,
+								Ordered:    ordered,
 							}
 						},
 					},
@@ -386,11 +387,12 @@ func BenchmarkRedisMapBroker_Cleanup(b *testing.B) {
 				broker := newTestRedisMapBroker(b, node)
 
 				ctx := context.Background()
+				futureNow := time.Now().UnixMilli() + 31_000
 
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
 					b.StopTimer()
-					ch := randomChannel("bench_cleanup")
+					ch := fmt.Sprintf("bench_cleanup_%s_%d_%d", orderLabel, numKeys, i)
 					for k := 0; k < numKeys; k++ {
 						_, err := broker.Publish(ctx, ch, fmt.Sprintf("key%d", k), MapPublishOptions{
 							Data:  []byte("data"),
@@ -400,11 +402,11 @@ func BenchmarkRedisMapBroker_Cleanup(b *testing.B) {
 							b.Fatal(err)
 						}
 					}
-					time.Sleep(2 * time.Millisecond)
+					shardWrapper := broker.shards[0]
+					cleanupKey := broker.cleanupRegistrationKeyForChannel(shardWrapper.shard, ch)
 					b.StartTimer()
 
-					// runCleanupCycle loops internally until all expired keys are processed.
-					broker.runCleanupCycle(ctx)
+					_ = broker.cleanupChannel(ctx, shardWrapper.shard, ch, cleanupKey, futureNow)
 				}
 				b.ReportMetric(float64(numKeys), "keys/op")
 			})
