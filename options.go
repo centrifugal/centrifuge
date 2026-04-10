@@ -223,6 +223,10 @@ type SubscribeOptions struct {
 	// This is useful for ephemeral state like cursor positions or temporary resources
 	// that should not persist after the client leaves.
 	MapRemoveClientOnUnsubscribe bool
+	// ClientPublishDebounceInterval when > 0, included in the subscribe result
+	// as publish_debounce (milliseconds). The SDK debounces client-initiated publishes
+	// to this channel locally.
+	ClientPublishDebounceInterval time.Duration
 }
 
 // SubscribeOption is a type to represent various Subscribe options.

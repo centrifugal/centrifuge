@@ -3288,6 +3288,10 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		res.Data = reply.Options.Data
 	}
 
+	if d := reply.Options.ClientPublishDebounceInterval; d > 0 {
+		res.PublishDebounce = uint32(d.Milliseconds())
+	}
+
 	channel := req.Channel
 
 	info := &ClientInfo{

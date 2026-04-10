@@ -774,6 +774,9 @@ func (c *Client) handleMapTransitionToLive(
 		State:        protoStatePubs,
 		Publications: recoveredPubs,
 	}
+	if d := opts.ClientPublishDebounceInterval; d > 0 {
+		res.PublishDebounce = uint32(d.Milliseconds())
+	}
 	if positioning {
 		res.Recoverable = true
 	}

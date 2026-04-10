@@ -4,7 +4,7 @@ go 1.24.9
 
 require (
 	github.com/FZambia/eagle v0.2.0
-	github.com/centrifugal/protocol v0.18.3-0.20260328121911-a27cd109e49a
+	github.com/centrifugal/protocol v0.18.3-0.20260409150120-4909dc22a607
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/google/cel-go v0.27.0
 	github.com/google/uuid v1.6.0
