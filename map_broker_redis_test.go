@@ -1149,7 +1149,7 @@ func TestRedisMapBroker_RemovePreservesTags(t *testing.T) {
 					Mode:       MapModePersistent,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
-					MetaTTL:    3600 * time.Second,
+					// MetaTTL stays 0 (permanent) — persistent keys require permanent meta.
 				}
 			},
 		},
