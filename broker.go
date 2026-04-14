@@ -209,3 +209,24 @@ type Broker interface {
 	// but sometimes can be useful for application logic.
 	RemoveHistory(ch string) error
 }
+
+// reliableDeliverer is an optional interface a Broker or MapBroker may implement
+// to declare that it guarantees no-gaps delivery of publications to local
+// subscribers. When a broker reports true, the node skips periodic position
+// sync requests for channels served by this broker, eliminating needless
+// storage load for brokers that can't lose messages between worker and client.
+//
+// Examples of reliable delivery:
+//   - PostgreSQL broker polling its own outbox table without fan-out: the
+//     shard lock guarantees BIGSERIAL order matches commit order and the
+//     worker reads rows in id order, so no gaps are possible.
+//
+// Examples where delivery is NOT reliable (interface should not be implemented
+// or should return false):
+//   - Redis/Nats brokers using PUB/SUB: subscribers can drop messages under
+//     buffer pressure or brief network blips without the node noticing.
+//   - PostgreSQL broker with broker fan-out enabled: the fan-out leg through
+//     Redis/Nats reintroduces the same at-most-once semantics.
+type reliableDeliverer interface {
+	ReliableDelivery() bool
+}

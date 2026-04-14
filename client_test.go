@@ -737,20 +737,12 @@ func testUnexpectedOffsetEpochProtocolV2(t *testing.T, offset uint64, epoch stri
 }
 
 func TestClientUnexpectedOffsetEpochClientV2(t *testing.T) {
-	tests := []struct {
-		Name   string
-		Offset uint64
-		Epoch  string
-	}{
-		{"wrong_offset", 2, ""},
-		{"wrong_epoch", 1, "xyz"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.Name, func(t *testing.T) {
-			testUnexpectedOffsetEpochProtocolV2(t, tt.Offset, tt.Epoch)
-		})
-	}
+	// Only wrong_offset triggers insufficient state. The "wrong_epoch" case
+	// (channel epoch="" + pub epoch="xyz") now adopts the epoch instead of
+	// disconnecting — this supports subscribing via a lagging read replica
+	// that doesn't have the meta row yet. See the empty-epoch adoption
+	// logic in client.go and TestEmptyEpochAdoption_AllChannelTypes.
+	testUnexpectedOffsetEpochProtocolV2(t, 2, "")
 }
 
 func TestClientSubscribeValidateErrors(t *testing.T) {

@@ -3858,11 +3858,13 @@ func (c *Client) writePublicationUpdatePosition(
 		return nil
 	}
 	if pubEpoch != channelContext.streamPosition.Epoch {
-		if channelContext.streamPosition.Epoch == "" && channelHasFlag(channelContext.flags, flagMap) {
-			// Map channel subscribed when no data existed (empty epoch). The first
+		if channelContext.streamPosition.Epoch == "" {
+			// Channel subscribed when no data existed (empty epoch) — e.g. due to
+			// a lagging read replica that didn't have the meta row yet. The first
 			// publication carries the real epoch — adopt it. This avoids a needless
 			// re-subscribe and is safe: the only way to have epoch="" is "no data
 			// existed at subscribe time", so there is no stale state to protect.
+			// Applies to both stream and map subscriptions.
 			channelContext.streamPosition.Epoch = pubEpoch
 			c.channels[ch] = channelContext
 		} else {

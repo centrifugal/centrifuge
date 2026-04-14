@@ -1689,6 +1689,17 @@ func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMe
 		if mapBroker == nil {
 			return true, nil
 		}
+		// If the map broker guarantees no-gaps delivery to local subscribers,
+		// the periodic position sync is redundant — trust the broker.
+		if rd, ok := mapBroker.(reliableDeliverer); ok && rd.ReliableDelivery() {
+			return true, nil
+		}
+	} else {
+		// If the stream broker guarantees no-gaps delivery to local subscribers,
+		// skip the position sync request entirely.
+		if rd, ok := n.getBroker(ch).(reliableDeliverer); ok && rd.ReliableDelivery() {
+			return true, nil
+		}
 	}
 	mu := n.subLock(ch)
 	mu.Lock()

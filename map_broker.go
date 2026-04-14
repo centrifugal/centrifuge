@@ -440,12 +440,25 @@ func ResolveAndValidateMapChannelOptions(resolver func(channel string) MapChanne
 		if opts.MetaTTL == 0 {
 			if opts.Mode.HasExpiry() {
 				opts.MetaTTL = opts.StreamTTL * 10
+				// Ensure auto-derived MetaTTL is at least KeyTTL.
+				if opts.KeyTTL > 0 && opts.MetaTTL < opts.KeyTTL {
+					opts.MetaTTL = opts.KeyTTL
+				}
 			}
 			// For Persistent, MetaTTL stays 0 (permanent).
 		}
 		// Validate MetaTTL >= StreamTTL when both explicit.
 		if opts.MetaTTL > 0 && opts.MetaTTL < opts.StreamTTL {
 			return MapChannelOptions{}, errors.New("MetaTTL must be >= StreamTTL (metadata must outlive stream)")
+		}
+		// Validate MetaTTL >= KeyTTL. When KeyTTL is 0 (permanent keys),
+		// MetaTTL must also be 0 (permanent) — metadata can't expire
+		// before keys that never expire.
+		if opts.MetaTTL > 0 && opts.KeyTTL == 0 {
+			return MapChannelOptions{}, errors.New("MetaTTL must be 0 (permanent) when KeyTTL is 0 (permanent keys)")
+		}
+		if opts.MetaTTL > 0 && opts.KeyTTL > 0 && opts.MetaTTL < opts.KeyTTL {
+			return MapChannelOptions{}, errors.New("MetaTTL must be >= KeyTTL (metadata must outlive keys)")
 		}
 	}
 

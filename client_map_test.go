@@ -3360,24 +3360,31 @@ func TestMapSubscribe_EmptyEpochAdoption(t *testing.T) {
 	client.mu.Unlock()
 }
 
-// TestMapSubscribe_EmptyEpochAdoption_NonMapNotAffected verifies that the epoch
-// adoption logic is map-specific: a non-map (regular) channel with epoch="" still
-// triggers handleInsufficientState when a publication arrives with a real epoch.
-func TestMapSubscribe_EmptyEpochAdoption_NonMapNotAffected(t *testing.T) {
+// TestEmptyEpochAdoption_AllChannelTypes verifies that the epoch adoption
+// logic works for both map and stream channels: any channel with epoch=""
+// receiving a publication with a real epoch adopts it instead of triggering
+// insufficient state. This supports the case of subscribing via a lagging
+// read replica that doesn't have the meta row yet (returns epoch=""), then
+// receiving the first publication with the real epoch.
+func TestEmptyEpochAdoption_AllChannelTypes(t *testing.T) {
 	t.Parallel()
 	broker := NewTestBroker()
 	node := nodeWithBroker(broker)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	done := make(chan struct{})
+	insufficientState := make(chan struct{}, 1)
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
 			callback(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true}}, nil)
 		})
 		client.OnUnsubscribe(func(event UnsubscribeEvent) {
-			require.Equal(t, UnsubscribeCodeInsufficient, event.Code)
-			close(done)
+			if event.Code == UnsubscribeCodeInsufficient {
+				select {
+				case insufficientState <- struct{}{}:
+				default:
+				}
+			}
 		})
 	})
 
@@ -3391,17 +3398,22 @@ func TestMapSubscribe_EmptyEpochAdoption_NonMapNotAffected(t *testing.T) {
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 
-	// Non-map channel with epoch="" receiving a pub with real epoch — should trigger insufficient state.
+	// Non-map channel with epoch="" receiving a pub with real epoch —
+	// should adopt the epoch (not trigger insufficient state).
 	err = node.handlePublication("test", StreamPosition{1, "xyz"}, &Publication{
 		Offset: 1,
 		Data:   []byte(`{}`),
 	}, nil, nil)
 	require.NoError(t, err)
 
+	// Give time for any async insufficient state handling to fire.
+	time.Sleep(200 * time.Millisecond)
+
 	select {
-	case <-time.After(time.Second):
-		require.Fail(t, "timeout waiting for insufficient state on non-map channel")
-	case <-done:
+	case <-insufficientState:
+		require.Fail(t, "got insufficient state — epoch adoption should have prevented this")
+	default:
+		// Success — no insufficient state, epoch was adopted.
 	}
 }
 
