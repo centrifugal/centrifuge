@@ -124,22 +124,6 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 		}
 	}
 
-	// ExternalState: broker has no state — reject operations that depend on it.
-	if chOpts.ExternalState {
-		if opts.UseDelta {
-			return MapUpdateResult{}, errors.New("delta not supported with ExternalState")
-		}
-		if opts.ExpectedPosition != nil {
-			return MapUpdateResult{}, errors.New("CAS not supported with ExternalState")
-		}
-		if opts.Version > 0 {
-			return MapUpdateResult{}, errors.New("version dedup not supported with ExternalState")
-		}
-		if opts.KeyMode != KeyModeReplace {
-			return MapUpdateResult{}, errors.New("key mode conditions not supported with ExternalState")
-		}
-	}
-
 	if opts.IdempotencyKey != "" {
 		if res, ok := e.getResultFromCache(ch, opts.IdempotencyKey); ok {
 			return MapUpdateResult{Position: res, Suppressed: true, SuppressReason: SuppressReasonIdempotency}, nil
@@ -174,7 +158,7 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 	}
 
 	var prevPub *Publication
-	streamTop, prevPub, suppressReason, err := e.mapHub.add(ch, key, statePub, streamPub, chOpts, opts, chOpts.ExternalState)
+	streamTop, prevPub, suppressReason, err := e.mapHub.add(ch, key, statePub, streamPub, chOpts, opts)
 	if err != nil {
 		return MapUpdateResult{}, err
 	}
@@ -223,20 +207,13 @@ func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opt
 		}
 	}
 
-	// ExternalState: broker has no state — reject operations that depend on it.
-	if chOpts.ExternalState {
-		if opts.ExpectedPosition != nil {
-			return MapUpdateResult{}, errors.New("CAS not supported with ExternalState")
-		}
-	}
-
 	if opts.IdempotencyKey != "" {
 		if res, ok := e.getResultFromCache(ch, opts.IdempotencyKey); ok {
 			return MapUpdateResult{Position: res, Suppressed: true, SuppressReason: SuppressReasonIdempotency}, nil
 		}
 	}
 
-	streamTop, removePub, suppressReason, err := e.mapHub.remove(ch, key, chOpts, opts, chOpts.ExternalState)
+	streamTop, removePub, suppressReason, err := e.mapHub.remove(ch, key, chOpts, opts)
 	if err != nil {
 		return MapUpdateResult{}, err
 	}
@@ -271,19 +248,9 @@ func (e *MemoryMapBroker) ReadStream(ctx context.Context, ch string, opts MapRea
 
 // ReadState retrieves keyed state with revisions.
 func (e *MemoryMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
-	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
+	_, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
 	if err != nil {
 		return MapStateResult{}, err
-	}
-	if chOpts.ExternalState {
-		// ExternalState: return only stream position, no state entries.
-		streamResult, err := e.ReadStream(ctx, ch, MapReadStreamOptions{
-			Filter: StreamFilter{Limit: 0},
-		})
-		if err != nil {
-			return MapStateResult{}, err
-		}
-		return MapStateResult{Position: streamResult.Position}, nil
 	}
 	return e.mapHub.getState(ch, opts)
 }
@@ -796,12 +763,12 @@ func (h *mapHub) parseChKey(chKey string) (string, string) {
 	return "", ""
 }
 
-func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Publication, chOpts MapChannelOptions, opts MapPublishOptions, externalState bool) (StreamPosition, *Publication, SuppressReason, error) {
+func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Publication, chOpts MapChannelOptions, opts MapPublishOptions) (StreamPosition, *Publication, SuppressReason, error) {
 	h.Lock()
 	defer h.Unlock()
 
 	var prevPub *Publication
-	if !externalState && opts.UseDelta && len(opts.StreamData) == 0 && key != "" {
+	if opts.UseDelta && len(opts.StreamData) == 0 && key != "" {
 		// Get previous publication for delta (key-based: same key's previous state).
 		if channel, ok := h.channels[ch]; ok {
 			if entry, ok := channel.state[key]; ok {
@@ -824,58 +791,73 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 		channel.sortedKeysDirty = true
 	}
 
-	if !externalState {
-		// Check KeyMode condition before proceeding
-		if key != "" && opts.KeyMode != KeyModeReplace {
-			existingEntry, keyExists := channel.state[key]
-			if opts.KeyMode == KeyModeIfNew && keyExists {
-				// KeyModeIfNew but key already exists - suppress publish
-				// But optionally refresh TTL if RefreshTTLOnSuppress is set
-				if opts.RefreshTTLOnSuppress && chOpts.KeyTTL > 0 {
-					expireAt := time.Now().UnixMilli() + chOpts.KeyTTL.Milliseconds()
-					existingEntry.ExpireAt = expireAt
-					// Update TTL tracking
-					chKey := h.makeChKey(ch, key)
-					heap.Push(&h.keyExpireQueue, &priority.Item{Value: chKey, Priority: expireAt})
-					h.keyExpires[chKey] = expireAt
-					if h.nextKeyExpireCheck == 0 || h.nextKeyExpireCheck > expireAt {
-						h.nextKeyExpireCheck = expireAt
-					}
-				}
+	// Canonical check order across brokers: Version → KeyMode → CAS.
+	// Dedup checks (version) drop duplicates first; constraint checks
+	// (KeyMode, CAS) report meaningful intent failures last.
+	// Version is gated by HasStream — streamless channels skip dedup.
+	if chOpts.Mode.HasStream() && key != "" && opts.Version > 0 {
+		if existing, ok := channel.state[key]; ok {
+			if (opts.VersionEpoch == "" || opts.VersionEpoch == existing.VersionEpoch) &&
+				opts.Version <= existing.Version {
 				var pos StreamPosition
 				if channel.stream != nil {
 					pos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
 				}
-				return pos, nil, SuppressReasonKeyExists, nil
-			}
-			if opts.KeyMode == KeyModeIfExists && !keyExists {
-				// KeyModeIfExists but key doesn't exist - skip
-				var pos StreamPosition
-				if channel.stream != nil {
-					pos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
-				}
-				return pos, nil, SuppressReasonKeyNotFound, nil
+				return pos, nil, SuppressReasonVersion, nil
 			}
 		}
+	}
 
-		// CAS check: verify expected position (offset + epoch)
-		if key != "" && opts.ExpectedPosition != nil {
-			existing, exists := channel.state[key]
+	// Check KeyMode condition before proceeding
+	if key != "" && opts.KeyMode != KeyModeReplace {
+		existingEntry, keyExists := channel.state[key]
+		if opts.KeyMode == KeyModeIfNew && keyExists {
+			// KeyModeIfNew but key already exists - suppress publish
+			// But optionally refresh TTL if RefreshTTLOnSuppress is set
+			if opts.RefreshTTLOnSuppress && chOpts.KeyTTL > 0 {
+				expireAt := time.Now().UnixMilli() + chOpts.KeyTTL.Milliseconds()
+				existingEntry.ExpireAt = expireAt
+				// Update TTL tracking
+				chKey := h.makeChKey(ch, key)
+				heap.Push(&h.keyExpireQueue, &priority.Item{Value: chKey, Priority: expireAt})
+				h.keyExpires[chKey] = expireAt
+				if h.nextKeyExpireCheck == 0 || h.nextKeyExpireCheck > expireAt {
+					h.nextKeyExpireCheck = expireAt
+				}
+			}
 			var pos StreamPosition
 			if channel.stream != nil {
 				pos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
 			}
-			if !exists {
-				// Key doesn't exist - position mismatch
-				return pos, nil, SuppressReasonPositionMismatch, nil
+			return pos, nil, SuppressReasonKeyExists, nil
+		}
+		if opts.KeyMode == KeyModeIfExists && !keyExists {
+			// KeyModeIfExists but key doesn't exist - skip
+			var pos StreamPosition
+			if channel.stream != nil {
+				pos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
 			}
-			// Check both offset AND epoch
-			if existing.Publication.Offset != opts.ExpectedPosition.Offset ||
-				pos.Epoch != opts.ExpectedPosition.Epoch {
-				// Return current publication for immediate retry.
-				// Client uses: CurrentPublication.Offset + Position.Epoch for next CAS attempt.
-				return pos, existing.Publication, SuppressReasonPositionMismatch, nil
-			}
+			return pos, nil, SuppressReasonKeyNotFound, nil
+		}
+	}
+
+	// CAS check: verify expected position (offset + epoch)
+	if key != "" && opts.ExpectedPosition != nil {
+		existing, exists := channel.state[key]
+		var pos StreamPosition
+		if channel.stream != nil {
+			pos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
+		}
+		if !exists {
+			// Key doesn't exist - position mismatch
+			return pos, nil, SuppressReasonPositionMismatch, nil
+		}
+		// Check both offset AND epoch
+		if existing.Publication.Offset != opts.ExpectedPosition.Offset ||
+			pos.Epoch != opts.ExpectedPosition.Epoch {
+			// Return current publication for immediate retry.
+			// Client uses: CurrentPublication.Offset + Position.Epoch for next CAS attempt.
+			return pos, existing.Publication, SuppressReasonPositionMismatch, nil
 		}
 	}
 
@@ -903,15 +885,6 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 			}
 		}
 
-		if !externalState && key != "" && opts.Version > 0 {
-			if existing, ok := channel.state[key]; ok {
-				if (opts.VersionEpoch == "" || opts.VersionEpoch == existing.VersionEpoch) &&
-					opts.Version <= existing.Version {
-					return StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}, nil, SuppressReasonVersion, nil
-				}
-			}
-		}
-
 		offset, _ := channel.stream.Add(streamPub, chOpts.StreamSize, 0, "")
 		streamPub.Offset = offset // Set offset on publication for delivery
 		streamPosition = StreamPosition{
@@ -928,15 +901,26 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 		}
 	}
 
-	// Handle keyed state (skip when ExternalState — app DB is the source of truth).
-	if key != "" && !externalState {
+	// Handle keyed state.
+	if key != "" {
 		// Calculate expiration time (milliseconds for sub-second TTL precision).
 		var expireAt int64
 		if chOpts.KeyTTL > 0 {
 			expireAt = time.Now().UnixMilli() + chOpts.KeyTTL.Milliseconds()
 		}
 
-		// Store statePub in state (contains full state Data)
+		// Store statePub in state (contains full state Data).
+		// Preserve stored version when caller publishes without one (matches Redis).
+		// Overwriting with 0 would erase dedup protection against late-arriving
+		// older versions from a concurrent producer.
+		version := opts.Version
+		versionEpoch := opts.VersionEpoch
+		if version == 0 {
+			if existing, ok := channel.state[key]; ok {
+				version = existing.Version
+				versionEpoch = existing.VersionEpoch
+			}
+		}
 		statePub.Offset = streamPosition.Offset
 		entry := &stateEntry{
 			Key:          key,
@@ -944,8 +928,8 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 			Publication:  statePub,
 			Score:        opts.Score,
 			ExpireAt:     expireAt,
-			Version:      opts.Version,
-			VersionEpoch: opts.VersionEpoch,
+			Version:      version,
+			VersionEpoch: versionEpoch,
 		}
 
 		channel.state[key] = entry
@@ -974,69 +958,57 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 	return streamPosition, prevPub, SuppressReasonNone, nil
 }
 
-func (h *mapHub) remove(ch string, key string, chOpts MapChannelOptions, opts MapRemoveOptions, externalState bool) (StreamPosition, *Publication, SuppressReason, error) {
+func (h *mapHub) remove(ch string, key string, chOpts MapChannelOptions, opts MapRemoveOptions) (StreamPosition, *Publication, SuppressReason, error) {
 	h.Lock()
 	defer h.Unlock()
 
 	channel, ok := h.channels[ch]
 	if !ok {
-		if externalState {
-			// ExternalState: first operation could be a remove — create channel+stream.
-			channel = &mapChannel{
-				stream:  memstream.New(),
-				state:   make(map[string]*stateEntry),
-				ordered: chOpts.Ordered,
-				scores:  make(map[string]int64),
-			}
-			h.channels[ch] = channel
-		} else {
-			// Channel doesn't exist — no position to report. All implementations
-			// (Redis, Postgres) return empty position here since no meta exists.
-			return StreamPosition{}, nil, SuppressReasonKeyNotFound, nil
-		}
+		// Channel doesn't exist — no position to report. All implementations
+		// (Redis, Postgres) return empty position here since no meta exists.
+		return StreamPosition{}, nil, SuppressReasonKeyNotFound, nil
 	}
 
 	var removeTags map[string]string
-	if !externalState {
-		entry, keyExists := channel.state[key]
-		if !keyExists {
-			// Key doesn't exist, nothing to remove
-			var streamPosition StreamPosition
-			if channel.stream != nil {
-				streamPosition = StreamPosition{
-					Offset: channel.stream.Top(),
-					Epoch:  channel.stream.Epoch(),
-				}
-			}
-			return streamPosition, nil, SuppressReasonKeyNotFound, nil
-		}
-
-		// CAS check: verify expected position (offset + epoch) before removal
-		if opts.ExpectedPosition != nil {
-			var pos StreamPosition
-			if channel.stream != nil {
-				pos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
-			}
-			if entry.Publication.Offset != opts.ExpectedPosition.Offset ||
-				pos.Epoch != opts.ExpectedPosition.Epoch {
-				return pos, entry.Publication, SuppressReasonPositionMismatch, nil
+	entry, keyExists := channel.state[key]
+	if !keyExists {
+		// Key doesn't exist, nothing to remove
+		var streamPosition StreamPosition
+		if channel.stream != nil {
+			streamPosition = StreamPosition{
+				Offset: channel.stream.Top(),
+				Epoch:  channel.stream.Epoch(),
 			}
 		}
-
-		// Capture tags before deletion for the removal publication.
-		removeTags = entry.Publication.Tags
-
-		// Remove from state
-		delete(channel.state, key)
-		channel.sortedKeysDirty = true // Mark dirty for any removal
-		if channel.ordered {
-			delete(channel.scores, key)
-		}
-
-		// Clean up key expiration tracking
-		chKey := h.makeChKey(ch, key)
-		delete(h.keyExpires, chKey)
+		return streamPosition, nil, SuppressReasonKeyNotFound, nil
 	}
+
+	// CAS check: verify expected position (offset + epoch) before removal
+	if opts.ExpectedPosition != nil {
+		var pos StreamPosition
+		if channel.stream != nil {
+			pos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
+		}
+		if entry.Publication.Offset != opts.ExpectedPosition.Offset ||
+			pos.Epoch != opts.ExpectedPosition.Epoch {
+			return pos, entry.Publication, SuppressReasonPositionMismatch, nil
+		}
+	}
+
+	// Capture tags before deletion for the removal publication.
+	removeTags = entry.Publication.Tags
+
+	// Remove from state
+	delete(channel.state, key)
+	channel.sortedKeysDirty = true // Mark dirty for any removal
+	if channel.ordered {
+		delete(channel.scores, key)
+	}
+
+	// Clean up key expiration tracking
+	chKey := h.makeChKey(ch, key)
+	delete(h.keyExpires, chKey)
+
 	if opts.Tags != nil {
 		removeTags = opts.Tags
 	}

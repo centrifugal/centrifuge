@@ -225,3 +225,136 @@ func testMapBrokerClientInfoInStream(t *testing.T, factory mapBrokerFactory) {
 		require.Equal(t, []byte("chan"), pub.Info.ChanInfo)
 	})
 }
+
+// testMapBrokerCheckOrder verifies the canonical order of suppression checks
+// across brokers: Idempotency → Version → KeyMode → CAS. When multiple
+// conditions would suppress a publish, the first failing check (in this order)
+// is the one whose reason is reported.
+func testMapBrokerCheckOrder(t *testing.T, factory mapBrokerFactory) {
+	ctx := context.Background()
+
+	t.Run("Version_runs_before_KeyMode", func(t *testing.T) {
+		broker := factory(t)
+		ch := "order_v_before_km_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+
+		// Seed key with version=10.
+		_, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
+			Data:    []byte("v1"),
+			Version: 10,
+		})
+		require.NoError(t, err)
+
+		// Publish with stale version=5 AND KeyModeIfNew. Both would suppress —
+		// version (5 <= 10) and key_exists. Canonical order returns "version".
+		res, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
+			Data:    []byte("v2"),
+			Version: 5,
+			KeyMode: KeyModeIfNew,
+		})
+		require.NoError(t, err)
+		require.True(t, res.Suppressed)
+		require.Equal(t, SuppressReasonVersion, res.SuppressReason,
+			"Version check must run before KeyMode")
+	})
+
+	t.Run("KeyMode_runs_before_CAS", func(t *testing.T) {
+		broker := factory(t)
+		ch := "order_km_before_cas_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+
+		// Seed key. After this, key exists at offset 1.
+		res1, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
+			Data: []byte("v1"),
+		})
+		require.NoError(t, err)
+		require.False(t, res1.Suppressed)
+
+		// Publish with KeyModeIfNew (would suppress with key_exists) AND a wrong
+		// ExpectedPosition (would suppress with position_mismatch). Canonical order
+		// returns "key_exists".
+		res, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
+			Data:    []byte("v2"),
+			KeyMode: KeyModeIfNew,
+			ExpectedPosition: &StreamPosition{
+				Offset: 999,
+				Epoch:  res1.Position.Epoch,
+			},
+		})
+		require.NoError(t, err)
+		require.True(t, res.Suppressed)
+		require.Equal(t, SuppressReasonKeyExists, res.SuppressReason,
+			"KeyMode check must run before CAS")
+	})
+
+	t.Run("Version_runs_before_CAS", func(t *testing.T) {
+		broker := factory(t)
+		ch := "order_v_before_cas_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+
+		// Seed key with version=10.
+		res1, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
+			Data:    []byte("v1"),
+			Version: 10,
+		})
+		require.NoError(t, err)
+
+		// Stale version + wrong CAS offset. Both fail; "version" wins.
+		res, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
+			Data:    []byte("v2"),
+			Version: 5,
+			ExpectedPosition: &StreamPosition{
+				Offset: 999,
+				Epoch:  res1.Position.Epoch,
+			},
+		})
+		require.NoError(t, err)
+		require.True(t, res.Suppressed)
+		require.Equal(t, SuppressReasonVersion, res.SuppressReason,
+			"Version check must run before CAS")
+	})
+}
+
+// testMapBrokerVersionPreserved verifies that publishing a key without a
+// version does NOT reset the stored version. This matters for late-arriving
+// older-versioned writes from a concurrent producer — without this, an
+// unversioned publish would erase the dedup protection.
+func testMapBrokerVersionPreserved(t *testing.T, factory mapBrokerFactory) {
+	ctx := context.Background()
+
+	t.Run("unversioned_publish_keeps_stored_version", func(t *testing.T) {
+		broker := factory(t)
+		ch := "version_preserved_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+
+		// Publish with version=10.
+		_, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
+			Data:    []byte("v10"),
+			Version: 10,
+		})
+		require.NoError(t, err)
+
+		// Publish without a version (Version == 0). Should succeed but must
+		// NOT reset the stored version.
+		_, err = broker.Publish(ctx, ch, "k", MapPublishOptions{
+			Data: []byte("unversioned"),
+		})
+		require.NoError(t, err)
+
+		// Now a stale-version publish must still be suppressed because the
+		// stored version is preserved at 10.
+		res, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
+			Data:    []byte("v5_should_be_dropped"),
+			Version: 5,
+		})
+		require.NoError(t, err)
+		require.True(t, res.Suppressed,
+			"stale version should still be suppressed after unversioned publish")
+		require.Equal(t, SuppressReasonVersion, res.SuppressReason)
+
+		// Newer version still wins.
+		res, err = broker.Publish(ctx, ch, "k", MapPublishOptions{
+			Data:    []byte("v11"),
+			Version: 11,
+		})
+		require.NoError(t, err)
+		require.False(t, res.Suppressed,
+			"newer version should still be accepted after unversioned publish")
+	})
+}

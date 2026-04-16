@@ -462,16 +462,6 @@ func ResolveAndValidateMapChannelOptions(resolver func(channel string) MapChanne
 		}
 	}
 
-	// Validate ExternalState constraints.
-	if opts.ExternalState {
-		if opts.Mode != MapModePersistent {
-			return MapChannelOptions{}, errors.New("ExternalState requires persistent mode (needs stream for recovery)")
-		}
-		if opts.Ordered {
-			return MapChannelOptions{}, errors.New("ExternalState requires Ordered == false (broker has no state to sort)")
-		}
-	}
-
 	return opts, nil
 }
 

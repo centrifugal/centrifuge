@@ -59,12 +59,6 @@ type MapChannelOptions struct {
 	// Zero = auto-derived: Durable: StreamTTL*10, Persistent: permanent (no expiry).
 	// Must be 0 for Ephemeral.
 	MetaTTL time.Duration
-	// ExternalState indicates that the application's database is the source of truth
-	// for state. The broker manages only the stream and PUB/SUB — no state hash, no
-	// ordering, no TTL tracking. Publish/Remove still write to the stream for recovery,
-	// and ReadState returns only the current stream position (no entries).
-	// Requires Mode == MapModePersistent and Ordered == false.
-	ExternalState bool
 	// DefaultPageSize sets the default number of items per page when
 	// the client does not specify a page size. Zero means default (100).
 	DefaultPageSize int

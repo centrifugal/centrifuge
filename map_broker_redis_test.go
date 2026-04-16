@@ -2904,6 +2904,20 @@ func TestRedisMapBroker_ClientInfoInStream(t *testing.T) {
 	})
 }
 
+func TestRedisMapBroker_CheckOrder(t *testing.T) {
+	testMapBrokerCheckOrder(t, func(t *testing.T) MapBroker {
+		node, _ := New(Config{})
+		return newTestRedisMapBroker(t, node)
+	})
+}
+
+func TestRedisMapBroker_VersionPreserved(t *testing.T) {
+	testMapBrokerVersionPreserved(t, func(t *testing.T) MapBroker {
+		node, _ := New(Config{})
+		return newTestRedisMapBroker(t, node)
+	})
+}
+
 // TestRedisMapBroker_ClientInfoDelivery tests that ClientInfo is delivered
 // via PUB/SUB when publishing with ClientInfo.
 func TestRedisMapBroker_ClientInfoDelivery(t *testing.T) {

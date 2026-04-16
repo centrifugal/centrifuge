@@ -317,12 +317,6 @@ func (c *Client) handleMapStatePhase(
 	}
 	defer c.releaseMapPaginationLock(channel)
 
-	// ExternalState channels have no broker state — reject state phase.
-	chOpts, err := c.node.ResolveMapChannelOptions(channel)
-	if err == nil && chOpts.ExternalState {
-		return ErrorBadRequest
-	}
-
 	// Track map subscription state on first state request (no cursor).
 	if req.Cursor == "" {
 		// Validate and store tags filter on first request.
@@ -366,7 +360,7 @@ func (c *Client) handleMapStatePhase(
 	}
 
 	// Build read options.
-	chOpts, _ = c.node.ResolveMapChannelOptions(channel)
+	chOpts, _ := c.node.ResolveMapChannelOptions(channel)
 	limit := c.getMapPageSize(req, chOpts)
 
 	opts := MapReadStateOptions{
@@ -575,15 +569,6 @@ func (c *Client) handleMapTransitionToLive(
 		if slices.Contains(opts.AllowedDeltaTypes, dt) {
 			deltaEnabled = true
 			sub.deltaType = dt
-		}
-	}
-
-	// ExternalState: broker has no previous state for delta computation — disable delta.
-	if deltaEnabled {
-		chOpts, err := c.node.ResolveMapChannelOptions(channel)
-		if err == nil && chOpts.ExternalState {
-			deltaEnabled = false
-			sub.deltaType = deltaTypeNone
 		}
 	}
 
