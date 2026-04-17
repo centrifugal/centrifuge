@@ -303,7 +303,8 @@ type SharedPollChannelOptions struct {
 	// Zero value means 30 * time.Second.
 	CallTimeout time.Duration
 	// ChannelShutdownDelay is the delay before shutting down a channel
-	// state after the last item is untracked. Zero means no delay (immediate shutdown).
+	// state after the last item is untracked. Zero means default (1s).
+	// Set to -1 for immediate shutdown with no delay.
 	ChannelShutdownDelay time.Duration
 	// NotificationBatchMaxSize sets the maximum number of notified keys to
 	// accumulate before triggering an immediate backend poll. The batch fires

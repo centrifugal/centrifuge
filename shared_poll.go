@@ -850,6 +850,7 @@ func (m *SharedPollManager) SharedPollRevokeKeys(channel string, keys []string, 
 }
 
 // scheduleShutdown starts a delayed cleanup timer.
+// A zero delay means default (1s). Use a negative delay (e.g. -1) for immediate shutdown.
 func (s *sharedPollChannelState) scheduleShutdown(m *SharedPollManager, channel string, delay time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -858,7 +859,11 @@ func (s *sharedPollChannelState) scheduleShutdown(m *SharedPollManager, channel 
 		s.shutdownTimer.Stop()
 	}
 
-	if delay <= 0 {
+	if delay == 0 {
+		delay = 1 * time.Second
+	}
+
+	if delay < 0 {
 		// Immediate shutdown.
 		s.doShutdown(m, channel)
 		return

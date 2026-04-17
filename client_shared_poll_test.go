@@ -1577,7 +1577,7 @@ func TestSharedPollChannelShutdown_Immediate(t *testing.T) {
 		RefreshInterval:        100 * time.Millisecond,
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
-		ChannelShutdownDelay:   0, // Immediate shutdown.
+		ChannelShutdownDelay:   -1, // Immediate shutdown.
 	})
 	setupSharedPollHandlers(node)
 
@@ -3570,7 +3570,7 @@ func TestSharedPollEpoch_ChangesOnChannelStateRecreation(t *testing.T) {
 		RefreshInterval:        100 * time.Millisecond,
 		RefreshBatchSize:       100,
 		MaxKeysPerConnection:   100,
-		ChannelShutdownDelay:   0, // Immediate cleanup on last untrack.
+		ChannelShutdownDelay:   -1, // Immediate cleanup on last untrack.
 	})
 	setupSharedPollHandlers(node)
 

@@ -2056,7 +2056,7 @@ func TestSharedPollManager_ScheduleShutdownImmediate(t *testing.T) {
 	opts := SharedPollChannelOptions{
 		RefreshInterval:        30 * time.Second,
 		MaxKeysPerConnection:   100,
-		ChannelShutdownDelay:   0, // immediate
+		ChannelShutdownDelay:   -1, // immediate
 	}
 	node := newTestNodeWithControllableBroker(t, broker, opts)
 	m := node.sharedPollManager
