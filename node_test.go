@@ -1432,7 +1432,7 @@ func TestNodeCheckPositionMap(t *testing.T) {
 
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode:   MapModeDurable,
+			Mode:   MapModeRecoverable,
 			KeyTTL: 60 * time.Second,
 		}
 	}
@@ -1497,7 +1497,7 @@ func TestNodeCheckPositionMapWithMedium(t *testing.T) {
 
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode:   MapModeDurable,
+			Mode:   MapModeRecoverable,
 			KeyTTL: 60 * time.Second,
 		}
 	}
@@ -1617,7 +1617,7 @@ func TestGetMapBroker(t *testing.T) {
 
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode:   MapModeDurable,
+			Mode:   MapModeRecoverable,
 			KeyTTL: 60 * time.Second,
 		}
 	}
@@ -1687,7 +1687,7 @@ func TestNode_MapStreamReadUnrecoverablePosition(t *testing.T) {
 
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode:   MapModeDurable,
+			Mode:   MapModeRecoverable,
 			KeyTTL: 60 * time.Second,
 		}
 	}
@@ -1725,7 +1725,7 @@ func TestNode_MapRemoveEmptyKey(t *testing.T) {
 
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode:   MapModeDurable,
+			Mode:   MapModeRecoverable,
 			KeyTTL: 60 * time.Second,
 		}
 	}
@@ -1814,7 +1814,7 @@ func TestNode_MapStats(t *testing.T) {
 
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode:   MapModeDurable,
+			Mode:   MapModeRecoverable,
 			KeyTTL: 60 * time.Second,
 		}
 	}
@@ -1838,7 +1838,7 @@ func TestNode_MapClear(t *testing.T) {
 
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode:   MapModeDurable,
+			Mode:   MapModeRecoverable,
 			KeyTTL: 60 * time.Second,
 		}
 	}
@@ -1866,7 +1866,7 @@ func TestNode_MapPublishEmptyKey(t *testing.T) {
 
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode:   MapModeDurable,
+			Mode:   MapModeRecoverable,
 			KeyTTL: 60 * time.Second,
 		}
 	}
@@ -1886,7 +1886,7 @@ func TestNode_MapPublish(t *testing.T) {
 
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode:   MapModeDurable,
+			Mode:   MapModeRecoverable,
 			KeyTTL: 60 * time.Second,
 		}
 	}
@@ -1903,7 +1903,7 @@ func TestNode_MapRemove(t *testing.T) {
 
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode:   MapModeDurable,
+			Mode:   MapModeRecoverable,
 			KeyTTL: 60 * time.Second,
 		}
 	}

@@ -117,10 +117,10 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 	// Reject CAS and Version in ephemeral mode.
 	if chOpts.Mode.IsEphemeral() {
 		if opts.ExpectedPosition != nil {
-			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires durable or persistent mode")
+			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires recoverable or persistent mode")
 		}
 		if opts.Version > 0 {
-			return MapUpdateResult{}, errors.New("version-based dedup requires durable or persistent mode")
+			return MapUpdateResult{}, errors.New("version-based dedup requires recoverable or persistent mode")
 		}
 	}
 
@@ -203,7 +203,7 @@ func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opt
 	// Reject CAS in ephemeral mode.
 	if chOpts.Mode.IsEphemeral() {
 		if opts.ExpectedPosition != nil {
-			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires durable or persistent mode")
+			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires recoverable or persistent mode")
 		}
 	}
 
@@ -1352,7 +1352,7 @@ func (h *mapHub) getState(ch string, opts MapReadStateOptions) (MapStateResult, 
 		if endIdx < totalKeys {
 			lastKey := channel.sortedKeys[endIdx-1]
 			if channel.ordered {
-				// Ordered cursor: "score\x00key"
+				// ordered cursor: "score\x00key"
 				lastScore := channel.scores[lastKey]
 				cursor = MakeOrderedCursor(strconv.FormatInt(lastScore, 10), lastKey)
 			} else {

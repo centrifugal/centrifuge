@@ -55,7 +55,7 @@ func TestRedisMapBroker_NodeGrouped_ConnectionCount(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -98,7 +98,7 @@ func TestRedisMapBroker_NodeGrouped_Basic(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -140,7 +140,7 @@ func TestRedisMapBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -198,7 +198,7 @@ func TestRedisMapBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -239,7 +239,7 @@ func TestRedisMapBroker_NodeGrouped_TopologyStable(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -272,7 +272,7 @@ func TestRedisMapBroker_NodeGrouped_TopologyDoneChannel(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -324,7 +324,7 @@ func TestRedisMapBroker_NodeGrouped_QueryClusterSlots(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -370,7 +370,7 @@ func TestRedisMapBroker_NodeGrouped_RebuildPreservesPartitions(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -409,7 +409,7 @@ func TestRedisMapBroker_NodeGrouped_Cleanup(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 1 * time.Second,
 				}
 			},
@@ -521,7 +521,7 @@ func TestRedisBroker_NodeGrouped_ConnectionCount(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -570,7 +570,7 @@ func TestRedisBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -640,7 +640,7 @@ func TestRedisBroker_NodeGrouped_PubSubTwoNodes(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -686,7 +686,7 @@ func TestRedisBroker_NodeGrouped_TopologyStable(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -719,7 +719,7 @@ func TestRedisBroker_NodeGrouped_RebuildPreservesPartitions(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -914,7 +914,7 @@ func TestRedisMapBroker_NodeGrouped_SlotMigration(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -983,7 +983,7 @@ func TestRedisMapBroker_NodeGrouped_SlotMigration(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -1325,7 +1325,7 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -1363,7 +1363,7 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},

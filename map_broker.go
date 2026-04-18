@@ -15,7 +15,7 @@ import (
 //   - State storage: Key-value state where each key maps to a publication.
 //     Clients receive the full state when subscribing.
 //
-//   - Stream (history): Ordered log of all changes for recovery. Clients use
+//   - Stream (history): ordered log of all changes for recovery. Clients use
 //     this to catch up on changes that occurred during subscription setup or
 //     after temporary disconnection.
 //
@@ -194,7 +194,7 @@ type MapPublishOptions struct {
 	// comparison. Empty string is valid — use when only incremental version matters.
 	VersionEpoch string
 
-	// Score is the sort value when Ordered=true (configured in MapChannelOptions).
+	// Score is the sort value when ordered=true (configured in MapChannelOptions).
 	// Higher scores appear first.
 	// Use for leaderboards, priority queues, and sorted collections.
 	Score int64
@@ -281,7 +281,7 @@ type MapReadStateOptions struct {
 	// Note: for unordered state in Redis, pagination uses HSCAN with COUNT hint.
 	// Redis may return more entries than Limit on some pages (especially for small
 	// hashes in listpack encoding). Callers should not rely on exact Limit enforcement
-	// for unordered reads. Ordered state uses ZRANGEBYSCORE with LIMIT — exact page sizes.
+	// for unordered reads. ordered state uses ZRANGEBYSCORE with LIMIT — exact page sizes.
 	Limit int
 
 	// Key filters to a single entry by exact key match.
@@ -388,7 +388,7 @@ func ResolveAndValidateMapChannelOptions(resolver func(channel string) MapChanne
 	if opts.Mode == 0 {
 		return MapChannelOptions{}, errors.New("map channel not configured: set Mode")
 	}
-	if opts.Mode != MapModeEphemeral && opts.Mode != MapModeDurable && opts.Mode != MapModePersistent {
+	if opts.Mode != MapModeEphemeral && opts.Mode != MapModeRecoverable && opts.Mode != MapModePersistent {
 		return MapChannelOptions{}, errors.New("invalid Mode value")
 	}
 
@@ -410,13 +410,13 @@ func ResolveAndValidateMapChannelOptions(resolver func(channel string) MapChanne
 	// Validate stream fields.
 	if opts.Mode.IsEphemeral() {
 		if opts.StreamSize > 0 {
-			return MapChannelOptions{}, errors.New("StreamSize requires durable or persistent mode")
+			return MapChannelOptions{}, errors.New("StreamSize requires recoverable or persistent mode")
 		}
 		if opts.StreamTTL > 0 {
-			return MapChannelOptions{}, errors.New("StreamTTL requires durable or persistent mode")
+			return MapChannelOptions{}, errors.New("StreamTTL requires recoverable or persistent mode")
 		}
 		if opts.MetaTTL > 0 {
-			return MapChannelOptions{}, errors.New("MetaTTL requires durable or persistent mode")
+			return MapChannelOptions{}, errors.New("MetaTTL requires recoverable or persistent mode")
 		}
 	}
 	if opts.Mode.HasStream() {

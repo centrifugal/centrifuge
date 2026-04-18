@@ -79,7 +79,7 @@ func BenchmarkRedisMapBroker_PublishMapStateOrdered(b *testing.B) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 10000,
 					StreamTTL:  300 * time.Second,
@@ -260,7 +260,7 @@ func BenchmarkRedisMapBroker_ReadStateOrdered(b *testing.B) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 10000,
 					StreamTTL:  300 * time.Second,
@@ -376,10 +376,10 @@ func BenchmarkRedisMapBroker_Cleanup(b *testing.B) {
 					Map: MapConfig{
 						GetMapChannelOptions: func(channel string) MapChannelOptions {
 							return MapChannelOptions{
-								Mode:       MapModeDurable,
+								Mode:       MapModeRecoverable,
 								KeyTTL:     30 * time.Second,
 								StreamSize: numKeys * 3,
-								Ordered:    ordered,
+								ordered:    ordered,
 							}
 						},
 					},

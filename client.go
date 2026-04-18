@@ -2011,7 +2011,23 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 			channelContext.expireAt = expireAt
 			c.channels[channel] = channelContext
 		}
+		isMapSub := okChan && channelHasFlag(channelContext.flags, flagMap)
 		c.mu.Unlock()
+
+		if reply.ServerTagsFilter != nil {
+			newTf := &tagsFilter{
+				filter: reply.ServerTagsFilter,
+				hash:   filter.Hash(reply.ServerTagsFilter),
+			}
+			_, changed := c.node.hub.updateServerTagsFilter(channel, c.ID(), newTf)
+			if changed && isMapSub {
+				c.Unsubscribe(channel, Unsubscribe{
+					Code:   UnsubscribeCodeStateInvalidated,
+					Reason: "server tags filter changed",
+				})
+				return
+			}
+		}
 
 		protoReply, err := c.getSubRefreshCommandReply(res)
 		if err != nil {
@@ -3261,6 +3277,7 @@ func isCacheRecovered(
 
 const (
 	subscriptionFlagChannelCompression = 1 << iota
+	subscriptionFlagRejectUnrecovered
 )
 
 // subscribeCmd handles subscribe command - clients send this when subscribe
@@ -3471,6 +3488,10 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 				historyResult, err := c.node.recoverHistory(channel, StreamPosition{Offset: cmdOffset, Epoch: cmdEpoch}, reply.Options.HistoryMetaTTL)
 				if err != nil {
 					if errors.Is(err, ErrorUnrecoverablePosition) {
+						if req.Flag&subscriptionFlagRejectUnrecovered != 0 {
+							c.pubSubSync.StopBuffering(channel)
+							return errorDisconnectContext(ErrorUnrecoverablePosition, nil)
+						}
 						// Result contains stream position in case of ErrorUnrecoverablePosition
 						// during recovery.
 						latestOffset = historyResult.Offset
@@ -3486,6 +3507,10 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					latestEpoch = historyResult.Epoch
 					var recovered bool
 					recoveredPubs, recovered = isStreamRecovered(historyResult, cmdOffset, cmdEpoch, sub.tagsFilter)
+					if !recovered && req.Flag&subscriptionFlagRejectUnrecovered != 0 {
+						c.pubSubSync.StopBuffering(channel)
+						return errorDisconnectContext(ErrorUnrecoverablePosition, nil)
+					}
 					res.Recovered = recovered
 					c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
 					if res.Recovered {

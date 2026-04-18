@@ -555,6 +555,95 @@ func TestClientSubscribeUnrecoverablePosition(t *testing.T) {
 	require.Empty(t, res.Publications)
 }
 
+func TestClientSubscribeRejectUnrecovered(t *testing.T) {
+	// When the client sets subscriptionFlagRejectUnrecovered, the server
+	// should return ErrorUnrecoverablePosition instead of subscribing
+	// with recovered=false.
+	broker := NewTestBroker()
+	node := nodeWithBroker(broker)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{
+				Options: SubscribeOptions{EnableRecovery: true},
+			}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClientV2(t, client)
+
+	// Without the flag — should get recovered=false (existing behavior).
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test_no_flag",
+		Recover: true,
+		Epoch:   "wrong_epoch",
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	res := extractSubscribeResult(rwWrapper.replies)
+	require.False(t, res.Recovered)
+
+	// With the flag — should get ErrorUnrecoverablePosition error.
+	rwWrapper = testReplyWriterWrapper()
+	err = client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test_with_flag",
+		Recover: true,
+		Epoch:   "wrong_epoch",
+		Flag:    subscriptionFlagRejectUnrecovered,
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.NotNil(t, rwWrapper.replies[0].Error)
+	require.Equal(t, ErrorUnrecoverablePosition.Code, rwWrapper.replies[0].Error.Code)
+}
+
+func TestClientSubscribeRejectUnrecovered_SuccessfulRecovery(t *testing.T) {
+	// When recovery succeeds, the flag should not interfere — normal result.
+	node := nodeWithTestBroker()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{
+				Options: SubscribeOptions{EnableRecovery: true},
+			}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClientV2(t, client)
+
+	// First subscribe without recovery to get the epoch.
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test_recover_ok",
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	res := rwWrapper.replies[0].Subscribe
+	epoch := res.Epoch
+	offset := res.Offset
+
+	// Resubscribe with correct position + flag — should succeed.
+	rwWrapper = testReplyWriterWrapper()
+	err = client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test_recover_ok_2",
+		Recover: true,
+		Epoch:   epoch,
+		Offset:  offset,
+		Flag:    subscriptionFlagRejectUnrecovered,
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	res = rwWrapper.replies[0].Subscribe
+	require.True(t, res.Recovered)
+}
+
 func TestClientSubscribePositionedError(t *testing.T) {
 	t.Parallel()
 	broker := NewTestBroker()

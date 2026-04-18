@@ -82,7 +82,7 @@ type brokerShardWrapper struct {
 // - States (HSET): For keyed state - may keep latest protocol.Publication or custom state.
 //
 // Pagination:
-//   - Ordered state use ZRANGEBYSCORE/ZRANGEBYLEX with LIMIT — exact page sizes.
+//   - ordered state use ZRANGEBYSCORE/ZRANGEBYLEX with LIMIT — exact page sizes.
 //   - Unordered state use HSCAN with COUNT — COUNT is only a hint, Redis may return
 //     more entries than requested (especially for small hashes in listpack encoding).
 //     Callers should not rely on exact Limit enforcement for unordered reads.
@@ -518,10 +518,10 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 	// Reject CAS and Version in ephemeral mode.
 	if chOpts.Mode.IsEphemeral() {
 		if opts.ExpectedPosition != nil {
-			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires durable or persistent mode")
+			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires recoverable or persistent mode")
 		}
 		if opts.Version > 0 {
-			return MapUpdateResult{}, errors.New("version-based dedup requires durable or persistent mode")
+			return MapUpdateResult{}, errors.New("version-based dedup requires recoverable or persistent mode")
 		}
 	}
 
@@ -761,7 +761,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 	// Reject CAS in ephemeral mode.
 	if chOpts.Mode.IsEphemeral() {
 		if opts.ExpectedPosition != nil {
-			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires durable or persistent mode")
+			return MapUpdateResult{}, errors.New("CAS (ExpectedPosition) requires recoverable or persistent mode")
 		}
 	}
 
@@ -955,7 +955,7 @@ func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadS
 //		}
 //		return MapStateResult{Position: streamResult.Position}, nil
 //	}
-//	if chOpts.Ordered {
+//	if chOpts.ordered {
 //		return e.readOrderedState(ctx, ch, opts, chOpts)
 //	}
 //	return e.readUnorderedStateZero(ctx, ch, opts, chOpts)
@@ -2689,15 +2689,15 @@ func (e *RedisMapBroker) batchRemoveExpired(ctx context.Context, shard *RedisSha
 	// Build ARGV: fixed args + triplets per entry
 	argv := make([]string, 0, 9+len(removals)*3)
 	argv = append(argv,
-		strconv.Itoa(len(removals)),   // ARGV[1]: num_entries
-		chID,                          // ARGV[2]: channel
-		publishCommand,                // ARGV[3]: publish_command
+		strconv.Itoa(len(removals)),     // ARGV[1]: num_entries
+		chID,                            // ARGV[2]: channel
+		publishCommand,                  // ARGV[3]: publish_command
 		strconv.Itoa(chOpts.StreamSize), // ARGV[4]: stream_size
-		millis(chOpts.StreamTTL),      // ARGV[5]: stream_ttl
-		metaExpire,                    // ARGV[6]: meta_expire
-		e.node.ID(),                   // ARGV[7]: new_epoch_if_empty
-		ch,                            // ARGV[8]: channel_for_cleanup
-		streamlessFlag,                // ARGV[9]: streamless
+		millis(chOpts.StreamTTL),        // ARGV[5]: stream_ttl
+		metaExpire,                      // ARGV[6]: meta_expire
+		e.node.ID(),                     // ARGV[7]: new_epoch_if_empty
+		ch,                              // ARGV[8]: channel_for_cleanup
+		streamlessFlag,                  // ARGV[9]: streamless
 	)
 	for _, r := range removals {
 		argv = append(argv, r.key, convert.BytesToString(r.payload), r.expireScore)

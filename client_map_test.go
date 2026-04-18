@@ -49,7 +49,7 @@ func newTestNodeWithMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
 func setTestMapChannelOptionsConverging(node *Node) {
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode:               MapModeDurable,
+			Mode:               MapModeRecoverable,
 			KeyTTL:             60 * time.Second,
 			MinPageSize: 1, // Allow small page sizes in tests.
 		}
@@ -1482,7 +1482,7 @@ func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:               MapModeDurable,
+					Mode:               MapModeRecoverable,
 					KeyTTL:             60 * time.Second,
 					MinPageSize: 1,
 				}
@@ -1558,7 +1558,7 @@ func TestMapSubscribe_StateToLive_WithStreamPublications(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -1628,7 +1628,7 @@ func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:               MapModeDurable,
+					Mode:               MapModeRecoverable,
 					KeyTTL:             60 * time.Second,
 					MinPageSize: 1,
 				}
@@ -1721,7 +1721,7 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:               MapModeDurable,
+					Mode:               MapModeRecoverable,
 					KeyTTL:             60 * time.Second,
 					MinPageSize: 1,
 				}
@@ -1831,7 +1831,7 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination_ManyPublishes(t *testi
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:               MapModeDurable,
+					Mode:               MapModeRecoverable,
 					KeyTTL:             60 * time.Second,
 					MinPageSize: 1,
 				}
@@ -2438,7 +2438,7 @@ func TestMapSubscribe_RecoveryMaxPublicationLimit(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:                             MapModeDurable,
+					Mode:                             MapModeRecoverable,
 					KeyTTL:                           60 * time.Second,
 					MinPageSize:               1,
 					LiveTransitionMaxPublicationLimit: 5, // Max 5 publications during recovery.
@@ -2991,7 +2991,7 @@ func TestMapSubscribe_CatchUpTimeout_PhaseTransition(t *testing.T) {
 	node, broker := newTestNodeWithMapBroker(t)
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode:                    MapModeDurable,
+			Mode:                    MapModeRecoverable,
 			KeyTTL:                  60 * time.Second,
 			MinPageSize:      1,
 			SubscribeCatchUpTimeout: 10 * time.Second, // Large enough for STATE pages.
@@ -4359,4 +4359,200 @@ func TestMapSubscribe_ServerTagsFilter_RemovalFiltering(t *testing.T) {
 	}
 	require.True(t, engRemoval, "eng_item removal should be delivered")
 	require.False(t, salesRemoval, "sales_item removal should be filtered out")
+}
+
+func TestSubRefresh_ServerTagsFilter_MapUnsubscribed(t *testing.T) {
+	node, _ := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_refresh_filter"
+
+	initialFilter := &FilterNode{Key: "role", Cmp: "eq", Val: "admin"}
+	updatedFilter := &FilterNode{Key: "role", Cmp: "eq", Val: "viewer"}
+
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			ClientSideRefresh: true,
+			Credentials:       &Credentials{UserID: "user1"},
+		}, nil
+	})
+
+	unsubscribeCh := make(chan UnsubscribeEvent, 1)
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:             SubscriptionTypeMap,
+					ExpireAt:         time.Now().Unix() + 60,
+					ServerTagsFilter: initialFilter,
+				},
+				ClientSideRefresh: true,
+			}, nil)
+		})
+		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+			cb(SubRefreshReply{
+				ExpireAt:         time.Now().Unix() + 60,
+				ServerTagsFilter: updatedFilter,
+			}, nil)
+		})
+		client.OnUnsubscribe(func(e UnsubscribeEvent) {
+			unsubscribeCh <- e
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+	subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+
+	// Refresh with a different filter — should trigger unsubscribe with state invalidated.
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
+		Channel: channel,
+		Token:   "new_token",
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	select {
+	case e := <-unsubscribeCh:
+		require.Equal(t, UnsubscribeCodeStateInvalidated, e.Code)
+		require.Equal(t, channel, e.Channel)
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for unsubscribe event")
+	}
+}
+
+func TestSubRefresh_ServerTagsFilter_SameFilterNoUnsubscribe(t *testing.T) {
+	node, _ := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_refresh_same_filter"
+
+	theFilter := &FilterNode{Key: "role", Cmp: "eq", Val: "admin"}
+
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			ClientSideRefresh: true,
+			Credentials:       &Credentials{UserID: "user1"},
+		}, nil
+	})
+
+	unsubscribeCh := make(chan UnsubscribeEvent, 1)
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:             SubscriptionTypeMap,
+					ExpireAt:         time.Now().Unix() + 60,
+					ServerTagsFilter: theFilter,
+				},
+				ClientSideRefresh: true,
+			}, nil)
+		})
+		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+			cb(SubRefreshReply{
+				ExpireAt:         time.Now().Unix() + 60,
+				ServerTagsFilter: theFilter, // same filter
+			}, nil)
+		})
+		client.OnUnsubscribe(func(e UnsubscribeEvent) {
+			unsubscribeCh <- e
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+	subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+
+	// Refresh with the same filter — should NOT trigger unsubscribe.
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
+		Channel: channel,
+		Token:   "new_token",
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	// Verify we got a normal refresh reply.
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+
+	// No unsubscribe should happen.
+	select {
+	case e := <-unsubscribeCh:
+		require.Fail(t, "unexpected unsubscribe event", "code: %d", e.Code)
+	case <-time.After(100 * time.Millisecond):
+		// Expected — no unsubscribe.
+	}
+}
+
+func TestSubRefresh_ServerTagsFilter_NilNoChange(t *testing.T) {
+	node, _ := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_refresh_nil_filter"
+
+	initialFilter := &FilterNode{Key: "role", Cmp: "eq", Val: "admin"}
+
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			ClientSideRefresh: true,
+			Credentials:       &Credentials{UserID: "user1"},
+		}, nil
+	})
+
+	unsubscribeCh := make(chan UnsubscribeEvent, 1)
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:             SubscriptionTypeMap,
+					ExpireAt:         time.Now().Unix() + 60,
+					ServerTagsFilter: initialFilter,
+				},
+				ClientSideRefresh: true,
+			}, nil)
+		})
+		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+			cb(SubRefreshReply{
+				ExpireAt: time.Now().Unix() + 60,
+				// ServerTagsFilter: nil — no change.
+			}, nil)
+		})
+		client.OnUnsubscribe(func(e UnsubscribeEvent) {
+			unsubscribeCh <- e
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+	subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+
+	// Refresh with nil filter — should NOT trigger unsubscribe.
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
+		Channel: channel,
+		Token:   "new_token",
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+
+	select {
+	case e := <-unsubscribeCh:
+		require.Fail(t, "unexpected unsubscribe event", "code: %d", e.Code)
+	case <-time.After(100 * time.Millisecond):
+		// Expected — no unsubscribe.
+	}
 }

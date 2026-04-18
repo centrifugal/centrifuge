@@ -14,7 +14,7 @@ func setupMemoryMapBrokerBench(b *testing.B) (*MemoryMapBroker, func()) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:   MapModeDurable,
+					Mode:   MapModeRecoverable,
 					KeyTTL: 60 * time.Second,
 				}
 			},
@@ -85,7 +85,7 @@ func BenchmarkMemoryMapBroker_PublishMapStateOrdered(b *testing.B) {
 	node, _ := New(Config{})
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode:       MapModeDurable,
+			Mode:       MapModeRecoverable,
 			Ordered:    true,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
@@ -264,7 +264,7 @@ func BenchmarkMemoryMapBroker_ReadStateOrdered(b *testing.B) {
 	node, _ := New(Config{})
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode:       MapModeDurable,
+			Mode:       MapModeRecoverable,
 			Ordered:    true,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
@@ -488,7 +488,7 @@ func BenchmarkMemoryMapBroker_Cleanup(b *testing.B) {
 					Map: MapConfig{
 						GetMapChannelOptions: func(channel string) MapChannelOptions {
 							return MapChannelOptions{
-								Mode:    MapModeDurable,
+								Mode:    MapModeRecoverable,
 								KeyTTL:  time.Millisecond,
 								Ordered: ordered,
 							}

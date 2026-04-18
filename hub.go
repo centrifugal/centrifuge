@@ -189,6 +189,10 @@ func (h *Hub) removeSub(ch string, c *Client) (bool, bool, bool) {
 	return h.subShards[index(ch, numHubShards)].removeSub(ch, c)
 }
 
+func (h *Hub) updateServerTagsFilter(ch string, clientID string, tf *tagsFilter) (bool, bool) {
+	return h.subShards[index(ch, numHubShards)].updateServerTagsFilter(ch, clientID, tf)
+}
+
 func (h *Hub) removeSubID(ch string) {
 	h.subShards[index(ch, numHubShards)].removeSubID(ch)
 }
@@ -617,6 +621,31 @@ func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
 		return chanID, true, nil
 	}
 	return chanID, false, nil
+}
+
+// updateServerTagsFilter updates the server-side tags filter for a specific
+// client subscription. Returns (found, changed) where changed is true only
+// if the filter hash differs from the current one.
+func (s *subShard) updateServerTagsFilter(ch string, clientID string, tf *tagsFilter) (bool, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	chSubs, ok := s.subs[ch]
+	if !ok {
+		return false, false
+	}
+	sub, ok := chSubs[clientID]
+	if !ok {
+		return false, false
+	}
+	if sub.serverTagsFilter != nil && sub.serverTagsFilter.hash == tf.hash {
+		return true, false
+	}
+	if sub.serverTagsFilter == nil && tf == nil {
+		return true, false
+	}
+	sub.serverTagsFilter = tf
+	chSubs[clientID] = sub
+	return true, true
 }
 
 func (s *subShard) removeSubID(ch string) {

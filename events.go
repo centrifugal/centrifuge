@@ -332,6 +332,12 @@ type SubRefreshReply struct {
 	ExpireAt int64
 	// Info is a new channel-scope info. Zero value means do not change previous one.
 	Info []byte
+	// ServerTagsFilter is an optional updated server-side tags filter. When nil,
+	// the existing filter is left unchanged. When set, Centrifuge compares it
+	// with the current filter — if different, the filter is updated in the hub
+	// and for map subscriptions the client is unsubscribed with
+	// UnsubscribeCodeStateInvalidated to force a full state re-sync.
+	ServerTagsFilter *FilterNode
 }
 
 // SubRefreshCallback should be called as soon as handler decides what to do

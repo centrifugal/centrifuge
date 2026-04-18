@@ -46,7 +46,7 @@ import (
 //     CAS (ExpectedPosition) and Version-based dedup are not available.
 //     EnablePositioning and EnableRecovery are both set to false.
 //
-//   - MapModeDurable / MapModePersistent: Stream mode. Publications are tracked with
+//   - MapModeRecoverable / MapModePersistent: Stream mode. Publications are tracked with
 //     offsets, stream history is maintained, and clients can recover missed publications
 //     on reconnect. CAS and Version features are available.
 //     EnablePositioning and EnableRecovery are both set to true.

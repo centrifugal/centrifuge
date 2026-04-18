@@ -13,9 +13,9 @@ const (
 	// MapModeEphemeral: PUB/SUB only, no stream. Missed updates during disconnect
 	// are lost — reconnect triggers full state resync. Entries expire after KeyTTL.
 	MapModeEphemeral MapMode = iota + 1
-	// MapModeDurable: stream-backed with offset-based recovery. Entries expire after
-	// KeyTTL. TTL removal events are logged to the stream (durable delivery).
-	MapModeDurable
+	// MapModeRecoverable: stream-backed with offset-based recovery. Entries expire after
+	// KeyTTL. TTL removal events are logged to the stream (recoverable delivery).
+	MapModeRecoverable
 	// MapModePersistent: stream-backed with offset-based recovery. Entries live
 	// forever (until explicitly removed). No TTL, no expiry.
 	MapModePersistent
@@ -24,11 +24,11 @@ const (
 // IsEphemeral returns true for MapModeEphemeral.
 func (m MapMode) IsEphemeral() bool { return m == MapModeEphemeral }
 
-// HasStream returns true for modes that maintain a recovery stream (Durable, Persistent).
-func (m MapMode) HasStream() bool { return m == MapModeDurable || m == MapModePersistent }
+// HasStream returns true for modes that maintain a recovery stream (Recoverable, Persistent).
+func (m MapMode) HasStream() bool { return m == MapModeRecoverable || m == MapModePersistent }
 
-// HasExpiry returns true for modes where entries expire via TTL (Ephemeral, Durable).
-func (m MapMode) HasExpiry() bool { return m == MapModeEphemeral || m == MapModeDurable }
+// HasExpiry returns true for modes where entries expire via TTL (Ephemeral, Recoverable).
+func (m MapMode) HasExpiry() bool { return m == MapModeEphemeral || m == MapModeRecoverable }
 
 // MapChannelOptions contains configuration for map channels. Every map channel
 // must have Mode explicitly set — zero value is an error.
@@ -37,7 +37,7 @@ func (m MapMode) HasExpiry() bool { return m == MapModeEphemeral || m == MapMode
 // NOT logged to a stream (there is no stream). If a client misses the removal
 // pub/sub message (e.g., during a brief disconnect), it will retain stale entries
 // until the next full state resync. This is expected behavior for ephemeral use
-// cases like cursor tracking — use Durable mode for data requiring consistency.
+// cases like cursor tracking — use Recoverable mode for data requiring consistency.
 type MapChannelOptions struct {
 	// Mode controls synchronization, recovery, and data lifecycle.
 	// Required. Zero value = not configured = error.
@@ -46,19 +46,19 @@ type MapChannelOptions struct {
 	// Required when Mode.HasExpiry() (must be > 0).
 	// Must be 0 when Mode is Persistent.
 	KeyTTL time.Duration
+	// StreamSize sets the maximum number of entries in the recovery stream.
+	// Zero = auto-derived (100) for Recoverable/Persistent. Must be 0 for Ephemeral.
+	StreamSize int
+	// StreamTTL sets how long stream entries are retained.
+	// Zero = auto-derived (1 minute) for Recoverable/Persistent. Must be 0 for Ephemeral.
+	StreamTTL time.Duration
+	// MetaTTL sets how long stream metadata (epoch, offset) is retained.
+	// Zero = auto-derived: Recoverable: StreamTTL*10, Persistent: permanent (no expiry).
+	// Must be 0 for Ephemeral.
+	MetaTTL time.Duration
 	// Ordered enables score-based ordering in the state. When true, entries
 	// are returned sorted by Score (descending).
 	Ordered bool
-	// StreamSize sets the maximum number of entries in the recovery stream.
-	// Zero = auto-derived (100) for Durable/Persistent. Must be 0 for Ephemeral.
-	StreamSize int
-	// StreamTTL sets how long stream entries are retained.
-	// Zero = auto-derived (1 minute) for Durable/Persistent. Must be 0 for Ephemeral.
-	StreamTTL time.Duration
-	// MetaTTL sets how long stream metadata (epoch, offset) is retained.
-	// Zero = auto-derived: Durable: StreamTTL*10, Persistent: permanent (no expiry).
-	// Must be 0 for Ephemeral.
-	MetaTTL time.Duration
 	// DefaultPageSize sets the default number of items per page when
 	// the client does not specify a page size. Zero means default (100).
 	DefaultPageSize int

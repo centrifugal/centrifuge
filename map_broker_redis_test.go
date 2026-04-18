@@ -201,7 +201,7 @@ func newTestRedisMapBrokerWithHandler(tb testing.TB, n *Node, h BrokerEventHandl
 	if n.config.Map.GetMapChannelOptions == nil {
 		n.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				Mode:       MapModeDurable,
+				Mode:       MapModeRecoverable,
 				StreamSize: 100,
 				StreamTTL:  300 * time.Second,
 				MetaTTL:    time.Hour,
@@ -234,7 +234,7 @@ func newTestRedisMapBroker(tb testing.TB, n *Node) *RedisMapBroker {
 	if n.config.Map.GetMapChannelOptions == nil {
 		n.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				Mode:       MapModeDurable,
+				Mode:       MapModeRecoverable,
 				StreamSize: 100,
 				StreamTTL:  300 * time.Second,
 				MetaTTL:    time.Hour,
@@ -322,7 +322,7 @@ func TestRedisMapBroker_StatefulChannelOrdered(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
@@ -970,7 +970,7 @@ func TestRedisMapBroker_CleanupGeneratesRemovalEvents(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
 					MetaTTL:    3600 * time.Second,
@@ -1078,7 +1078,7 @@ func TestRedisMapBroker_CleanupPreservesTags(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
 					MetaTTL:    3600 * time.Second,
@@ -1209,7 +1209,7 @@ func TestRedisMapBroker_CleanupExpiry(t *testing.T) {
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				if channel == shortChannel {
 					return MapChannelOptions{
-						Mode:       MapModeDurable,
+						Mode:       MapModeRecoverable,
 						StreamSize: 100,
 						StreamTTL:  300 * time.Second,
 						MetaTTL:    3600 * time.Second,
@@ -1217,7 +1217,7 @@ func TestRedisMapBroker_CleanupExpiry(t *testing.T) {
 					}
 				}
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
 					MetaTTL:    3600 * time.Second,
@@ -1294,7 +1294,7 @@ func TestRedisMapBroker_CleanupRefreshedTTL(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
 					MetaTTL:    3600 * time.Second,
@@ -1368,7 +1368,7 @@ func TestRedisMapBroker_CleanupRegistration(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
 					MetaTTL:    3600 * time.Second,
@@ -1438,7 +1438,7 @@ func TestRedisMapBroker_OrderedStateOrdering(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
@@ -1499,7 +1499,7 @@ func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
@@ -1618,7 +1618,7 @@ func TestRedisMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
@@ -1677,7 +1677,7 @@ func TestRedisMapBroker_OrderedStateWithSameScores(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
@@ -1728,7 +1728,7 @@ func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
@@ -1831,7 +1831,7 @@ func TestRedisMapBroker_OrderedStateFullPagination(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
@@ -1908,7 +1908,7 @@ func TestRedisMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
@@ -2240,7 +2240,7 @@ func TestRedisMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
@@ -2307,7 +2307,7 @@ func TestRedisMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
@@ -2371,7 +2371,7 @@ func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
@@ -2464,7 +2464,7 @@ func TestRedisMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
@@ -2557,7 +2557,7 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
@@ -2859,7 +2859,7 @@ func TestRedisMapBroker_ReadStream_Table(t *testing.T) {
 		node, _ := New(Config{})
 		node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 			return MapChannelOptions{
-				Mode:       MapModeDurable,
+				Mode:       MapModeRecoverable,
 				StreamSize: 100,
 				StreamTTL:  300 * time.Second,
 				KeyTTL:     300 * time.Second,
@@ -2978,7 +2978,7 @@ func TestRedisMapBroker_OrderedStateAsc(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
@@ -3046,7 +3046,7 @@ func TestRedisMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
@@ -3120,7 +3120,7 @@ func TestRedisMapBroker_OrderedStateAscSameScores(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					Ordered:    true,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
@@ -3192,7 +3192,7 @@ func TestRedisMapBroker_CleanupMetrics(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:       MapModeDurable,
+					Mode:       MapModeRecoverable,
 					StreamSize: 100,
 					StreamTTL:  300 * time.Second,
 					MetaTTL:    3600 * time.Second,
