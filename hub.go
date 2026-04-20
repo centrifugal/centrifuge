@@ -206,6 +206,13 @@ func (h *Hub) BroadcastPublication(ch string, pub *Publication, sp StreamPositio
 	return h.broadcastPublication(ch, sp, pub, nil, nil, ChannelBatchConfig{})
 }
 
+// BroadcastPublicationDelta is like BroadcastPublication but supports delta compression.
+// When prevPub is non-nil, subscribers with delta enabled receive a computed delta
+// instead of the full publication data. Only sent to the current node subscribers.
+func (h *Hub) BroadcastPublicationDelta(ch string, pub *Publication, prevPub *Publication, sp StreamPosition) error {
+	return h.broadcastPublication(ch, sp, pub, prevPub, prevPub, ChannelBatchConfig{})
+}
+
 func (h *Hub) broadcastPublication(
 	ch string, sp StreamPosition, pub, prevPub, localPrevPub *Publication,
 	batchConfig ChannelBatchConfig,

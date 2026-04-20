@@ -3583,6 +3583,15 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	}
 	res.WasRecovering = req.Recover
 
+	// Append publications from subscribe reply (e.g., initial full state).
+	if len(reply.Publications) > 0 && len(res.Publications) == 0 {
+		protoPubs := make([]*protocol.Publication, 0, len(reply.Publications))
+		for _, pub := range reply.Publications {
+			protoPubs = append(protoPubs, pubToProto(pub))
+		}
+		res.Publications = protoPubs
+	}
+
 	if !serverSide {
 		// Write subscription reply only if initiated by client.
 		protoReply, err := c.getSubscribeCommandReply(res)

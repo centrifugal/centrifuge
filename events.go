@@ -209,6 +209,11 @@ type SubscribeReply struct {
 	// SubRefresh handler will be used.
 	ClientSideRefresh bool
 
+	// Publications to include in the subscribe result. These are delivered to the
+	// client as publication events before live publications begin — same mechanism
+	// as recovery publications. Useful for delivering initial state on subscribe.
+	Publications []*Publication
+
 	// SubscriptionReady channel if provided will be closed as soon as Centrifuge
 	// written subscribe reply to the connection, so it's possible to start writing
 	// publications into a channel using experimental Client.WritePublication method.
