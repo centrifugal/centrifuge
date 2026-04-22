@@ -86,7 +86,7 @@ func BenchmarkMemoryMapBroker_PublishMapStateOrdered(b *testing.B) {
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeRecoverable,
-			Ordered:    true,
+			ordered:    true,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -112,7 +112,7 @@ func BenchmarkMemoryMapBroker_PublishMapStateOrdered(b *testing.B) {
 			data := []byte(fmt.Sprintf("data%d", i))
 			_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 				Data:  data,
-				Score: i,
+				score: i,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -265,7 +265,7 @@ func BenchmarkMemoryMapBroker_ReadStateOrdered(b *testing.B) {
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
 			Mode:       MapModeRecoverable,
-			Ordered:    true,
+			ordered:    true,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -286,7 +286,7 @@ func BenchmarkMemoryMapBroker_ReadStateOrdered(b *testing.B) {
 		data := []byte(fmt.Sprintf("data%d", i))
 		_, err := broker.Publish(ctx, channel, key, MapPublishOptions{
 			Data:  data,
-			Score: int64(i),
+			score: int64(i),
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -490,7 +490,7 @@ func BenchmarkMemoryMapBroker_Cleanup(b *testing.B) {
 							return MapChannelOptions{
 								Mode:    MapModeRecoverable,
 								KeyTTL:  time.Millisecond,
-								Ordered: ordered,
+								ordered: ordered,
 							}
 						},
 					},
@@ -509,7 +509,7 @@ func BenchmarkMemoryMapBroker_Cleanup(b *testing.B) {
 					for k := 0; k < numKeys; k++ {
 						_, _ = broker.Publish(ctx, ch, fmt.Sprintf("key%d", k), MapPublishOptions{
 							Data:  []byte("data"),
-							Score: int64(k),
+							score: int64(k),
 						})
 					}
 					time.Sleep(2 * time.Millisecond)

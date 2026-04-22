@@ -150,8 +150,8 @@ type PublishOptions struct {
 
 	// Removed indicates this is a removal event in map subscriptions.
 	Removed bool
-	// Score is used for ordered map subscriptions (leaderboards, priority queues).
-	Score int64
+	// score is used for ordered map subscriptions (leaderboards, priority queues).
+	score int64
 	// Offset is the stream offset for map publications. When set, this offset
 	// is used instead of broker-assigned offset (used for map broker fan-out).
 	Offset uint64

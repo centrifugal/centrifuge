@@ -556,42 +556,22 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 
 	now := time.Now().UnixMilli()
 
-	// Stream publication (used for stream and pub/sub) - may have StreamData for incremental updates.
-	streamData := opts.Data
-	if len(opts.StreamData) > 0 {
-		streamData = opts.StreamData
-	}
+	// Stream publication (used for stream and pub/sub).
 	streamProtoPub := &protocol.Publication{
-		Data:  streamData,
+		Data:  opts.Data,
 		Info:  infoToProto(opts.ClientInfo),
 		Tags:  opts.Tags,
 		Time:  now,
 		Key:   key,
-		Score: opts.Score,
+		Score: opts.score,
 	}
 	streamBytes, err := streamProtoPub.MarshalVT()
 	if err != nil {
 		return MapUpdateResult{}, err
 	}
 
-	// State publication (used for state storage) - always uses full state Data.
+	// stateBytes is nil — Lua will use streamBytes for both state and stream.
 	var stateBytes []byte
-	if len(opts.StreamData) > 0 {
-		// Different data for state vs stream - need separate serialization.
-		stateProtoPub := &protocol.Publication{
-			Data:  opts.Data,
-			Info:  infoToProto(opts.ClientInfo),
-			Tags:  opts.Tags,
-			Time:  now,
-			Key:   key,
-			Score: opts.Score,
-		}
-		stateBytes, err = stateProtoPub.MarshalVT()
-		if err != nil {
-			return MapUpdateResult{}, err
-		}
-	}
-	// If stateBytes is nil, Lua will use streamBytes for both.
 
 	var resultKey string
 	var resultExpire string
@@ -612,7 +592,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		metaKey = e.metaKey(s.shard, ch)
 	}
 
-	ordered := chOpts.Ordered
+	ordered := chOpts.ordered
 
 	if key != "" {
 		stateHashKey = e.stateHashKey(s.shard, ch)
@@ -630,7 +610,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 	metaExpire := millis(chOpts.MetaTTL)
 
 	useDelta := "0"
-	if opts.UseDelta && len(opts.StreamData) == 0 {
+	if opts.UseDelta {
 		useDelta = "1"
 	}
 
@@ -725,7 +705,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 			version,
 			opts.VersionEpoch,
 			"0", // is_remove
-			strconv.FormatInt(opts.Score, 10),
+			strconv.FormatInt(opts.score, 10),
 			millis(chOpts.KeyTTL),
 			"0",                                  // use_hpexpire
 			ch,                                   // channel_for_cleanup (for cleanup registration)
@@ -928,7 +908,7 @@ func (e *RedisMapBroker) ReadState(ctx context.Context, ch string, opts MapReadS
 		}
 		return MapStateResult{Position: streamResult.Position}, nil
 	}
-	if chOpts.Ordered {
+	if chOpts.ordered {
 		return e.readOrderedState(ctx, ch, opts, chOpts)
 	}
 	return e.readUnorderedState(ctx, ch, opts, chOpts)

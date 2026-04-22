@@ -169,12 +169,8 @@ type MapPublishOptions struct {
 	IdempotentResultTTL time.Duration
 
 	// Data is the publication payload (usually JSON, but can be binary also).
-	// Stored in state and published to stream/pub-sub (unless StreamData is set).
+	// Stored in state and published to stream/pub-sub.
 	Data []byte
-	// StreamData, if set, overrides Data for stream and pub-sub publication.
-	// Use when you want to store full state in state but publish incremental updates.
-	// Example: state stores {"count":105}, stream publishes {"delta":5}.
-	StreamData []byte
 	// Tags are key-value metadata for filtering. Subscribers can filter by tags
 	// to receive only relevant publications.
 	Tags map[string]string
@@ -182,8 +178,6 @@ type MapPublishOptions struct {
 	ClientInfo *ClientInfo
 	// UseDelta enables delta compression. When true, only the difference from
 	// the previous value is stored/sent (requires client support).
-	// Note: delta is automatically disabled when StreamData is set, because
-	// StreamData provides explicit incremental data, making delta redundant.
 	UseDelta bool
 
 	// Version enables per-key version-based ordering. If set, the publish only
@@ -194,10 +188,10 @@ type MapPublishOptions struct {
 	// comparison. Empty string is valid — use when only incremental version matters.
 	VersionEpoch string
 
-	// Score is the sort value when ordered=true (configured in MapChannelOptions).
+	// score is the sort value when ordered=true (configured in MapChannelOptions).
 	// Higher scores appear first.
 	// Use for leaderboards, priority queues, and sorted collections.
-	Score int64
+	score int64
 
 	// KeyMode controls conditional publishing based on key existence.
 	// Default (empty/KeyModeReplace) always writes.

@@ -107,7 +107,7 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Pub
 		Time:    time.Now().UnixMilli(),
 		Key:     opts.Key,
 		Removed: opts.Removed,
-		Score:   opts.Score,
+		Score:   opts.score,
 		Version: opts.Version,
 	}
 	var prevPub *Publication

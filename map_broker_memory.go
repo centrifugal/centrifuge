@@ -139,23 +139,10 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 		Tags:  opts.Tags,
 		Time:  now,
 		Key:   key,
-		Score: opts.Score,
+		Score: opts.score,
 	}
 
-	// Stream publication may have different data (StreamData) for incremental updates.
-	var streamPub *Publication
-	if len(opts.StreamData) > 0 {
-		streamPub = &Publication{
-			Data:  opts.StreamData,
-			Info:  opts.ClientInfo,
-			Tags:  opts.Tags,
-			Time:  now,
-			Key:   key,
-			Score: opts.Score,
-		}
-	} else {
-		streamPub = statePub
-	}
+	streamPub := statePub
 
 	var prevPub *Publication
 	streamTop, prevPub, suppressReason, err := e.mapHub.add(ch, key, statePub, streamPub, chOpts, opts)
@@ -181,7 +168,7 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 	}
 
 	if e.eventHandler != nil {
-		// Publish streamPub (with StreamData if set) to subscribers.
+		// Publish streamPub to subscribers.
 		return MapUpdateResult{Position: streamTop}, e.eventHandler.HandlePublication(ch, streamPub, streamTop, opts.UseDelta, prevPub)
 	}
 
@@ -768,7 +755,7 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 	defer h.Unlock()
 
 	var prevPub *Publication
-	if opts.UseDelta && len(opts.StreamData) == 0 && key != "" {
+	if opts.UseDelta && key != "" {
 		// Get previous publication for delta (key-based: same key's previous state).
 		if channel, ok := h.channels[ch]; ok {
 			if entry, ok := channel.state[key]; ok {
@@ -782,11 +769,11 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 		channel = &mapChannel{
 			stream:  memstream.New(),
 			state:   make(map[string]*stateEntry),
-			ordered: chOpts.Ordered,
+			ordered: chOpts.ordered,
 			scores:  make(map[string]int64),
 		}
 		h.channels[ch] = channel
-	} else if chOpts.Ordered && !channel.ordered {
+	} else if chOpts.ordered && !channel.ordered {
 		channel.ordered = true
 		channel.sortedKeysDirty = true
 	}
@@ -926,7 +913,7 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 			Key:          key,
 			Revision:     streamPosition,
 			Publication:  statePub,
-			Score:        opts.Score,
+			Score:        opts.score,
 			ExpireAt:     expireAt,
 			Version:      version,
 			VersionEpoch: versionEpoch,
@@ -936,8 +923,8 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 
 		// Mark sorted keys as dirty for any state change
 		channel.sortedKeysDirty = true
-		if chOpts.Ordered {
-			channel.scores[key] = opts.Score
+		if chOpts.ordered {
+			channel.scores[key] = opts.score
 		}
 
 		// Handle key TTL expiration tracking

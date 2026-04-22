@@ -628,7 +628,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		Time:     time.Now().UnixMilli(),
 		Key:      opts.Key,
 		Removed:  opts.Removed,
-		Score:    opts.Score,
+		Score:    opts.score,
 		Offset:   opts.Offset,
 		Epoch:    opts.Epoch,
 		PrevData: opts.PrevData,
@@ -1360,7 +1360,7 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 			// it to unmarshalled Publication.
 			pub.Offset = sp.Offset
 		}
-		// Use Publication's Offset/Epoch for StreamPosition when available (keyed broker fan-out).
+		// Use Publication's Offset/Epoch for StreamPosition when available (map broker fan-out).
 		// This takes precedence over metadata prefix since keyed publications carry position in the message.
 		if pub.Offset > 0 {
 			sp.Offset = pub.Offset

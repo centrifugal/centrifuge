@@ -19,9 +19,9 @@ func newTestNodeWithSharedPoll(t *testing.T, opts ...SharedPollChannelOptions) *
 		spOpts = opts[0]
 	} else {
 		spOpts = SharedPollChannelOptions{
-			RefreshInterval:        100 * time.Millisecond,
-			RefreshBatchSize:       100,
-			MaxKeysPerConnection:   100,
+			RefreshInterval:      100 * time.Millisecond,
+			RefreshBatchSize:     100,
+			MaxKeysPerConnection: 100,
 		}
 	}
 
@@ -64,8 +64,8 @@ func setupSharedPollHandlers(node *Node) {
 				ClientSideRefresh: true,
 			}, nil)
 		})
-		client.OnKeyedTrack(func(e KeyedTrackEvent, cb KeyedTrackCallback) {
-			cb(KeyedTrackReply{}, nil)
+		client.OnTrack(func(e TrackEvent, cb TrackCallback) {
+			cb(TrackReply{}, nil)
 		})
 		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
 			cb(SubRefreshReply{}, nil)
@@ -105,7 +105,7 @@ func trackSharedPollClientWithReply(t testing.TB, client *Client, channel string
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: channel,
-		Type:    keyedTypeTrack,
+		Type:    typeTrack,
 		Items:   items,
 	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
@@ -122,7 +122,7 @@ func untrackSharedPollClient(t testing.TB, client *Client, channel string, keys 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel:     channel,
-		Type:        keyedTypeUntrack,
+		Type:        typeUntrack,
 		UntrackKeys: keys,
 	}, &protocol.Command{Id: 3}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
@@ -275,8 +275,8 @@ func TestSharedPollTrack_SignatureRejected(t *testing.T) {
 				ClientSideRefresh: true,
 			}, nil)
 		})
-		client.OnKeyedTrack(func(e KeyedTrackEvent, cb KeyedTrackCallback) {
-			cb(KeyedTrackReply{}, ErrorPermissionDenied)
+		client.OnTrack(func(e TrackEvent, cb TrackCallback) {
+			cb(TrackReply{}, ErrorPermissionDenied)
 		})
 		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
 			cb(SubRefreshReply{}, nil)
@@ -290,7 +290,7 @@ func TestSharedPollTrack_SignatureRejected(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: "test:channel",
-		Type:    keyedTypeTrack,
+		Type:    typeTrack,
 		Items:   []*protocol.KeyedItem{{Key: "key1", Version: 1}},
 	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
@@ -305,8 +305,8 @@ func TestSharedPollTrack_SignatureRejected(t *testing.T) {
 
 func TestSharedPollTrack_MaxTrackedExceeded(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		MaxKeysPerConnection:   2,
+		RefreshInterval:      100 * time.Millisecond,
+		MaxKeysPerConnection: 2,
 	})
 	setupSharedPollHandlers(node)
 	client := newTestClientV2(t, node, "user1")
@@ -323,7 +323,7 @@ func TestSharedPollTrack_MaxTrackedExceeded(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: "test:channel",
-		Type:    keyedTypeTrack,
+		Type:    typeTrack,
 		Items:   []*protocol.KeyedItem{{Key: "key3", Version: 3}},
 	}, &protocol.Command{Id: 3}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorLimitExceeded, err)
@@ -426,7 +426,7 @@ func TestSharedPollTrack_EmptyItems(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: "test:channel",
-		Type:    keyedTypeTrack,
+		Type:    typeTrack,
 		Items:   nil,
 	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorBadRequest, err)
@@ -442,7 +442,7 @@ func TestSharedPollUntrack_EmptyKeys(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel:     "test:channel",
-		Type:        keyedTypeUntrack,
+		Type:        typeUntrack,
 		UntrackKeys: nil,
 	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorBadRequest, err)
@@ -608,9 +608,9 @@ func TestSharedPollRefresh_Batching(t *testing.T) {
 	var batchCalls atomic.Int32
 
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   500,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 500,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -803,10 +803,10 @@ func TestSharedPollVersionedMode_VersionsInRequest(t *testing.T) {
 	var callCount atomic.Int32
 
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		Mode:                   SharedPollModeVersioned,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		Mode:                 SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -857,10 +857,10 @@ func TestSharedPollVersionedMode_AlwaysSendsVersions(t *testing.T) {
 	var callCount atomic.Int32
 
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		Mode:                   SharedPollModeVersioned,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		Mode:                 SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -965,9 +965,9 @@ func TestSharedPollUnsubscribe_Cleanup(t *testing.T) {
 
 func TestSharedPollConcurrent_TrackUntrack(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        50 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   1000,
+		RefreshInterval:      50 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 1000,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -1370,9 +1370,9 @@ func TestSharedPollRefresh_TwoClientsOverlap(t *testing.T) {
 
 func TestSharedPollRefresh_BatchingConcurrency(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   5000,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 5000,
 	})
 
 	var mu sync.Mutex
@@ -1483,10 +1483,10 @@ func TestSharedPollRevokeKeys_NonexistentKey(t *testing.T) {
 
 func TestSharedPollKeepLatestData_DataStored(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		KeepLatestData:         true,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		KeepLatestData:       true,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -1574,10 +1574,10 @@ func TestSharedPollKeepLatestData_NoDataWithout(t *testing.T) {
 
 func TestSharedPollChannelShutdown_Immediate(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		ChannelShutdownDelay:   -1, // Immediate shutdown.
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		ChannelShutdownDelay: -1, // Immediate shutdown.
 	})
 	setupSharedPollHandlers(node)
 
@@ -1599,10 +1599,10 @@ func TestSharedPollChannelShutdown_Immediate(t *testing.T) {
 
 func TestSharedPollChannelShutdown_Delay(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		ChannelShutdownDelay:   500 * time.Millisecond,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		ChannelShutdownDelay: 500 * time.Millisecond,
 	})
 	setupSharedPollHandlers(node)
 
@@ -1670,8 +1670,8 @@ func setupSharedPollDeltaHandlers(node *Node) {
 				ClientSideRefresh: true,
 			}, nil)
 		})
-		client.OnKeyedTrack(func(e KeyedTrackEvent, cb KeyedTrackCallback) {
-			cb(KeyedTrackReply{}, nil)
+		client.OnTrack(func(e TrackEvent, cb TrackCallback) {
+			cb(TrackReply{}, nil)
 		})
 		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
 			cb(SubRefreshReply{}, nil)
@@ -1716,10 +1716,10 @@ func TestSharedPollDelta_NegotiationDisabled(t *testing.T) {
 
 func TestSharedPollDelta_FirstPubIsFull(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		KeepLatestData:         true,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		KeepLatestData:       true,
 	})
 	setupSharedPollDeltaHandlers(node)
 
@@ -1785,11 +1785,11 @@ func TestSharedPollDelta_FirstPubIsFull(t *testing.T) {
 
 func TestSharedPollDelta_SubsequentPubIsDelta(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		KeepLatestData:         true,
-		Mode:                   SharedPollModeVersioned,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		KeepLatestData:       true,
+		Mode:                 SharedPollModeVersioned,
 	})
 	setupSharedPollDeltaHandlers(node)
 
@@ -1862,10 +1862,10 @@ func TestSharedPollDelta_SubsequentPubIsDelta(t *testing.T) {
 
 func TestSharedPollDelta_MultipleKeysIndependent(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		KeepLatestData:         true,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		KeepLatestData:       true,
 	})
 	setupSharedPollDeltaHandlers(node)
 
@@ -1924,10 +1924,10 @@ func TestSharedPollDelta_MultipleKeysIndependent(t *testing.T) {
 func TestSharedPollDelta_NoDeltaWithoutKeepLatestData(t *testing.T) {
 	// Without KeepLatestData, no prevData is captured → no delta.
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		KeepLatestData:         false,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		KeepLatestData:       false,
 	})
 	setupSharedPollDeltaHandlers(node)
 
@@ -1990,11 +1990,11 @@ done:
 func TestSharedPollDelta_DeltaApplicable(t *testing.T) {
 	// Verify the delta patch is actually a valid fossil delta.
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		KeepLatestData:         true,
-		Mode:                   SharedPollModeVersioned,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		KeepLatestData:       true,
+		Mode:                 SharedPollModeVersioned,
 	})
 	setupSharedPollDeltaHandlers(node)
 
@@ -2123,7 +2123,7 @@ func TestBuildPreparedPollData_LargePatch(t *testing.T) {
 	}
 }
 
-// setupSharedPollHandlersWithExpiry sets up handlers where OnKeyedTrack returns the given ExpireAt.
+// setupSharedPollHandlersWithExpiry sets up handlers where OnTrack returns the given ExpireAt.
 func setupSharedPollHandlersWithExpiry(node *Node, expireAt int64) {
 	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
 		return ConnectReply{}, nil
@@ -2137,8 +2137,8 @@ func setupSharedPollHandlersWithExpiry(node *Node, expireAt int64) {
 				ClientSideRefresh: true,
 			}, nil)
 		})
-		client.OnKeyedTrack(func(e KeyedTrackEvent, cb KeyedTrackCallback) {
-			cb(KeyedTrackReply{ExpireAt: expireAt}, nil)
+		client.OnTrack(func(e TrackEvent, cb TrackCallback) {
+			cb(TrackReply{ExpireAt: expireAt}, nil)
 		})
 		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
 			cb(SubRefreshReply{}, nil)
@@ -2198,8 +2198,8 @@ func TestSharedPollTrackExpiry_RefreshResetsExpiry(t *testing.T) {
 	// Simulate refresh: re-track with new expiry.
 	newExpireAt := int64(200)
 	// Update handler to return new expiry.
-	client.eventHub.keyedTrackHandler = func(e KeyedTrackEvent, cb KeyedTrackCallback) {
-		cb(KeyedTrackReply{ExpireAt: newExpireAt}, nil)
+	client.eventHub.trackHandler = func(e TrackEvent, cb TrackCallback) {
+		cb(TrackReply{ExpireAt: newExpireAt}, nil)
 	}
 	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
 		{Key: "keyA", Version: 1},
@@ -2250,8 +2250,8 @@ func TestSharedPollTrackExpiry_PartialRefresh(t *testing.T) {
 
 	// Refresh only A and B with new expiry (C keeps old expiry).
 	newExpireAt := int64(200)
-	client.eventHub.keyedTrackHandler = func(e KeyedTrackEvent, cb KeyedTrackCallback) {
-		cb(KeyedTrackReply{ExpireAt: newExpireAt}, nil)
+	client.eventHub.trackHandler = func(e TrackEvent, cb TrackCallback) {
+		cb(TrackReply{ExpireAt: newExpireAt}, nil)
 	}
 	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
 		{Key: "keyA", Version: 1},
@@ -2355,11 +2355,11 @@ func TestSharedPollTrackExpiry_NotExpiredYet(t *testing.T) {
 
 func TestSharedPollCachedData_ReturnedOnTrack(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		KeepLatestData:         true,
-		Mode:                   SharedPollModeVersioned,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		KeepLatestData:       true,
+		Mode:                 SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2411,10 +2411,10 @@ func TestSharedPollCachedData_ReturnedOnTrack(t *testing.T) {
 
 func TestSharedPollCachedData_NotReturnedWhenVersionCurrent(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		KeepLatestData:         true,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		KeepLatestData:       true,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2462,10 +2462,10 @@ func TestSharedPollCachedData_NotReturnedWhenVersionCurrent(t *testing.T) {
 
 func TestSharedPollCachedData_NotReturnedWithoutKeepLatestData(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		KeepLatestData:         false, // explicitly disabled
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		KeepLatestData:       false, // explicitly disabled
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2513,11 +2513,11 @@ func TestSharedPollCachedData_NotReturnedWithoutKeepLatestData(t *testing.T) {
 
 func TestSharedPollCachedData_VersionUpdatedNoDuplicate(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        10 * time.Second, // long interval to avoid timer poll interference
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		KeepLatestData:         true,
-		Mode:                   SharedPollModeVersioned,
+		RefreshInterval:      10 * time.Second, // long interval to avoid timer poll interference
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		KeepLatestData:       true,
+		Mode:                 SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2571,11 +2571,11 @@ func TestSharedPollCachedData_VersionUpdatedNoDuplicate(t *testing.T) {
 
 func TestSharedPollCachedData_MultipleKeys(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		KeepLatestData:         true,
-		Mode:                   SharedPollModeVersioned,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		KeepLatestData:       true,
+		Mode:                 SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2641,11 +2641,11 @@ func TestSharedPollCachedData_MultipleKeys(t *testing.T) {
 
 func TestSharedPollCachedData_PartialVersionMatch(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		KeepLatestData:         true,
-		Mode:                   SharedPollModeVersioned,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		KeepLatestData:       true,
+		Mode:                 SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2704,10 +2704,10 @@ func TestSharedPollAutoNotify_ColdKey(t *testing.T) {
 	var pollKeys []string
 
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        10 * time.Second, // Long interval — only auto-notify triggers poll.
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		Mode:                   SharedPollModeVersioned,
+		RefreshInterval:      10 * time.Second, // Long interval — only auto-notify triggers poll.
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		Mode:                 SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2748,10 +2748,10 @@ func TestSharedPollAutoNotify_ExistingKeyNoNotify(t *testing.T) {
 	callCh := make(chan SharedPollEvent, 10)
 
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        10 * time.Second, // Long interval.
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		Mode:                   SharedPollModeVersioned,
+		RefreshInterval:      10 * time.Second, // Long interval.
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		Mode:                 SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2817,10 +2817,10 @@ func TestSharedPollAutoNotify_MultipleClientsSameColdKey(t *testing.T) {
 	var pollCalled atomic.Int32
 
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        10 * time.Second,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		Mode:                   SharedPollModeVersioned,
+		RefreshInterval:      10 * time.Second,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		Mode:                 SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2886,10 +2886,10 @@ func TestSharedPollAutoNotify_ColdKeyNonZeroVersionNoNotify(t *testing.T) {
 	var pollCalled atomic.Int32
 
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        10 * time.Second, // Long interval — only auto-notify would trigger fast poll.
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		Mode:                   SharedPollModeVersioned,
+		RefreshInterval:      10 * time.Second, // Long interval — only auto-notify would trigger fast poll.
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		Mode:                 SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -2922,10 +2922,10 @@ func TestSharedPollAutoNotify_ColdKeyVersionZeroTriggersNotify(t *testing.T) {
 	var pollCalled atomic.Int32
 
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        10 * time.Second,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		Mode:                   SharedPollModeVersioned,
+		RefreshInterval:      10 * time.Second,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		Mode:                 SharedPollModeVersioned,
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
@@ -3067,11 +3067,11 @@ func TestSharedPollCachedData_DeltaReadyAfterCache(t *testing.T) {
 
 func TestSharedPollCachedData_DeltaReadyPartialKeys(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		KeepLatestData:         true,
-		Mode:                   SharedPollModeVersioned,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		KeepLatestData:       true,
+		Mode:                 SharedPollModeVersioned,
 	})
 	setupSharedPollDeltaHandlers(node)
 
@@ -3479,10 +3479,10 @@ func TestSharedPollEpoch_VersionlessSubscribeReplyHasEpoch(t *testing.T) {
 
 func TestSharedPollEpoch_VersionedModeEmptyEpoch(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		Mode:                   SharedPollModeVersioned,
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
+		Mode:                 SharedPollModeVersioned,
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
 	})
 	setupSharedPollHandlers(node)
 	client := newTestClientV2(t, node, "user1")
@@ -3567,10 +3567,10 @@ func TestSharedPollEpoch_ChangesOnChannelStateRecreation(t *testing.T) {
 	// reconnecting clients keep stale synthetic versions and miss updates
 	// until the version counter catches up.
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
-		RefreshInterval:        100 * time.Millisecond,
-		RefreshBatchSize:       100,
-		MaxKeysPerConnection:   100,
-		ChannelShutdownDelay:   -1, // Immediate cleanup on last untrack.
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		ChannelShutdownDelay: -1, // Immediate cleanup on last untrack.
 	})
 	setupSharedPollHandlers(node)
 

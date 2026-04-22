@@ -55,12 +55,12 @@ type keyedState struct {
 
 // Keyed sub-refresh request types (wire protocol values).
 const (
-	keyedTypeTrack   int32 = 1
-	keyedTypeUntrack int32 = 2
+	typeTrack   int32 = 1
+	typeUntrack int32 = 2
 )
 
-// handleKeyedTrack processes SubRefreshRequest with type=keyedTypeTrack (track).
-func (c *Client) handleKeyedTrack(req *protocol.SubRefreshRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
+// handleTrack processes SubRefreshRequest with type=typeTrack (track).
+func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
 	channel := req.Channel
 
 	if len(req.Items) == 0 {
@@ -80,24 +80,23 @@ func (c *Client) handleKeyedTrack(req *protocol.SubRefreshRequest, cmd *protocol
 		return ErrorLimitExceeded
 	}
 
-	// Call OnKeyedTrack handler (Centrifugo validates HMAC).
-	if c.eventHub.keyedTrackHandler == nil {
+	// Call OnTrack handler (Centrifugo validates HMAC).
+	if c.eventHub.trackHandler == nil {
 		return ErrorNotAvailable
 	}
 
-	items := make([]KeyedItem, len(req.Items))
+	items := make([]TrackItem, len(req.Items))
 	for i, it := range req.Items {
-		items[i] = KeyedItem{Key: it.Key, Version: it.Version}
+		items[i] = TrackItem{Key: it.Key, Version: it.Version}
 	}
 
-	event := KeyedTrackEvent{
+	event := TrackEvent{
 		Channel:   channel,
-		UserID:    c.UserID(),
 		Items:     items,
 		Signature: req.Signature,
 	}
 
-	c.eventHub.keyedTrackHandler(event, func(reply KeyedTrackReply, err error) {
+	c.eventHub.trackHandler(event, func(reply TrackReply, err error) {
 		if err != nil {
 			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, err, started, rw)
 			return
@@ -279,8 +278,8 @@ func (c *Client) handleKeyedTrack(req *protocol.SubRefreshRequest, cmd *protocol
 	return nil
 }
 
-// handleKeyedUntrack processes SubRefreshRequest with type=2 (untrack).
-func (c *Client) handleKeyedUntrack(req *protocol.SubRefreshRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
+// handleUntrack processes SubRefreshRequest with type=2 (untrack).
+func (c *Client) handleUntrack(req *protocol.SubRefreshRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
 	channel := req.Channel
 
 	if len(req.UntrackKeys) == 0 {
@@ -312,6 +311,13 @@ func (c *Client) handleKeyedUntrack(req *protocol.SubRefreshRequest, cmd *protoc
 				c.node.sharedPollManager.untrack(channel, key)
 			}
 		}
+	}
+
+	if c.eventHub.untrackHandler != nil {
+		c.eventHub.untrackHandler(UntrackEvent{
+			Channel: channel,
+			Keys:    req.UntrackKeys,
+		})
 	}
 
 	res := &protocol.SubRefreshResult{}

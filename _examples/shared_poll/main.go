@@ -213,10 +213,10 @@ func main() {
 			cb(centrifuge.SubscribeReply{}, nil)
 		})
 
-		// OnKeyedTrack is the SOLE authorization gate for shared poll subscriptions.
+		// OnTrack is the SOLE authorization gate for shared poll subscriptions.
 		// The handler MUST verify the signature — returning nil error without
 		// validation lets any client subscribe to arbitrary keys.
-		client.OnKeyedTrack(func(e centrifuge.KeyedTrackEvent, cb centrifuge.KeyedTrackCallback) {
+		client.OnTrack(func(e centrifuge.TrackEvent, cb centrifuge.TrackCallback) {
 			keys := make([]string, len(e.Items))
 			for i, item := range e.Items {
 				keys[i] = item.Key
@@ -226,8 +226,8 @@ func main() {
 			// this exact set of keys for the embedded role.
 			role, expireAt, err := verifySignature(e.Signature, e.Channel, keys)
 			if err != nil {
-				log.Printf("[user %s] track rejected: %v", e.UserID, err)
-				cb(centrifuge.KeyedTrackReply{}, centrifuge.ErrorPermissionDenied)
+				log.Printf("[user %s] track rejected: %v", client.UserID(), err)
+				cb(centrifuge.TrackReply{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
 
@@ -240,20 +240,20 @@ func main() {
 				f, ok := flags[item.Key]
 				if ok && f.AdminOnly && role != "admin" {
 					flagsMu.RUnlock()
-					log.Printf("[user %s] track rejected: %s requires admin role", e.UserID, item.Key)
-					cb(centrifuge.KeyedTrackReply{}, centrifuge.ErrorPermissionDenied)
+					log.Printf("[user %s] track rejected: %s requires admin role", client.UserID(), item.Key)
+					cb(centrifuge.TrackReply{}, centrifuge.ErrorPermissionDenied)
 					return
 				}
 			}
 			flagsMu.RUnlock()
 
-			log.Printf("[user %s] track approved: %d keys, role=%s", e.UserID, len(keys), role)
+			log.Printf("[user %s] track approved: %d keys, role=%s", client.UserID(), len(keys), role)
 
 			// ExpireAt forces the client to re-authorize after the signature TTL.
 			// This is how you enforce access revocation: when the client re-tracks
 			// with a fresh signature, the backend can refuse to sign keys the user
 			// no longer has access to.
-			cb(centrifuge.KeyedTrackReply{ExpireAt: expireAt}, nil)
+			cb(centrifuge.TrackReply{ExpireAt: expireAt}, nil)
 		})
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {

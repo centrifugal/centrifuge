@@ -578,11 +578,21 @@ func newCommandProcessedEvent(command *protocol.Command, err error, reply *proto
 // Also, carefully read docs for CommandProcessedEvent to avoid possible bugs.
 type CommandProcessedHandler func(*Client, CommandProcessedEvent)
 
-// KeyedTrackEvent contains fields related to a track request on a keyed channel.
-type KeyedTrackEvent struct {
+// UntrackEvent contains fields related to an untrack request on a keyed channel.
+type UntrackEvent struct {
+	// Channel client untracked keys from.
 	Channel string
-	UserID  string
-	Items   []KeyedItem
+	// Keys are the keys being untracked.
+	Keys []string
+}
+
+// UntrackHandler called when client untracks keys on a keyed channel.
+type UntrackHandler func(UntrackEvent)
+
+// TrackEvent contains fields related to a track request on a keyed channel.
+type TrackEvent struct {
+	Channel string
+	Items   []TrackItem
 	// Signature is an opaque string sent by the client to prove authorization for
 	// the requested channel and keys. In Centrifugo this is an HMAC token generated
 	// by the application backend. The handler MUST verify Signature before allowing
@@ -591,14 +601,14 @@ type KeyedTrackEvent struct {
 	Signature string
 }
 
-// KeyedItem represents a single item being tracked (key + version).
-type KeyedItem struct {
+// TrackItem represents a single item being tracked (key + version).
+type TrackItem struct {
 	Key     string
 	Version uint64
 }
 
-// KeyedTrackReply contains the reaction to a keyed track event.
-type KeyedTrackReply struct {
+// TrackReply contains the reaction to a keyed track event.
+type TrackReply struct {
 	// ExpireAt is the Unix timestamp (seconds) after which the client's tracked keys
 	// for this channel are considered expired and stop receiving updates. The client
 	// must re-track with a fresh signature to continue.
@@ -612,15 +622,15 @@ type KeyedTrackReply struct {
 	ExpireAt int64
 }
 
-// KeyedTrackCallback should be called with KeyedTrackReply or error.
-type KeyedTrackCallback func(KeyedTrackReply, error)
+// TrackCallback should be called with TrackReply or error.
+type TrackCallback func(TrackReply, error)
 
-// KeyedTrackHandler is called when a client sends a track request on a shared
-// poll channel. The handler MUST validate KeyedTrackEvent.Signature and return
+// TrackHandler is called when a client sends a track request on a shared
+// poll channel. The handler MUST validate TrackEvent.Signature and return
 // an error if it is invalid — this is the sole authorization gate for which keys
-// a client may receive data for. On success, set KeyedTrackReply.ExpireAt to
+// a client may receive data for. On success, set TrackReply.ExpireAt to
 // bound how long the client may receive updates without re-authorization.
-type KeyedTrackHandler func(KeyedTrackEvent, KeyedTrackCallback)
+type TrackHandler func(TrackEvent, TrackCallback)
 
 // SharedPollEvent contains fields for a shared poll refresh call.
 type SharedPollEvent struct {

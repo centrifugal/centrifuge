@@ -65,11 +65,11 @@ type sharedPollChannelState struct {
 }
 
 type sharedPollTrackedEntry struct {
-	version             uint64 // last version from backend (or synthetic in versionless mode)
-	data                []byte // only when KeepLatestData is true
-	dataHash            uint64 // xxhash64 hash of data, only used in versionless mode
-	freshFromPublish bool // set by SharedPollPublish, cleared each timer poll cycle
-	needsBroadcast      bool   // set when a version=0 subscriber joins an existing key; cleared after broadcast
+	version          uint64 // last version from backend (or synthetic in versionless mode)
+	data             []byte // only when KeepLatestData is true
+	dataHash         uint64 // xxhash64 hash of data, only used in versionless mode
+	freshFromPublish bool   // set by SharedPollPublish, cleared each timer poll cycle
+	needsBroadcast   bool   // set when a version=0 subscriber joins an existing key; cleared after broadcast
 }
 
 func xxHash64(data []byte) uint64 {
@@ -115,7 +115,7 @@ func newSharedPollManager(node *Node) *SharedPollManager {
 
 // track registers an item in the shared poll channel state and ensures
 // a refresh worker is running. Hub registration (addSubscriber) is handled
-// by the generic keyed layer in handleKeyedTrack — NOT here.
+// by the generic keyed layer in handleTrack — NOT here.
 func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions, key string) (bool, uint64, error) {
 	// Check global shutdown.
 	select {
@@ -490,7 +490,7 @@ func (m *SharedPollManager) notify(channel string, key string) {
 // getCachedData returns cached publications for items where the server has a newer
 // version than the client. Returns nil when nothing to return (omitted from protobuf).
 // Only returns data when KeepLatestData is enabled for the channel.
-func (m *SharedPollManager) getCachedData(channel string, items []KeyedItem) []*protocol.Publication {
+func (m *SharedPollManager) getCachedData(channel string, items []TrackItem) []*protocol.Publication {
 	m.mu.RLock()
 	s, ok := m.channels[channel]
 	m.mu.RUnlock()

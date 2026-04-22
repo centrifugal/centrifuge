@@ -56,9 +56,6 @@ type MapChannelOptions struct {
 	// Zero = auto-derived: Recoverable: StreamTTL*10, Persistent: permanent (no expiry).
 	// Must be 0 for Ephemeral.
 	MetaTTL time.Duration
-	// Ordered enables score-based ordering in the state. When true, entries
-	// are returned sorted by Score (descending).
-	Ordered bool
 	// DefaultPageSize sets the default number of items per page when
 	// the client does not specify a page size. Zero means default (100).
 	DefaultPageSize int
@@ -78,6 +75,9 @@ type MapChannelOptions struct {
 	// disconnected with DisconnectSlow. Zero means 5 seconds (default). Negative
 	// means no timeout.
 	SubscribeCatchUpTimeout time.Duration
+	// ordered enables score-based ordering in the state. When true, entries
+	// are returned sorted by Score (descending).
+	ordered bool
 }
 
 // Config contains Node configuration options.

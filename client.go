@@ -58,7 +58,8 @@ type clientEventHub struct {
 	presenceStatsHandler PresenceStatsHandler
 	historyHandler       HistoryHandler
 	stateSnapshotHandler StateSnapshotHandler
-	keyedTrackHandler    KeyedTrackHandler
+	trackHandler         TrackHandler
+	untrackHandler       UntrackHandler
 }
 
 // OnAlive allows setting AliveHandler.
@@ -148,10 +149,16 @@ func (c *Client) OnHistory(h HistoryHandler) {
 	c.eventHub.historyHandler = h
 }
 
-// OnKeyedTrack allows setting KeyedTrackHandler.
-// KeyedTrackHandler called when client sends a track request on a keyed channel.
-func (c *Client) OnKeyedTrack(h KeyedTrackHandler) {
-	c.eventHub.keyedTrackHandler = h
+// OnTrack allows setting TrackHandler.
+// TrackHandler called when client sends a track request on a keyed channel.
+func (c *Client) OnTrack(h TrackHandler) {
+	c.eventHub.trackHandler = h
+}
+
+// OnUntrack allows setting UntrackHandler.
+// UntrackHandler called when client untracks keys on a keyed channel.
+func (c *Client) OnUntrack(h UntrackHandler) {
+	c.eventHub.untrackHandler = h
 }
 
 const (
@@ -1955,10 +1962,10 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 	// Route by type for keyed channels (shared poll track/untrack).
 	if channelHasFlag(ctx.flags, flagKeyed) {
 		switch req.Type {
-		case keyedTypeTrack:
-			return c.handleKeyedTrack(req, cmd, started, rw)
-		case keyedTypeUntrack:
-			return c.handleKeyedUntrack(req, cmd, started, rw)
+		case typeTrack:
+			return c.handleTrack(req, cmd, started, rw)
+		case typeUntrack:
+			return c.handleUntrack(req, cmd, started, rw)
 		}
 	}
 

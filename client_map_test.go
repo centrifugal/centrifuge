@@ -20,8 +20,8 @@ func newTestNodeWithMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:               MapModeEphemeral,
-					KeyTTL:             60 * time.Second,
+					Mode:        MapModeEphemeral,
+					KeyTTL:      60 * time.Second,
 					MinPageSize: 1, // Allow small page sizes in tests.
 				}
 			},
@@ -49,8 +49,8 @@ func newTestNodeWithMapBroker(t *testing.T) (*Node, *MemoryMapBroker) {
 func setTestMapChannelOptionsConverging(node *Node) {
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
-			Mode:               MapModeRecoverable,
-			KeyTTL:             60 * time.Second,
+			Mode:        MapModeRecoverable,
+			KeyTTL:      60 * time.Second,
 			MinPageSize: 1, // Allow small page sizes in tests.
 		}
 	}
@@ -1382,95 +1382,6 @@ func TestMapBroker_CASWrongEpoch(t *testing.T) {
 	require.Equal(t, []byte(`{"value":10}`), pubs[0].Data)
 }
 
-// TestMapBroker_StreamDataDifferentPayloads tests publishing with different
-// data for state (full state) and stream (incremental update).
-func TestMapBroker_StreamDataDifferentPayloads(t *testing.T) {
-	node, broker := newTestNodeWithMapBroker(t)
-	setTestMapChannelOptionsConverging(node)
-	ctx := context.Background()
-	ch := "test_stream_data"
-
-	// Publish with different payloads: state gets full state, stream gets delta
-	_, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
-		Data:       []byte(`{"count":100}`), // Full state → state
-		StreamData: []byte(`{"delta":100}`), // Incremental → stream
-	})
-	require.NoError(t, err)
-
-	// Read state - should have full state
-	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
-	require.NoError(t, err)
-	pubs, pos, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
-	require.NoError(t, err)
-	require.Len(t, pubs, 1)
-	require.Equal(t, []byte(`{"count":100}`), pubs[0].Data)
-
-	// Read stream - should have incremental data
-	streamResult, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{
-		Filter: StreamFilter{Limit: 10},
-	})
-	require.NoError(t, err)
-	require.Len(t, streamResult.Publications, 1)
-	require.Equal(t, []byte(`{"delta":100}`), streamResult.Publications[0].Data)
-
-	// Update with CAS: read current position, update with different payloads
-	expectedPos := StreamPosition{Offset: pubs[0].Offset, Epoch: pos.Epoch}
-	_, err = broker.Publish(ctx, ch, "counter", MapPublishOptions{
-		Data:             []byte(`{"count":105}`), // New full state → state
-		StreamData:       []byte(`{"delta":5}`),   // Incremental → stream
-		ExpectedPosition: &expectedPos,
-	})
-	require.NoError(t, err)
-
-	// Verify state has new full state
-	stateRes, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
-	require.NoError(t, err)
-	pubs, _, _ = stateRes.Publications, stateRes.Position, stateRes.Cursor
-	require.NoError(t, err)
-	require.Len(t, pubs, 1)
-	require.Equal(t, []byte(`{"count":105}`), pubs[0].Data)
-
-	// Verify stream has both incremental updates
-	streamResult, err = broker.ReadStream(ctx, ch, MapReadStreamOptions{
-		Filter: StreamFilter{Limit: 10},
-	})
-	require.NoError(t, err)
-	require.Len(t, streamResult.Publications, 2)
-	require.Equal(t, []byte(`{"delta":100}`), streamResult.Publications[0].Data)
-	require.Equal(t, []byte(`{"delta":5}`), streamResult.Publications[1].Data)
-}
-
-// TestMapBroker_StreamDataWithoutStreamData tests that when StreamData is not set,
-// Data is used for both state and stream.
-func TestMapBroker_StreamDataWithoutStreamData(t *testing.T) {
-	node, broker := newTestNodeWithMapBroker(t)
-	setTestMapChannelOptionsConverging(node)
-	ctx := context.Background()
-	ch := "test_no_stream_data"
-
-	// Publish without StreamData - Data should be used for both
-	_, err := broker.Publish(ctx, ch, "item", MapPublishOptions{
-		Data: []byte(`{"name":"test","value":42}`),
-	})
-	require.NoError(t, err)
-
-	// Read state
-	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Key: "item"})
-	require.NoError(t, err)
-	pubs, _, _ := stateRes.Publications, stateRes.Position, stateRes.Cursor
-	require.NoError(t, err)
-	require.Len(t, pubs, 1)
-	require.Equal(t, []byte(`{"name":"test","value":42}`), pubs[0].Data)
-
-	// Read stream - should have same data
-	streamResult, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{
-		Filter: StreamFilter{Limit: 10},
-	})
-	require.NoError(t, err)
-	require.Len(t, streamResult.Publications, 1)
-	require.Equal(t, []byte(`{"name":"test","value":42}`), streamResult.Publications[0].Data)
-}
-
 // Tests for STATE→LIVE direct transition optimization.
 
 func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
@@ -1482,8 +1393,8 @@ func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:               MapModeRecoverable,
-					KeyTTL:             60 * time.Second,
+					Mode:        MapModeRecoverable,
+					KeyTTL:      60 * time.Second,
 					MinPageSize: 1,
 				}
 			},
@@ -1628,8 +1539,8 @@ func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:               MapModeRecoverable,
-					KeyTTL:             60 * time.Second,
+					Mode:        MapModeRecoverable,
+					KeyTTL:      60 * time.Second,
 					MinPageSize: 1,
 				}
 			},
@@ -1721,8 +1632,8 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:               MapModeRecoverable,
-					KeyTTL:             60 * time.Second,
+					Mode:        MapModeRecoverable,
+					KeyTTL:      60 * time.Second,
 					MinPageSize: 1,
 				}
 			},
@@ -1831,8 +1742,8 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination_ManyPublishes(t *testi
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:               MapModeRecoverable,
-					KeyTTL:             60 * time.Second,
+					Mode:        MapModeRecoverable,
+					KeyTTL:      60 * time.Second,
 					MinPageSize: 1,
 				}
 			},
@@ -2438,9 +2349,9 @@ func TestMapSubscribe_RecoveryMaxPublicationLimit(t *testing.T) {
 		Map: MapConfig{
 			GetMapChannelOptions: func(channel string) MapChannelOptions {
 				return MapChannelOptions{
-					Mode:                             MapModeRecoverable,
-					KeyTTL:                           60 * time.Second,
-					MinPageSize:               1,
+					Mode:                              MapModeRecoverable,
+					KeyTTL:                            60 * time.Second,
+					MinPageSize:                       1,
 					LiveTransitionMaxPublicationLimit: 5, // Max 5 publications during recovery.
 				}
 			},
@@ -2929,7 +2840,7 @@ func TestMapSubscribe_CatchUpTimeout_StatePagination(t *testing.T) {
 		return MapChannelOptions{
 			Mode:                    MapModeEphemeral,
 			KeyTTL:                  60 * time.Second,
-			MinPageSize:      1,
+			MinPageSize:             1,
 			SubscribeCatchUpTimeout: time.Nanosecond,
 		}
 	}
@@ -2993,7 +2904,7 @@ func TestMapSubscribe_CatchUpTimeout_PhaseTransition(t *testing.T) {
 		return MapChannelOptions{
 			Mode:                    MapModeRecoverable,
 			KeyTTL:                  60 * time.Second,
-			MinPageSize:      1,
+			MinPageSize:             1,
 			SubscribeCatchUpTimeout: 10 * time.Second, // Large enough for STATE pages.
 		}
 	}
@@ -3075,7 +2986,7 @@ func TestMapSubscribe_CatchUpTimeout_Sweep(t *testing.T) {
 		return MapChannelOptions{
 			Mode:                    MapModeEphemeral,
 			KeyTTL:                  60 * time.Second,
-			MinPageSize:      1,
+			MinPageSize:             1,
 			SubscribeCatchUpTimeout: time.Nanosecond,
 		}
 	}
@@ -3148,7 +3059,7 @@ func TestMapSubscribe_CatchUpTimeout_Disabled(t *testing.T) {
 		return MapChannelOptions{
 			Mode:                    MapModeEphemeral,
 			KeyTTL:                  60 * time.Second,
-			MinPageSize:      1,
+			MinPageSize:             1,
 			SubscribeCatchUpTimeout: -1,
 		}
 	}
@@ -3988,8 +3899,8 @@ func TestSharedPollSubscribe_WithMapPresence(t *testing.T) {
 				ClientSideRefresh: true,
 			}, nil)
 		})
-		client.OnKeyedTrack(func(e KeyedTrackEvent, cb KeyedTrackCallback) {
-			cb(KeyedTrackReply{}, nil)
+		client.OnTrack(func(e TrackEvent, cb TrackCallback) {
+			cb(TrackReply{}, nil)
 		})
 		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
 			cb(SubRefreshReply{}, nil)
@@ -4040,8 +3951,8 @@ func TestSharedPollSubscribe_WithRegularPresence(t *testing.T) {
 				ClientSideRefresh: true,
 			}, nil)
 		})
-		client.OnKeyedTrack(func(e KeyedTrackEvent, cb KeyedTrackCallback) {
-			cb(KeyedTrackReply{}, nil)
+		client.OnTrack(func(e TrackEvent, cb TrackCallback) {
+			cb(TrackReply{}, nil)
 		})
 		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
 			cb(SubRefreshReply{}, nil)
@@ -4254,8 +4165,8 @@ func TestMapSubscribe_ServerAndClientTagsFilter_AND(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Type:             SubscriptionTypeMap,
-					AllowTagsFilter:  true,
+					Type:            SubscriptionTypeMap,
+					AllowTagsFilter: true,
 					ServerTagsFilter: &FilterNode{
 						Key: "team", Cmp: "eq", Val: "eng",
 					},
