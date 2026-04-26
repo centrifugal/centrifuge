@@ -109,4 +109,11 @@ var (
 		Code:    112,
 		Message: "unrecoverable position",
 	}
+	// ErrorConcurrentPagination means a pagination request was sent while
+	// another pagination request for the same channel is in progress.
+	ErrorConcurrentPagination = &Error{
+		Code:      113,
+		Message:   "concurrent pagination",
+		Temporary: true,
+	}
 )

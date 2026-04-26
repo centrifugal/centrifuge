@@ -25,6 +25,7 @@ func setupChannelMedium(t testing.TB, options ChannelMediumOptions, node nodeSub
 type mockNode struct {
 	handlePublicationFunc func(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error
 	streamTopFunc         func(ch string, historyMetaTTL time.Duration) (StreamPosition, error)
+	mapStreamTopFunc      func(ch string) (StreamPosition, error)
 }
 
 func (m *mockNode) handlePublication(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
@@ -37,6 +38,13 @@ func (m *mockNode) handlePublication(channel string, sp StreamPosition, pub, pre
 func (m *mockNode) streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error) {
 	if m.streamTopFunc != nil {
 		return m.streamTopFunc(ch, historyMetaTTL)
+	}
+	return StreamPosition{}, nil
+}
+
+func (m *mockNode) mapStreamTop(ch string) (StreamPosition, error) {
+	if m.mapStreamTopFunc != nil {
+		return m.mapStreamTopFunc(ch)
 	}
 	return StreamPosition{}, nil
 }
@@ -191,4 +199,135 @@ func TestChannelMediumPositionSyncRetry(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "streamTopLatestPubFunc was not called")
 	}
+}
+
+func TestChannelMediumPositionSyncMap(t *testing.T) {
+	// Verify that SharedPositionSync for map channels calls mapStreamTop (not streamTop).
+	options := ChannelMediumOptions{
+		SharedPositionSync: true,
+	}
+	mapStreamTopCalled := make(chan struct{})
+	var closeOnce sync.Once
+	medium := setupChannelMedium(t, options, &mockNode{
+		streamTopFunc: func(ch string, historyMetaTTL time.Duration) (StreamPosition, error) {
+			require.Fail(t, "streamTop should not be called for map channel")
+			return StreamPosition{}, nil
+		},
+		mapStreamTopFunc: func(ch string) (StreamPosition, error) {
+			closeOnce.Do(func() {
+				close(mapStreamTopCalled)
+			})
+			return StreamPosition{Offset: 5, Epoch: "abc"}, nil
+		},
+	})
+	medium.isMap = true
+
+	originalGetter := channelMediumTimeNow
+	channelMediumTimeNow = func() time.Time {
+		return time.Now().Add(time.Hour)
+	}
+	// Position matches — should return true.
+	valid := medium.CheckPosition(time.Second, StreamPosition{Offset: 5, Epoch: "abc"}, time.Second)
+	channelMediumTimeNow = originalGetter
+	require.True(t, valid)
+	select {
+	case <-mapStreamTopCalled:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "mapStreamTopFunc was not called")
+	}
+}
+
+func TestChannelMediumPositionSyncMapMismatch(t *testing.T) {
+	// Verify that SharedPositionSync for map channels detects position mismatch.
+	options := ChannelMediumOptions{
+		SharedPositionSync: true,
+		enableQueue:        true,
+	}
+	insufficientCh := make(chan struct{})
+	var closeOnce sync.Once
+	medium := setupChannelMedium(t, options, &mockNode{
+		handlePublicationFunc: func(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
+			if pub.Offset == math.MaxUint64 {
+				closeOnce.Do(func() {
+					close(insufficientCh)
+				})
+			}
+			return nil
+		},
+		mapStreamTopFunc: func(ch string) (StreamPosition, error) {
+			return StreamPosition{Offset: 10, Epoch: "xyz"}, nil
+		},
+	})
+	medium.isMap = true
+
+	originalGetter := channelMediumTimeNow
+	channelMediumTimeNow = func() time.Time {
+		return time.Now().Add(time.Hour)
+	}
+	// Client has stale position — should return false.
+	valid := medium.CheckPosition(time.Second, StreamPosition{Offset: 5, Epoch: "xyz"}, time.Second)
+	channelMediumTimeNow = originalGetter
+	require.False(t, valid)
+	select {
+	case <-insufficientCh:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "insufficient state was not broadcast")
+	}
+}
+
+func TestChannelMediumNoLocalPrevPubForMapSubs(t *testing.T) {
+	// Test that channel medium does NOT provide localPrevPub for map publications
+	// (pub.Key != ""). Map keys are independent streams — a single latestPublication
+	// can't serve as a correct delta base across different keys. Only non-map
+	// publications get medium-level localPrevPub tracking.
+	type broadcastEvent struct {
+		pub          *Publication
+		localPrevPub *Publication
+	}
+
+	var mu sync.Mutex
+	var events []broadcastEvent
+
+	options := ChannelMediumOptions{
+		KeepLatestPublication: true,
+	}
+	medium := setupChannelMedium(t, options, &mockNode{
+		handlePublicationFunc: func(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
+			mu.Lock()
+			events = append(events, broadcastEvent{pub: pub, localPrevPub: localPrevPub})
+			mu.Unlock()
+			return nil
+		},
+	})
+
+	// Map publications always get nil localPrevPub.
+	pubA1 := &Publication{Data: []byte("a1"), Key: "a"}
+	medium.broadcastPublication(pubA1, StreamPosition{Offset: 1}, true, nil)
+	pubA2 := &Publication{Data: []byte("a2"), Key: "a"}
+	medium.broadcastPublication(pubA2, StreamPosition{Offset: 2}, true, nil)
+	pubB1 := &Publication{Data: []byte("b1"), Key: "b"}
+	medium.broadcastPublication(pubB1, StreamPosition{Offset: 3}, true, nil)
+
+	mu.Lock()
+	require.Len(t, events, 3)
+	require.Nil(t, events[0].localPrevPub, "map pub must not get localPrevPub")
+	require.Nil(t, events[1].localPrevPub, "map pub same key must not get localPrevPub")
+	require.Nil(t, events[2].localPrevPub, "map pub different key must not get localPrevPub")
+	mu.Unlock()
+
+	// Map publications must not pollute latestPublication used by non-map pubs.
+	pubNoKey1 := &Publication{Data: []byte("nokey1")}
+	medium.broadcastPublication(pubNoKey1, StreamPosition{Offset: 4}, true, nil)
+	mu.Lock()
+	require.Len(t, events, 4)
+	require.Nil(t, events[3].localPrevPub, "first non-map pub should have nil localPrevPub")
+	mu.Unlock()
+
+	pubNoKey2 := &Publication{Data: []byte("nokey2")}
+	medium.broadcastPublication(pubNoKey2, StreamPosition{Offset: 5}, true, nil)
+	mu.Lock()
+	require.Len(t, events, 5)
+	require.NotNil(t, events[4].localPrevPub)
+	require.Equal(t, []byte("nokey1"), events[4].localPrevPub.Data)
+	mu.Unlock()
 }

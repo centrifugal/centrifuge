@@ -249,8 +249,8 @@ func TestMetrics(t *testing.T) {
 				m.incRecover(true, "channel"+strconv.Itoa(i%2), false)
 				m.incRecover(false, "channel"+strconv.Itoa(i%2), false)
 				m.observeRecoveredPublications(10, "channel"+strconv.Itoa(i%2))
-				m.observePubSubDeliveryLag(100)
-				m.observePubSubDeliveryLag(-10)
+				m.observePubSubDeliveryLag(100, "channel"+strconv.Itoa(i%2))
+				m.observePubSubDeliveryLag(-10, "channel"+strconv.Itoa(i%2))
 				m.observePingPongDuration(time.Second, transportWebsocket)
 				m.incServerDisconnect(3000)
 				m.incServerDisconnect(30000)
@@ -262,6 +262,33 @@ func TestMetrics(t *testing.T) {
 				m.setNumUsers(300)
 				m.setNumNodes(4)
 				m.setNumSubscriptions(500)
+
+				// Shared poll metrics.
+				cc := m.getSharedPollChannelCached("channel" + strconv.Itoa(i%2))
+				cc.cycleDuration.Observe(1.5)
+				cc.cycleWorkDuration.Observe(1.0)
+				cc.notifyCount.Inc()
+
+				for _, trigger := range []string{"timer", "notification"} {
+					ch := "channel" + strconv.Itoa(i%2)
+					hc := m.getSharedPollHandlerCached(trigger, ch)
+					hc.duration.Observe(0.05)
+					hc.semWait.Observe(0.001)
+					hc.errorCount.Inc()
+					hc.itemsPolled.Add(100)
+
+					rc := m.getSharedPollResultCached(trigger, ch)
+					rc.changed.Add(5)
+					rc.unchanged.Add(90)
+					rc.removed.Add(2)
+				}
+
+				pc := m.getSharedPollPublishCached("channel" + strconv.Itoa(i%2))
+				pc.applied.Inc()
+				pc.skipped.Inc()
+
+				m.setSharedPollNumChannels(10)
+				m.setSharedPollNumKeys(500)
 			}
 		})
 	}
@@ -304,4 +331,59 @@ func Test_getHTTPTransportProto(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMetrics_MapBrokerAndRedisBrokerCounters(t *testing.T) {
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test_map",
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(t, err)
+	// These were previously uncovered.
+	m.incRedisBrokerPubSubErrors("test_broker", "subscribe")
+	m.incMapBrokerCleanupErrors("test_broker")
+	m.addMapBrokerCleanupKeysRemoved("test_broker", 10)
+	m.setMapBrokerCleanupLag("test_broker", 2.5)
+}
+
+func BenchmarkSharedPollHandlerCached(b *testing.B) {
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(b, err)
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			hc := m.getSharedPollHandlerCached("timer", "channel"+strconv.Itoa(i%10))
+			hc.duration.Observe(0.05)
+			hc.itemsPolled.Add(100)
+			i++
+		}
+	})
+}
+
+func BenchmarkSharedPollResultCached(b *testing.B) {
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(b, err)
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			rc := m.getSharedPollResultCached("timer", "channel"+strconv.Itoa(i%10))
+			rc.changed.Add(5)
+			rc.unchanged.Add(90)
+			i++
+		}
+	})
 }

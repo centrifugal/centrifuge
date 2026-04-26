@@ -72,12 +72,12 @@ func (e *TestBroker) RegisterBrokerEventHandler(_ BrokerEventHandler) error {
 	return nil
 }
 
-func (e *TestBroker) Publish(_ string, _ []byte, _ PublishOptions) (StreamPosition, bool, error) {
+func (e *TestBroker) Publish(_ string, _ []byte, _ PublishOptions) (PublishResult, error) {
 	atomic.AddInt32(&e.publishCount, 1)
 	if e.errorOnPublish {
-		return StreamPosition{}, false, errors.New("boom")
+		return PublishResult{}, errors.New("boom")
 	}
-	return StreamPosition{}, false, nil
+	return PublishResult{}, nil
 }
 
 func (e *TestBroker) PublishJoin(_ string, _ *ClientInfo) error {
@@ -104,14 +104,14 @@ func (e *TestBroker) PublishControl(_ []byte, _, _ string) error {
 	return nil
 }
 
-func (e *TestBroker) Subscribe(_ string) error {
+func (e *TestBroker) Subscribe(_ ...string) error {
 	if e.errorOnSubscribe {
 		return errors.New("boom")
 	}
 	return nil
 }
 
-func (e *TestBroker) Unsubscribe(_ string) error {
+func (e *TestBroker) Unsubscribe(_ ...string) error {
 	if e.errorOnUnsubscribe {
 		return errors.New("boom")
 	}
@@ -1407,21 +1407,160 @@ func TestNodeCheckPosition(t *testing.T) {
 	isValid, err := node.checkPosition("test", StreamPosition{
 		Offset: 20,
 		Epoch:  "test",
-	}, 200*time.Second)
+	}, 200*time.Second, false)
 	require.NoError(t, err)
 	require.True(t, isValid)
 
 	isValid, err = node.checkPosition("test", StreamPosition{
 		Offset: 19,
 		Epoch:  "test",
-	}, 200*time.Second)
+	}, 200*time.Second, false)
 	require.NoError(t, err)
 	require.False(t, isValid)
 
 	isValid, err = node.checkPosition("test", StreamPosition{
 		Offset: 20,
 		Epoch:  "test_new",
-	}, 200*time.Second)
+	}, 200*time.Second, false)
+	require.NoError(t, err)
+	require.False(t, isValid)
+}
+
+func TestNodeCheckPositionMap(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	// Set up map broker.
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	ctx := context.Background()
+	channel := "test_map"
+
+	// Publish some data to create stream position.
+	result, err := mapBroker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"test": 1}`),
+	})
+	require.NoError(t, err)
+	streamPos := result.Position
+
+	// Check with correct position - should be valid.
+	isValid, err := node.checkPosition(channel, streamPos, 200*time.Second, true)
+	require.NoError(t, err)
+	require.True(t, isValid)
+
+	// Check with wrong offset - should be invalid.
+	isValid, err = node.checkPosition(channel, StreamPosition{
+		Offset: streamPos.Offset - 1,
+		Epoch:  streamPos.Epoch,
+	}, 200*time.Second, true)
+	require.NoError(t, err)
+	require.False(t, isValid)
+
+	// Check with wrong epoch - should be invalid.
+	isValid, err = node.checkPosition(channel, StreamPosition{
+		Offset: streamPos.Offset,
+		Epoch:  "wrong_epoch",
+	}, 200*time.Second, true)
+	require.NoError(t, err)
+	require.False(t, isValid)
+
+	// Publish more data.
+	result2, err := mapBroker.Publish(ctx, channel, "key2", MapPublishOptions{
+		Data: []byte(`{"test": 2}`),
+	})
+	require.NoError(t, err)
+	streamPos2 := result2.Position
+
+	// Old position should now be invalid.
+	isValid, err = node.checkPosition(channel, streamPos, 200*time.Second, true)
+	require.NoError(t, err)
+	require.False(t, isValid)
+
+	// New position should be valid.
+	isValid, err = node.checkPosition(channel, streamPos2, 200*time.Second, true)
+	require.NoError(t, err)
+	require.True(t, isValid)
+}
+
+func TestNodeCheckPositionMapWithMedium(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+	node.config.GetChannelMediumOptions = func(channel string) ChannelMediumOptions {
+		return ChannelMediumOptions{
+			SharedPositionSync: true,
+		}
+	}
+	node.config.ClientChannelPositionCheckDelay = 0
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	ctx := context.Background()
+	channel := "test_map_medium"
+
+	// Publish data to create stream position.
+	result, err := mapBroker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"test": 1}`),
+	})
+	require.NoError(t, err)
+	streamPos := result.Position
+
+	// Create a subscription to trigger medium creation with isMap=true.
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
+					HistoryMetaTTL:    200 * time.Second,
+				},
+			}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+	subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+
+	// Now checkPosition should use the medium's SharedPositionSync path.
+	// Correct position — valid.
+	isValid, err := node.checkPosition(channel, streamPos, 200*time.Second, true)
+	require.NoError(t, err)
+	require.True(t, isValid)
+
+	// Wrong offset — invalid.
+	isValid, err = node.checkPosition(channel, StreamPosition{
+		Offset: streamPos.Offset + 1,
+		Epoch:  streamPos.Epoch,
+	}, 200*time.Second, true)
+	require.NoError(t, err)
+	require.False(t, isValid)
+
+	// Wrong epoch — invalid.
+	isValid, err = node.checkPosition(channel, StreamPosition{
+		Offset: streamPos.Offset,
+		Epoch:  "wrong",
+	}, 200*time.Second, true)
 	require.NoError(t, err)
 	require.False(t, isValid)
 }
@@ -1470,4 +1609,321 @@ func TestGetPresenceManager(t *testing.T) {
 
 	_, err = node.Presence("test2")
 	require.NoError(t, err)
+}
+
+func TestGetMapBroker(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	// Create two map brokers
+	defaultBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	_ = defaultBroker.RegisterEventHandler(nil)
+
+	customBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	_ = customBroker.RegisterEventHandler(nil)
+
+	// Set default broker
+	node.SetMapBroker(defaultBroker)
+
+	// Configure GetMapBroker to route "custom:*" channels to customBroker
+	node.config.Map.GetMapBroker = func(channel string) (MapBroker, bool) {
+		if len(channel) >= 7 && channel[:7] == "custom:" {
+			return customBroker, true
+		}
+		return nil, false // Use default
+	}
+
+	ctx := context.Background()
+
+	// Publish to default channel - should use defaultBroker
+	_, err = node.MapPublish(ctx, "default:test", "key1", MapPublishOptions{
+		Data: []byte(`{"v":1}`),
+	})
+	require.NoError(t, err)
+
+	// Publish to custom channel - should use customBroker
+	_, err = node.MapPublish(ctx, "custom:test", "key1", MapPublishOptions{
+		Data: []byte(`{"v":2}`),
+	})
+	require.NoError(t, err)
+
+	// Read from default channel - should find the data
+	result, err := node.MapStateRead(ctx, "default:test", MapReadStateOptions{Key: "key1"})
+	require.NoError(t, err)
+	require.Len(t, result.Publications, 1)
+	require.Equal(t, []byte(`{"v":1}`), result.Publications[0].Data)
+
+	// Read from custom channel - should find the data
+	result, err = node.MapStateRead(ctx, "custom:test", MapReadStateOptions{Key: "key1"})
+	require.NoError(t, err)
+	require.Len(t, result.Publications, 1)
+	require.Equal(t, []byte(`{"v":2}`), result.Publications[0].Data)
+
+	// Verify isolation - default channel shouldn't find custom data
+	result, err = node.MapStateRead(ctx, "default:test", MapReadStateOptions{Key: "key1"})
+	require.NoError(t, err)
+	require.Len(t, result.Publications, 1)
+	require.Equal(t, []byte(`{"v":1}`), result.Publications[0].Data) // Still default data
+
+	// Custom channel shouldn't find default data
+	result, err = node.MapStateRead(ctx, "custom:test", MapReadStateOptions{Key: "key1"})
+	require.NoError(t, err)
+	require.Len(t, result.Publications, 1)
+	require.Equal(t, []byte(`{"v":2}`), result.Publications[0].Data) // Still custom data
+}
+
+func TestNode_MapStreamReadUnrecoverablePosition(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	ctx := context.Background()
+	ch := "test_overflow"
+
+	// Publish 200 messages with StreamSize=30 to force heavy trimming.
+	var epoch string
+	for i := 1; i <= 200; i++ {
+		res, err := mapBroker.Publish(ctx, ch, fmt.Sprintf("key_%d", i), MapPublishOptions{
+			Data: []byte(fmt.Sprintf("data_%d", i)),
+		})
+		require.NoError(t, err)
+		epoch = res.Position.Epoch
+	}
+
+	// Try to recover from offset 3 — should fail because entries 4..170+ are gone.
+	_, err = node.MapStreamRead(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{
+			Since: &StreamPosition{Offset: 3, Epoch: epoch},
+			Limit: -1,
+		},
+	})
+	require.ErrorIs(t, err, ErrorUnrecoverablePosition)
+}
+
+func TestNode_MapRemoveEmptyKey(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	_, err = node.MapRemove(context.Background(), "test_ch", "", MapRemoveOptions{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "key is required")
+}
+
+func TestNode_Config(t *testing.T) {
+	cfg := Config{
+		LogLevel: LogLevelInfo,
+	}
+	n, err := New(cfg)
+	require.NoError(t, err)
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	require.Equal(t, LogLevelInfo, n.Config().LogLevel)
+}
+
+func TestNode_MapMetricMethods(t *testing.T) {
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	// These should not panic even when metrics are initialized.
+	n.IncMapBrokerCleanupErrors("test")
+	n.AddMapBrokerCleanupKeysRemoved("test", 5)
+	n.SetMapBrokerCleanupLag("test", 1.5)
+}
+
+func TestNode_MapMetricMethods_NilMetrics(t *testing.T) {
+	n, err := New(Config{})
+	require.NoError(t, err)
+	// Before Run(), metrics may be nil — should not panic.
+	n.IncMapBrokerCleanupErrors("test")
+	n.AddMapBrokerCleanupKeysRemoved("test", 5)
+	n.SetMapBrokerCleanupLag("test", 1.5)
+}
+
+func TestNode_mapStateKey(t *testing.T) {
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	key := n.mapStateKey("ch1", MapReadStateOptions{})
+	require.Contains(t, key, "ch1")
+
+	key = n.mapStateKey("ch1", MapReadStateOptions{
+		Cursor: "abc", Limit: 10, Key: "k1", Asc: true, AllowCached: true,
+		Revision: &StreamPosition{Offset: 42, Epoch: "e1"},
+	})
+	require.Contains(t, key, "cursor:abc")
+	require.Contains(t, key, "limit:10")
+	require.Contains(t, key, "key:k1")
+	require.Contains(t, key, "asc:1")
+	require.Contains(t, key, "cached:1")
+	require.Contains(t, key, "rev_offset:42")
+	require.Contains(t, key, "rev_epoch:e1")
+}
+
+func TestNode_mapStreamKey(t *testing.T) {
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	key := n.mapStreamKey("ch1", MapReadStreamOptions{})
+	require.Contains(t, key, "ch1")
+	require.Contains(t, key, "limit:0")
+
+	key = n.mapStreamKey("ch1", MapReadStreamOptions{
+		Filter: StreamFilter{
+			Since:   &StreamPosition{Offset: 5, Epoch: "e2"},
+			Limit:   20,
+			Reverse: true,
+		},
+	})
+	require.Contains(t, key, "since_offset:5")
+	require.Contains(t, key, "since_epoch:e2")
+	require.Contains(t, key, "limit:20")
+	require.Contains(t, key, "reverse:true")
+}
+
+func TestNode_MapStats(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	ctx := context.Background()
+	_, err = mapBroker.Publish(ctx, "ch", "k1", MapPublishOptions{Data: []byte(`"v"`)})
+	require.NoError(t, err)
+
+	stats, err := node.MapStats(ctx, "ch")
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.NumKeys)
+}
+
+func TestNode_MapClear(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	ctx := context.Background()
+	_, err = mapBroker.Publish(ctx, "ch", "k1", MapPublishOptions{Data: []byte(`"v"`)})
+	require.NoError(t, err)
+
+	err = node.MapClear(ctx, "ch", MapClearOptions{})
+	require.NoError(t, err)
+
+	// Verify state is empty after clear.
+	stats, err := node.MapStats(ctx, "ch")
+	require.NoError(t, err)
+	require.Equal(t, 0, stats.NumKeys)
+}
+
+func TestNode_MapPublishEmptyKey(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	_, err = node.MapPublish(context.Background(), "ch", "", MapPublishOptions{Data: []byte(`"v"`)})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "key is required")
+}
+
+func TestNode_MapPublish(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	ctx := context.Background()
+	result, err := node.MapPublish(ctx, "ch", "k1", MapPublishOptions{Data: []byte(`"val"`)})
+	require.NoError(t, err)
+	require.True(t, result.Position.Offset > 0)
+}
+
+func TestNode_MapRemove(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	ctx := context.Background()
+	_, err := node.MapPublish(ctx, "ch", "k1", MapPublishOptions{Data: []byte(`"val"`)})
+	require.NoError(t, err)
+
+	_, err = node.MapRemove(ctx, "ch", "k1", MapRemoveOptions{})
+	require.NoError(t, err)
+
+	stats, err := node.MapStats(ctx, "ch")
+	require.NoError(t, err)
+	require.Equal(t, 0, stats.NumKeys)
+}
+
+func TestHub_Connections(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	conns := node.Hub().Connections()
+	require.Empty(t, conns)
 }

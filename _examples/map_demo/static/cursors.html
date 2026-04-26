@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ephemeral Cursors - Map Subscriptions Demo</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: white;
+            overflow: hidden;
+            height: 100vh;
+        }
+        #canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            cursor: none;
+        }
+        .cursor {
+            position: absolute;
+            pointer-events: none;
+            transition: transform 0.05s linear, opacity 0.4s ease-out;
+            z-index: 1000;
+        }
+        .cursor.fade-out {
+            opacity: 0;
+        }
+        .cursor-pointer {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 2px solid white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+        .cursor-label {
+            position: absolute;
+            top: 24px;
+            left: 8px;
+            background: rgba(0,0,0,0.7);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .my-cursor {
+            position: fixed;
+            pointer-events: none;
+            z-index: 1001;
+            transition: none;
+        }
+        .my-cursor .cursor-pointer {
+            box-shadow: 0 2px 12px rgba(255,255,255,0.5);
+        }
+        .info-panel {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.8);
+            padding: 20px;
+            border-radius: 12px;
+            z-index: 2000;
+            max-width: 300px;
+        }
+        .info-panel h1 {
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+        .info-panel p {
+            font-size: 14px;
+            color: #aaa;
+            margin-bottom: 15px;
+        }
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #f44;
+        }
+        .status-dot.connected {
+            background: #4f4;
+        }
+        .user-count {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #888;
+        }
+        .back-link {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            color: #888;
+            text-decoration: none;
+            font-size: 14px;
+            z-index: 2000;
+        }
+        .back-link:hover {
+            color: white;
+        }
+        .instruction {
+            position: fixed;
+            bottom: 50%;
+            left: 50%;
+            transform: translate(-50%, 50%);
+            font-size: 24px;
+            color: rgba(255,255,255,0.3);
+            text-align: center;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas"></div>
+
+    <div class="info-panel">
+        <h1>Ephemeral Cursors</h1>
+        <p>Move your mouse around. Other users will see your cursor in real-time!</p>
+        <div class="status">
+            <div class="status-dot" id="statusDot"></div>
+            <span id="statusText">Connecting...</span>
+        </div>
+        <div class="user-count" id="userCount">0 users online</div>
+    </div>
+
+    <div class="instruction">Move your mouse around</div>
+
+    <a href="/" class="back-link">← Back to demos</a>
+
+    <script src="http://localhost:2000/centrifuge.js"></script>
+    <script>
+        // Generate random user info.
+        const userId = 'user_' + Math.random().toString(36).substr(2, 8);
+        const userColor = '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
+        const userName = 'User ' + userId.substr(5, 4).toUpperCase();
+
+        // Cursors from other users.
+        const cursors = new Map();
+
+        // Our client ID (set on connect).
+        let myClientId = null;
+
+        // Create my cursor element (hidden initially until first mousemove).
+        const myCursor = document.createElement('div');
+        myCursor.className = 'cursor my-cursor';
+        myCursor.style.display = 'none';
+        myCursor.innerHTML = `
+            <div class="cursor-pointer" style="background: ${userColor}"></div>
+            <div class="cursor-label">${userName} (you)</div>
+        `;
+        document.body.appendChild(myCursor);
+
+        // Create or update cursor for a user.
+        function updateCursor(key, data) {
+            let cursor = cursors.get(key);
+
+            if (!cursor) {
+                cursor = document.createElement('div');
+                cursor.className = 'cursor';
+                cursor.innerHTML = `
+                    <div class="cursor-pointer" style="background: ${data.color}"></div>
+                    <div class="cursor-label">${data.name}</div>
+                `;
+                document.getElementById('canvas').appendChild(cursor);
+                cursors.set(key, cursor);
+            }
+
+            // Offset by half cursor size (10px) to center on the point
+            cursor.style.transform = `translate(${data.x - 10}px, ${data.y - 10}px)`;
+            updateUserCount();
+        }
+
+        // Remove cursor with fade-out.
+        function removeCursor(key) {
+            const cursor = cursors.get(key);
+            if (cursor) {
+                cursors.delete(key);
+                updateUserCount();
+                cursor.classList.add('fade-out');
+                cursor.addEventListener('transitionend', () => cursor.remove(), { once: true });
+            }
+        }
+
+        function updateUserCount() {
+            document.getElementById('userCount').textContent =
+                `${cursors.size + 1} user${cursors.size === 0 ? '' : 's'} online`;
+        }
+
+        // Connect to Centrifuge.
+        const centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket', {
+            name: userId
+        });
+
+        centrifuge.on('connected', (ctx) => {
+            myClientId = ctx.client;
+            document.getElementById('statusDot').classList.add('connected');
+            document.getElementById('statusText').textContent = 'Connected';
+            updateUserCount();
+        });
+
+        centrifuge.on('connecting', () => {
+            document.getElementById('statusDot').classList.remove('connected');
+            document.getElementById('statusText').textContent = 'Connecting...';
+        });
+
+        centrifuge.on('disconnected', () => {
+            document.getElementById('statusDot').classList.remove('connected');
+            document.getElementById('statusText').textContent = 'Disconnected';
+        });
+
+        // Subscribe to cursors channel with map mode.
+        const sub = centrifuge.newMapSubscription('cursors');
+
+        sub.on('sync', (ctx) => {
+            console.log('Synced cursors channel');
+
+            // Remove all existing cursor elements and rebuild from snapshot.
+            for (const [key] of cursors) {
+                removeCursor(key);
+            }
+
+            for (const pub of ctx.entries) {
+                if (pub.key && pub.key !== myClientId && pub.data) {
+                    updateCursor(pub.key, pub.data);
+                }
+            }
+        });
+
+        sub.on('update', (ctx) => {
+            // Skip if no key or if it's our own cursor.
+            if (!ctx.key || ctx.key === myClientId) return;
+
+            if (ctx.removed) {
+                removeCursor(ctx.key);
+            } else if (ctx.data) {
+                updateCursor(ctx.key, ctx.data);
+            }
+        });
+
+        sub.subscribe();
+        centrifuge.connect();
+
+        // Track mouse movement and send updates.
+        let lastUpdate = 0;
+        const updateInterval = 50; // ms
+
+        document.addEventListener('mousemove', (e) => {
+            // Show and update my cursor.
+            if (myCursor.style.display === 'none') {
+                myCursor.style.display = '';
+            }
+            // Offset by half cursor size (10px) to center on the point
+            myCursor.style.transform = `translate(${e.clientX - 10}px, ${e.clientY - 10}px)`;
+
+            // Throttle updates to server.
+            const now = Date.now();
+            if (now - lastUpdate < updateInterval) return;
+            lastUpdate = now;
+
+            // Send cursor update via map publish (server assigns key to client ID).
+            sub.mapPublish('', {
+                x: e.clientX,
+                y: e.clientY,
+                color: userColor,
+                name: userName
+            }).catch(err => console.error('Error sending cursor update:', err));
+        });
+    </script>
+</body>
+</html>

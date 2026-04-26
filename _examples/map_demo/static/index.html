@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Map Subscriptions Demo</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 6px;
+            font-size: 26px;
+        }
+        .subtitle {
+            color: rgba(255,255,255,0.8);
+            text-align: center;
+            margin-bottom: 20px;
+            font-size: 20px;
+        }
+        .demos {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+        }
+        @media (max-width: 900px) {
+            .demos {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+        @media (max-width: 600px) {
+            .demos {
+                grid-template-columns: 1fr;
+            }
+        }
+        .demo-card {
+            background: white;
+            border-radius: 10px;
+            padding: 16px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+            transition: transform 0.2s, box-shadow 0.2s;
+            display: flex;
+            flex-direction: column;
+        }
+        .demo-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+        }
+        .demo-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 6px;
+        }
+        .icon {
+            font-size: 24px;
+        }
+        .demo-card h2 {
+            margin: 0;
+            font-size: 16px;
+            color: #333;
+        }
+        .demo-card p {
+            color: #666;
+            margin: 0 0 10px 0;
+            font-size: 13px;
+            line-height: 1.4;
+            flex: 1;
+        }
+        .features {
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+        .feature {
+            background: #f0f0f0;
+            padding: 2px 7px;
+            border-radius: 3px;
+            font-size: 10px;
+            color: #555;
+        }
+        .demo-card a {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 8px 14px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 13px;
+            transition: opacity 0.2s;
+            text-align: center;
+        }
+        .demo-card a:hover {
+            opacity: 0.9;
+        }
+    </style>
+</head>
+<body>
+    <p class="subtitle">Map Subscriptions Demo. Real-time state synchronization with Centrifuge.</p>
+
+    <div class="demos">
+        <div class="demo-card">
+            <div class="demo-header">
+                <div class="icon">🔬</div>
+                <h2>Sync Protocol Visualizer</h2>
+            </div>
+            <div class="features">
+                <span class="feature">STATE → STREAM → LIVE</span>
+                <span class="feature">Sequence diagram</span>
+                <span class="feature">6 scenarios</span>
+            </div>
+            <p>Visualize the map subscription sync protocol with interactive scenarios and live frame inspection.</p>
+            <a href="/visualizer.html">Open Demo</a>
+        </div>
+
+        <div class="demo-card">
+            <div class="demo-header">
+                <div class="icon">🖱️</div>
+                <h2>Ephemeral Cursors</h2>
+            </div>
+            <div class="features">
+                <span class="feature">Real-time sync</span>
+                <span class="feature">Snapshot on join</span>
+                <span class="feature">Auto-cleanup</span>
+            </div>
+            <p>See other users' cursor positions in real-time with instant sync on join.</p>
+            <a href="/cursors.html">Open Demo</a>
+        </div>
+
+        <div class="demo-card">
+            <div class="demo-header">
+                <div class="icon">🎮</div>
+                <h2>Game Lobby</h2>
+            </div>
+            <div class="features">
+                <span class="feature">2-player slots</span>
+                <span class="feature">Live updates</span>
+                <span class="feature">Auto-start</span>
+            </div>
+            <p>A 2-player lobby with slot claiming and automatic game start.</p>
+            <a href="/lobby.html">Open Demo</a>
+        </div>
+
+        <div class="demo-card">
+            <div class="demo-header">
+                <div class="icon">📦</div>
+                <h2>Inventory (CAS)</h2>
+            </div>
+            <div class="features">
+                <span class="feature">Compare-And-Swap</span>
+                <span class="feature">Conflict handling</span>
+                <span class="feature">Stock tracking</span>
+            </div>
+            <p>Purchase items with CAS to prevent overselling and handle conflicts.</p>
+            <a href="/inventory.html">Open Demo</a>
+        </div>
+
+        <div class="demo-card">
+            <div class="demo-header">
+                <div class="icon">📈</div>
+                <h2>Stock Tickers</h2>
+            </div>
+            <div class="features">
+                <span class="feature">Instant state</span>
+                <span class="feature">Tags filter</span>
+                <span class="feature">Live prices</span>
+            </div>
+            <p>Real-time stock price feed with sector filtering using map state and TagsFilter.</p>
+            <a href="/tickers.html">Open Demo</a>
+        </div>
+
+        <div class="demo-card">
+            <div class="demo-header">
+                <div class="icon">⚽</div>
+                <h2>Live Scoreboard (Delta)</h2>
+            </div>
+            <div class="features">
+                <span class="feature">Delta compression</span>
+                <span class="feature">Live matches</span>
+                <span class="feature">6 concurrent games</span>
+            </div>
+            <p>6 concurrent football matches with fossil delta compression. See bandwidth savings in real-time.</p>
+            <a href="/scoreboard.html">Open Demo</a>
+        </div>
+
+    </div>
+</body>
+</html>
