@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Massive map presence — 100k members in one tab</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, system-ui, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: rgba(255,255,255,0.92);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        header {
+            max-width: 986px; /* canvas (960) + canvas-wrap padding (24) + border (2) */
+            margin: 0 auto 16px;
+        }
+        h1 {
+            font-size: 22px;
+            margin-bottom: 4px;
+        }
+        .subtitle {
+            font-size: 13px;
+            color: rgba(255,255,255,0.55);
+            margin-bottom: 16px;
+        }
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px 18px;
+            align-items: center;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 10px;
+            padding: 10px 14px;
+            font-size: 13px;
+        }
+        .stat {
+            display: flex;
+            flex-direction: column;
+            min-width: 80px;
+        }
+        .stat .label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(255,255,255,0.4);
+        }
+        .stat .value {
+            font-variant-numeric: tabular-nums;
+            font-weight: 600;
+        }
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: rgba(244,68,54,0.18);
+            color: #ff8a80;
+            font-size: 12px;
+        }
+        .status-pill.connected {
+            background: rgba(76,175,80,0.18);
+            color: #80e27e;
+        }
+        .status-pill .dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+        .config {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+        }
+        .config label { color: rgba(255,255,255,0.55); }
+        .config input {
+            width: 80px;
+            padding: 5px 8px;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.06);
+            color: white;
+            font-size: 13px;
+        }
+        .config button {
+            padding: 5px 12px;
+            border-radius: 6px;
+            border: none;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        main {
+            max-width: 986px; /* canvas (960) + canvas-wrap padding (24) + border (2) */
+            margin: 0 auto;
+        }
+        .canvas-wrap {
+            position: relative;
+            background: #0e1525;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 12px;
+            padding: 12px;
+            margin-top: 14px;
+        }
+        canvas {
+            display: block;
+            /* Lock to intrinsic size on desktop — fractional scaling makes
+               the 1 px gaps render unevenly (some 1 device px, some 2).
+               max-width + aspect-ratio keep it square if a narrow viewport
+               forces it smaller. */
+            width: 960px;
+            max-width: 100%;
+            aspect-ratio: 1 / 1;
+            height: auto;
+            background: #0a1020;
+            border-radius: 6px;
+            image-rendering: pixelated;
+        }
+        .legend {
+            display: flex;
+            gap: 14px;
+            margin-top: 10px;
+            font-size: 11px;
+            color: rgba(255,255,255,0.5);
+        }
+        .legend .swatch {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            margin-right: 4px;
+            border-radius: 2px;
+            vertical-align: middle;
+        }
+        .progress {
+            margin-top: 10px;
+            height: 4px;
+            border-radius: 2px;
+            background: rgba(255,255,255,0.08);
+            overflow: hidden;
+        }
+        .progress > div {
+            height: 100%;
+            background: linear-gradient(90deg, #4a90e2, #80e27e);
+            width: 0%;
+            transition: width 0.15s linear;
+        }
+    </style>
+</head>
+<body>
+<header>
+    <h1>Massive map presence — 100k members in one browser tab</h1>
+    <div class="subtitle">
+        Server pushes synthetic entries directly to a <code>map_clients</code> channel via the broker.
+        A single WebSocket connection paginates the initial state, then live joins/leaves stream in.
+        Stable id pool: keys <code>c_0</code>…<code>c_102399</code>, each mapped to a fixed grid cell.
+    </div>
+    <div class="toolbar">
+        <span class="status-pill" id="status"><span class="dot"></span><span id="statusText">Connecting…</span></span>
+        <div class="stat"><span class="label">Total users</span><span class="value" id="totalUsers">—</span></div>
+        <div class="stat"><span class="label">Online</span><span class="value" id="totalCount">0</span></div>
+        <div class="stat"><span class="label">Joins/s</span><span class="value" id="joinRate">0</span></div>
+        <div class="stat"><span class="label">Leaves/s</span><span class="value" id="leaveRate">0</span></div>
+        <div class="stat"><span class="label">Updates</span><span class="value" id="totalUpdates">0</span></div>
+        <div class="config">
+            <label for="pageSize">Page size:</label>
+            <input id="pageSize" type="number" min="1" max="10000">
+            <button id="apply">Re-subscribe</button>
+        </div>
+    </div>
+</header>
+<main>
+    <div class="canvas-wrap">
+        <canvas id="grid" width="960" height="960"></canvas>
+        <div class="progress"><div id="syncBar"></div></div>
+        <div class="legend">
+            <span><span class="swatch" style="background:#3a7bd5"></span>Connected member</span>
+            <span><span class="swatch" style="background:#80e27e"></span>Just joined</span>
+            <span><span class="swatch" style="background:#ff8a80"></span>Just left</span>
+            <span>Each cell = one connection in the <code>map_clients</code> presence channel.</span>
+        </div>
+    </div>
+</main>
+
+<script src="http://localhost:2000/centrifuge.js"></script>
+<script>
+    // Pool size matches the server (presence_farm.go: PoolSize = 102400).
+    // Keys are "c_<idx>" with idx in [0, POOL_SIZE), each mapped to a fixed
+    // grid cell — so the same client always lands on the same cell.
+    const POOL_SIZE = 102400;
+    // "Total users" is the size of the stable id pool — every member is one
+    // of c_0…c_(POOL_SIZE-1). "Online" is the subset currently in the
+    // map_clients channel.
+    const COLS = 320;
+    const ROWS = 320; // 320 * 320 = POOL_SIZE
+    // 2 px filled square + 1 px gap = 3 px stride. Gap is the EMPTY_COLOR
+    // background showing through, so each cell reads as a distinct dot
+    // instead of a solid sheet of blue at 100k+ entries.
+    const CELL_FILL = 2;
+    const CELL_GAP = 1;
+    const CELL_STRIDE = CELL_FILL + CELL_GAP;
+    const CANVAS_SIZE = COLS * CELL_STRIDE; // 960 px
+
+    const canvas = document.getElementById('grid');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    ctx.fillStyle = '#0a1020';
+    ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+
+    const statusEl = document.getElementById('status');
+    const statusTextEl = document.getElementById('statusText');
+    const totalUsersEl = document.getElementById('totalUsers');
+    const totalCountEl = document.getElementById('totalCount');
+    const joinRateEl = document.getElementById('joinRate');
+    const leaveRateEl = document.getElementById('leaveRate');
+    const totalUpdatesEl = document.getElementById('totalUpdates');
+    const syncBar = document.getElementById('syncBar');
+
+    // 1 = occupied, 0 = empty. Single source of truth for grid state.
+    const occupied = new Uint8Array(POOL_SIZE);
+    let occupiedCount = 0;
+    // One in-flight flash per cell. New flash for a cell replaces any prior
+    // one (e.g., a quick leave→join cancels the leave flash).
+    const flashByCell = new Map();
+    // Pending sync drain handle (rAF id) — cancelled if a new sync arrives.
+    let drainHandle = 0;
+
+    // Single occupied-cell color so the grid reads as "N connected members"
+    // — the eye-catching deltas are the green/red flashes for joins/leaves,
+    // not the static fill.
+    const OCCUPIED_COLOR = '#3a7bd5';
+    const EMPTY_COLOR = '#0a1020';
+
+    function cellForKey(key) {
+        // Keys arrive as "c_<idx>" from the server.
+        if (!key || key.length < 3 || key.charCodeAt(0) !== 99 /*c*/ || key.charCodeAt(1) !== 95 /*_*/) return -1;
+        const n = +key.slice(2);
+        return Number.isInteger(n) && n >= 0 && n < POOL_SIZE ? n : -1;
+    }
+
+    function drawCell(idx, fill) {
+        const x = (idx % COLS) * CELL_STRIDE;
+        const y = ((idx / COLS) | 0) * CELL_STRIDE;
+        ctx.fillStyle = fill;
+        ctx.fillRect(x, y, CELL_FILL, CELL_FILL);
+    }
+
+    function addEntry(key, silent) {
+        const idx = cellForKey(key);
+        if (idx < 0) return;
+        if (occupied[idx]) return; // already on screen
+        occupied[idx] = 1;
+        occupiedCount++;
+        drawCell(idx, OCCUPIED_COLOR);
+        if (!silent) {
+            flashByCell.set(idx, { until: performance.now() + 600, color: '#80e27e' });
+        } else {
+            flashByCell.delete(idx);
+        }
+    }
+
+    function removeEntry(key) {
+        const idx = cellForKey(key);
+        if (idx < 0) return;
+        if (!occupied[idx]) return;
+        occupied[idx] = 0;
+        occupiedCount--;
+        flashByCell.set(idx, { until: performance.now() + 400, color: '#ff8a80' });
+    }
+
+    // Animation loop — overlays flash color, then on expiry restores the
+    // cell to whatever the underlying state says (occupied or empty).
+    function tick(now) {
+        for (const [idx, f] of flashByCell) {
+            if (now < f.until) {
+                drawCell(idx, f.color);
+            } else {
+                drawCell(idx, occupied[idx] ? OCCUPIED_COLOR : EMPTY_COLOR);
+                flashByCell.delete(idx);
+            }
+        }
+        requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+
+    totalUsersEl.textContent = POOL_SIZE.toLocaleString();
+
+    // Rate counters — exponential moving average, sampled per second.
+    let joinsThisSec = 0;
+    let leavesThisSec = 0;
+    let updatesTotal = 0;
+    setInterval(() => {
+        joinRateEl.textContent = joinsThisSec;
+        leaveRateEl.textContent = leavesThisSec;
+        joinsThisSec = 0;
+        leavesThisSec = 0;
+    }, 1000);
+
+    // ---- Centrifuge wiring ----
+
+    let centrifuge = null;
+    let sub = null;
+
+    function setStatus(text, connected) {
+        statusTextEl.textContent = text;
+        statusEl.classList.toggle('connected', !!connected);
+    }
+
+    function resetGrid() {
+        if (drainHandle) { cancelAnimationFrame(drainHandle); drainHandle = 0; }
+        occupied.fill(0);
+        occupiedCount = 0;
+        flashByCell.clear();
+        ctx.fillStyle = EMPTY_COLOR;
+        ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+        totalCountEl.textContent = '0';
+        syncBar.style.width = '0%';
+    }
+
+    function resetAll() {
+        resetGrid();
+        totalUpdatesEl.textContent = '0';
+        updatesTotal = 0;
+    }
+
+    const PAGE_SIZE_KEY = 'mapPresenceMassive.pageSize';
+    const pageSizeInput = document.getElementById('pageSize');
+    pageSizeInput.value = localStorage.getItem(PAGE_SIZE_KEY) || '1000';
+
+    function connect() {
+        const pageSize = parseInt(pageSizeInput.value, 10) || 1000;
+        localStorage.setItem(PAGE_SIZE_KEY, String(pageSize));
+        if (centrifuge) {
+            centrifuge.disconnect();
+            centrifuge = null;
+        }
+        resetAll();
+
+        centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket', {
+            name: 'viewer'
+        });
+        centrifuge.on('connecting', () => setStatus('Connecting…', false));
+        centrifuge.on('connected', () => setStatus('Connected', true));
+        centrifuge.on('disconnected', () => setStatus('Disconnected', false));
+
+        sub = centrifuge.newMapClientsSubscription('clients:massive', { pageSize });
+
+        // 'sync' fires once after all state pages are delivered, with every
+        // entry in ctx.entries (matches lobby.html semantics — full state
+        // snapshot, replace local view). For 100k entries this is a single
+        // huge synchronous handler, so split the work:
+        //   1. Reset state + assign cells synchronously (cheap, ~10ms).
+        //   2. Render cells across rAF chunks so UI stays responsive.
+        // Live updates that arrive during the render drain operate on the
+        // same keyToCell map; the drain reads keyToCell, so a key removed
+        // mid-drain is naturally skipped.
+        sub.on('sync', (syncCtx) => {
+            resetGrid();
+            const entries = syncCtx.entries || [];
+            // Mark occupied cells synchronously (cheap — Uint8Array writes).
+            const renderQueue = [];
+            for (let i = 0; i < entries.length; i++) {
+                const pub = entries[i];
+                if (!pub.key || pub.removed) continue;
+                const idx = cellForKey(pub.key);
+                if (idx < 0 || occupied[idx]) continue;
+                occupied[idx] = 1;
+                occupiedCount++;
+                renderQueue.push(idx);
+            }
+            totalCountEl.textContent = occupiedCount.toLocaleString();
+            const total = renderQueue.length;
+            if (total === 0) {
+                syncBar.style.width = '0%';
+                return;
+            }
+            // Render across rAF chunks so the UI stays responsive while the
+            // bulk fill (up to ~100k fillRect calls) plays out.
+            let i = 0;
+            const chunkSize = 5000;
+            const drainChunk = () => {
+                const end = Math.min(i + chunkSize, total);
+                for (; i < end; i++) {
+                    const idx = renderQueue[i];
+                    if (!occupied[idx]) continue; // removed during drain
+                    drawCell(idx, OCCUPIED_COLOR);
+                }
+                syncBar.style.width = ((i / total) * 100).toFixed(1) + '%';
+                if (i < total) {
+                    drainHandle = requestAnimationFrame(drainChunk);
+                } else {
+                    drainHandle = 0;
+                    syncBar.style.width = '100%';
+                    setTimeout(() => { syncBar.style.width = '0%'; }, 400);
+                }
+            };
+            drainHandle = requestAnimationFrame(drainChunk);
+        });
+
+        sub.on('update', (ctx) => {
+            if (!ctx.key) return;
+            if (ctx.removed) {
+                removeEntry(ctx.key);
+                leavesThisSec++;
+            } else {
+                addEntry(ctx.key);
+                joinsThisSec++;
+            }
+            updatesTotal++;
+            totalUpdatesEl.textContent = updatesTotal.toLocaleString();
+            totalCountEl.textContent = occupiedCount.toLocaleString();
+        });
+
+        sub.subscribe();
+        centrifuge.connect();
+    }
+
+    document.getElementById('apply').addEventListener('click', connect);
+    connect();
+</script>
+</body>
+</html>
