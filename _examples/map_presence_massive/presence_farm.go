@@ -11,13 +11,6 @@ import (
 	"github.com/centrifugal/centrifuge"
 )
 
-// PoolSize is the fixed identifier pool — keys are "c_0" .. "c_<PoolSize-1>".
-// The browser viewer maps each key directly to a grid cell (320 * 320 = 102400
-// cells), so identifiers must stay within this range. Clients only join or
-// leave from this fixed pool; churn is a swap between the live and not-live
-// subsets.
-const PoolSize = 102400
-
 // presenceFarmConfig describes a synthetic map_clients presence load.
 // Entries are pushed directly via the map broker — no real WebSocket
 // clients — so we can stress the protocol with hundreds of thousands of
@@ -29,6 +22,7 @@ const PoolSize = 102400
 // every key is reused over time so each grid cell flickers with activity.
 type presenceFarmConfig struct {
 	Channel      string
+	PoolSize     int // total stable id pool — keys are c_0..c_<PoolSize-1>
 	InitialCount int
 	ChurnPerSec  int
 }
@@ -37,12 +31,15 @@ func runPresenceFarm(ctx context.Context, node *centrifuge.Node, cfg presenceFar
 	if cfg.Channel == "" {
 		cfg.Channel = "clients:massive"
 	}
-	if cfg.InitialCount <= 0 {
-		cfg.InitialCount = 100000
+	if cfg.PoolSize <= 0 {
+		cfg.PoolSize = 102400
 	}
-	if cfg.InitialCount > PoolSize {
-		log.Printf("massive farm: --count %d exceeds pool size %d, clamping", cfg.InitialCount, PoolSize)
-		cfg.InitialCount = PoolSize
+	if cfg.InitialCount <= 0 {
+		cfg.InitialCount = cfg.PoolSize - cfg.PoolSize/40 // ~97.5% full
+	}
+	if cfg.InitialCount > cfg.PoolSize {
+		log.Printf("massive farm: count %d exceeds pool %d, clamping", cfg.InitialCount, cfg.PoolSize)
+		cfg.InitialCount = cfg.PoolSize
 	}
 	if cfg.ChurnPerSec <= 0 {
 		cfg.ChurnPerSec = 200
@@ -72,7 +69,7 @@ func runPresenceFarm(ctx context.Context, node *centrifuge.Node, cfg presenceFar
 
 	// Shuffle 0..PoolSize-1 once. The first InitialCount become live, the
 	// rest become the not-live pool.
-	all := make([]int, PoolSize)
+	all := make([]int, cfg.PoolSize)
 	for i := range all {
 		all[i] = i
 	}
@@ -97,7 +94,7 @@ func runPresenceFarm(ctx context.Context, node *centrifuge.Node, cfg presenceFar
 		return v, true
 	}
 
-	log.Printf("massive farm: populating %d entries on %q (pool=%d) ...", cfg.InitialCount, cfg.Channel, PoolSize)
+	log.Printf("massive farm: populating %d entries on %q (pool=%d) ...", cfg.InitialCount, cfg.Channel, cfg.PoolSize)
 	start := time.Now()
 	for _, idx := range live {
 		if ctx.Err() != nil {

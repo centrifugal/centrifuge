@@ -1,0 +1,170 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, system-ui, sans-serif;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    color: rgba(255,255,255,0.92);
+    min-height: 100vh;
+    padding: 20px;
+}
+a { color: #80bfff; }
+header {
+    max-width: var(--container-width, 1080px);
+    margin: 0 auto 16px;
+}
+h1 { font-size: 22px; margin-bottom: 4px; }
+.subtitle {
+    font-size: 13px;
+    color: rgba(255,255,255,0.55);
+    margin-bottom: 16px;
+}
+.subtitle code {
+    background: rgba(255,255,255,0.06);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+.toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 18px;
+    align-items: center;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 13px;
+}
+.stat {
+    display: flex;
+    flex-direction: column;
+    min-width: 80px;
+}
+.stat .label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: rgba(255,255,255,0.4);
+}
+.stat .value {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(244,68,54,0.18);
+    color: #ff8a80;
+    font-size: 12px;
+}
+.status-pill.connected {
+    background: rgba(76,175,80,0.18);
+    color: #80e27e;
+}
+.status-pill .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+}
+.config {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+.config label { color: rgba(255,255,255,0.55); }
+.config input {
+    width: 80px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.12);
+    background: rgba(255,255,255,0.06);
+    color: white;
+    font-size: 13px;
+}
+.config button {
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: none;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: white;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+main {
+    max-width: var(--container-width, 1080px);
+    margin: 0 auto;
+}
+.canvas-wrap {
+    position: relative;
+    background: #0e1525;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 12px;
+    margin-top: 14px;
+}
+canvas {
+    display: block;
+    width: var(--canvas-size, 960px);
+    max-width: 100%;
+    aspect-ratio: 1 / 1;
+    height: auto;
+    background: #0a1020;
+    border-radius: 6px;
+    image-rendering: pixelated;
+}
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-top: 10px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.5);
+}
+.legend .swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 4px;
+    border-radius: 2px;
+    vertical-align: middle;
+}
+.progress {
+    margin-top: 10px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255,255,255,0.08);
+    overflow: hidden;
+}
+.progress > div {
+    height: 100%;
+    background: linear-gradient(90deg, #4a90e2, #80e27e);
+    width: 0%;
+    transition: width 0.15s linear;
+}
+
+/* Landing page card grid */
+.cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    max-width: 800px;
+    margin: 24px auto 0;
+}
+.card {
+    display: block;
+    text-decoration: none;
+    color: inherit;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 20px;
+    transition: background 0.15s;
+}
+.card:hover { background: rgba(255,255,255,0.08); }
+.card .scale { font-size: 28px; font-weight: 700; color: #80bfff; }
+.card .desc  { font-size: 13px; color: rgba(255,255,255,0.6); margin-top: 6px; line-height: 1.5; }

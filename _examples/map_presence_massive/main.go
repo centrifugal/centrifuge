@@ -1,8 +1,10 @@
-// Massive map_clients presence demo — populates a single map_clients
-// presence channel with up to 100k synthetic entries directly via the
-// MapBroker (no real WebSocket clients) and serves a viewer page that
-// subscribes from a single browser tab. The viewer renders entries on
-// a canvas grid for very lightweight DOM cost.
+// Massive map_clients presence demo with two scales:
+//   - 100k members, channel clients:massive_100k, viewer at /100k.html
+//   - 1M  members, channel clients:massive_1m,   viewer at /1m.html
+//
+// Both populations are populated and churned directly via the MapBroker
+// (no real WebSocket clients), so a single browser tab can subscribe and
+// see the entire population synchronized over the protocol.
 //
 // This example lives in its own folder because the farm produces
 // non-trivial CPU and network load — the regular map_demo should not
@@ -23,13 +25,23 @@ import (
 	"github.com/centrifugal/centrifuge"
 )
 
-const presenceChannel = "clients:massive"
+const (
+	channel100k = "clients:massive_100k"
+	channel1m   = "clients:massive_1m"
+
+	pool100k = 320 * 320   // 102,400
+	pool1m   = 1024 * 1024 // 1,048,576
+
+	count100k = 100000
+	count1m   = 1000000
+
+	churn100k = 200
+	churn1m   = 1000
+)
 
 var (
-	port         = flag.String("port", "3010", "HTTP server port")
-	redisAddr    = flag.String("redis", "", "Redis address (e.g., localhost:6379). If empty, uses in-memory map broker.")
-	initialCount = flag.Int("count", 100000, "Initial number of synthetic presence entries")
-	churnRate    = flag.Int("churn-rate", 200, "Replace events per second (each event = 1 leave + 1 join, count stays constant)")
+	port      = flag.String("port", "3010", "HTTP server port")
+	redisAddr = flag.String("redis", "", "Redis address (e.g., localhost:6379). If empty, uses in-memory map broker.")
 )
 
 func handleLog(e centrifuge.LogEntry) {
@@ -44,18 +56,30 @@ func main() {
 		LogHandler: handleLog,
 		Map: centrifuge.MapConfig{
 			GetMapChannelOptions: func(channel string) centrifuge.MapChannelOptions {
-				if channel == presenceChannel {
-					// Synthetic entries are managed by presence_farm.go,
-					// not by real client connections. Long TTL so synthetic
-					// entries don't expire on their own. Default page size
-					// 1000 keeps initial state pagination cheap at 100k+
-					// entries; the viewer can override via SDK pageSize.
+				switch channel {
+				case channel100k, channel1m:
+					// Recoverable mode so the SDK's stream catch-up phase
+					// can replay events that occurred during the long
+					// state pagination — ephemeral has no stream and
+					// loses convergence at this scale, so two viewer
+					// tabs would end up with different counts.
+					// SubscribeCatchUpTimeout disabled (-1) because
+					// paginating up to 1M entries exceeds the 5s default.
+					streamSize := 50000
+					streamTTL := 5 * time.Minute
+					if channel == channel1m {
+						streamSize = 200000
+						streamTTL = 10 * time.Minute
+					}
 					return centrifuge.MapChannelOptions{
-						Mode:            centrifuge.MapModeEphemeral,
-						KeyTTL:          24 * time.Hour,
-						DefaultPageSize: 1000,
-						MinPageSize:     1,
-						MaxPageSize:     10000,
+						Mode:                    centrifuge.MapModeRecoverable,
+						KeyTTL:                  24 * time.Hour,
+						StreamSize:              streamSize,
+						StreamTTL:               streamTTL,
+						DefaultPageSize:         1000,
+						MinPageSize:             1,
+						MaxPageSize:             10000,
+						SubscribeCatchUpTimeout: -1,
 					}
 				}
 				return centrifuge.MapChannelOptions{
@@ -87,7 +111,7 @@ func main() {
 
 	node.OnConnect(func(client *centrifuge.Client) {
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
-			if e.Channel != presenceChannel {
+			if e.Channel != channel100k && e.Channel != channel1m {
 				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
@@ -105,10 +129,18 @@ func main() {
 
 	farmCtx, cancelFarm := context.WithCancel(context.Background())
 	defer cancelFarm()
+
 	go runPresenceFarm(farmCtx, node, presenceFarmConfig{
-		Channel:      presenceChannel,
-		InitialCount: *initialCount,
-		ChurnPerSec:  *churnRate,
+		Channel:      channel100k,
+		PoolSize:     pool100k,
+		InitialCount: count100k,
+		ChurnPerSec:  churn100k,
+	})
+	go runPresenceFarm(farmCtx, node, presenceFarmConfig{
+		Channel:      channel1m,
+		PoolSize:     pool1m,
+		InitialCount: count1m,
+		ChurnPerSec:  churn1m,
 	})
 
 	http.Handle("/", http.FileServer(http.Dir("./static")))
@@ -118,7 +150,8 @@ func main() {
 
 	go func() {
 		log.Printf("Massive presence demo: http://localhost:%s/", *port)
-		log.Printf("Channel: %s   count=%d   churn=%d/s", presenceChannel, *initialCount, *churnRate)
+		log.Printf("  100k viewer: http://localhost:%s/100k.html  (channel %s, pool %d)", *port, channel100k, pool100k)
+		log.Printf("  1M   viewer: http://localhost:%s/1m.html    (channel %s, pool %d)", *port, channel1m, pool1m)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)
 		}
