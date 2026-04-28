@@ -665,7 +665,7 @@ func TestSharedPollPublish_LocalOnly(t *testing.T) {
 		{Key: "key1", Version: 0},
 	})
 
-	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 5, []byte(`{"v":5}`))
+	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 5, "", []byte(`{"v":5}`))
 	require.NoError(t, err)
 
 	// Client should receive the publication.
@@ -721,7 +721,7 @@ func TestSharedPollPublish_FreshFromPublish_SkipsTimerPoll(t *testing.T) {
 	require.Len(t, timerEvent.Items, 2)
 
 	// Publish to key1 — should mark it fresh.
-	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 10, []byte(`{"v":10}`))
+	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 10, "", []byte(`{"v":10}`))
 	require.NoError(t, err)
 
 	// Next timer poll should only include key2 (key1 is fresh).
@@ -778,7 +778,7 @@ func TestSharedPollPublish_FreshFromPublish_NotSkippedByNotify(t *testing.T) {
 	})
 
 	// Publish v10 to key1.
-	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 10, []byte(`{"v":10}`))
+	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 10, "", []byte(`{"v":10}`))
 	require.NoError(t, err)
 
 	// Wait for publish to be applied.
@@ -813,7 +813,7 @@ func TestSharedPollPublish_UnknownChannel(t *testing.T) {
 	setupSharedPollHandlers(node)
 
 	// Publish to untracked channel — should be a no-op.
-	err := node.SharedPollPublish(context.Background(), "nonexistent:channel", "key1", 1, []byte(`{}`))
+	err := node.SharedPollPublish(context.Background(), "nonexistent:channel", "key1", 1, "", []byte(`{}`))
 	require.NoError(t, err)
 }
 
@@ -837,7 +837,7 @@ func TestSharedPollPublish_UntrackedKey(t *testing.T) {
 	})
 
 	// Publish for a key not tracked — should be a no-op.
-	err := node.SharedPollPublish(context.Background(), "test:channel", "unknown_key", 1, []byte(`{}`))
+	err := node.SharedPollPublish(context.Background(), "test:channel", "unknown_key", 1, "", []byte(`{}`))
 	require.NoError(t, err)
 }
 
@@ -864,7 +864,7 @@ func TestSharedPollPublish_DeltaWithKeepLatestData(t *testing.T) {
 	})
 
 	// First publish.
-	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 1, []byte(`{"score":10}`))
+	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 1, "", []byte(`{"score":10}`))
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
@@ -875,7 +875,7 @@ func TestSharedPollPublish_DeltaWithKeepLatestData(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond)
 
 	// Second publish with different data — delta should be available.
-	err = node.SharedPollPublish(context.Background(), "test:channel", "key1", 2, []byte(`{"score":20}`))
+	err = node.SharedPollPublish(context.Background(), "test:channel", "key1", 2, "", []byte(`{"score":20}`))
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
@@ -926,7 +926,7 @@ func TestSharedPollPublish_MultipleClients(t *testing.T) {
 		{Key: "key1", Version: 0},
 	})
 
-	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 5, []byte(`{"v":5}`))
+	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 5, "", []byte(`{"v":5}`))
 	require.NoError(t, err)
 
 	// Both clients should receive version 5.
@@ -1076,7 +1076,7 @@ func TestSharedPollPublish_VersionIncrementsConsecutive(t *testing.T) {
 	})
 
 	for v := uint64(1); v <= 5; v++ {
-		err := node.SharedPollPublish(context.Background(), "test:channel", "key1", v, []byte(`{}`))
+		err := node.SharedPollPublish(context.Background(), "test:channel", "key1", v, "", []byte(`{}`))
 		require.NoError(t, err)
 
 		ver := v
@@ -1089,7 +1089,7 @@ func TestSharedPollPublish_VersionIncrementsConsecutive(t *testing.T) {
 	}
 
 	// Stale version should be ignored.
-	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 3, []byte(`{"stale":true}`))
+	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 3, "", []byte(`{"stale":true}`))
 	require.NoError(t, err)
 
 	// Version should still be 5.
@@ -1105,7 +1105,7 @@ func TestSharedPollPublish_NilManager(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 1, []byte(`{}`))
+	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 1, "", []byte(`{}`))
 	require.Error(t, err)
 }
 
@@ -1168,7 +1168,7 @@ func TestSharedPoll_StaleResponseDoesNotOverwriteData(t *testing.T) {
 
 	// Direct publish advances to v5.
 	v5Data := []byte(`{"v":5,"published":true}`)
-	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 5, v5Data)
+	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 5, "", v5Data)
 	require.NoError(t, err)
 
 	// Verify entry is at v5 with v5 data.
@@ -1256,7 +1256,7 @@ func TestSharedPoll_EqualVersionPublishNoOverwrite(t *testing.T) {
 
 	// Publish same version with different data.
 	dataB := []byte(`{"version":"five","source":"publish"}`)
-	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 5, dataB)
+	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 5, "", dataB)
 	require.NoError(t, err)
 
 	// Give time for publish to be processed.
@@ -1441,7 +1441,7 @@ func TestSharedPoll_VersionlessPublishRejected(t *testing.T) {
 		{Key: "key1", Version: 0},
 	})
 
-	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 5, []byte(`{"v":5}`))
+	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 5, "", []byte(`{"v":5}`))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "versionless")
 }

@@ -101,6 +101,36 @@ func (h *keyedHub) numKeys() int {
 	return n
 }
 
+// collectAllClients returns the deduplicated set of *Client refs subscribed
+// to any key on this hub. Used to enumerate every client of a shared-poll
+// channel — for epoch-flip-driven unsubscribe in particular.
+//
+// Holds h.mu.RLock during enumeration only; the returned slice is safe to
+// iterate without holding hub or channel-state locks.
+func (h *keyedHub) collectAllClients() []*Client {
+	h.mu.RLock()
+	if len(h.items) == 0 {
+		h.mu.RUnlock()
+		return nil
+	}
+	seen := make(map[string]*Client)
+	for _, subs := range h.items {
+		for uid, c := range subs {
+			if _, ok := seen[uid]; ok {
+				continue
+			}
+			seen[uid] = c
+		}
+	}
+	h.mu.RUnlock()
+
+	out := make([]*Client, 0, len(seen))
+	for _, c := range seen {
+		out = append(out, c)
+	}
+	return out
+}
+
 // broadcastToKey sends a publication to all subscribers of a key.
 // Each subscriber's per-connection version is checked — only clients
 // with a version lower than pubVersion receive the publication.

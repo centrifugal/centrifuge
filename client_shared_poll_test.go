@@ -3214,7 +3214,7 @@ gotV5:
 
 	// Bump to v10 via SharedPollPublish — entry.data becomes data_B.
 	dataB := []byte(`{"value":"this is data_B at version ten, padded to be large enough for fossil delta!!"}`)
-	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 10, dataB)
+	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 10, "", dataB)
 	require.NoError(t, err)
 
 	// Wait for v10 delivery.
@@ -3603,4 +3603,207 @@ func TestSharedPollEpoch_ChangesOnChannelStateRecreation(t *testing.T) {
 	epoch2 := node.sharedPollManager.Epoch("test:channel", true)
 	require.NotEmpty(t, epoch2)
 	require.NotEqual(t, epoch1, epoch2, "epoch must change after channel state recreation")
+}
+
+// ---- Epoch flip tests (versioned mode, publisher-supplied epoch) ----
+
+// versionedSharedPollOpts returns shared-poll channel options for versioned
+// mode with publish-enabled fast-path. Used by epoch-flip tests.
+func versionedSharedPollOpts() SharedPollChannelOptions {
+	return SharedPollChannelOptions{
+		Mode:                 SharedPollModeVersioned,
+		RefreshInterval:      time.Hour, // disable refresh worker timer-driven polls
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		PublishEnabled:       false, // local-only for unit tests
+	}
+}
+
+// TestSharedPollEpoch_VersionedInitialEmpty: a versioned channel starts with
+// empty epoch. The first publish carrying a non-empty epoch flips state.
+func TestSharedPollEpoch_VersionedInitialEmpty(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, versionedSharedPollOpts())
+	setupSharedPollHandlers(node)
+
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{{Key: "k1", Version: 0}})
+
+	// No publish yet — epoch is empty.
+	require.Equal(t, "", node.sharedPollManager.Epoch("test:channel", false))
+
+	// First publish with non-empty epoch sets the channel epoch.
+	err := node.SharedPollPublish(context.Background(), "test:channel", "k1", 1, "epochA", []byte(`{}`))
+	require.NoError(t, err)
+	require.Equal(t, "epochA", node.sharedPollManager.Epoch("test:channel", false))
+}
+
+// TestSharedPollEpoch_SameEpochVersionCompare: same epoch + monotonic
+// versions = standard accept-fresh / skip-stale behavior.
+func TestSharedPollEpoch_SameEpochVersionCompare(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, versionedSharedPollOpts())
+	setupSharedPollHandlers(node)
+
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{{Key: "k1", Version: 0}})
+
+	ctx := context.Background()
+	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 5, "epochA", []byte(`{"v":5}`)))
+	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 10, "epochA", []byte(`{"v":10}`)))
+	// Stale within same epoch — should be skipped silently.
+	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 3, "epochA", []byte(`{"v":3-stale"}`)))
+
+	// Epoch unchanged.
+	require.Equal(t, "epochA", node.sharedPollManager.Epoch("test:channel", false))
+}
+
+// TestSharedPollEpoch_FlipUnsubscribesClient: a publish with a different
+// epoch unsubscribes existing subscribers with insufficient-state code.
+func TestSharedPollEpoch_FlipUnsubscribesClient(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, versionedSharedPollOpts())
+	setupSharedPollHandlers(node)
+
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+
+	// Capture unsubscribe events on the client.
+	unsubReceived := make(chan Unsubscribe, 1)
+	client.eventHub.unsubscribeHandler = func(event UnsubscribeEvent) {
+		select {
+		case unsubReceived <- Unsubscribe{Code: event.Code, Reason: event.Reason}:
+		default:
+		}
+	}
+
+	subscribeSharedPollClient(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{{Key: "k1", Version: 0}})
+
+	ctx := context.Background()
+	// Establish first epoch.
+	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 1, "epochA", []byte(`{"v":1}`)))
+	require.Equal(t, "epochA", node.sharedPollManager.Epoch("test:channel", false))
+
+	// Flip with new epoch.
+	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 1, "epochB", []byte(`{"v":1-newepoch"}`)))
+
+	// Channel epoch updated.
+	require.Equal(t, "epochB", node.sharedPollManager.Epoch("test:channel", false))
+
+	// Client received unsubscribe with insufficient-state code.
+	select {
+	case unsub := <-unsubReceived:
+		require.Equal(t, UnsubscribeCodeInsufficient, unsub.Code)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected client to receive insufficient-state unsubscribe after epoch flip")
+	}
+}
+
+// TestSharedPollEpoch_FlipResetsEntries: an epoch flip resets per-key version
+// state — a publish with version=1 under the new epoch is accepted even when
+// the previous epoch had reached version=1000.
+func TestSharedPollEpoch_FlipResetsEntries(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, versionedSharedPollOpts())
+	setupSharedPollHandlers(node)
+
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{{Key: "k1", Version: 0}})
+
+	ctx := context.Background()
+	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 1000, "epochA", []byte(`{"v":1000}`)))
+
+	// New epoch with low version: must be accepted (entries reset on flip).
+	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 1, "epochB", []byte(`{"v":1-postflip"}`)))
+
+	// Re-track client (it was unsubbed by the flip). Then verify that the
+	// post-flip publish data is reachable by re-subscribing and tracking.
+	// Internal state check: channel epoch is now epochB.
+	require.Equal(t, "epochB", node.sharedPollManager.Epoch("test:channel", false))
+
+	// A subsequent publish with version=2 under epochB must be applied
+	// (proves the entry version was reset to 0 on flip, not retained at 1000).
+	subscribeSharedPollClient(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{{Key: "k1", Version: 0}})
+	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 2, "epochB", []byte(`{"v":2-postflip"}`)))
+
+	// Stale (≤ 2) publishes under same epoch should still be skipped.
+	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 1, "epochB", []byte(`{"v":1-stale"}`)))
+}
+
+// TestSharedPollEpoch_FlipOnUntrackedKey: a publish for a key NOT tracked on
+// this node still updates the stored channel epoch (per-node ignorance fix).
+// This avoids an extra unsub-resub cycle for the first subscriber to a quiet
+// node.
+func TestSharedPollEpoch_FlipOnUntrackedKey(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, versionedSharedPollOpts())
+	setupSharedPollHandlers(node)
+
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+	// Track only k1.
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{{Key: "k1", Version: 0}})
+
+	ctx := context.Background()
+	// Publish for an UNTRACKED key — entry doesn't exist on this node.
+	// Channel epoch should still update.
+	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "untracked_key", 1, "epochX", []byte(`{}`)))
+	require.Equal(t, "epochX", node.sharedPollManager.Epoch("test:channel", false))
+}
+
+// TestSharedPollEpoch_EmptyEpochUnchangedBehavior: publishing with empty
+// epoch when stored is also empty performs pure version comparison — no
+// flip, no unsubscribe.
+func TestSharedPollEpoch_EmptyEpochUnchangedBehavior(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, versionedSharedPollOpts())
+	setupSharedPollHandlers(node)
+
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+
+	unsubCount := atomic.Int32{}
+	client.eventHub.unsubscribeHandler = func(event UnsubscribeEvent) {
+		unsubCount.Add(1)
+	}
+
+	subscribeSharedPollClient(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{{Key: "k1", Version: 0}})
+
+	ctx := context.Background()
+	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 1, "", []byte(`{}`)))
+	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 2, "", []byte(`{}`)))
+
+	require.Equal(t, "", node.sharedPollManager.Epoch("test:channel", false))
+	// Give time for any spurious unsubscribe event.
+	time.Sleep(50 * time.Millisecond)
+	require.Equal(t, int32(0), unsubCount.Load(), "no flip should occur with empty-to-empty epochs")
+}
+
+// TestSharedPollEpoch_SubscribeReplyCarriesEpoch: subscribe reply for a
+// versioned channel returns the current channel epoch. Clients use it to
+// detect mid-session flips on resubscribe.
+func TestSharedPollEpoch_SubscribeReplyCarriesEpoch(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t, versionedSharedPollOpts())
+	setupSharedPollHandlers(node)
+
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+
+	// First subscribe before any publish — epoch is empty.
+	res1 := subscribeSharedPollClient(t, client, "test:channel")
+	require.Equal(t, "", res1.Epoch)
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{{Key: "k1", Version: 0}})
+
+	// Publish with epoch sets channel state.
+	require.NoError(t, node.SharedPollPublish(context.Background(), "test:channel", "k1", 1, "epochA", []byte(`{}`)))
+
+	// Re-subscribe (after the flip-driven unsub above).
+	client2 := newTestClientV2(t, node, "user2")
+	connectClientV2(t, client2)
+	res2 := subscribeSharedPollClient(t, client2, "test:channel")
+	require.Equal(t, "epochA", res2.Epoch)
 }

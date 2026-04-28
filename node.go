@@ -1921,13 +1921,26 @@ func (n *Node) SharedPollNotify(notifications []SharedPollNotificationItem) {
 
 // SharedPollPublish pushes data directly to a SharedPoll channel for a specific key.
 // The version must be in the same space as versions returned by the OnSharedPoll handler —
-// stale versions (≤ current) are ignored. When PublishEnabled is set in channel options,
-// the publication is distributed to all nodes via Broker PUB/SUB. Otherwise, local-only.
-func (n *Node) SharedPollPublish(ctx context.Context, channel string, key string, version uint64, data []byte) error {
+// stale versions (≤ current) are ignored within a given epoch. When PublishEnabled is set
+// in channel options, the publication is distributed to all nodes via Broker PUB/SUB.
+// Otherwise, local-only.
+//
+// epoch is an optional channel-level string identifying the publisher's epoch.
+// If it differs from the channel's stored epoch, all current subscribers are
+// unsubscribed with insufficient-state code so they re-track from version 0 on
+// resubscribe — this lets a publisher that resets its in-memory version counter
+// (e.g., after a process restart) deliver fresh state without freezing connected
+// clients. Empty epoch disables this protection (pure version comparison).
+//
+// A publisher should generate a fresh epoch (e.g., uuid.NewString()) at process
+// startup and use the same value for every call. Reusing the same epoch across
+// process restarts brings back the freeze problem; using a different epoch on
+// every call to a stable channel triggers an unsubscribe storm.
+func (n *Node) SharedPollPublish(ctx context.Context, channel string, key string, version uint64, epoch string, data []byte) error {
 	if n.sharedPollManager == nil {
 		return errors.New("shared poll manager not initialized")
 	}
-	return n.sharedPollManager.publish(ctx, channel, key, version, data)
+	return n.sharedPollManager.publish(ctx, channel, key, version, epoch, data)
 }
 
 // HandlePublication coming from Broker.
@@ -1938,12 +1951,12 @@ func (n *Node) HandlePublication(ch string, pub *Publication, sp StreamPosition,
 	// Route shared poll key-scoped publications to SharedPollManager.
 	if n.sharedPollManager != nil && pub.Key != "" {
 		if baseCh, key := parseSharedPollKeyChannel(ch); baseCh != "" {
-			n.sharedPollManager.handlePublishedData(baseCh, key, pub.Version, pub.Data)
+			n.sharedPollManager.handlePublishedData(baseCh, key, pub.Version, pub.Epoch, pub.Data)
 			return nil
 		}
 		// Fallback: check if it's a direct channel match (local-only path).
 		if n.sharedPollManager.hasChannel(ch) {
-			n.sharedPollManager.handlePublishedData(ch, pub.Key, pub.Version, pub.Data)
+			n.sharedPollManager.handlePublishedData(ch, pub.Key, pub.Version, pub.Epoch, pub.Data)
 			return nil
 		}
 	}

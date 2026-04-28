@@ -130,7 +130,7 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 	if !ok {
 		s = &sharedPollChannelState{
 			opts:      opts,
-			epoch:     epoch.Generate(),
+			epoch:     initialChannelEpoch(opts),
 			itemIndex: make(map[string]*sharedPollTrackedEntry),
 			notifCh:   make(chan string, 1024),
 		}
@@ -153,7 +153,7 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 		m.mu.Lock()
 		s = &sharedPollChannelState{
 			opts:      opts,
-			epoch:     epoch.Generate(),
+			epoch:     initialChannelEpoch(opts),
 			itemIndex: make(map[string]*sharedPollTrackedEntry),
 			notifCh:   make(chan string, 1024),
 		}
@@ -254,7 +254,7 @@ func (m *SharedPollManager) trackKeys(channel string, opts SharedPollChannelOpti
 	if !ok {
 		s = &sharedPollChannelState{
 			opts:      opts,
-			epoch:     epoch.Generate(),
+			epoch:     initialChannelEpoch(opts),
 			itemIndex: make(map[string]*sharedPollTrackedEntry),
 			notifCh:   make(chan string, 1024),
 		}
@@ -277,7 +277,7 @@ func (m *SharedPollManager) trackKeys(channel string, opts SharedPollChannelOpti
 		m.mu.Lock()
 		s = &sharedPollChannelState{
 			opts:      opts,
-			epoch:     epoch.Generate(),
+			epoch:     initialChannelEpoch(opts),
 			itemIndex: make(map[string]*sharedPollTrackedEntry),
 			notifCh:   make(chan string, 1024),
 		}
@@ -528,25 +528,76 @@ func (m *SharedPollManager) hasChannel(channel string) bool {
 	return ok
 }
 
-// Epoch returns the epoch string for subscribe replies. For versionless
-// channels, returns a per-channel epoch that changes when channel state
-// is recreated (e.g., after shutdown delay expires and synthetic version
-// counter resets). For versioned channels, returns empty string — backend
-// versions are stable and don't need epoch-based invalidation.
-func (m *SharedPollManager) Epoch(channel string, isVersionless bool) string {
-	if !isVersionless {
-		return ""
+// initialChannelEpoch returns the epoch a freshly-created sharedPollChannelState
+// starts with. For versionless mode the server generates a per-channel epoch
+// (changes when state is recreated). For versioned mode the epoch is supplied
+// by the publisher on each publish/refresh, so initial state is empty and
+// gets populated via flipEpoch on the first incoming publish.
+func initialChannelEpoch(opts SharedPollChannelOptions) string {
+	if opts.isVersionless() {
+		return epoch.Generate()
 	}
+	return ""
+}
+
+// Epoch returns the epoch string for subscribe replies.
+//
+// Versionless channels: server-generated, stable for the lifetime of channel
+// state. Changes when state is recreated after shutdown delay expires.
+//
+// Versioned channels: publisher-supplied, set on first publish/refresh.
+// Changes (epoch flip) trigger unsubscribe of all current subscribers with
+// insufficient-state code so they re-track from version 0 on resubscribe.
+func (m *SharedPollManager) Epoch(channel string, isVersionless bool) string {
 	m.mu.RLock()
 	s, ok := m.channels[channel]
 	m.mu.RUnlock()
 	if !ok {
-		return m.epoch
+		if isVersionless {
+			return m.epoch
+		}
+		return ""
 	}
 	s.mu.Lock()
 	e := s.epoch
 	s.mu.Unlock()
 	return e
+}
+
+// flipEpochAndCollectClients atomically updates the stored channel epoch,
+// resets all per-key state, and collects the *Client references currently
+// subscribed (via the keyed hub). Caller must invoke Client.Unsubscribe on
+// each returned client with no locks held — calling Unsubscribe under
+// s.mu would deadlock since Unsubscribe's cleanup path takes s.mu via
+// untrack.
+//
+// All state mutation (epoch + entries) and the client snapshot are taken
+// under s.mu to prevent a window where a client subscribing concurrently
+// with the flip could be unsubbed despite having seen the new epoch in
+// its subscribe reply.
+//
+// If newEpoch == s.epoch, returns nil and performs no mutation.
+func (s *sharedPollChannelState) flipEpochAndCollectClients(hub *keyedHub, newEpoch string) []*Client {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.epoch == newEpoch {
+		return nil
+	}
+	s.epoch = newEpoch
+	for _, e := range s.itemIndex {
+		e.version = 0
+		e.data = nil
+		e.dataHash = 0
+		e.freshFromPublish = false
+		e.needsBroadcast = false
+	}
+	if hub == nil {
+		return nil
+	}
+	// Nested s.mu -> h.mu is consistent with existing patterns in this file
+	// (e.g. SharedPollRevokeKeys uses removeAllSubscribers under s.mu).
+	return hub.collectAllClients()
 }
 
 // close stops all refresh workers and waits for them to finish.
@@ -717,7 +768,7 @@ func (m *SharedPollManager) unsubscribeAllBrokerKeys(channel string) {
 	})
 }
 
-func (m *SharedPollManager) publish(ctx context.Context, channel string, key string, version uint64, data []byte) error {
+func (m *SharedPollManager) publish(ctx context.Context, channel string, key string, version uint64, epoch string, data []byte) error {
 	m.mu.RLock()
 	s, ok := m.channels[channel]
 	m.mu.RUnlock()
@@ -737,11 +788,15 @@ func (m *SharedPollManager) publish(ctx context.Context, channel string, key str
 	m.brokerSubMu.RUnlock()
 
 	if broker != nil {
-		_, err := broker.Publish(keyCh, data, PublishOptions{Key: key, Version: version})
+		// For shared-poll keyed channels, the broker's Publication.Epoch
+		// carries the publisher's per-channel epoch (the wire field is
+		// shared with stream channels' stream-position epoch — semantics
+		// differ per channel type, but the wire is the same).
+		_, err := broker.Publish(keyCh, data, PublishOptions{Key: key, Version: version, Epoch: epoch})
 		return err
 	}
 	// Local-only (PublishEnabled=false or channel not active): apply directly.
-	m.handlePublishedData(channel, key, version, data)
+	m.handlePublishedData(channel, key, version, epoch, data)
 	return nil
 }
 
@@ -759,7 +814,7 @@ func (m *SharedPollManager) stats() (int, int) {
 	return numChannels, numKeys
 }
 
-func (m *SharedPollManager) handlePublishedData(channel string, key string, version uint64, data []byte) {
+func (m *SharedPollManager) handlePublishedData(channel string, key string, version uint64, epoch string, data []byte) {
 	m.mu.RLock()
 	s, ok := m.channels[channel]
 	m.mu.RUnlock()
@@ -771,17 +826,28 @@ func (m *SharedPollManager) handlePublishedData(channel string, key string, vers
 		return
 	}
 
+	if s.opts.isVersionless() {
+		// SharedPollPublish should not reach here in versionless mode
+		// (rejected by publish()), but guard defensively.
+		return
+	}
+
+	// Epoch comparison runs *before* the entry-lookup early-return so the
+	// channel's stored epoch stays current even on nodes that don't track
+	// this specific key. Otherwise the first subscriber to ever track a
+	// key on a quiet node would trigger an unnecessary unsubscribe cycle
+	// when the cold-key auto-poll detects the existing publisher epoch.
+	if clients := s.flipEpochAndCollectClients(hub, epoch); len(clients) > 0 {
+		for _, c := range clients {
+			c.Unsubscribe(channel, unsubscribeInsufficientState)
+		}
+	}
+
 	s.mu.Lock()
 	entry := s.itemIndex[key]
 	if entry == nil {
 		s.mu.Unlock()
 		return // Key not tracked on this node.
-	}
-	if s.opts.isVersionless() {
-		// SharedPollPublish should not reach here in versionless mode
-		// (rejected by publish()), but guard defensively.
-		s.mu.Unlock()
-		return
 	}
 	if version <= entry.version {
 		s.mu.Unlock()
@@ -799,7 +865,7 @@ func (m *SharedPollManager) handlePublishedData(channel string, key string, vers
 
 	m.node.metrics.getSharedPollPublishCached(channel).applied.Inc()
 
-	pub := &protocol.Publication{Key: key, Data: data, Version: version}
+	pub := &protocol.Publication{Key: key, Data: data, Version: version, Epoch: epoch}
 	prep := buildPreparedPollData(pub, prevData)
 	hub.broadcastToKey(channel, key, version, pub, prep)
 }
@@ -1131,7 +1197,7 @@ func (s *sharedPollChannelState) runNotifiedRefreshCycle(ctx context.Context, no
 
 	// Notified refresh does not track absences — absence tracking is only
 	// meaningful for full-channel timer-based polls.
-	s.onNotifiedRefreshResponse(channel, result.Items, hub, node)
+	s.onNotifiedRefreshResponse(channel, result.Epoch, result.Items, hub, node)
 }
 
 func (s *sharedPollChannelState) runRefreshCycle(ctx context.Context, node *Node, channel string, sem chan struct{}) time.Duration {
@@ -1264,7 +1330,7 @@ func (s *sharedPollChannelState) runRefreshCycle(ctx context.Context, node *Node
 				return
 			}
 
-			s.onRefreshResponse(channel, chunk, result.Items, hub, node)
+			s.onRefreshResponse(channel, chunk, result.Epoch, result.Items, hub, node)
 		}(chunk, semStart)
 	}
 
@@ -1307,7 +1373,19 @@ func buildPreparedPollData(pub *protocol.Publication, prevData []byte) preparedD
 
 // onNotifiedRefreshResponse processes backend response for notified keys.
 // Unlike onRefreshResponse, it does not track absences since this is a targeted poll.
-func (s *sharedPollChannelState) onNotifiedRefreshResponse(channel string, items []SharedPollRefreshItem, hub *keyedHub, node *Node) {
+func (s *sharedPollChannelState) onNotifiedRefreshResponse(channel string, respEpoch string, items []SharedPollRefreshItem, hub *keyedHub, node *Node) {
+	// Versioned channels: detect publisher epoch change before any per-item
+	// processing. A flip resets all per-key state and unsubscribes current
+	// subscribers; the items in this response then repopulate state under
+	// the new epoch via the standard path below.
+	if !s.opts.isVersionless() {
+		if clients := s.flipEpochAndCollectClients(hub, respEpoch); len(clients) > 0 {
+			for _, c := range clients {
+				c.Unsubscribe(channel, unsubscribeInsufficientState)
+			}
+		}
+	}
+
 	type pendingUpdate struct {
 		key      string
 		version  uint64
@@ -1445,7 +1523,17 @@ func (s *sharedPollChannelState) onNotifiedRefreshResponse(channel string, items
 	}
 }
 
-func (s *sharedPollChannelState) onRefreshResponse(channel string, queriedKeys []string, items []SharedPollRefreshItem, hub *keyedHub, node *Node) {
+func (s *sharedPollChannelState) onRefreshResponse(channel string, queriedKeys []string, respEpoch string, items []SharedPollRefreshItem, hub *keyedHub, node *Node) {
+	// Versioned channels: detect publisher epoch change before any per-item
+	// processing. See onNotifiedRefreshResponse for rationale.
+	if !s.opts.isVersionless() {
+		if clients := s.flipEpochAndCollectClients(hub, respEpoch); len(clients) > 0 {
+			for _, c := range clients {
+				c.Unsubscribe(channel, unsubscribeInsufficientState)
+			}
+		}
+	}
+
 	type pendingUpdate struct {
 		key      string
 		version  uint64

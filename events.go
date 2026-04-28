@@ -647,6 +647,15 @@ type SharedPollItem struct {
 // SharedPollResult contains the response from a shared poll refresh.
 type SharedPollResult struct {
 	Items []SharedPollRefreshItem
+	// Epoch is the publisher's current epoch for this channel. When set, an
+	// epoch change vs the channel's stored epoch resets all per-key versions
+	// and unsubscribes current subscribers with insufficient-state code,
+	// forcing a fresh subscribe handshake. Empty epoch means no epoch
+	// invalidation logic — pure version comparison.
+	//
+	// Only meaningful for versioned shared-poll channels. Versionless
+	// channels use server-generated channel-level epoch and ignore this.
+	Epoch string
 }
 
 // SharedPollRefreshItem represents a single item in a shared poll refresh response.

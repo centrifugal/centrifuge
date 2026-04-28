@@ -10,7 +10,13 @@ type Publication struct {
 	// Offset is an incremental position number inside a history stream.
 	// Zero value means that channel does not maintain Publication stream.
 	Offset uint64
-	// Epoch is the stream epoch. Used together with Offset for position tracking.
+	// Epoch is a multi-purpose channel-level epoch string. For stream
+	// subscriptions it pairs with Offset for stream-position tracking
+	// (history loss / stream recreation detection). For shared-poll
+	// versioned subscriptions it carries the publisher's per-channel
+	// epoch — a change in epoch resets per-key versions and unsubscribes
+	// current subscribers with insufficient-state code so they re-track
+	// from version 0 on resubscribe.
 	Epoch string
 	// Data to be published to a channel (to be delivered to subscribers).
 	Data []byte
