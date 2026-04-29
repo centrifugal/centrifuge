@@ -263,8 +263,16 @@ func runPubSubLoop(
 			subClients[clusterShardIndex][psShardIndex] = conn
 			subClientsMu.Unlock()
 			defer func() {
+				// Compare-and-swap: only nil the slot if it still holds OUR
+				// conn. A subsequent run of this same loop (after topology
+				// rebuild closed our `done`) may have already written its own
+				// fresh conn into this slot before our defer fires. Without
+				// the equality check, our nil write would clobber a live
+				// connection.
 				subClientsMu.Lock()
-				subClients[clusterShardIndex][psShardIndex] = nil
+				if subClients[clusterShardIndex][psShardIndex] == conn {
+					subClients[clusterShardIndex][psShardIndex] = nil
+				}
 				subClientsMu.Unlock()
 			}()
 			startOnce(nil)
@@ -502,8 +510,14 @@ func runNodeGroupedPubSubLoop(
 			}
 			subClientsMu.Unlock()
 			defer func() {
+				// Compare-and-swap: only nil the slot if it still holds OUR
+				// conn. A subsequent run of this same loop (after topology
+				// rebuild closed our `done`) may have already written its own
+				// fresh conn into this slot before our defer fires. Without
+				// the equality check, our nil write would clobber a live
+				// connection.
 				subClientsMu.Lock()
-				if nodeIdx < len(subClients) {
+				if nodeIdx < len(subClients) && subClients[nodeIdx][psShardIdx] == conn {
 					subClients[nodeIdx][psShardIdx] = nil
 				}
 				subClientsMu.Unlock()

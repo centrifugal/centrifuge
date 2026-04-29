@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,6 +46,35 @@ func newNodeGroupedMapBrokerPrefix(t *testing.T, n *Node, numPartitions int, pre
 	}
 
 	return e
+}
+
+// waitForSubClientsPopulated polls until every slot in *slotsPtr is non-nil.
+// This is the deterministic post-rebuild barrier: rather than sleeping a
+// fixed duration and hoping goroutines have finished their dedicate +
+// resubscribe cycle, callers wait until the goroutines have actually written
+// their connections back into the array. Tests that exercise rebuild paths
+// should use this instead of time.Sleep before invoking Subscribe / Publish.
+//
+// slotsPtr is a pointer to the wrapper's subClients field so the helper sees
+// post-rebuild reallocations (the slice header may be replaced by rebuild).
+func waitForSubClientsPopulated(t *testing.T, mu *sync.Mutex, slotsPtr *[][]rueidis.DedicatedClient, timeout time.Duration) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		slots := *slotsPtr
+		if len(slots) == 0 {
+			return false
+		}
+		for i := range slots {
+			for j := range slots[i] {
+				if slots[i][j] == nil {
+					return false
+				}
+			}
+		}
+		return true
+	}, timeout, 100*time.Millisecond, "all subClients slots should be populated")
 }
 
 // TestRedisMapBroker_NodeGrouped_ConnectionCount verifies that the number of
@@ -399,6 +429,135 @@ func TestRedisMapBroker_NodeGrouped_RebuildPreservesPartitions(t *testing.T) {
 	require.Equal(t, origMapping, wrapper.partitionToNodeIdx, "partition→node mapping should be same after rebuild")
 	for i, parts := range wrapper.nodePartitions {
 		require.Equal(t, origNodePartitions[i], parts, "nodePartitions[%d] should be same after rebuild", i)
+	}
+}
+
+// TestRedisMapBroker_NodeGrouped_RapidRebuildPreservesConnections is a stress
+// test for the rebuild path. It triggers many rebuilds in rapid succession on
+// a stable cluster (numNodes unchanged — the same array is reused) and then
+// verifies subClients slots end up populated and pub/sub still works.
+//
+// The race that motivated the compare-and-swap on the cleanup defer requires
+// an old cleanup goroutine's defer to fire AFTER a new loop has written its
+// conn into the same slot. In practice that ordering is rare — the new
+// loop's init takes milliseconds (Dedicate + subscribe + resubscribe) while
+// an old defer is microseconds — so this test exercises the rebuild
+// machinery rather than deterministically reproducing the clobber. Useful as
+// general regression coverage even though a flake-free reproducer for the
+// specific race would require instrumented hooks.
+func TestRedisMapBroker_NodeGrouped_RapidRebuildPreservesConnections(t *testing.T) {
+	prefix := getUniquePrefix()
+
+	node1, _ := New(Config{
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeRecoverable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
+		},
+	})
+	e1 := newNodeGroupedMapBrokerPrefix(t, node1, 16, prefix)
+	defer func() { _ = e1.Close(context.Background()) }()
+	defer func() { _ = node1.Shutdown(context.Background()) }()
+
+	var numPubs atomic.Int64
+	pubCh := make(chan struct{}, 1)
+	require.NoError(t, e1.RegisterEventHandler(&testBrokerEventHandler{
+		HandleControlFunc: func(bytes []byte) error { return nil },
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			numPubs.Add(1)
+			select {
+			case pubCh <- struct{}{}:
+			default:
+			}
+			return nil
+		},
+		HandleJoinFunc:  func(ch string, info *ClientInfo) error { return nil },
+		HandleLeaveFunc: func(ch string, info *ClientInfo) error { return nil },
+	}))
+
+	testChannel := "rapid_rebuild_test_ch"
+	require.NoError(t, e1.Subscribe(testChannel))
+
+	// Publisher broker (same prefix).
+	node2, _ := New(Config{
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeRecoverable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
+		},
+	})
+	e2 := newNodeGroupedMapBrokerPrefix(t, node2, 16, prefix)
+	defer func() { _ = e2.Close(context.Background()) }()
+	defer func() { _ = node2.Shutdown(context.Background()) }()
+	_ = e2.RegisterEventHandler(&testBrokerEventHandler{
+		HandleControlFunc: func(bytes []byte) error { return nil },
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			return nil
+		},
+		HandleJoinFunc:  func(ch string, info *ClientInfo) error { return nil },
+		HandleLeaveFunc: func(ch string, info *ClientInfo) error { return nil },
+	})
+
+	wrapper := e1.shards[0]
+
+	// Sanity check: publication works in the steady state.
+	_, err := e2.Publish(context.Background(), testChannel, "", MapPublishOptions{
+		Data: []byte(`"baseline"`),
+	})
+	require.NoError(t, err)
+	select {
+	case <-pubCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("baseline publication did not arrive")
+	}
+
+	// Trigger many rebuilds in rapid succession on a stable cluster.
+	// numNodes is unchanged across these — exactly the path where the
+	// race lived (old defer clobbering new init in the same array slot).
+	// Tight spacing — well under the 500ms drain heuristic — so old
+	// loops' cleanup goroutines are likely still pending when the next
+	// rebuild fires.
+	const numRebuilds = 50
+	for i := 0; i < numRebuilds; i++ {
+		e1.closeTopologyDone(wrapper)
+		time.Sleep(20 * time.Millisecond)
+		e1.rebuildNodeGroupedPubSub(wrapper)
+	}
+
+	// Give the system time to settle: goroutines must reach the point where
+	// they re-subscribe and write their conn into the (post-final-rebuild)
+	// subClients slot. With CAS on the cleanup defer, those writes survive.
+	require.Eventually(t, func() bool {
+		wrapper.subClientsMu.Lock()
+		defer wrapper.subClientsMu.Unlock()
+		for i := range wrapper.subClients {
+			for j := range wrapper.subClients[i] {
+				if wrapper.subClients[i][j] == nil {
+					return false
+				}
+			}
+		}
+		return true
+	}, 15*time.Second, 200*time.Millisecond, "all subClients slots should be populated after rebuilds settle")
+
+	// Final functional check: a publication still arrives end-to-end.
+	numPubs.Store(0)
+	pubCh = make(chan struct{}, 1)
+	require.NoError(t, e1.Subscribe(testChannel))
+	_, err = e2.Publish(context.Background(), testChannel, "", MapPublishOptions{
+		Data: []byte(`"post_rapid_rebuild"`),
+	})
+	require.NoError(t, err)
+	select {
+	case <-pubCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("post-rebuild publication did not arrive — subClients slot likely got nil-clobbered")
 	}
 }
 
@@ -1044,10 +1203,12 @@ func TestRedisMapBroker_NodeGrouped_SlotMigration(t *testing.T) {
 	// --- Phase 3: Wait for topology rebuild and verify ---
 	t.Log("phase 2: slot migrated, waiting for topology rebuild...")
 
-	// Wait for topology rebuild. The sunsubscribe → topologyRebuildCh → coordinator
-	// → closeTopologyDone + sleep(500ms) + rebuild cycle takes ~1 second.
-	// Add margin for goroutine restart via runForever (250ms backoff).
-	time.Sleep(3 * time.Second)
+	// Wait for topology rebuild and goroutine restart to settle: poll until
+	// every subClients slot is repopulated post-rebuild. This is the
+	// deterministic version of "sleep N seconds and hope" — the rebuild
+	// cycle (sunsubscribe → topologyRebuildCh → close + sleep + rebuild +
+	// runForever retry + dedicate + resubscribe) has a variable wall time.
+	waitForSubClientsPopulated(t, &wrapper.subClientsMu, &wrapper.subClients, 15*time.Second)
 
 	// Verify topology was rebuilt correctly.
 	wrapper.subClientsMu.Lock()
@@ -1250,8 +1411,41 @@ func cleanupNode7004(t *testing.T) {
 	_ = exec.Command(redisCLI, "-p", "7004", "SHUTDOWN", "NOSAVE").Run()
 	_ = exec.Command("rm", "-f", "/tmp/nodes-7004.conf").Run()
 
-	// Check if 7004 is still referenced in cluster nodes and forget it.
+	// Get node IDs for canonical owners (7001, 7002, 7003).
 	output := runRedisCLI(t, 7001, "CLUSTER", "NODES")
+	canonicalNodeID := func(port string) string {
+		for _, l := range strings.Split(output, "\n") {
+			if strings.Contains(l, port) && strings.Contains(l, "master") {
+				return strings.Fields(l)[0]
+			}
+		}
+		return ""
+	}
+	nodeIDs := map[int]string{
+		7001: canonicalNodeID("7001"),
+		7002: canonicalNodeID("7002"),
+		7003: canonicalNodeID("7003"),
+	}
+
+	// Reassign any slot owned by 7004 (or noaddr) back to its CANONICAL
+	// owner based on the slot number, not blindly to 7001. The canonical
+	// distribution from create-cluster is:
+	//   0-5460     → 7001
+	//   5461-10922 → 7002
+	//   10923-16383→ 7003
+	// Putting slots back to the wrong owner is the prior bug that made
+	// rerunning this test corrupt the cluster across iterations.
+	canonicalOwnerForSlot := func(slot int) string {
+		switch {
+		case slot <= 5460:
+			return nodeIDs[7001]
+		case slot <= 10922:
+			return nodeIDs[7002]
+		default:
+			return nodeIDs[7003]
+		}
+	}
+
 	for _, line := range strings.Split(output, "\n") {
 		if !strings.Contains(line, "7004") && !strings.Contains(line, "noaddr") {
 			continue
@@ -1276,21 +1470,14 @@ func cleanupNode7004(t *testing.T) {
 					start, _ = strconv.Atoi(rangeParts[0])
 					end = start
 				}
-				// Assign these slots to node 7001.
-				node7001ID := ""
-				for _, l := range strings.Split(output, "\n") {
-					if strings.Contains(l, "7001") && strings.Contains(l, "master") {
-						node7001ID = strings.Fields(l)[0]
-						break
-					}
-				}
-				if node7001ID == "" {
-					continue
-				}
 				for s := start; s <= end; s++ {
+					targetID := canonicalOwnerForSlot(s)
+					if targetID == "" {
+						continue
+					}
 					for _, p := range []int{7001, 7002, 7003} {
 						_ = exec.Command(redisCLI, "-p", strconv.Itoa(p),
-							"CLUSTER", "SETSLOT", strconv.Itoa(s), "NODE", node7001ID).Run()
+							"CLUSTER", "SETSLOT", strconv.Itoa(s), "NODE", targetID).Run()
 					}
 				}
 			}
@@ -1298,6 +1485,53 @@ func cleanupNode7004(t *testing.T) {
 		// Forget the node from all known nodes.
 		for _, p := range []int{7001, 7002, 7003} {
 			_ = exec.Command(redisCLI, "-p", strconv.Itoa(p), "CLUSTER", "FORGET", nodeID).Run()
+		}
+	}
+
+	// Restore canonical distribution for any slots that drifted to a
+	// non-canonical owner during a partially-completed earlier test run.
+	// Without this, slots reshared from 7002 to 7001 (or any other
+	// non-canonical placement) by a failed run stay there permanently.
+	output = runRedisCLI(t, 7001, "CLUSTER", "NODES")
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 9 || !strings.Contains(line, "master") {
+			continue
+		}
+		ownerID := fields[0]
+		port := 0
+		for p, id := range nodeIDs {
+			if id == ownerID {
+				port = p
+				break
+			}
+		}
+		if port == 0 {
+			continue
+		}
+		for _, sf := range fields[8:] {
+			if strings.Contains(sf, "[") {
+				continue
+			}
+			rangeParts := strings.Split(sf, "-")
+			var start, end int
+			if len(rangeParts) == 2 {
+				start, _ = strconv.Atoi(rangeParts[0])
+				end, _ = strconv.Atoi(rangeParts[1])
+			} else if len(rangeParts) == 1 {
+				start, _ = strconv.Atoi(rangeParts[0])
+				end = start
+			}
+			for s := start; s <= end; s++ {
+				canonical := canonicalOwnerForSlot(s)
+				if canonical == "" || canonical == ownerID {
+					continue
+				}
+				for _, p := range []int{7001, 7002, 7003} {
+					_ = exec.Command(redisCLI, "-p", strconv.Itoa(p),
+						"CLUSTER", "SETSLOT", strconv.Itoa(s), "NODE", canonical).Run()
+				}
+			}
 		}
 	}
 }
@@ -1317,9 +1551,22 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 	prefix := getUniquePrefix()
 	numPartitions := 128
 
+	// Broker goroutines (topology refresh, per-node PubSub loops) can outlive
+	// Close() under -count=N reruns: rebuilds and runForever retries keep
+	// firing briefly after closeCh fires. If those tail-end log entries hit
+	// t.Logf after the test function has returned, Go's testing package
+	// panics ("Log in goroutine after test has completed"). Gate the log
+	// handler on an atomic flag flipped at function exit; tail logs after
+	// that point are silently dropped.
+	var testEnded atomic.Bool
+	defer testEnded.Store(true) // registered first → runs last
+
 	node1, _ := New(Config{
 		LogLevel: LogLevelInfo,
 		LogHandler: func(entry LogEntry) {
+			if testEnded.Load() {
+				return
+			}
 			t.Logf("[e1] %s %v", entry.Message, entry.Fields)
 		},
 		Map: MapConfig{
@@ -1458,8 +1705,11 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 	t.Logf("phase 2: node count = %d, maxNodeGoroutines = %d", nodeCount, wrapper.maxNodeGoroutines)
 	require.Equal(t, 4, wrapper.maxNodeGoroutines, "maxNodeGoroutines should be 4")
 
-	// Give new goroutines time to establish PubSub connections.
-	time.Sleep(3 * time.Second)
+	// Wait for all subClients slots to be populated by post-rebuild goroutines
+	// before exercising Subscribe. A fixed sleep here was flaky because in
+	// rapid-rebuild scenarios goroutines may not have completed their
+	// dedicate+resubscribe cycle within a hard-coded window.
+	waitForSubClientsPopulated(t, &wrapper.subClientsMu, &wrapper.subClients, 15*time.Second)
 
 	// Re-subscribe the test channel on the new topology.
 	require.NoError(t, e1.Subscribe(testChannel))
@@ -1521,9 +1771,10 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 	require.Equal(t, 3, nodeCount, "broker should see 3 nodes after remove")
 	t.Logf("phase 3: node count = %d", nodeCount)
 
-	// The critical check: no panic from goroutines that had nodeIdx=3.
-	// Give goroutines time to cycle through runForever with bounds check.
-	time.Sleep(3 * time.Second)
+	// Wait for the post-shrink subClients (size 3) to be populated by the
+	// post-rebuild goroutines. Orphaned goroutines for nodeIdx=3 self-skip
+	// via the bounds check; we only require slots [0..2] to be live.
+	waitForSubClientsPopulated(t, &wrapper.subClientsMu, &wrapper.subClients, 15*time.Second)
 
 	// Re-subscribe.
 	require.NoError(t, e1.Subscribe(testChannel))
@@ -1539,6 +1790,369 @@ func TestRedisMapBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 	select {
 	case <-pubCh:
 		t.Log("phase 3: publication received with 3 nodes — no panic, recovery successful")
+	case <-time.After(10 * time.Second):
+		t.Fatal("phase 3: timeout waiting for publication after remove")
+	}
+}
+
+// TestRedisBroker_NodeGrouped_SlotMigration is the RedisBroker counterpart to
+// TestRedisMapBroker_NodeGrouped_SlotMigration. The CAS fix for the rebuild
+// cleanup defer lives in shared code (redis_pubsub_shared.go) and is exercised
+// by both broker types; without this counterpart, the regular broker side has
+// no integration coverage of the rebuild path under real slot migration.
+func TestRedisBroker_NodeGrouped_SlotMigration(t *testing.T) {
+	requireRedisCLI(t)
+	prefix := getUniquePrefix()
+	numPartitions := 128
+
+	node1, _ := New(Config{
+		LogLevel:   LogLevelInfo,
+		LogHandler: func(entry LogEntry) {},
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeRecoverable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
+		},
+	})
+	b1 := newNodeGroupedBrokerPrefix(t, node1, numPartitions, prefix)
+	defer func() { _ = node1.Shutdown(context.Background()) }()
+	defer stopRedisBroker(b1)
+
+	// Pick a partition and find which cluster node owns its slot.
+	targetPartition := 10
+	slot := int(redisSlot("{" + strconv.Itoa(targetPartition) + "}"))
+	t.Logf("target partition=%d slot=%d", targetPartition, slot)
+
+	clusterNodes := parseClusterNodes(t, 7001)
+	require.GreaterOrEqual(t, len(clusterNodes), 3, "need at least 3 cluster nodes")
+
+	sourceNode := findNodeForSlot(clusterNodes, slot)
+	require.NotNil(t, sourceNode, "no node found owning slot %d", slot)
+
+	var targetNode *clusterNodeInfo
+	for i := range clusterNodes {
+		if clusterNodes[i].id != sourceNode.id {
+			targetNode = &clusterNodes[i]
+			break
+		}
+	}
+	require.NotNil(t, targetNode, "no target node found")
+
+	// Find a channel that hashes to the target partition.
+	var testChannel string
+	for i := 0; i < 10000; i++ {
+		ch := fmt.Sprintf("broker_slotmig_%d", i)
+		if consistentIndex(ch, numPartitions) == targetPartition {
+			testChannel = ch
+			break
+		}
+	}
+	require.NotEmpty(t, testChannel, "couldn't find a channel hashing to partition %d", targetPartition)
+
+	// --- Phase 1: Verify PubSub works before migration ---
+	var numPubs atomic.Int64
+	pubCh := make(chan struct{}, 1)
+	handler := &testBrokerEventHandler{
+		HandleControlFunc: func(bytes []byte) error { return nil },
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			if numPubs.Add(1) == 1 {
+				select {
+				case pubCh <- struct{}{}:
+				default:
+				}
+			}
+			return nil
+		},
+		HandleJoinFunc:  func(ch string, info *ClientInfo) error { return nil },
+		HandleLeaveFunc: func(ch string, info *ClientInfo) error { return nil },
+	}
+	_ = b1.RegisterControlEventHandler(handler)
+	_ = b1.RegisterBrokerEventHandler(handler)
+	require.NoError(t, b1.Subscribe(testChannel))
+
+	// Second broker / node to publish (same prefix).
+	node2, _ := New(Config{
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeRecoverable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
+		},
+	})
+	b2 := newNodeGroupedBrokerPrefix(t, node2, numPartitions, prefix)
+	require.NoError(t, node2.Run())
+	defer func() { _ = node2.Shutdown(context.Background()) }()
+	defer stopRedisBroker(b2)
+
+	_, err := node2.Publish(testChannel, []byte(`"before_migration"`))
+	require.NoError(t, err)
+
+	select {
+	case <-pubCh:
+		t.Log("phase 1: publication received before migration")
+	case <-time.After(10 * time.Second):
+		t.Fatal("phase 1: timeout waiting for publication before migration")
+	}
+
+	wrapper := b1.shards[0]
+	wrapper.subClientsMu.Lock()
+	origNodeIdx := wrapper.partitionToNodeIdx[targetPartition]
+	wrapper.subClientsMu.Unlock()
+
+	// --- Phase 2: Migrate the slot ---
+	migrateSlot(t, slot, sourceNode, targetNode, clusterNodes)
+	defer func() {
+		currentNodes := parseClusterNodes(t, 7001)
+		currentSource := findNodeForSlot(currentNodes, slot)
+		var currentTarget *clusterNodeInfo
+		for i := range currentNodes {
+			if currentNodes[i].id == sourceNode.id {
+				currentTarget = &currentNodes[i]
+				break
+			}
+		}
+		if currentSource != nil && currentTarget != nil && currentSource.id != currentTarget.id {
+			migrateSlot(t, slot, currentSource, currentTarget, currentNodes)
+		}
+	}()
+
+	// --- Phase 3: Wait for topology rebuild and verify ---
+	t.Log("phase 2: slot migrated, waiting for topology rebuild...")
+	waitForSubClientsPopulated(t, &wrapper.subClientsMu, &wrapper.subClients, 15*time.Second)
+
+	wrapper.subClientsMu.Lock()
+	newNodeIdx := wrapper.partitionToNodeIdx[targetPartition]
+	wrapper.subClientsMu.Unlock()
+	require.NotEqual(t, origNodeIdx, newNodeIdx,
+		"partition %d should have moved to a different node", targetPartition)
+
+	// Re-subscribe and verify delivery on the new topology.
+	require.NoError(t, b1.Subscribe(testChannel))
+	numPubs.Store(0)
+	pubCh = make(chan struct{}, 1)
+
+	_, err = node2.Publish(testChannel, []byte(`"after_migration"`))
+	require.NoError(t, err)
+
+	select {
+	case <-pubCh:
+		t.Log("phase 3: publication received after slot migration — recovery successful")
+	case <-time.After(10 * time.Second):
+		t.Fatal("phase 3: timeout waiting for publication after slot migration")
+	}
+}
+
+// TestRedisBroker_NodeGrouped_AddRemoveNode is the RedisBroker counterpart to
+// TestRedisMapBroker_NodeGrouped_AddRemoveNode. Adds a 4th cluster node,
+// verifies the running broker discovers it and PubSub still works, then
+// removes the node and verifies recovery.
+func TestRedisBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
+	requireRedisCLI(t)
+	if redisServer == "" {
+		t.Skip("redis-server not found in PATH")
+	}
+	cleanupNode7004(t)
+
+	prefix := getUniquePrefix()
+	numPartitions := 128
+
+	// See AddRemoveNode (map broker) for the rationale on testEnded gating.
+	var testEnded atomic.Bool
+	defer testEnded.Store(true)
+
+	node1, _ := New(Config{
+		LogLevel: LogLevelInfo,
+		LogHandler: func(entry LogEntry) {
+			if testEnded.Load() {
+				return
+			}
+			t.Logf("[b1] %s %v", entry.Message, entry.Fields)
+		},
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeRecoverable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
+		},
+	})
+	b1 := newNodeGroupedBrokerPrefix(t, node1, numPartitions, prefix)
+	defer func() { _ = node1.Shutdown(context.Background()) }()
+	defer stopRedisBroker(b1)
+
+	var numPubs atomic.Int64
+	pubCh := make(chan struct{}, 1)
+	signalPub := func() {
+		select {
+		case pubCh <- struct{}{}:
+		default:
+		}
+	}
+	handler := &testBrokerEventHandler{
+		HandleControlFunc: func(bytes []byte) error { return nil },
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			numPubs.Add(1)
+			signalPub()
+			return nil
+		},
+		HandleJoinFunc:  func(ch string, info *ClientInfo) error { return nil },
+		HandleLeaveFunc: func(ch string, info *ClientInfo) error { return nil },
+	}
+	_ = b1.RegisterControlEventHandler(handler)
+	_ = b1.RegisterBrokerEventHandler(handler)
+
+	testChannel := "broker_add_remove_node_test_ch"
+	require.NoError(t, b1.Subscribe(testChannel))
+
+	node2, _ := New(Config{
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeRecoverable,
+					KeyTTL: 60 * time.Second,
+				}
+			},
+		},
+	})
+	b2 := newNodeGroupedBrokerPrefix(t, node2, numPartitions, prefix)
+	require.NoError(t, node2.Run())
+	defer func() { _ = node2.Shutdown(context.Background()) }()
+	defer stopRedisBroker(b2)
+
+	wrapper := b1.shards[0]
+
+	// --- Phase 1: Verify PubSub works with 3 nodes ---
+	t.Log("phase 1: verifying PubSub with 3 nodes")
+	wrapper.subClientsMu.Lock()
+	require.Equal(t, 3, len(wrapper.nodeClients), "should start with 3 nodes")
+	wrapper.subClientsMu.Unlock()
+
+	_, err := node2.Publish(testChannel, []byte(`"before_add"`))
+	require.NoError(t, err)
+	select {
+	case <-pubCh:
+		t.Log("phase 1: publication received with 3 nodes")
+	case <-time.After(10 * time.Second):
+		t.Fatal("phase 1: timeout waiting for publication with 3 nodes")
+	}
+
+	// --- Phase 2: Add a 4th node ---
+	t.Log("phase 2: adding node on port 7004")
+	cleanupNode := startRedisNode(t, 7004)
+	defer func() {
+		cleanupNode()
+		cleanupNode7004(t)
+	}()
+
+	addNodeToCluster(t, 7004, 7001, []int{7001, 7002, 7003})
+	newNodeID := getNodeID(t, 7004)
+
+	clusterNodes := parseClusterNodes(t, 7001)
+	var sourceNode *clusterNodeInfo
+	for i := range clusterNodes {
+		if clusterNodes[i].id != newNodeID && len(clusterNodes[i].slots) > 0 {
+			sourceNode = &clusterNodes[i]
+			break
+		}
+	}
+	require.NotNil(t, sourceNode, "need a source node with slots")
+	reshardToNode(t, 7001, sourceNode.id, newNodeID, 1000)
+	waitForClusterConverge(t, 7001, 30*time.Second)
+
+	forceRueidisTopologyRefresh(t, b1.shards[0].shard.client)
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if b1.refreshBrokerTopology(wrapper) {
+			t.Log("phase 2: topology change detected, triggering rebuild")
+			b1.closeBrokerTopologyDone(wrapper)
+			time.Sleep(500 * time.Millisecond)
+			b1.rebuildBrokerNodeGroupedPubSub(wrapper)
+		}
+		wrapper.subClientsMu.Lock()
+		nodeCount := len(wrapper.nodeClients)
+		wrapper.subClientsMu.Unlock()
+		if nodeCount == 4 {
+			break
+		}
+		forceRueidisTopologyRefresh(t, b1.shards[0].shard.client)
+		time.Sleep(1 * time.Second)
+	}
+
+	wrapper.subClientsMu.Lock()
+	nodeCount := len(wrapper.nodeClients)
+	wrapper.subClientsMu.Unlock()
+	require.Equal(t, 4, nodeCount, "broker should see 4 nodes after add")
+	require.Equal(t, 4, wrapper.maxNodeGoroutines, "maxNodeGoroutines should be 4")
+
+	waitForSubClientsPopulated(t, &wrapper.subClientsMu, &wrapper.subClients, 15*time.Second)
+
+	require.NoError(t, b1.Subscribe(testChannel))
+	numPubs.Store(0)
+	pubCh = make(chan struct{}, 1)
+
+	_, err = node2.Publish(testChannel, []byte(`"after_add"`))
+	require.NoError(t, err)
+	select {
+	case <-pubCh:
+		t.Log("phase 2: publication received with 4 nodes")
+	case <-time.After(10 * time.Second):
+		t.Fatal("phase 2: timeout waiting for publication with 4 nodes")
+	}
+
+	// --- Phase 3: Remove the 4th node ---
+	t.Log("phase 3: removing node on port 7004")
+
+	reshardToNode(t, 7001, newNodeID, sourceNode.id, 1000)
+	waitForClusterConverge(t, 7001, 30*time.Second)
+	removeNodeFromCluster(t, 7001, newNodeID)
+	waitForClusterConverge(t, 7001, 30*time.Second)
+
+	cleanupNode()
+	time.Sleep(2 * time.Second)
+
+	forceRueidisTopologyRefresh(t, b1.shards[0].shard.client)
+
+	deadline = time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		forceRueidisTopologyRefresh(t, b1.shards[0].shard.client)
+		if b1.refreshBrokerTopology(wrapper) {
+			t.Log("phase 3: topology change detected, triggering rebuild")
+			b1.closeBrokerTopologyDone(wrapper)
+			time.Sleep(500 * time.Millisecond)
+			b1.rebuildBrokerNodeGroupedPubSub(wrapper)
+		}
+		wrapper.subClientsMu.Lock()
+		nodeCount = len(wrapper.nodeClients)
+		wrapper.subClientsMu.Unlock()
+		if nodeCount == 3 {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	wrapper.subClientsMu.Lock()
+	nodeCount = len(wrapper.nodeClients)
+	wrapper.subClientsMu.Unlock()
+	require.Equal(t, 3, nodeCount, "broker should see 3 nodes after remove")
+
+	waitForSubClientsPopulated(t, &wrapper.subClientsMu, &wrapper.subClients, 15*time.Second)
+
+	require.NoError(t, b1.Subscribe(testChannel))
+	numPubs.Store(0)
+	pubCh = make(chan struct{}, 1)
+
+	_, err = node2.Publish(testChannel, []byte(`"after_remove"`))
+	require.NoError(t, err)
+	select {
+	case <-pubCh:
+		t.Log("phase 3: publication received with 3 nodes — recovery successful")
 	case <-time.After(10 * time.Second):
 		t.Fatal("phase 3: timeout waiting for publication after remove")
 	}
