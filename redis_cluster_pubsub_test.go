@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,7 +58,9 @@ func newNodeGroupedMapBrokerPrefix(t *testing.T, n *Node, numPartitions int, pre
 //
 // slotsPtr is a pointer to the wrapper's subClients field so the helper sees
 // post-rebuild reallocations (the slice header may be replaced by rebuild).
-func waitForSubClientsPopulated(t *testing.T, mu *sync.Mutex, slotsPtr *[][]rueidis.DedicatedClient, timeout time.Duration) {
+//
+// Accepts testing.TB so it can also be used from benchmarks.
+func waitForSubClientsPopulated(t testing.TB, mu *sync.Mutex, slotsPtr *[][]rueidis.DedicatedClient, timeout time.Duration) {
 	t.Helper()
 	require.Eventually(t, func() bool {
 		mu.Lock()
@@ -639,11 +642,11 @@ func TestRedisMapBroker_NodeGrouped_Cleanup(t *testing.T) {
 }
 
 // newNodeGroupedBroker creates a RedisBroker with GroupShardedPubSubByNode=true on a 3-node cluster.
-func newNodeGroupedBroker(t *testing.T, n *Node, numPartitions int) *RedisBroker {
+func newNodeGroupedBroker(t testing.TB, n *Node, numPartitions int) *RedisBroker {
 	return newNodeGroupedBrokerPrefix(t, n, numPartitions, getUniquePrefix())
 }
 
-func newNodeGroupedBrokerPrefix(t *testing.T, n *Node, numPartitions int, prefix string) *RedisBroker {
+func newNodeGroupedBrokerPrefix(t testing.TB, n *Node, numPartitions int, prefix string) *RedisBroker {
 	t.Helper()
 	redisConf := RedisShardConfig{
 		ClusterAddresses: []string{"localhost:7001", "localhost:7002", "localhost:7003"},
@@ -2155,5 +2158,196 @@ func TestRedisBroker_NodeGrouped_AddRemoveNode(t *testing.T) {
 		t.Log("phase 3: publication received with 3 nodes — recovery successful")
 	case <-time.After(10 * time.Second):
 		t.Fatal("phase 3: timeout waiting for publication after remove")
+	}
+}
+
+// BenchmarkRedisBroker_NodeGrouped_Throughput measures end-to-end pub/sub
+// throughput on a node-grouped Redis Cluster. It auto-discovers the cluster
+// from the seed addresses, so the same benchmark runs unchanged against a
+// 3-node, 6-node, or larger cluster.
+//
+// Tuning notes:
+//   - numPubSubProcessors is set to NumCPU. With the shared helper's default
+//     of 2, all messages from every cluster node funnel through 2 subscriber
+//     goroutines.
+//   - numPartitions is intentionally large relative to cluster size so the
+//     broker's partition→node mapping spreads channels evenly across all
+//     nodes.
+//   - SetParallelism(64) drives enough concurrent goroutines to keep all
+//     rueidis pipelines fed; the elbow on the publisher curve.
+//
+// Reported metrics (in addition to standard ns/op):
+//   - publishes/sec — rate at which Publish() returns success
+//   - deliveries/sec — rate at which the subscriber's HandlePublication fires
+//
+// Run examples:
+//
+//	go test -tags=integration -run=^$ -bench BenchmarkRedisBroker_NodeGrouped_Throughput -benchtime=10s
+//	go test -tags=integration -run=^$ -bench BenchmarkRedisBroker_NodeGrouped_Throughput -benchtime=30s
+//
+// Tip: -benchtime≥10s. Shorter runs spend most time on setup (subscribe
+// storm + topology discovery); longer runs let the steady-state rate
+// stabilize.
+//
+// Empirical results on Apple M4 (publisher + subscriber + Redis cluster all
+// running locally on the same machine):
+//
+//	cluster   throughput   per-node Redis CPU   per-node ops/sec
+//	3-node    ~1.08M/s     56%                  ~360k
+//	6-node    ~1.29M/s     38%                  ~215k
+//
+// The "spread load across cluster" property is clearly visible — per-node
+// Redis CPU and per-node ops/sec both drop substantially when doubling the
+// cluster. Total throughput growth is more modest (~19%) because the bench
+// runs publisher + subscriber + Redis processes on the same machine and is
+// CPU-bound on syscalls (a CPU profile shows ~54% time in socket
+// read/write syscalls). On a deployment with Redis on a separate machine,
+// the Go process gets the full local CPU budget and Redis-side CPU rises
+// toward saturation, exposing further cluster scaling.
+func BenchmarkRedisBroker_NodeGrouped_Throughput(b *testing.B) {
+	const (
+		numChannels   = 4096
+		numPartitions = 1024
+		payloadSize   = 256
+	)
+	payload := make([]byte, payloadSize)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+
+	prefix := getUniquePrefix()
+
+	// setupBroker constructs a broker with a config tuned for benchmarking.
+	// The shared test helper hardcodes numPubSubProcessors=2; that floor
+	// caps subscriber-side processing well below what the cluster can
+	// deliver. We set it to NumCPU so processing scales naturally with
+	// cluster size.
+	setupBroker := func(node *Node) *RedisBroker {
+		shard, err := NewRedisShard(node, RedisShardConfig{
+			ClusterAddresses: []string{"localhost:7001", "localhost:7002", "localhost:7003"},
+			IOTimeout:        10 * time.Second,
+			ConnectTimeout:   10 * time.Second,
+		})
+		require.NoError(b, err)
+		broker, err := NewRedisBroker(node, RedisBrokerConfig{
+			Shards:                     []*RedisShard{shard},
+			Prefix:                     prefix,
+			NumShardedPubSubPartitions: numPartitions,
+			GroupShardedPubSubByNode:   true,
+			numResubscribeShards:       4,
+			numPubSubProcessors:        runtime.NumCPU(),
+		})
+		require.NoError(b, err)
+		node.SetBroker(broker)
+		// Verify sharded PUB/SUB is supported.
+		result := shard.client.Do(context.Background(), shard.client.B().Spublish().Channel(prefix+"._").Message("").Build())
+		if result.Error() != nil && strings.Contains(result.Error().Error(), "unknown command") {
+			b.Skip("sharded PUB/SUB not supported by this Redis version")
+		}
+		return broker
+	}
+
+	// Subscriber broker.
+	nodeSub, _ := New(Config{
+		LogHandler: func(entry LogEntry) {},
+	})
+	bSub := setupBroker(nodeSub)
+	defer func() { _ = nodeSub.Shutdown(context.Background()) }()
+	defer stopRedisBroker(bSub)
+
+	var received atomic.Int64
+	handler := &testBrokerEventHandler{
+		HandleControlFunc: func(bytes []byte) error { return nil },
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			received.Add(1)
+			return nil
+		},
+		HandleJoinFunc:  func(ch string, info *ClientInfo) error { return nil },
+		HandleLeaveFunc: func(ch string, info *ClientInfo) error { return nil },
+	}
+	_ = bSub.RegisterControlEventHandler(handler)
+	_ = bSub.RegisterBrokerEventHandler(handler)
+
+	channels := make([]string, numChannels)
+	for i := 0; i < numChannels; i++ {
+		channels[i] = fmt.Sprintf("ngp_bench_%d", i)
+		require.NoError(b, bSub.Subscribe(channels[i]))
+	}
+
+	// Publisher broker (separate node, same prefix → same channels).
+	nodePub, _ := New(Config{
+		LogHandler: func(entry LogEntry) {},
+	})
+	bPub := setupBroker(nodePub)
+	require.NoError(b, nodePub.Run())
+	defer func() { _ = nodePub.Shutdown(context.Background()) }()
+	defer stopRedisBroker(bPub)
+
+	// Wait for the subscriber's per-node connections to all be live before
+	// starting the timer. Without this the first messages can be lost while
+	// initial sharded SUBSCRIBE commands are still in flight.
+	wrapper := bSub.shards[0]
+	waitForSubClientsPopulated(b, &wrapper.subClientsMu, &wrapper.subClients, 15*time.Second)
+
+	nodeHits := map[int]int{}
+	for _, ch := range channels {
+		partIdx := consistentIndex(ch, numPartitions)
+		nodeIdx := wrapper.partitionToNodeIdx[partIdx]
+		nodeHits[nodeIdx]++
+	}
+	b.Logf("cluster=%d nodes channels=%d partitions=%d payload=%dB processors=%d distribution=%v",
+		len(wrapper.nodeClients), numChannels, numPartitions, payloadSize, runtime.NumCPU(), nodeHits)
+
+	received.Store(0)
+	var nextCh atomic.Int64
+
+	// Spawn 64×GOMAXPROCS publisher goroutines. The default of GOMAXPROCS
+	// goroutines spends most of its time in I/O wait on rueidis pipelined
+	// SPUBLISH responses, leaving the cluster mostly idle. Empirical scaling
+	// curve on M4 with -benchtime=10s (3-node / 6-node cluster):
+	//
+	//   parallelism    3-node      6-node
+	//   1×             ~46k        ~46k
+	//   4×             ~250k       ~302k
+	//   8×             ~430k       ~509k
+	//   16×            ~660k       ~797k
+	//   32×            ~890k       ~1.13M
+	//   64×            ~1.08M      ~1.29M
+	//
+	// 64× is the elbow on this hardware. Beyond it scaling tapers off
+	// because the bench process becomes CPU-bound on socket I/O syscalls
+	// (publisher + subscriber + cluster all running locally; CPU profile
+	// showed ~54% time in syscall.rawsyscalln).
+	b.SetParallelism(64)
+
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			ch := channels[nextCh.Add(1)%int64(numChannels)]
+			if _, err := nodePub.Publish(ch, payload); err != nil {
+				b.Errorf("publish error: %v", err)
+				return
+			}
+		}
+	})
+
+	elapsed := b.Elapsed()
+	b.StopTimer()
+
+	// Drain stragglers: with high parallelism we typically have a few
+	// thousand in-flight publications when the timer stops. Wait briefly
+	// to count them so deliveries/sec isn't biased by the cutoff.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && received.Load() < int64(b.N) {
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	delivered := received.Load()
+	b.ReportMetric(float64(b.N)/elapsed.Seconds(), "publishes/sec")
+	b.ReportMetric(float64(delivered)/elapsed.Seconds(), "deliveries/sec")
+	if delivered < int64(b.N) {
+		b.Logf("note: %d/%d (%.1f%%) deliveries received within drain window — increase -benchtime if persistent",
+			delivered, b.N, 100*float64(delivered)/float64(b.N))
 	}
 }
