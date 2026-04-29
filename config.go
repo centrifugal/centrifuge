@@ -10,7 +10,7 @@ import (
 type MapMode int
 
 const (
-	// MapModeEphemeral: PUB/SUB only, no stream. Missed updates during disconnect
+	// MapModeEphemeral is PUB/SUB only, no stream. Missed updates during disconnect
 	// are lost — reconnect triggers full state resync. Entries expire after KeyTTL.
 	MapModeEphemeral MapMode = iota + 1
 	// MapModeRecoverable: stream-backed with offset-based recovery. Entries expire after

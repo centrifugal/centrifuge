@@ -1930,12 +1930,7 @@ func (n *Node) SharedPollNotify(notifications []SharedPollNotificationItem) {
 // unsubscribed with insufficient-state code so they re-track from version 0 on
 // resubscribe — this lets a publisher that resets its in-memory version counter
 // (e.g., after a process restart) deliver fresh state without freezing connected
-// clients. Empty epoch disables this protection (pure version comparison).
-//
-// A publisher should generate a fresh epoch (e.g., uuid.NewString()) at process
-// startup and use the same value for every call. Reusing the same epoch across
-// process restarts brings back the freeze problem; using a different epoch on
-// every call to a stable channel triggers an unsubscribe storm.
+// clients. Use empty epoch to skip this check (pure version comparison).
 func (n *Node) SharedPollPublish(ctx context.Context, channel string, key string, version uint64, epoch string, data []byte) error {
 	if n.sharedPollManager == nil {
 		return errors.New("shared poll manager not initialized")
