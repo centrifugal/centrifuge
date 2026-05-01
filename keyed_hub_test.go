@@ -202,3 +202,66 @@ func TestKeyedHub_RemoveSubscribersForUsers_Exclude(t *testing.T) {
 	require.False(t, hub.hasSubscriber("key1", client2))
 	require.False(t, hub.hasSubscriber("key1", client3))
 }
+
+// TestKeyedHub_RemoveSubscribersForUsers_MissingKey covers the early-return
+// branch when the requested key has no subscribers in the hub.
+func TestKeyedHub_RemoveSubscribersForUsers_MissingKey(t *testing.T) {
+	hub := newKeyedHub()
+	// No-op against a hub that has no entry for "missing-key".
+	require.NotPanics(t, func() {
+		hub.removeSubscribersForUsers("missing-key", []string{"user1"}, nil)
+	})
+}
+
+// TestKeyedHub_RemoveSubscribersForUsers_DeletesEmptyKey covers the branch
+// where every subscriber is removed and the key entry itself is deleted.
+func TestKeyedHub_RemoveSubscribersForUsers_DeletesEmptyKey(t *testing.T) {
+	hub := newKeyedHub()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{}, nil
+	})
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	hub.addSubscriber("k", client)
+	require.True(t, hub.hasSubscriber("k", client))
+
+	hub.removeSubscribersForUsers("k", []string{"user1"}, nil)
+
+	// After all subscribers removed, key entry should be gone.
+	require.False(t, hub.hasSubscriber("k", client))
+	require.Zero(t, hub.subscriberCount("k"))
+}
+
+// TestKeyedHub_BroadcastRemovalToUsers_NoTargets covers the early-return when
+// the key has no subscribers at all.
+func TestKeyedHub_BroadcastRemovalToUsers_NoTargets(t *testing.T) {
+	hub := newKeyedHub()
+	require.NotPanics(t, func() {
+		hub.broadcastRemovalToUsers("ch", "k", []string{"user1"}, nil)
+	})
+}
+
+// TestKeyedHub_AllKeys_DedupsAcrossKeys covers the dedup branch in subscribers/
+// allKeys when the same client is registered under multiple keys — each unique
+// client-id should appear once in the returned set.
+func TestKeyedHub_AllKeys_DedupsAcrossKeys(t *testing.T) {
+	hub := newKeyedHub()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{}, nil
+	})
+	client := newTestClientV2(t, node, "user-multi")
+	connectClientV2(t, client)
+	// Same client under two keys.
+	hub.addSubscriber("k1", client)
+	hub.addSubscriber("k2", client)
+
+	// collectAllClients should return the client once even though it appears
+	// under two keys (drives the dedup `if _, ok := seen[uid]; ok { continue }`
+	// path).
+	subs := hub.collectAllClients()
+	require.Len(t, subs, 1)
+}

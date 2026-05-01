@@ -3859,3 +3859,70 @@ func TestSharedPollEpoch_SubscribeReplyCarriesEpoch(t *testing.T) {
 	res2 := subscribeSharedPollClient(t, client2, "test:channel")
 	require.Equal(t, "epochA", res2.Epoch)
 }
+
+// TestKeyedWritePublication_EarlyReturns covers the no-op safety branches at
+// the top of keyedWritePublication: c.keyed unset, channel not tracked, key
+// not tracked, and incoming pubVersion <= keyState.version.
+func TestKeyedWritePublication_EarlyReturns(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	// c.keyed == nil → must return without panicking.
+	client := newTestClient(t, node, "u1")
+	require.NotPanics(t, func() {
+		client.keyedWritePublication("ch", "k", 1, &protocol.Publication{Data: []byte(`{}`)}, preparedData{})
+	})
+
+	// c.keyed set, channel not tracked → return.
+	client.mu.Lock()
+	client.keyed = &keyedState{
+		channels:    map[string]*keyedChannelDeltaState{},
+		trackedKeys: map[string]map[string]*keyedKeyState{},
+	}
+	client.mu.Unlock()
+	require.NotPanics(t, func() {
+		client.keyedWritePublication("not-tracked", "k", 1, &protocol.Publication{Data: []byte(`{}`)}, preparedData{})
+	})
+
+	// Channel tracked but key absent → return.
+	client.mu.Lock()
+	client.keyed.trackedKeys["ch"] = map[string]*keyedKeyState{}
+	client.mu.Unlock()
+	require.NotPanics(t, func() {
+		client.keyedWritePublication("ch", "missing", 1, &protocol.Publication{Data: []byte(`{}`)}, preparedData{})
+	})
+
+	// Key tracked at version 5; incoming version <= 5 → return.
+	client.mu.Lock()
+	client.keyed.trackedKeys["ch"]["k"] = &keyedKeyState{version: 5}
+	client.mu.Unlock()
+	require.NotPanics(t, func() {
+		client.keyedWritePublication("ch", "k", 5, &protocol.Publication{Data: []byte(`{}`)}, preparedData{})
+	})
+}
+
+// TestKeyedWriteRemoval_EarlyReturns covers the symmetric no-op safety
+// branches in keyedWriteRemoval.
+func TestKeyedWriteRemoval_EarlyReturns(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	// c.keyed == nil → no-op.
+	client := newTestClient(t, node, "u2")
+	require.NotPanics(t, func() {
+		client.keyedWriteRemoval("ch", "k", &protocol.Publication{Removed: true})
+	})
+
+	// c.keyed set, channel not tracked → no-op.
+	client.mu.Lock()
+	client.keyed = &keyedState{
+		channels:    map[string]*keyedChannelDeltaState{},
+		trackedKeys: map[string]map[string]*keyedKeyState{},
+	}
+	client.mu.Unlock()
+	require.NotPanics(t, func() {
+		client.keyedWriteRemoval("not-tracked", "k", &protocol.Publication{Removed: true})
+	})
+}

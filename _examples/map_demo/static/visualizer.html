@@ -604,6 +604,10 @@
         const ws = protocols !== undefined ? new _OrigWS(url, protocols) : new _OrigWS(url);
         window.__wsInterceptor.ws = ws;
 
+        // The configured latency is round-trip — split it across both legs so
+        // a request→response cycle is delayed by ~latency total, not 2×latency.
+        const oneWayDelay = () => Math.floor((window.__wsInterceptor.latency || 0) / 2);
+
         // Intercept send — supports artificial latency on outgoing frames.
         const origSend = ws.send.bind(ws);
         ws.send = function(data) {
@@ -620,7 +624,7 @@
                 }
                 return origSend(data);
             };
-            const delay = window.__wsInterceptor.latency || 0;
+            const delay = oneWayDelay();
             if (delay > 0) {
                 setTimeout(doSend, delay);
             } else {
@@ -629,7 +633,8 @@
         };
 
         // Intercept incoming data — delay delivery to centrifuge-js's onmessage
-        // handler by the configured latency to simulate real round-trip delay.
+        // handler by half the configured latency so the round-trip total matches
+        // the configured value.
         let _userOnMessage = null;
         Object.defineProperty(ws, 'onmessage', {
             get() { return _userOnMessage; },
@@ -648,7 +653,7 @@
                             }
                         } catch(e) { /* binary or unparseable */ }
                     }
-                    const delay = window.__wsInterceptor.latency || 0;
+                    const delay = oneWayDelay();
                     if (delay > 0 && _userOnMessage) {
                         setTimeout(() => _userOnMessage(event), delay);
                     } else if (_userOnMessage) {

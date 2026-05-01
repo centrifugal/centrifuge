@@ -1365,7 +1365,12 @@ func (c *Client) addMapClientPresence(presenceChannel string, info *ClientInfo) 
 
 // addMapUserPresence adds user presence to the given channel.
 // Key is userId, no ClientInfo stored (just the key for uniqueness).
+// No-op for anonymous connections (empty user ID) — user-presence has no
+// meaningful key without a user ID, and MapPublish would reject the empty key.
 func (c *Client) addMapUserPresence(presenceChannel string) error {
+	if c.user == "" {
+		return nil
+	}
 	// Use KeyModeIfNew with RefreshTTLOnSuppress to:
 	// - Publish JOIN event only if this is a new user
 	// - Refresh TTL without publishing if user already exists
@@ -1398,8 +1403,9 @@ func (c *Client) updateMapPresence(info *ClientInfo, ctx ChannelContext) error {
 		}
 	}
 
-	// Update user presence if channel is configured.
-	if ctx.mapUserPresenceChannel != "" {
+	// Update user presence if channel is configured. Skip for anonymous
+	// connections (empty user ID) — user-presence is keyless without a user.
+	if ctx.mapUserPresenceChannel != "" && c.user != "" {
 		_, err := c.node.MapPublish(c.ctx, ctx.mapUserPresenceChannel, c.user, MapPublishOptions{
 			KeyMode:              KeyModeIfNew,
 			RefreshTTLOnSuppress: true,

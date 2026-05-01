@@ -2628,6 +2628,35 @@ func TestResolveAndValidateMapChannelOptions(t *testing.T) {
 		require.Contains(t, err.Error(), "MetaTTL must be >= StreamTTL")
 	})
 
+	t.Run("MetaTTL with permanent KeyTTL rejected", func(t *testing.T) {
+		// Persistent mode has KeyTTL = 0 (permanent). Setting MetaTTL > 0 means
+		// the metadata can expire while the keys live forever — invalid.
+		resolver := func(string) MapChannelOptions {
+			return MapChannelOptions{
+				Mode:    MapModePersistent,
+				MetaTTL: time.Minute,
+			}
+		}
+		_, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "MetaTTL must be 0 (permanent) when KeyTTL is 0")
+	})
+
+	t.Run("MetaTTL less than KeyTTL", func(t *testing.T) {
+		// Metadata must outlive keys: MetaTTL >= KeyTTL.
+		resolver := func(string) MapChannelOptions {
+			return MapChannelOptions{
+				Mode:      MapModeRecoverable,
+				KeyTTL:    10 * time.Minute,
+				StreamTTL: time.Minute, // less than KeyTTL but irrelevant once MetaTTL fires
+				MetaTTL:   5 * time.Minute,
+			}
+		}
+		_, err := ResolveAndValidateMapChannelOptions(resolver, "ch")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "MetaTTL must be >= KeyTTL")
+	})
+
 	t.Run("recoverable auto defaults", func(t *testing.T) {
 		resolver := func(string) MapChannelOptions {
 			return MapChannelOptions{Mode: MapModeRecoverable, KeyTTL: time.Second}

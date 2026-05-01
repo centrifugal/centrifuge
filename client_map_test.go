@@ -4687,3 +4687,199 @@ func TestClientHandleMapRemove(t *testing.T) {
 		}
 	})
 }
+
+// TestValidateAndCreateTagsFilter exercises the two error branches of
+// validateAndCreateTagsFilter: tags filter not allowed for the channel, and
+// invalid filter structure.
+func TestValidateAndCreateTagsFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "u-tags")
+
+	// nil filter → no filter, no error.
+	tf, err := client.validateAndCreateTagsFilter(&protocol.SubscribeRequest{}, true, "ch")
+	require.NoError(t, err)
+	require.Nil(t, tf)
+
+	// Filter present but allowTagsFilter=false → ErrorBadRequest.
+	req := &protocol.SubscribeRequest{
+		Tf: &protocol.FilterNode{Op: "", Cmp: "eq", Key: "k", Val: "v"},
+	}
+	tf, err = client.validateAndCreateTagsFilter(req, false, "ch")
+	require.Equal(t, ErrorBadRequest, err)
+	require.Nil(t, tf)
+
+	// Allowed but invalid (leaf with empty Cmp) → ErrorBadRequest.
+	bad := &protocol.SubscribeRequest{
+		Tf: &protocol.FilterNode{Op: "", Cmp: ""},
+	}
+	tf, err = client.validateAndCreateTagsFilter(bad, true, "ch")
+	require.Equal(t, ErrorBadRequest, err)
+	require.Nil(t, tf)
+
+	// Allowed and valid → returns a non-nil filter.
+	good := &protocol.SubscribeRequest{
+		Tf: &protocol.FilterNode{Op: "", Cmp: "eq", Key: "k", Val: "v"},
+	}
+	tf, err = client.validateAndCreateTagsFilter(good, true, "ch")
+	require.NoError(t, err)
+	require.NotNil(t, tf)
+}
+
+// TestMapUserPresence_AnonymousSkipped verifies that user-presence operations
+// are no-ops when the connecting client has no user ID. Otherwise MapPublish
+// would reject the empty user as "key is required for map publish" — which is
+// what surfaces in lobby/games-style demos that allow anonymous connections.
+func TestMapUserPresence_AnonymousSkipped(t *testing.T) {
+	t.Parallel()
+	node, _ := newTestNodeWithMapBroker(t)
+	// Anonymous client (no user ID).
+	ctx, cancelFn := context.WithCancel(context.Background())
+	t.Cleanup(cancelFn)
+	transport := newTestTransport(cancelFn)
+	transport.setProtocolVersion(ProtocolVersion2)
+	client, err := newClient(SetCredentials(ctx, &Credentials{UserID: ""}), node, transport)
+	require.NoError(t, err)
+	require.Equal(t, "", client.user, "test setup expects empty user")
+
+	// addMapUserPresence: must skip silently for anonymous clients.
+	require.NoError(t, client.addMapUserPresence("users:games:lobby"))
+
+	// updateMapPresence with only user-presence channel set: must also be a no-op.
+	chCtx := ChannelContext{mapUserPresenceChannel: "users:games:lobby"}
+	require.NoError(t, client.updateMapPresence(&ClientInfo{ClientID: client.uid}, chCtx))
+}
+
+// TestMapUserPresence_AuthenticatedPublishes is the positive counterpart:
+// a client with a user ID does actually populate the user-presence channel.
+func TestMapUserPresence_AuthenticatedPublishes(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	client := newTestConnectedClientV2(t, node, "user-42")
+	require.Equal(t, "user-42", client.user)
+
+	presenceChannel := "users:games:lobby"
+	require.NoError(t, client.addMapUserPresence(presenceChannel))
+
+	state, err := broker.ReadState(context.Background(), presenceChannel, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 1)
+	require.Equal(t, "user-42", state.Publications[0].Key)
+}
+
+// TestGetMapPageSize covers each clamp branch in getMapPageSize: default-when-zero,
+// clamp-to-min, clamp-to-max, and the unmodified pass-through.
+func TestGetMapPageSize(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "u-page")
+
+	chOpts := MapChannelOptions{
+		MinPageSize:     5,
+		MaxPageSize:     100,
+		DefaultPageSize: 25,
+	}
+
+	// Limit == 0 → default.
+	require.Equal(t, 25, client.getMapPageSize(&protocol.SubscribeRequest{Limit: 0}, chOpts))
+	// Limit < min → min.
+	require.Equal(t, 5, client.getMapPageSize(&protocol.SubscribeRequest{Limit: 2}, chOpts))
+	// Limit > max → max.
+	require.Equal(t, 100, client.getMapPageSize(&protocol.SubscribeRequest{Limit: 1000}, chOpts))
+	// Within bounds → unchanged.
+	require.Equal(t, 50, client.getMapPageSize(&protocol.SubscribeRequest{Limit: 50}, chOpts))
+
+	// All-zero options use library defaults — verify they're applied.
+	def := client.getMapPageSize(&protocol.SubscribeRequest{Limit: 0}, MapChannelOptions{})
+	require.Greater(t, def, 0)
+}
+
+// TestBuildMapChannelFlags covers the conditional flag-setting branches in
+// buildMapChannelFlags by toggling each option individually.
+func TestBuildMapChannelFlags(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "u-flags")
+
+	// Baseline: every flag off.
+	flags := client.buildMapChannelFlags(false, "", false, SubscribeOptions{}, SubscribeReply{})
+	require.True(t, flags&flagSubscribed != 0)
+	require.True(t, flags&flagMap != 0)
+	require.False(t, flags&flagPositioning != 0)
+	require.False(t, flags&flagDeltaAllowed != 0)
+	require.False(t, flags&flagEmitJoinLeave != 0)
+	require.False(t, flags&flagPushJoinLeave != 0)
+
+	// EnablePositioning → flagPositioning.
+	flags = client.buildMapChannelFlags(false, "", false, SubscribeOptions{EnablePositioning: true}, SubscribeReply{})
+	require.True(t, flags&flagPositioning != 0)
+
+	// EnableRecovery (also positioning).
+	flags = client.buildMapChannelFlags(false, "", false, SubscribeOptions{EnableRecovery: true}, SubscribeReply{})
+	require.True(t, flags&flagPositioning != 0)
+
+	// deltaEnabled + Fossil → flagDeltaAllowed.
+	flags = client.buildMapChannelFlags(true, string(DeltaTypeFossil), false, SubscribeOptions{}, SubscribeReply{})
+	require.True(t, flags&flagDeltaAllowed != 0)
+
+	// EmitJoinLeave / PushJoinLeave / EmitPresence.
+	opts := SubscribeOptions{EmitPresence: true, EmitJoinLeave: true, PushJoinLeave: true}
+	flags = client.buildMapChannelFlags(false, "", false, opts, SubscribeReply{})
+	require.True(t, flags&flagEmitPresence != 0)
+	require.True(t, flags&flagEmitJoinLeave != 0)
+	require.True(t, flags&flagPushJoinLeave != 0)
+
+	// Presence subscription marker.
+	flags = client.buildMapChannelFlags(false, "", true, SubscribeOptions{}, SubscribeReply{})
+	require.True(t, flags&flagMapPresence != 0)
+
+	// MapClientPresenceChannel / MapUserPresenceChannel / MapRemoveClientOnUnsubscribe.
+	opts = SubscribeOptions{
+		MapClientPresenceChannel:     "client-pres",
+		MapUserPresenceChannel:       "user-pres",
+		MapRemoveClientOnUnsubscribe: true,
+	}
+	flags = client.buildMapChannelFlags(false, "", false, opts, SubscribeReply{})
+	require.True(t, flags&flagMapClientPresence != 0)
+	require.True(t, flags&flagMapUserPresence != 0)
+	require.True(t, flags&flagCleanupOnUnsubscribe != 0)
+
+	// ClientSideRefresh from reply.
+	flags = client.buildMapChannelFlags(false, "", false, SubscribeOptions{}, SubscribeReply{ClientSideRefresh: true})
+	require.True(t, flags&flagClientSideRefresh != 0)
+}
+
+// TestCleanupMapSubscribingAll covers the loop body of cleanupMapSubscribingAll.
+// We seed mapSubscribing with two channels (one with a subscribingCh, one
+// without) and verify both are removed and the channel is closed.
+func TestCleanupMapSubscribingAll(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "u-cleanup")
+
+	ch := make(chan struct{})
+	client.mu.Lock()
+	if client.mapSubscribing == nil {
+		client.mapSubscribing = make(map[string]*mapSubscribeState)
+	}
+	client.mapSubscribing["a"] = &mapSubscribeState{subscribingCh: ch}
+	client.mapSubscribing["b"] = &mapSubscribeState{} // no subscribingCh
+	client.mu.Unlock()
+
+	client.cleanupMapSubscribingAll()
+
+	client.mu.Lock()
+	require.Empty(t, client.mapSubscribing)
+	client.mu.Unlock()
+
+	// The seeded subscribingCh must have been closed.
+	select {
+	case <-ch:
+	default:
+		t.Fatal("subscribingCh was not closed by cleanupMapSubscribingAll")
+	}
+}
