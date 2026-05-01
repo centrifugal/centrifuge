@@ -233,6 +233,11 @@ func (f redisMapBrokerFactory) makeCustom(tb testing.TB, n *Node, h BrokerEventH
 	}
 	shard, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
+	if f.variant.UseCluster {
+		// Sharded PUB/SUB is a Redis 7+ feature; skip the cluster variants when
+		// the cluster doesn't support it (matches newNodeGroupedMapBrokerPrefix).
+		skipIfNoShardedPubSub(tb, shard, "centrifuge-test-skip-probe-"+randString(4))
+	}
 	brokerConf := RedisMapBrokerConfig{Shards: []*RedisShard{shard}}
 	if f.variant.UseCluster {
 		if f.variant.NodeGrouped {

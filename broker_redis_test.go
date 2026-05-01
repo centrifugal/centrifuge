@@ -118,6 +118,12 @@ func NewTestRedisBrokerClusterWithOptions(tb testing.TB, n *Node, prefix string,
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
 	require.Equal(tb, s.Mode(), RedisShardModeCluster)
+	if groupShardedPubSubByNode {
+		// Sharded PUB/SUB is a Redis 7+ feature. CI may run older clusters; skip
+		// the variant rather than fail the test (matches the pattern in
+		// newNodeGroupedMapBrokerPrefix).
+		skipIfNoShardedPubSub(tb, s, prefix)
+	}
 	brokerConfig := RedisBrokerConfig{
 		Prefix:                   prefix,
 		UseLists:                 !useStreams,
@@ -144,6 +150,17 @@ func NewTestRedisBrokerClusterWithOptions(tb testing.TB, n *Node, prefix string,
 	err = n.Run()
 	require.NoError(tb, err)
 	return e
+}
+
+// skipIfNoShardedPubSub probes the shard for SPUBLISH support and skips the
+// current test if the Redis cluster doesn't support sharded PUB/SUB
+// (Redis < 7). Caller should hold a *RedisShard whose client is connected.
+func skipIfNoShardedPubSub(tb testing.TB, s *RedisShard, prefix string) {
+	tb.Helper()
+	res := s.client.Do(context.Background(), s.client.B().Spublish().Channel(prefix+"._").Message("").Build())
+	if err := res.Error(); err != nil && strings.Contains(err.Error(), "unknown command") {
+		tb.Skipf("sharded PUB/SUB not supported by this Redis version: %v", err)
+	}
 }
 
 func NewTestRedisBrokerSentinel(tb testing.TB) *RedisBroker {
