@@ -25,8 +25,14 @@ func getUniquePrefix() string {
 }
 
 func newTestRedisBroker(tb testing.TB, n *Node, useStreams bool, useCluster bool, port int) *RedisBroker {
+	return newTestRedisBrokerWithOptions(tb, n, useStreams, useCluster, false, port)
+}
+
+// newTestRedisBrokerWithOptions is the extended constructor used by table-driven
+// tests that need to vary GroupShardedPubSubByNode (cluster-only feature).
+func newTestRedisBrokerWithOptions(tb testing.TB, n *Node, useStreams bool, useCluster bool, groupShardedPubSubByNode bool, port int) *RedisBroker {
 	if useCluster {
-		return NewTestRedisBrokerCluster(tb, n, getUniquePrefix(), useStreams, port)
+		return NewTestRedisBrokerClusterWithOptions(tb, n, getUniquePrefix(), useStreams, groupShardedPubSubByNode, port)
 	}
 	return NewTestRedisBroker(tb, n, getUniquePrefix(), useStreams, port)
 }
@@ -82,6 +88,13 @@ func NewTestRedisBroker(tb testing.TB, n *Node, prefix string, useStreams bool, 
 }
 
 func NewTestRedisBrokerCluster(tb testing.TB, n *Node, prefix string, useStreams bool, port int) *RedisBroker {
+	return NewTestRedisBrokerClusterWithOptions(tb, n, prefix, useStreams, false, port)
+}
+
+// NewTestRedisBrokerClusterWithOptions creates a cluster RedisBroker, optionally
+// enabling GroupShardedPubSubByNode (which also requires NumShardedPubSubPartitions
+// to be set since sharded PUB/SUB is mandatory for the node-grouped path).
+func NewTestRedisBrokerClusterWithOptions(tb testing.TB, n *Node, prefix string, useStreams bool, groupShardedPubSubByNode bool, port int) *RedisBroker {
 	tb.Helper()
 
 	numClusterNodes := 3
@@ -106,9 +119,14 @@ func NewTestRedisBrokerCluster(tb testing.TB, n *Node, prefix string, useStreams
 	require.NoError(tb, err)
 	require.Equal(tb, s.Mode(), RedisShardModeCluster)
 	brokerConfig := RedisBrokerConfig{
-		Prefix:   prefix,
-		UseLists: !useStreams,
-		Shards:   []*RedisShard{s},
+		Prefix:                   prefix,
+		UseLists:                 !useStreams,
+		Shards:                   []*RedisShard{s},
+		GroupShardedPubSubByNode: groupShardedPubSubByNode,
+	}
+	if groupShardedPubSubByNode {
+		// Sharded PUB/SUB is mandatory for the node-grouped path.
+		brokerConfig.NumShardedPubSubPartitions = 16
 	}
 
 	numClusterShardsStr := os.Getenv("CENTRIFUGE_REDIS_CLUSTER_BENCHMARKS_NUM_SHARDS")
@@ -177,22 +195,27 @@ func TestRedisBrokerSentinel(t *testing.T) {
 }
 
 type historyRedisTest struct {
-	Name       string
-	UseStreams bool
-	UseCluster bool
-	Port       int
+	Name                     string
+	UseStreams               bool
+	UseCluster               bool
+	GroupShardedPubSubByNode bool
+	Port                     int
 }
 
 var historyRedisTests = []historyRedisTest{
-	{"rd_single_list", false, false, 6379},
-	{"vk_single_list", false, false, 16379},
-	{"rd_single_strm", true, false, 6379},
-	{"vk_single_strm", true, false, 16379},
-	{"df_single_list", false, false, 36379},
-	{"df_single_strm", true, false, 36379},
-	{"rd_cluster_list", false, true, 7001},
-	{"rd_cluster_strm", true, true, 7001},
-	{"vk_cluster_strm", true, true, 17000},
+	{"rd_single_list", false, false, false, 6379},
+	{"vk_single_list", false, false, false, 16379},
+	{"rd_single_strm", true, false, false, 6379},
+	{"vk_single_strm", true, false, false, 16379},
+	{"df_single_list", false, false, false, 36379},
+	{"df_single_strm", true, false, false, 36379},
+	{"rd_cluster_list", false, true, false, 7001},
+	{"rd_cluster_strm", true, true, false, 7001},
+	{"vk_cluster_strm", true, true, false, 17000},
+	// Same cluster scenarios but with GroupShardedPubSubByNode enabled — exercises
+	// the per-node connection pool and topology refresh paths in CI.
+	{"rd_cluster_list_ng", false, true, true, 7001},
+	{"rd_cluster_strm_ng", true, true, true, 7001},
 }
 
 type noHistoryRedisTest struct {
@@ -244,7 +267,7 @@ func TestRedisBroker(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
 
-			b := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			b := newTestRedisBrokerWithOptions(t, node, tt.UseStreams, tt.UseCluster, tt.GroupShardedPubSubByNode, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(b)
 
@@ -356,7 +379,7 @@ func TestRedisBrokerPublishIdempotent(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
 
-			b := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			b := newTestRedisBrokerWithOptions(t, node, tt.UseStreams, tt.UseCluster, tt.GroupShardedPubSubByNode, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(b)
 
@@ -419,7 +442,7 @@ func TestRedisBrokerPublishSkipOldVersion(t *testing.T) {
 
 			node := testNode(t)
 
-			b := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			b := newTestRedisBrokerWithOptions(t, node, tt.UseStreams, tt.UseCluster, tt.GroupShardedPubSubByNode, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(b)
 
@@ -492,7 +515,7 @@ func TestRedisCurrentPosition(t *testing.T) {
 	for _, tt := range historyRedisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
-			b := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			b := newTestRedisBrokerWithOptions(t, node, tt.UseStreams, tt.UseCluster, tt.GroupShardedPubSubByNode, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(b)
 
@@ -525,7 +548,7 @@ func TestRedisBrokerRecover(t *testing.T) {
 	for _, tt := range historyRedisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
-			b := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			b := newTestRedisBrokerWithOptions(t, node, tt.UseStreams, tt.UseCluster, tt.GroupShardedPubSubByNode, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(b)
 
@@ -1543,7 +1566,7 @@ func BenchmarkRedisPublish_1Ch(b *testing.B) {
 	for _, tt := range noHistoryBenchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := benchNode(b)
-			broker := newTestRedisBroker(b, node, false, tt.UseCluster, tt.Port)
+			broker := newTestRedisBrokerWithOptions(b, node, false, tt.UseCluster, false, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(broker)
 			rawData := []byte(`{"bench": true}`)
@@ -1567,7 +1590,7 @@ func BenchmarkRedisPublish_ManyCh(b *testing.B) {
 	for _, tt := range noHistoryRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := benchNode(b)
-			broker := newTestRedisBroker(b, node, false, tt.UseCluster, tt.Port)
+			broker := newTestRedisBrokerWithOptions(b, node, false, tt.UseCluster, false, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(broker)
 			rawData := []byte(`{"bench": true}`)
@@ -1592,7 +1615,7 @@ func BenchmarkRedisPublish_History_1Ch(b *testing.B) {
 	for _, tt := range historyBenchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := benchNode(b)
-			broker := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			broker := newTestRedisBrokerWithOptions(b, node, tt.UseStreams, tt.UseCluster, tt.GroupShardedPubSubByNode, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(broker)
 			rawData := []byte(`{"bench": true}`)
@@ -1619,7 +1642,7 @@ func BenchmarkRedisPub_History_ManyCh(b *testing.B) {
 	for _, tt := range historyBenchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := benchNode(b)
-			broker := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			broker := newTestRedisBrokerWithOptions(b, node, tt.UseStreams, tt.UseCluster, tt.GroupShardedPubSubByNode, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(broker)
 			rawData := []byte(`{"bench": true}`)
@@ -1649,7 +1672,7 @@ func BenchmarkRedisSubscribe(b *testing.B) {
 	for _, tt := range noHistoryRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := benchNode(b)
-			broker := newTestRedisBroker(b, node, false, tt.UseCluster, tt.Port)
+			broker := newTestRedisBrokerWithOptions(b, node, false, tt.UseCluster, false, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(broker)
 			i := int32(0)
@@ -1672,7 +1695,7 @@ func BenchmarkRedisHistory_1Ch(b *testing.B) {
 	for _, tt := range historyBenchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := benchNode(b)
-			broker := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			broker := newTestRedisBrokerWithOptions(b, node, tt.UseStreams, tt.UseCluster, tt.GroupShardedPubSubByNode, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(broker)
 			rawData := []byte("{}")
@@ -1698,7 +1721,7 @@ func BenchmarkRedisRecover_1Ch(b *testing.B) {
 	for _, tt := range historyBenchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := benchNode(b)
-			broker := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			broker := newTestRedisBrokerWithOptions(b, node, tt.UseStreams, tt.UseCluster, tt.GroupShardedPubSubByNode, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(broker)
 			rawData := []byte(randString(800))
@@ -1805,7 +1828,7 @@ func TestRedisHistoryIteration(t *testing.T) {
 	for _, tt := range historyRedisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
-			broker := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			broker := newTestRedisBrokerWithOptions(t, node, tt.UseStreams, tt.UseCluster, tt.GroupShardedPubSubByNode, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(broker)
 			it := historyIterationTest{100, 5}
@@ -1819,7 +1842,7 @@ func TestRedisHistoryReversedNoMetaYet(t *testing.T) {
 	for _, tt := range historyRedisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
-			broker := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			broker := newTestRedisBrokerWithOptions(t, node, tt.UseStreams, tt.UseCluster, tt.GroupShardedPubSubByNode, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(broker)
 			pubs, sp, err := broker.History(
@@ -1854,7 +1877,7 @@ func TestRedisHistoryIterationReverse(t *testing.T) {
 				t.Skip()
 			}
 			node := testNode(t)
-			broker := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			broker := newTestRedisBrokerWithOptions(t, node, tt.UseStreams, tt.UseCluster, tt.GroupShardedPubSubByNode, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(broker)
 			it := historyIterationTest{100, 5}
@@ -1868,7 +1891,7 @@ func BenchmarkRedisHistoryIteration(b *testing.B) {
 	for _, tt := range historyBenchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := benchNode(b)
-			broker := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			broker := newTestRedisBrokerWithOptions(b, node, tt.UseStreams, tt.UseCluster, tt.GroupShardedPubSubByNode, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(broker)
 			it := historyIterationTest{10000, 100}
@@ -2132,7 +2155,7 @@ func TestRedisMemoryUsage(t *testing.T) {
 	for _, tt := range historyRedisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
-			broker := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			broker := newTestRedisBrokerWithOptions(t, node, tt.UseStreams, tt.UseCluster, tt.GroupShardedPubSubByNode, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(broker)
 			rawData := []byte(randString(messageSizeBytes))
@@ -2575,4 +2598,55 @@ func TestRedisClusterMultipleChannelsTwoNodes(t *testing.T) {
 		defer mu.Unlock()
 		require.Fail(t, "timeout waiting for PUB/SUB messages, received %d out of %d", len(receivedChannels), numChannels)
 	}
+}
+
+// TestNewRedisBrokerErrors covers input-validation branches in NewRedisBroker.
+// These tests don't actually connect to Redis since the failures occur before any
+// connection attempt, but they live with the rest of the integration-tagged tests
+// for this type to keep all RedisBroker tests together.
+func TestNewRedisBrokerErrors(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	// Empty shards.
+	_, err := NewRedisBroker(node, RedisBrokerConfig{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no Redis shards")
+
+	// SubscribeOnReplica without replica client.
+	_, err = NewRedisBroker(node, RedisBrokerConfig{
+		Shards:             []*RedisShard{{}},
+		SubscribeOnReplica: true,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "SubscribeOnReplica")
+
+	// NumShardedPubSubPartitions > 0 without cluster.
+	_, err = NewRedisBroker(node, RedisBrokerConfig{
+		Shards:                     []*RedisShard{{}},
+		NumShardedPubSubPartitions: 2,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "sharded PUB/SUB")
+}
+
+// TestRedisBrokerHistoryEmptyChannel verifies History returns empty publications
+// and a stream position for a channel that has no publications. This drives the
+// historyStream/historyList read paths against a not-yet-existing channel — a
+// common edge case for new subscriptions.
+func TestRedisBrokerHistoryEmptyChannel(t *testing.T) {
+	t.Parallel()
+	node := testNode(t)
+	broker := newTestRedisBroker(t, node, true, false, 6379)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	channel := "empty-history-" + randString(4)
+	pubs, sp, err := broker.History(channel, HistoryOptions{
+		Filter:  HistoryFilter{Limit: -1},
+		MetaTTL: 5 * time.Minute,
+	})
+	require.NoError(t, err)
+	require.Empty(t, pubs)
+	require.NotEmpty(t, sp.Epoch)
 }

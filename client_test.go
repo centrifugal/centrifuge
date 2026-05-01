@@ -4895,3 +4895,84 @@ func TestClient_RecoverCache(t *testing.T) {
 	require.Equal(t, 1, len(recoveredPubs), "Should recover exactly 1 prod message")
 	require.Equal(t, `{"input": "msg2"}`, string(recoveredPubs[0].Data), "Should recover the latest message)")
 }
+
+// TestClientHandleInsufficientStateDisconnect verifies that when the channel is
+// server-side, handleInsufficientState routes through the disconnect path
+// (which closes the connection) rather than the async unsubscribe path.
+func TestClientHandleInsufficientStateDisconnect(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	disconnected := make(chan Disconnect, 1)
+	node.OnConnect(func(c *Client) {
+		c.OnDisconnect(func(e DisconnectEvent) {
+			disconnected <- e.Disconnect
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "u-disc")
+	client.handleInsufficientState("test", true)
+	select {
+	case d := <-disconnected:
+		require.Equal(t, DisconnectInsufficientState.Code, d.Code)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected disconnect")
+	}
+}
+
+// TestClientUnsubscribeOnClosedClient verifies that calling Unsubscribe on a
+// closed client is a no-op rather than panicking or producing an error.
+func TestClientUnsubscribeOnClosedClient(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "u-unsub-closed")
+	connectClientV2(t, client)
+	require.NoError(t, client.close(DisconnectForceNoReconnect))
+
+	// Should not panic, should not produce log entries about errors.
+	client.Unsubscribe("not-a-channel")
+}
+
+// TestClientDisconnectMultipleArgPanics verifies the panic-on-misuse contract.
+func TestClientDisconnectMultipleArgPanics(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "u-panic")
+	connectClientV2(t, client)
+	require.PanicsWithValue(t, "Client.Disconnect called with more than 1 argument", func() {
+		client.Disconnect(DisconnectShutdown, DisconnectForceNoReconnect)
+	})
+}
+
+// TestClientUnsubscribeMultipleArgPanics verifies the panic-on-misuse contract.
+func TestClientUnsubscribeMultipleArgPanics(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "u-panic-unsub")
+	connectClientV2(t, client)
+	require.PanicsWithValue(t, "Client.Unsubscribe called with more than 1 unsubscribe argument", func() {
+		client.Unsubscribe("ch", unsubscribeServer, unsubscribeServer)
+	})
+}
+
+// TestClientOnMapPublishOnMapRemoveOnUntrackSetters covers the simple setter wiring
+// — they're trivial but exposed and uncovered.
+func TestClientOnMapPublishOnMapRemoveOnUntrackSetters(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "u")
+
+	client.OnMapPublish(func(MapPublishEvent, MapPublishCallback) {})
+	require.NotNil(t, client.eventHub.mapPublishHandler)
+
+	client.OnMapRemove(func(MapRemoveEvent, MapRemoveCallback) {})
+	require.NotNil(t, client.eventHub.mapRemoveHandler)
+
+	client.OnUntrack(func(UntrackEvent) {})
+	require.NotNil(t, client.eventHub.untrackHandler)
+}

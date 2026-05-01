@@ -2292,3 +2292,56 @@ OUTER2:
 	t.Logf("Leave message without useID: %s", msgWithoutIDStr)
 	t.Logf("Leave message with useID: %s", msgWithIDStr)
 }
+
+// TestHubBroadcastPublicationDeltaPublic verifies the public BroadcastPublicationDelta
+// helper delegates to the internal broadcast path. We only check successful delivery —
+// the delta semantics are covered by TestHubBroadcastPublicationDelta.
+func TestHubBroadcastPublicationDeltaPublic(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	transport.sink = make(chan []byte, 16)
+	newTestSubscribedClientWithTransport(t, ctx, node, transport, "broadcast-user", "bcast")
+
+	drainTransport(transport.sink, 200*time.Millisecond)
+
+	err := node.hub.BroadcastPublicationDelta(
+		"bcast",
+		&Publication{Data: []byte(`{"a":1}`), Offset: 1},
+		nil,
+		StreamPosition{Offset: 1, Epoch: "epoch"},
+	)
+	require.NoError(t, err)
+
+	require.True(t, waitForPayload(t, transport.sink, `"a":1`, 2*time.Second))
+}
+
+// drainTransport drains messages from a transport sink until silent for `quiet`.
+func drainTransport(sink chan []byte, quiet time.Duration) {
+	for {
+		select {
+		case <-sink:
+		case <-time.After(quiet):
+			return
+		}
+	}
+}
+
+// waitForPayload returns true if a message containing `needle` is received before timeout.
+func waitForPayload(t *testing.T, sink chan []byte, needle string, timeout time.Duration) bool {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case data := <-sink:
+			if strings.Contains(string(data), needle) {
+				return true
+			}
+		case <-deadline:
+			return false
+		}
+	}
+}

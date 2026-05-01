@@ -5,6 +5,7 @@ package centrifuge
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -922,8 +923,19 @@ var redisCLI = func() string {
 	return ""
 }()
 
+// runRedisTopologyTestsEnv is the opt-in env var that enables tests which
+// MUTATE Redis Cluster topology (slot migration, add/remove node, etc.).
+// These tests permanently alter the cluster they run against, so they must
+// not run in CI or against shared cluster instances (e.g. a docker-compose
+// cluster used by the rest of the suite). Set this env var only when running
+// against a throwaway cluster you control.
+const runRedisTopologyTestsEnv = "CENTRIFUGE_RUN_REDIS_TOPOLOGY_TESTS"
+
 func requireRedisCLI(t *testing.T) {
 	t.Helper()
+	if os.Getenv(runRedisTopologyTestsEnv) == "" {
+		t.Skipf("topology-mutating test skipped; set %s=1 to run (requires a throwaway Redis Cluster)", runRedisTopologyTestsEnv)
+	}
 	if redisCLI == "" {
 		t.Skip("redis-cli not found in PATH")
 	}

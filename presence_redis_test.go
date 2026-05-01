@@ -494,3 +494,35 @@ func BenchmarkRedisPresenceStatsWithMapping(b *testing.B) {
 		})
 	}
 }
+
+// TestNewRedisPresenceManagerErrors covers the constructor's input-validation branches.
+// These tests don't actually connect to Redis since the failures occur before any
+// connection attempt, but they live with the rest of the integration-tagged tests for
+// this type to keep all RedisPresenceManager tests together.
+func TestNewRedisPresenceManagerErrors(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	// Empty shards.
+	_, err := NewRedisPresenceManager(node, RedisPresenceManagerConfig{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no Redis shards")
+
+	// ReadFromReplica requires UseHashFieldTTL.
+	_, err = NewRedisPresenceManager(node, RedisPresenceManagerConfig{
+		Shards:          []*RedisShard{{}},
+		ReadFromReplica: true,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "UseHashFieldTTL")
+
+	// ReadFromReplica with UseHashFieldTTL but no replica client initialized.
+	_, err = NewRedisPresenceManager(node, RedisPresenceManagerConfig{
+		Shards:          []*RedisShard{{}},
+		ReadFromReplica: true,
+		UseHashFieldTTL: true,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "replica client")
+}

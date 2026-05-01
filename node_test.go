@@ -1927,3 +1927,106 @@ func TestHub_Connections(t *testing.T) {
 	conns := node.Hub().Connections()
 	require.Empty(t, conns)
 }
+
+// TestNodeMapAPIWithoutBroker validates that map APIs report ErrorNotAvailable
+// when no map broker is configured for the channel.
+func TestNodeMapAPIWithoutBroker(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	// Force the per-channel resolver to report no broker so we test the missing-broker
+	// path in the public Node API (default node always installs a MemoryMapBroker).
+	node.config.Map.GetMapBroker = func(string) (MapBroker, bool) { return nil, true }
+	node.mapBroker = nil
+
+	ctx := context.Background()
+
+	_, err := node.MapPublish(ctx, "ch", "k", MapPublishOptions{Data: []byte(`{}`)})
+	require.Equal(t, ErrorNotAvailable, err)
+
+	_, err = node.MapRemove(ctx, "ch", "k", MapRemoveOptions{})
+	require.Equal(t, ErrorNotAvailable, err)
+
+	_, err = node.MapStateRead(ctx, "ch", MapReadStateOptions{Limit: 1})
+	require.Equal(t, ErrorNotAvailable, err)
+
+	_, err = node.MapStreamRead(ctx, "ch", MapReadStreamOptions{Filter: StreamFilter{Limit: 1}})
+	require.Equal(t, ErrorNotAvailable, err)
+
+	_, err = node.MapStats(ctx, "ch")
+	require.Equal(t, ErrorNotAvailable, err)
+}
+
+// TestNodeMapPublishRemoveKeyRequired validates the key validation in the public Map APIs.
+// An empty key is a programming error and should be rejected before reaching the broker.
+func TestNodeMapPublishRemoveKeyRequired(t *testing.T) {
+	t.Parallel()
+	node, _ := newTestNodeWithMapBroker(t)
+	ctx := context.Background()
+
+	_, err := node.MapPublish(ctx, "ch", "", MapPublishOptions{Data: []byte(`{}`)})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "key is required")
+
+	_, err = node.MapRemove(ctx, "ch", "", MapRemoveOptions{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "key is required")
+}
+
+// TestNodeMapStateReadWithSingleFlight covers the UseSingleFlight branch.
+func TestNodeMapStateReadWithSingleFlight(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	node.config.UseSingleFlight = true
+
+	ctx := context.Background()
+	channel := "single-flight-state"
+	_, err := broker.Publish(ctx, channel, "k1", MapPublishOptions{Data: []byte(`{}`)})
+	require.NoError(t, err)
+
+	state, err := node.MapStateRead(ctx, channel, MapReadStateOptions{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 1)
+
+	state, err = node.MapStateRead(ctx, channel, MapReadStateOptions{
+		Limit:    10,
+		Cursor:   "",
+		Asc:      true,
+		Revision: &StreamPosition{Offset: 0, Epoch: state.Position.Epoch},
+	})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 1)
+}
+
+// TestNodeMapStreamReadWithSingleFlight covers the UseSingleFlight branch for stream reads.
+func TestNodeMapStreamReadWithSingleFlight(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+	node.config.UseSingleFlight = true
+
+	ctx := context.Background()
+	channel := "single-flight-stream"
+	_, err := broker.Publish(ctx, channel, "k1", MapPublishOptions{Data: []byte(`{}`)})
+	require.NoError(t, err)
+
+	res, err := node.MapStreamRead(ctx, channel, MapReadStreamOptions{Filter: StreamFilter{Limit: 10}})
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Publications)
+}
+
+// TestNodeMapStatsWithSingleFlight covers the UseSingleFlight branch for stats.
+func TestNodeMapStatsWithSingleFlight(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	node.config.UseSingleFlight = true
+
+	ctx := context.Background()
+	channel := "single-flight-stats"
+	_, err := broker.Publish(ctx, channel, "k1", MapPublishOptions{Data: []byte(`{}`)})
+	require.NoError(t, err)
+
+	stats, err := node.MapStats(ctx, channel)
+	require.NoError(t, err)
+	_ = stats
+}

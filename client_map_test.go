@@ -4467,3 +4467,223 @@ func TestSubRefresh_ServerTagsFilter_NilNoChange(t *testing.T) {
 		// Expected — no unsubscribe.
 	}
 }
+
+// TestClientHandleMapPublish covers the map publish callback paths through handleMapPublish:
+// not-available without handler, missing channel, callback error, success that delegates
+// publish to the broker, and success where the handler supplies a Result directly.
+func TestClientHandleMapPublish(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ErrorNotAvailableWhenNoHandler", func(t *testing.T) {
+		node, _ := newTestNodeWithMapBroker(t)
+		client := newTestConnectedClientV2(t, node, "u")
+		rwWrapper := testReplyWriterWrapper()
+		err := client.handleMapPublish(&protocol.PublishRequest{
+			Channel: "ch", Type: 1, Key: "k", Data: []byte(`{}`),
+		}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+		require.Equal(t, ErrorNotAvailable, err)
+	})
+
+	t.Run("EmptyChannelDisconnects", func(t *testing.T) {
+		node, _ := newTestNodeWithMapBroker(t)
+		node.OnConnect(func(c *Client) {
+			c.OnMapPublish(func(_ MapPublishEvent, cb MapPublishCallback) {
+				cb(MapPublishReply{}, nil)
+			})
+		})
+		client := newTestConnectedClientV2(t, node, "u")
+		rwWrapper := testReplyWriterWrapper()
+		err := client.handleMapPublish(&protocol.PublishRequest{
+			Channel: "", Type: 1, Key: "k",
+		}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+		require.Equal(t, DisconnectBadRequest, err)
+	})
+
+	t.Run("HandlerErrorIsWrittenToReply", func(t *testing.T) {
+		node, _ := newTestNodeWithMapBroker(t)
+		node.OnConnect(func(c *Client) {
+			c.OnMapPublish(func(_ MapPublishEvent, cb MapPublishCallback) {
+				cb(MapPublishReply{}, ErrorBadRequest)
+			})
+		})
+		client := newTestConnectedClientV2(t, node, "u")
+		rwWrapper := testReplyWriterWrapper()
+		err := client.handleMapPublish(&protocol.PublishRequest{
+			Channel: "ch", Type: 1, Key: "k", Data: []byte(`{}`),
+		}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+		require.NoError(t, err)
+		require.NotEmpty(t, rwWrapper.replies)
+		require.NotNil(t, rwWrapper.replies[0].Error)
+		require.Equal(t, ErrorBadRequest.Code, rwWrapper.replies[0].Error.Code)
+	})
+
+	t.Run("HandlerSuccessPublishesViaBroker", func(t *testing.T) {
+		node, broker := newTestNodeWithMapBroker(t)
+		invoked := make(chan struct{}, 1)
+		node.OnConnect(func(c *Client) {
+			c.OnMapPublish(func(e MapPublishEvent, cb MapPublishCallback) {
+				invoked <- struct{}{}
+				_ = e
+				cb(MapPublishReply{}, nil)
+			})
+		})
+		client := newTestConnectedClientV2(t, node, "u")
+
+		channel := "map-success"
+
+		// Sanity: direct broker.Publish with explicit data populates state.
+		_, err := broker.Publish(context.Background(), channel, "sanity", MapPublishOptions{Data: []byte(`{"v":0}`)})
+		require.NoError(t, err)
+		state, err := broker.ReadState(context.Background(), channel, MapReadStateOptions{Limit: 100})
+		require.NoError(t, err)
+		require.Len(t, state.Publications, 1, "direct publish failed before handler run")
+
+		rwWrapper := testReplyWriterWrapper()
+		err = client.handleMapPublish(&protocol.PublishRequest{
+			Channel: channel, Type: 1, Key: "k1", Data: []byte(`{"v":1}`),
+		}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+		require.NoError(t, err)
+
+		// Confirm the handler was invoked at least once.
+		select {
+		case <-invoked:
+		case <-time.After(time.Second):
+			t.Fatal("OnMapPublish handler not invoked")
+		}
+
+		require.Len(t, rwWrapper.replies, 1)
+		require.Nil(t, rwWrapper.replies[0].Error)
+
+		// Verify broker has the new entry — confirms node.MapPublish was invoked from the callback.
+		state, err = broker.ReadState(context.Background(), channel, MapReadStateOptions{Limit: 100})
+		require.NoError(t, err)
+
+		var keys []string
+		for _, p := range state.Publications {
+			keys = append(keys, p.Key)
+		}
+		require.Contains(t, keys, "k1", "k1 not found in state, got: %v", keys)
+	})
+
+	t.Run("HandlerSuppliesResultSkipsBrokerPublish", func(t *testing.T) {
+		node, broker := newTestNodeWithMapBroker(t)
+		node.OnConnect(func(c *Client) {
+			c.OnMapPublish(func(_ MapPublishEvent, cb MapPublishCallback) {
+				cb(MapPublishReply{
+					Result: &MapUpdateResult{Position: StreamPosition{Offset: 42, Epoch: "fake"}},
+				}, nil)
+			})
+		})
+		client := newTestConnectedClientV2(t, node, "u")
+
+		channel := "map-result-shortcut"
+		rwWrapper := testReplyWriterWrapper()
+		err := client.handleMapPublish(&protocol.PublishRequest{
+			Channel: channel, Type: 1, Key: "k", Data: []byte(`{}`),
+		}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+		require.NoError(t, err)
+		require.Nil(t, rwWrapper.replies[0].Error)
+
+		// Broker must NOT see the publication since the handler claimed it already published.
+		state, err := broker.ReadState(context.Background(), channel, MapReadStateOptions{Limit: 100})
+		require.NoError(t, err)
+		require.Len(t, state.Publications, 0)
+	})
+
+	t.Run("EmptyKeyAfterReplyOverrideIsBadRequest", func(t *testing.T) {
+		// Both event.Key and reply.Key are empty -> reply must include ErrorBadRequest.
+		node, _ := newTestNodeWithMapBroker(t)
+		node.OnConnect(func(c *Client) {
+			c.OnMapPublish(func(_ MapPublishEvent, cb MapPublishCallback) {
+				cb(MapPublishReply{}, nil)
+			})
+		})
+		client := newTestConnectedClientV2(t, node, "u")
+		rwWrapper := testReplyWriterWrapper()
+		err := client.handleMapPublish(&protocol.PublishRequest{
+			Channel: "ch", Type: 1, Key: "", Data: []byte(`{}`),
+		}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+		require.NoError(t, err)
+		require.NotNil(t, rwWrapper.replies[0].Error)
+		require.Equal(t, ErrorBadRequest.Code, rwWrapper.replies[0].Error.Code)
+	})
+}
+
+// TestClientHandleMapRemove covers the symmetric remove paths.
+func TestClientHandleMapRemove(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ErrorNotAvailableWhenNoHandler", func(t *testing.T) {
+		node, _ := newTestNodeWithMapBroker(t)
+		client := newTestConnectedClientV2(t, node, "u")
+		rwWrapper := testReplyWriterWrapper()
+		err := client.handleMapRemove(&protocol.PublishRequest{
+			Channel: "ch", Type: 1, Removed: true, Key: "k",
+		}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+		require.Equal(t, ErrorNotAvailable, err)
+	})
+
+	t.Run("EmptyChannelDisconnects", func(t *testing.T) {
+		node, _ := newTestNodeWithMapBroker(t)
+		node.OnConnect(func(c *Client) {
+			c.OnMapRemove(func(_ MapRemoveEvent, cb MapRemoveCallback) {
+				cb(MapRemoveReply{}, nil)
+			})
+		})
+		client := newTestConnectedClientV2(t, node, "u")
+		rwWrapper := testReplyWriterWrapper()
+		err := client.handleMapRemove(&protocol.PublishRequest{
+			Channel: "", Type: 1, Removed: true, Key: "k",
+		}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+		require.Equal(t, DisconnectBadRequest, err)
+	})
+
+	t.Run("HandlerErrorIsWrittenToReply", func(t *testing.T) {
+		node, _ := newTestNodeWithMapBroker(t)
+		node.OnConnect(func(c *Client) {
+			c.OnMapRemove(func(_ MapRemoveEvent, cb MapRemoveCallback) {
+				cb(MapRemoveReply{}, ErrorBadRequest)
+			})
+		})
+		client := newTestConnectedClientV2(t, node, "u")
+		rwWrapper := testReplyWriterWrapper()
+		err := client.handleMapRemove(&protocol.PublishRequest{
+			Channel: "ch", Type: 1, Removed: true, Key: "k",
+		}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+		require.NoError(t, err)
+		require.NotEmpty(t, rwWrapper.replies)
+		require.NotNil(t, rwWrapper.replies[0].Error)
+		require.Equal(t, ErrorBadRequest.Code, rwWrapper.replies[0].Error.Code)
+	})
+
+	t.Run("HandlerSuccessRemovesViaBroker", func(t *testing.T) {
+		node, broker := newTestNodeWithMapBroker(t)
+		ctx := context.Background()
+		channel := "map-remove-success"
+		// Pre-populate so remove has something to act on.
+		_, err := broker.Publish(ctx, channel, "kdel", MapPublishOptions{Data: []byte(`{}`)})
+		require.NoError(t, err)
+
+		node.OnConnect(func(c *Client) {
+			c.OnMapRemove(func(_ MapRemoveEvent, cb MapRemoveCallback) {
+				cb(MapRemoveReply{}, nil)
+			})
+		})
+		client := newTestConnectedClientV2(t, node, "u")
+
+		rwWrapper := testReplyWriterWrapper()
+		err = client.handleMapRemove(&protocol.PublishRequest{
+			Channel: channel, Type: 1, Removed: true, Key: "kdel",
+		}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+		require.NoError(t, err)
+		require.Nil(t, rwWrapper.replies[0].Error)
+
+		state, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+		require.NoError(t, err)
+		// Either entries is empty, or the kdel key marked as removed -- in either case
+		// no live "kdel" entry remains.
+		for _, e := range state.Publications {
+			require.NotEqual(t, "kdel", e.Key)
+		}
+	})
+}
