@@ -9,12 +9,29 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/require"
 )
+
+// nonFlusherResponseWriter is an http.ResponseWriter that does NOT implement
+// http.Flusher — used to drive the "not a Flusher" error path in HTTP/SSE handlers.
+type nonFlusherResponseWriter struct {
+	headers http.Header
+	body    []byte
+	status  int
+}
+
+func newNonFlusherWriter() *nonFlusherResponseWriter {
+	return &nonFlusherResponseWriter{headers: http.Header{}, status: http.StatusOK}
+}
+
+func (w *nonFlusherResponseWriter) Header() http.Header         { return w.headers }
+func (w *nonFlusherResponseWriter) Write(b []byte) (int, error) { w.body = append(w.body, b...); return len(b), nil }
+func (w *nonFlusherResponseWriter) WriteHeader(status int)      { w.status = status }
 
 func TestHTTPStreamHandler(t *testing.T) {
 	t.Parallel()
@@ -189,6 +206,47 @@ func TestHTTPStreamHandler_UnknownMethod(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 	_ = resp.Body.Close()
+}
+
+// TestHTTPStreamHandlerNonFlusher verifies the handler returns 500 when the
+// ResponseWriter does not implement http.Flusher.
+func TestHTTPStreamHandlerNonFlusher(t *testing.T) {
+	t.Parallel()
+	n, _ := New(Config{LogLevel: LogLevelInfo, LogHandler: func(LogEntry) {}})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	h := NewHTTPStreamHandler(n, HTTPStreamConfig{})
+	req := httptest.NewRequest(http.MethodPost, "/connection/http_stream", strings.NewReader("{}"))
+	w := newNonFlusherWriter()
+	h.ServeHTTP(w, req)
+	require.Equal(t, http.StatusInternalServerError, w.status)
+}
+
+// TestHTTPStreamTransportGetters verifies the simple getters of the http stream transport.
+// These reflect protocol/HTTP version state derived from the request, so they're worth covering
+// as they're part of the Transport contract used by metrics and push handling.
+func TestHTTPStreamTransportGetters(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodPost, "/connection/http_stream", strings.NewReader(""))
+	req.ProtoMajor = 2
+	transport := newHTTPStreamTransport(req, httpStreamTransportConfig{
+		protocolType: ProtocolTypeJSON,
+		protoMajor:   uint8(req.ProtoMajor),
+		pingPong: PingPongConfig{
+			PingInterval: 5 * time.Second,
+			PongTimeout:  3 * time.Second,
+		},
+	}, make(chan struct{}))
+
+	require.Equal(t, transportHTTPStream, transport.Name())
+	require.Equal(t, "h2", transport.AcceptProtocol())
+	require.Equal(t, ProtocolVersion2, transport.ProtocolVersion())
+	require.Equal(t, ProtocolTypeJSON, transport.Protocol())
+	require.False(t, transport.Unidirectional())
+	require.True(t, transport.Emulation())
+	require.EqualValues(t, 0, transport.DisabledPushFlags())
+	require.Equal(t, 5*time.Second, transport.PingPongConfig().PingInterval)
 }
 
 func newJSONStreamDecoder(body io.Reader) *jsonStreamDecoder {

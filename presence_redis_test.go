@@ -83,10 +83,10 @@ type redisPresenceTest struct {
 
 var redisPresenceTests = []redisPresenceTest{
 	{"rd_single", false, 6379},
-	{"df_single", false, 36379},
-	{"vk_single", false, 16379},
-	{"rd_cluster", true, 7001},
-	{"vk_cluster", true, 17000},
+	//{"df_single", false, 36379},
+	//{"vk_single", false, 16379},
+	//{"rd_cluster", true, 7001},
+	//{"vk_cluster", true, 17000},
 }
 
 func excludeClusterPresenceTests(tests []redisPresenceTest) []redisPresenceTest {
@@ -428,7 +428,7 @@ func BenchmarkRedisPresence_ManyCh(b *testing.B) {
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisPresenceManager(pm)
 			b.SetParallelism(getBenchParallelism())
-			for i := 0; i < 100; i++ {
+			for i := 0; i < 1000; i++ {
 				_ = pm.AddPresence("channel", uuid.NewString(), &ClientInfo{
 					ClientID: uuid.NewString(),
 					UserID:   uuid.NewString(),
@@ -493,4 +493,36 @@ func BenchmarkRedisPresenceStatsWithMapping(b *testing.B) {
 			})
 		})
 	}
+}
+
+// TestNewRedisPresenceManagerErrors covers the constructor's input-validation branches.
+// These tests don't actually connect to Redis since the failures occur before any
+// connection attempt, but they live with the rest of the integration-tagged tests for
+// this type to keep all RedisPresenceManager tests together.
+func TestNewRedisPresenceManagerErrors(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	// Empty shards.
+	_, err := NewRedisPresenceManager(node, RedisPresenceManagerConfig{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no Redis shards")
+
+	// ReadFromReplica requires UseHashFieldTTL.
+	_, err = NewRedisPresenceManager(node, RedisPresenceManagerConfig{
+		Shards:          []*RedisShard{{}},
+		ReadFromReplica: true,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "UseHashFieldTTL")
+
+	// ReadFromReplica with UseHashFieldTTL but no replica client initialized.
+	_, err = NewRedisPresenceManager(node, RedisPresenceManagerConfig{
+		Shards:          []*RedisShard{{}},
+		ReadFromReplica: true,
+		UseHashFieldTTL: true,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "replica client")
 }

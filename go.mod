@@ -4,14 +4,15 @@ go 1.24.9
 
 require (
 	github.com/FZambia/eagle v0.2.0
-	github.com/centrifugal/protocol v0.18.2
-	github.com/google/cel-go v0.27.0
+	github.com/centrifugal/protocol v0.19.0
+	github.com/cespare/xxhash/v2 v2.3.0
+	github.com/google/cel-go v0.28.0
 	github.com/google/uuid v1.6.0
 	github.com/maypok86/otter/v2 v2.3.0
 	github.com/planetscale/vtprotobuf v0.6.0
 	github.com/prometheus/client_golang v1.23.2
-	github.com/quagmt/udecimal v1.9.0
-	github.com/redis/rueidis v1.0.71
+	github.com/quagmt/udecimal v1.10.0
+	github.com/redis/rueidis v1.0.73
 	github.com/segmentio/encoding v0.5.3
 	github.com/shadowspore/fossil-delta v0.0.0-20241213113458-1d797d70cbe3
 	github.com/stretchr/testify v1.11.1
@@ -23,7 +24,6 @@ require (
 	cel.dev/expr v0.25.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
@@ -32,6 +32,7 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
+	github.com/rogpeppe/go-internal v1.12.0 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect

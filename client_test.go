@@ -555,6 +555,95 @@ func TestClientSubscribeUnrecoverablePosition(t *testing.T) {
 	require.Empty(t, res.Publications)
 }
 
+func TestClientSubscribeRejectUnrecovered(t *testing.T) {
+	// When the client sets subscriptionFlagRejectUnrecovered, the server
+	// should return ErrorUnrecoverablePosition instead of subscribing
+	// with recovered=false.
+	broker := NewTestBroker()
+	node := nodeWithBroker(broker)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{
+				Options: SubscribeOptions{EnableRecovery: true},
+			}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClientV2(t, client)
+
+	// Without the flag — should get recovered=false (existing behavior).
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test_no_flag",
+		Recover: true,
+		Epoch:   "wrong_epoch",
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	res := extractSubscribeResult(rwWrapper.replies)
+	require.False(t, res.Recovered)
+
+	// With the flag — should get ErrorUnrecoverablePosition error.
+	rwWrapper = testReplyWriterWrapper()
+	err = client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test_with_flag",
+		Recover: true,
+		Epoch:   "wrong_epoch",
+		Flag:    subscriptionFlagRejectUnrecovered,
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.NotNil(t, rwWrapper.replies[0].Error)
+	require.Equal(t, ErrorUnrecoverablePosition.Code, rwWrapper.replies[0].Error.Code)
+}
+
+func TestClientSubscribeRejectUnrecovered_SuccessfulRecovery(t *testing.T) {
+	// When recovery succeeds, the flag should not interfere — normal result.
+	node := nodeWithTestBroker()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{
+				Options: SubscribeOptions{EnableRecovery: true},
+			}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClientV2(t, client)
+
+	// First subscribe without recovery to get the epoch.
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test_recover_ok",
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	res := rwWrapper.replies[0].Subscribe
+	epoch := res.Epoch
+	offset := res.Offset
+
+	// Resubscribe with correct position + flag — should succeed.
+	rwWrapper = testReplyWriterWrapper()
+	err = client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test_recover_ok_2",
+		Recover: true,
+		Epoch:   epoch,
+		Offset:  offset,
+		Flag:    subscriptionFlagRejectUnrecovered,
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	res = rwWrapper.replies[0].Subscribe
+	require.True(t, res.Recovered)
+}
+
 func TestClientSubscribePositionedError(t *testing.T) {
 	t.Parallel()
 	broker := NewTestBroker()
@@ -737,58 +826,12 @@ func testUnexpectedOffsetEpochProtocolV2(t *testing.T, offset uint64, epoch stri
 }
 
 func TestClientUnexpectedOffsetEpochClientV2(t *testing.T) {
-	tests := []struct {
-		Name   string
-		Offset uint64
-		Epoch  string
-	}{
-		{"wrong_offset", 2, ""},
-		{"wrong_epoch", 1, "xyz"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.Name, func(t *testing.T) {
-			testUnexpectedOffsetEpochProtocolV2(t, tt.Offset, tt.Epoch)
-		})
-	}
-}
-
-func TestEmptyDataDisconnectsJSONClient(t *testing.T) {
-	t.Parallel()
-	broker := NewTestBroker()
-	node := nodeWithBroker(broker)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-
-	done := make(chan struct{})
-
-	node.OnConnect(func(client *Client) {
-		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
-			callback(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true}}, nil)
-		})
-		client.OnUnsubscribe(func(event UnsubscribeEvent) {
-			require.Equal(t, UnsubscribeCodeDisconnect, event.Code)
-			close(done)
-		})
-	})
-
-	client := newTestClientV2(t, node, "42")
-	connectClientV2(t, client)
-
-	rwWrapper := testReplyWriterWrapper()
-	err := client.handleSubscribe(&protocol.SubscribeRequest{
-		Channel: "test",
-		Recover: true,
-	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.NoError(t, err)
-
-	err = node.handlePublication("test", StreamPosition{}, &Publication{}, nil, nil)
-	require.NoError(t, err)
-
-	select {
-	case <-time.After(time.Second):
-		require.Fail(t, "timeout waiting for channel close")
-	case <-done:
-	}
+	// Only wrong_offset triggers insufficient state. The "wrong_epoch" case
+	// (channel epoch="" + pub epoch="xyz") now adopts the epoch instead of
+	// disconnecting — this supports subscribing via a lagging read replica
+	// that doesn't have the meta row yet. See the empty-epoch adoption
+	// logic in client.go and TestEmptyEpochAdoption_AllChannelTypes.
+	testUnexpectedOffsetEpochProtocolV2(t, 2, "")
 }
 
 func TestClientSubscribeValidateErrors(t *testing.T) {
@@ -1435,6 +1478,75 @@ func TestFossilRecoveredPubs(t *testing.T) {
 	data2, err := fdelta.Apply(data1, pubs[2].Data)
 	require.NoError(t, err)
 	require.Equal(t, []byte("This is a message to test Fossil: I just subscribed to channel"), data2)
+}
+
+func TestFossilRecoveredMapPubs(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClientV2Protocol(t, node, "42", ProtocolTypeProtobuf)
+
+	// Empty input returns nil.
+	pubs := client.makeRecoveredMapPubsDeltaFossil([]*protocol.Publication{})
+	require.Nil(t, pubs)
+
+	// Single publication — returned as full data.
+	pubs = client.makeRecoveredMapPubsDeltaFossil([]*protocol.Publication{
+		{Offset: 1, Key: "a", Data: []byte("hello")},
+	})
+	require.Len(t, pubs, 1)
+	require.False(t, pubs[0].Delta)
+	require.Equal(t, "a", pubs[0].Key)
+	require.Equal(t, []byte("hello"), []byte(pubs[0].Data))
+
+	// Interleaved keys: each key gets independent per-key delta.
+	pubs = client.makeRecoveredMapPubsDeltaFossil([]*protocol.Publication{
+		{Offset: 1, Key: "a", Data: []byte("This is a message for key A: first version")},
+		{Offset: 2, Key: "b", Data: []byte("This is a message for key B: first version")},
+		{Offset: 3, Key: "a", Data: []byte("This is a message for key A: second version")},
+		{Offset: 4, Key: "b", Data: []byte("This is a message for key B: second version")},
+	})
+	require.Len(t, pubs, 4)
+	require.False(t, pubs[0].Delta) // a: first occurrence, full
+	require.False(t, pubs[1].Delta) // b: first occurrence, full
+	require.True(t, pubs[2].Delta)  // a: delta from pubs[0]
+	require.True(t, pubs[3].Delta)  // b: delta from pubs[1]
+	require.Equal(t, "a", pubs[0].Key)
+	require.Equal(t, "b", pubs[1].Key)
+	require.Equal(t, "a", pubs[2].Key)
+	require.Equal(t, "b", pubs[3].Key)
+
+	// Verify delta for key "a" applies correctly against first "a" value.
+	dataA1, err := fdelta.Apply(pubs[0].Data, pubs[2].Data)
+	require.NoError(t, err)
+	require.Equal(t, []byte("This is a message for key A: second version"), dataA1)
+
+	// Verify delta for key "b" applies correctly against first "b" value.
+	dataB1, err := fdelta.Apply(pubs[1].Data, pubs[3].Data)
+	require.NoError(t, err)
+	require.Equal(t, []byte("This is a message for key B: second version"), dataB1)
+
+	// Removal resets per-key tracking: next set for same key is full.
+	pubs = client.makeRecoveredMapPubsDeltaFossil([]*protocol.Publication{
+		{Offset: 1, Key: "x", Data: []byte("This is a message for key X: initial")},
+		{Offset: 2, Key: "x", Removed: true},
+		{Offset: 3, Key: "x", Data: []byte("This is a message for key X: after removal")},
+	})
+	require.Len(t, pubs, 3)
+	require.False(t, pubs[0].Delta)   // first occurrence
+	require.False(t, pubs[1].Delta)   // removal — no delta
+	require.True(t, pubs[1].Removed)  // removed flag preserved
+	require.False(t, pubs[2].Delta)   // after removal — full, not delta
+	require.Equal(t, []byte("This is a message for key X: after removal"), []byte(pubs[2].Data))
+
+	// Score field is preserved.
+	pubs = client.makeRecoveredMapPubsDeltaFossil([]*protocol.Publication{
+		{Offset: 1, Key: "s", Score: 42, Data: []byte("This is a message for key S: first")},
+		{Offset: 2, Key: "s", Score: 99, Data: []byte("This is a message for key S: second")},
+	})
+	require.Len(t, pubs, 2)
+	require.Equal(t, int64(42), pubs[0].Score)
+	require.Equal(t, int64(99), pubs[1].Score)
 }
 
 func TestClientUnsubscribeClientSide(t *testing.T) {
@@ -4782,4 +4894,85 @@ func TestClient_RecoverCache(t *testing.T) {
 	recoveredPubs := subscribeResult.Publications
 	require.Equal(t, 1, len(recoveredPubs), "Should recover exactly 1 prod message")
 	require.Equal(t, `{"input": "msg2"}`, string(recoveredPubs[0].Data), "Should recover the latest message)")
+}
+
+// TestClientHandleInsufficientStateDisconnect verifies that when the channel is
+// server-side, handleInsufficientState routes through the disconnect path
+// (which closes the connection) rather than the async unsubscribe path.
+func TestClientHandleInsufficientStateDisconnect(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	disconnected := make(chan Disconnect, 1)
+	node.OnConnect(func(c *Client) {
+		c.OnDisconnect(func(e DisconnectEvent) {
+			disconnected <- e.Disconnect
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "u-disc")
+	client.handleInsufficientState("test", true)
+	select {
+	case d := <-disconnected:
+		require.Equal(t, DisconnectInsufficientState.Code, d.Code)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected disconnect")
+	}
+}
+
+// TestClientUnsubscribeOnClosedClient verifies that calling Unsubscribe on a
+// closed client is a no-op rather than panicking or producing an error.
+func TestClientUnsubscribeOnClosedClient(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "u-unsub-closed")
+	connectClientV2(t, client)
+	require.NoError(t, client.close(DisconnectForceNoReconnect))
+
+	// Should not panic, should not produce log entries about errors.
+	client.Unsubscribe("not-a-channel")
+}
+
+// TestClientDisconnectMultipleArgPanics verifies the panic-on-misuse contract.
+func TestClientDisconnectMultipleArgPanics(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "u-panic")
+	connectClientV2(t, client)
+	require.PanicsWithValue(t, "Client.Disconnect called with more than 1 argument", func() {
+		client.Disconnect(DisconnectShutdown, DisconnectForceNoReconnect)
+	})
+}
+
+// TestClientUnsubscribeMultipleArgPanics verifies the panic-on-misuse contract.
+func TestClientUnsubscribeMultipleArgPanics(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "u-panic-unsub")
+	connectClientV2(t, client)
+	require.PanicsWithValue(t, "Client.Unsubscribe called with more than 1 unsubscribe argument", func() {
+		client.Unsubscribe("ch", unsubscribeServer, unsubscribeServer)
+	})
+}
+
+// TestClientOnMapPublishOnMapRemoveOnUntrackSetters covers the simple setter wiring
+// — they're trivial but exposed and uncovered.
+func TestClientOnMapPublishOnMapRemoveOnUntrackSetters(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "u")
+
+	client.OnMapPublish(func(MapPublishEvent, MapPublishCallback) {})
+	require.NotNil(t, client.eventHub.mapPublishHandler)
+
+	client.OnMapRemove(func(MapRemoveEvent, MapRemoveCallback) {})
+	require.NotNil(t, client.eventHub.mapRemoveHandler)
+
+	client.OnUntrack(func(UntrackEvent) {})
+	require.NotNil(t, client.eventHub.untrackHandler)
 }

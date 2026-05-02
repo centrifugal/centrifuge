@@ -234,3 +234,15 @@ func TestOptionsFromAddressUnix(t *testing.T) {
 	})
 	require.Error(t, err)
 }
+
+// TestRedisShardModeStandalone covers the three branches of Mode (standalone,
+// cluster, sentinel).
+func TestRedisShardModeStandalone(t *testing.T) {
+	t.Parallel()
+	s := &RedisShard{}
+	require.Equal(t, RedisShardModeStandalone, s.Mode())
+	s2 := &RedisShard{isCluster: true}
+	require.Equal(t, RedisShardModeCluster, s2.Mode())
+	s3 := &RedisShard{isSentinel: true}
+	require.Equal(t, RedisShardModeSentinel, s3.Mode())
+}

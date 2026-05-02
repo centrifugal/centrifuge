@@ -421,8 +421,15 @@ func (s *RedisShard) string() string {
 }
 
 // consistentIndex is an adapted function from https://github.com/dgryski/go-jump
-// package by Damian Gryski. It consistently chooses a hash bucket number in the
-// range [0, numBuckets) for the given string. numBuckets must be >= 1.
+// package by Damian Gryski. It implements the Jump Consistent Hash algorithm
+// from the Google paper "A Fast, Minimal Memory, Consistent Hash Algorithm"
+// (Lamping & Veach, 2014).
+//
+// It consistently chooses a hash bucket number in the range [0, numBuckets)
+// for the given string. numBuckets must be >= 1.
+//
+// Key property: When adding a shard, only ~1/(n+1) keys are redistributed.
+// This is critical for minimizing data movement when scaling.
 func consistentIndex(s string, numBuckets int) int {
 	hash := fnv.New64a()
 	_, _ = hash.Write([]byte(s))

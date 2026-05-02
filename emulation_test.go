@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -275,4 +276,45 @@ func TestEmulation_SameNode(t *testing.T) {
 			break
 		}
 	}
+}
+
+// TestEmulationHandlerBadJSON covers the unmarshal-error branch in EmulationHandler
+// when the body cannot be decoded.
+func TestEmulationHandlerBadJSON(t *testing.T) {
+	t.Parallel()
+	n, _ := New(Config{LogLevel: LogLevelInfo, LogHandler: func(LogEntry) {}})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	mux := http.NewServeMux()
+	mux.Handle("/emulation", NewEmulationHandler(n, EmulationConfig{}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/emulation", "application/json", strings.NewReader("not-json"))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	_ = resp.Body.Close()
+}
+
+// TestEmulationHandlerProtobufInvalid exercises the protobuf branch of the emulation
+// handler with an invalid (random-bytes) protobuf payload — drives the unmarshal-error
+// path for Content-Type=application/octet-stream.
+func TestEmulationHandlerProtobufInvalid(t *testing.T) {
+	t.Parallel()
+	n, _ := New(Config{LogLevel: LogLevelInfo, LogHandler: func(LogEntry) {}})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	mux := http.NewServeMux()
+	mux.Handle("/emulation", NewEmulationHandler(n, EmulationConfig{}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	// Random bytes that won't decode as a valid EmulationRequest protobuf.
+	resp, err := http.Post(server.URL+"/emulation", "application/octet-stream",
+		strings.NewReader("\xff\xff\xff\xff"))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	_ = resp.Body.Close()
 }
