@@ -75,7 +75,7 @@ func benchRefreshCycle(b *testing.B, numKeys int, latency time.Duration) {
 	}
 
 	// Ensure keyed hub exists.
-	node.keyedManager.getOrCreateChannel("bench:ch", KeyedChannelOptions{})
+	node.keyedManager.getOrCreateChannel("bench:ch", keyedChannelOptions{})
 
 	// Stop the background refresh worker and override RefreshInterval for
 	// spread delay calculation (time.Hour would cause multi-minute chunk delays).
@@ -177,7 +177,7 @@ func benchLargeChannel(b *testing.B, totalKeys, batchSize int, latency time.Dura
 		_, _, _ = mgr.track("bench:ch", opts, fmt.Sprintf("item_%d", i))
 	}
 
-	node.keyedManager.getOrCreateChannel("bench:ch", KeyedChannelOptions{})
+	node.keyedManager.getOrCreateChannel("bench:ch", keyedChannelOptions{})
 
 	// Stop the background refresh worker and override RefreshInterval for
 	// spread delay calculation (time.Hour would cause multi-minute chunk delays).

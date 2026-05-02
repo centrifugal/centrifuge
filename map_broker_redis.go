@@ -1296,7 +1296,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 	cursorScore := ""
 	cursorKey := ""
 	if opts.Cursor != "" {
-		cursorScore, cursorKey = ParseOrderedCursor(opts.Cursor)
+		cursorScore, cursorKey = parseOrderedCursor(opts.Cursor)
 	}
 
 	streamlessFlag := "0"

@@ -198,7 +198,7 @@ func (c *Client) handleMapSubscribeCommand(
 		if !hasState {
 			return ErrorPermissionDenied
 		}
-		catchUpChOpts, _ := c.node.ResolveMapChannelOptions(req.Channel)
+		catchUpChOpts, _ := c.node.resolveMapChannelOptions(req.Channel)
 		if c.isMapCatchUpExpired(state, catchUpChOpts) {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "map subscribe catch-up timeout", map[string]any{
 				"channel": req.Channel, "user": c.user, "client": c.uid,
@@ -214,7 +214,7 @@ func (c *Client) handleMapSubscribeCommand(
 	}
 
 	if req.Phase != MapPhaseState && hasState {
-		catchUpChOpts, _ := c.node.ResolveMapChannelOptions(req.Channel)
+		catchUpChOpts, _ := c.node.resolveMapChannelOptions(req.Channel)
 		if c.isMapCatchUpExpired(state, catchUpChOpts) {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "map subscribe catch-up timeout", map[string]any{
 				"channel": req.Channel, "user": c.user, "client": c.uid,
@@ -271,7 +271,7 @@ func (c *Client) handleMapSubscribe(
 	channel := req.Channel
 
 	// Auto-set positioning flags from Mode.
-	chOpts, err := c.node.ResolveMapChannelOptions(channel)
+	chOpts, err := c.node.resolveMapChannelOptions(channel)
 	if err != nil {
 		c.cleanupMapSubscribing(channel)
 		return err
@@ -360,7 +360,7 @@ func (c *Client) handleMapStatePhase(
 	}
 
 	// Build read options.
-	chOpts, _ := c.node.ResolveMapChannelOptions(channel)
+	chOpts, _ := c.node.resolveMapChannelOptions(channel)
 	limit := c.getMapPageSize(req, chOpts)
 
 	opts := MapReadStateOptions{
@@ -597,7 +597,7 @@ func (c *Client) handleMapTransitionToLive(
 
 	if positioning {
 		// Positioned mode: read stream from sincePosition to catch any updates.
-		chOpts, _ := c.node.ResolveMapChannelOptions(channel)
+		chOpts, _ := c.node.resolveMapChannelOptions(channel)
 		liveTransitionLimit := chOpts.LiveTransitionMaxPublicationLimit
 		if liveTransitionLimit == 0 {
 			// Default to MaxPageSize.
@@ -947,7 +947,7 @@ func (c *Client) handleMapStreamPhase(
 		c.mu.Unlock()
 	}
 
-	chOpts, _ := c.node.ResolveMapChannelOptions(channel)
+	chOpts, _ := c.node.resolveMapChannelOptions(channel)
 	limit := c.getMapPageSize(req, chOpts)
 
 	// Check if close enough to go LIVE: offset + limit >= streamStart
@@ -1303,7 +1303,7 @@ func (c *Client) sweepExpiredMapSubscribing(skipChannel string) {
 		if ch == skipChannel {
 			continue
 		}
-		sweepChOpts, _ := c.node.ResolveMapChannelOptions(ch)
+		sweepChOpts, _ := c.node.resolveMapChannelOptions(ch)
 		if c.isMapCatchUpExpired(state, sweepChOpts) {
 			if state.subscribingCh != nil {
 				close(state.subscribingCh)

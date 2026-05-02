@@ -600,7 +600,7 @@ func TestKeyedManager_GetOrCreateChannel(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	m := node.keyedManager
-	opts := KeyedChannelOptions{MaxTrackedPerConnection: 42}
+	opts := keyedChannelOptions{MaxTrackedPerConnection: 42}
 
 	s1 := m.getOrCreateChannel("ch1", opts)
 	require.NotNil(t, s1)
@@ -622,11 +622,11 @@ func TestKeyedManager_MaxTrackedPerConnection(t *testing.T) {
 	require.Equal(t, 5000, m.maxTrackedPerConnection("nonexistent"))
 
 	// Create with custom limit.
-	m.getOrCreateChannel("ch1", KeyedChannelOptions{MaxTrackedPerConnection: 100})
+	m.getOrCreateChannel("ch1", keyedChannelOptions{MaxTrackedPerConnection: 100})
 	require.Equal(t, 100, m.maxTrackedPerConnection("ch1"))
 
 	// Zero limit — default 5000.
-	m.getOrCreateChannel("ch2", KeyedChannelOptions{MaxTrackedPerConnection: 0})
+	m.getOrCreateChannel("ch2", keyedChannelOptions{MaxTrackedPerConnection: 0})
 	require.Equal(t, 5000, m.maxTrackedPerConnection("ch2"))
 }
 
@@ -635,7 +635,7 @@ func TestKeyedManager_RemoveChannel(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	m := node.keyedManager
-	m.getOrCreateChannel("ch1", KeyedChannelOptions{})
+	m.getOrCreateChannel("ch1", keyedChannelOptions{})
 
 	require.NotNil(t, m.getHub("ch1"))
 

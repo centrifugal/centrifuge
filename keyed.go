@@ -2,16 +2,16 @@ package centrifuge
 
 import "sync"
 
-// KeyedChannelOptions are generic options for any keyed channel.
-type KeyedChannelOptions struct {
+// keyedChannelOptions are generic options for any keyed channel.
+type keyedChannelOptions struct {
 	// MaxTrackedPerConnection limits how many keys a single connection
 	// can track in this channel. Zero value means 5000.
 	MaxTrackedPerConnection int
 }
 
-// KeyedManager manages keyed channel state: per-channel reverse index
+// keyedManager manages keyed channel state: per-channel reverse index
 // (key→subscribers) and keyed hub for per-key fan-out.
-type KeyedManager struct {
+type keyedManager struct {
 	node     *Node
 	mu       sync.RWMutex
 	channels map[string]*keyedChannelState
@@ -19,17 +19,17 @@ type KeyedManager struct {
 
 type keyedChannelState struct {
 	hub  *keyedHub
-	opts KeyedChannelOptions
+	opts keyedChannelOptions
 }
 
-func newKeyedManager(node *Node) *KeyedManager {
-	return &KeyedManager{
+func newKeyedManager(node *Node) *keyedManager {
+	return &keyedManager{
 		node:     node,
 		channels: make(map[string]*keyedChannelState),
 	}
 }
 
-func (m *KeyedManager) getOrCreateChannel(channel string, opts KeyedChannelOptions) *keyedChannelState {
+func (m *keyedManager) getOrCreateChannel(channel string, opts keyedChannelOptions) *keyedChannelState {
 	m.mu.Lock()
 	s, ok := m.channels[channel]
 	if !ok {
@@ -43,7 +43,7 @@ func (m *KeyedManager) getOrCreateChannel(channel string, opts KeyedChannelOptio
 	return s
 }
 
-func (m *KeyedManager) getHub(channel string) *keyedHub {
+func (m *keyedManager) getHub(channel string) *keyedHub {
 	m.mu.RLock()
 	s, ok := m.channels[channel]
 	m.mu.RUnlock()
@@ -53,7 +53,7 @@ func (m *KeyedManager) getHub(channel string) *keyedHub {
 	return s.hub
 }
 
-func (m *KeyedManager) removeChannel(channel string) {
+func (m *keyedManager) removeChannel(channel string) {
 	m.mu.Lock()
 	delete(m.channels, channel)
 	m.mu.Unlock()
@@ -61,7 +61,7 @@ func (m *KeyedManager) removeChannel(channel string) {
 
 const defaultMaxTrackedPerConnection = 5000
 
-func (m *KeyedManager) maxTrackedPerConnection(channel string) int {
+func (m *keyedManager) maxTrackedPerConnection(channel string) int {
 	m.mu.RLock()
 	s, ok := m.channels[channel]
 	m.mu.RUnlock()

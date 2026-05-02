@@ -462,8 +462,8 @@ func MakeOrderedCursor(score, key string) string {
 	return score + "\x00" + key
 }
 
-// ParseOrderedCursor parses an ordered cursor into score and key strings.
-func ParseOrderedCursor(cursor string) (string, string) {
+// parseOrderedCursor parses an ordered cursor into score and key strings.
+func parseOrderedCursor(cursor string) (string, string) {
 	for i := 0; i < len(cursor); i++ {
 		if cursor[i] == '\x00' {
 			return cursor[:i], cursor[i+1:]
@@ -487,7 +487,7 @@ func findUnorderedCursorPosition(sortedKeys []string, cursor string) int {
 // For ASC (asc=true), sorted by (score ASC, key ASC), finds first entry where:
 //   - score > cursorScore, OR score == cursorScore AND key > cursorKey
 func findOrderedCursorPosition(sortedKeys []string, scores map[string]int64, cursor string, asc bool) int {
-	cursorScoreStr, cursorKey := ParseOrderedCursor(cursor)
+	cursorScoreStr, cursorKey := parseOrderedCursor(cursor)
 	cursorScore, _ := strconv.ParseInt(cursorScoreStr, 10, 64)
 
 	return sort.Search(len(sortedKeys), func(i int) bool {

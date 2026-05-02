@@ -330,8 +330,8 @@ func (o SharedPollChannelOptions) isVersionless() bool {
 	return o.Mode == "" || o.Mode == SharedPollModeVersionless
 }
 
-func (o SharedPollChannelOptions) toKeyedChannelOptions() KeyedChannelOptions {
-	return KeyedChannelOptions{
+func (o SharedPollChannelOptions) toKeyedChannelOptions() keyedChannelOptions {
+	return keyedChannelOptions{
 		MaxTrackedPerConnection: o.MaxKeysPerConnection,
 	}
 }

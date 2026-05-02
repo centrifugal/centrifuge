@@ -95,7 +95,7 @@ type Node struct {
 	timerScheduler TimerScheduler
 
 	// keyedManager manages keyed channel state (track/untrack, reverse index).
-	keyedManager *KeyedManager
+	keyedManager *keyedManager
 	// sharedPollManager manages shared poll refresh workers.
 	sharedPollManager *SharedPollManager
 }
@@ -283,10 +283,10 @@ func (n *Node) SetMapBroker(e MapBroker) {
 	n.mapBroker = e
 }
 
-// ResolveMapChannelOptions returns validated channel options for a map channel.
+// resolveMapChannelOptions returns validated channel options for a map channel.
 // Returns an error if GetMapChannelOptions is not configured or the channel
 // options are invalid.
-func (n *Node) ResolveMapChannelOptions(channel string) (MapChannelOptions, error) {
+func (n *Node) resolveMapChannelOptions(channel string) (MapChannelOptions, error) {
 	return ResolveAndValidateMapChannelOptions(n.config.Map.GetMapChannelOptions, channel)
 }
 

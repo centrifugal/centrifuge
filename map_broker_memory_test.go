@@ -2692,40 +2692,40 @@ func TestResolveAndValidateMapChannelOptions(t *testing.T) {
 
 func TestParseOrderedCursor(t *testing.T) {
 	t.Run("valid cursor", func(t *testing.T) {
-		score, key := ParseOrderedCursor("100\x00mykey")
+		score, key := parseOrderedCursor("100\x00mykey")
 		require.Equal(t, "100", score)
 		require.Equal(t, "mykey", key)
 	})
 
 	t.Run("empty cursor", func(t *testing.T) {
-		score, key := ParseOrderedCursor("")
+		score, key := parseOrderedCursor("")
 		require.Equal(t, "", score)
 		require.Equal(t, "", key)
 	})
 
 	t.Run("no separator", func(t *testing.T) {
-		score, key := ParseOrderedCursor("noseparator")
+		score, key := parseOrderedCursor("noseparator")
 		require.Equal(t, "", score)
 		require.Equal(t, "", key)
 	})
 
 	t.Run("roundtrip", func(t *testing.T) {
 		cursor := MakeOrderedCursor("42", "testkey")
-		score, key := ParseOrderedCursor(cursor)
+		score, key := parseOrderedCursor(cursor)
 		require.Equal(t, "42", score)
 		require.Equal(t, "testkey", key)
 	})
 
 	t.Run("negative score", func(t *testing.T) {
 		cursor := MakeOrderedCursor("-5", "k")
-		score, key := ParseOrderedCursor(cursor)
+		score, key := parseOrderedCursor(cursor)
 		require.Equal(t, "-5", score)
 		require.Equal(t, "k", key)
 	})
 
 	t.Run("empty key part", func(t *testing.T) {
 		cursor := MakeOrderedCursor("10", "")
-		score, key := ParseOrderedCursor(cursor)
+		score, key := parseOrderedCursor(cursor)
 		require.Equal(t, "10", score)
 		require.Equal(t, "", key)
 	})
