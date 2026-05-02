@@ -3694,3 +3694,381 @@ func TestRedisMapBrokerPublishEphemeralRejectsCASAndVersion(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "version")
 }
+
+// TestRedisMapBroker_RefreshTTLOnSuppress_RefreshesMetaAndStream verifies the
+// suppressed if_new+refresh_ttl_on_suppress branch in map_broker_add.lua bumps
+// meta_key (and stream_key when stream_ttl > 0). Without this, an idle channel
+// whose keys are being kept alive can still lose meta + stream to native Redis
+// TTL, forcing an epoch reset on the next publish.
+func TestRedisMapBroker_RefreshTTLOnSuppress_RefreshesMetaAndStream(t *testing.T) {
+	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
+		node, _ := New(Config{
+			Map: MapConfig{
+				GetMapChannelOptions: func(channel string) MapChannelOptions {
+					return MapChannelOptions{
+						Mode:       MapModeRecoverable,
+						StreamSize: 100,
+						StreamTTL:  60 * time.Second,
+						MetaTTL:    120 * time.Second,
+						KeyTTL:     30 * time.Second,
+					}
+				},
+			},
+		})
+		broker := mb.make(t, node)
+		ctx := context.Background()
+		channel := randomChannel("test_refresh_ttl_meta_stream")
+
+		// Initial publish: creates meta_key and stream_key with their TTLs.
+		_, err := broker.Publish(ctx, channel, "k", MapPublishOptions{
+			Data:    []byte("v1"),
+			KeyMode: KeyModeIfNew,
+		})
+		require.NoError(t, err)
+
+		shardWrapper := broker.shards[0]
+		client := shardWrapper.shard.client
+		metaKey := broker.metaKey(shardWrapper.shard, channel)
+		streamKey := broker.streamKey(shardWrapper.shard, channel)
+
+		pttl := func(key string) int64 {
+			ms, err := client.Do(ctx, client.B().Pttl().Key(key).Build()).AsInt64()
+			require.NoError(t, err)
+			return ms
+		}
+
+		metaBefore := pttl(metaKey)
+		streamBefore := pttl(streamKey)
+		require.Greater(t, metaBefore, int64(0), "meta_key must have a TTL set")
+		require.Greater(t, streamBefore, int64(0), "stream_key must have a TTL set")
+
+		// Burn enough time for any TTL refresh to be observable above clock noise.
+		time.Sleep(150 * time.Millisecond)
+
+		// Suppressed keepalive: same key, if_new + refresh_ttl_on_suppress.
+		res, err := broker.Publish(ctx, channel, "k", MapPublishOptions{
+			Data:                 []byte("v1"),
+			KeyMode:              KeyModeIfNew,
+			RefreshTTLOnSuppress: true,
+		})
+		require.NoError(t, err)
+		require.True(t, res.Suppressed)
+		require.Equal(t, SuppressReasonKeyExists, res.SuppressReason)
+
+		metaAfter := pttl(metaKey)
+		streamAfter := pttl(streamKey)
+		// PTTL should be reset close to the configured TTL again — strictly
+		// greater than the value captured before the sleep.
+		require.Greater(t, metaAfter, metaBefore-100,
+			"meta_key TTL must be refreshed by suppressed keepalive (was %d, now %d)", metaBefore, metaAfter)
+		require.Greater(t, metaAfter, int64(60_000),
+			"meta_key TTL must be near MetaTTL after refresh, got %d ms", metaAfter)
+		require.Greater(t, streamAfter, streamBefore-100,
+			"stream_key TTL must be refreshed by suppressed keepalive (was %d, now %d)", streamBefore, streamAfter)
+	})
+}
+
+// TestRedisMapBroker_NoRefreshTTL_LeavesMetaAlone is the negative case:
+// without RefreshTTLOnSuppress, suppressed publishes do not bump meta_key.
+func TestRedisMapBroker_NoRefreshTTL_LeavesMetaAlone(t *testing.T) {
+	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
+		node, _ := New(Config{
+			Map: MapConfig{
+				GetMapChannelOptions: func(channel string) MapChannelOptions {
+					return MapChannelOptions{
+						Mode:       MapModeRecoverable,
+						StreamSize: 100,
+						StreamTTL:  60 * time.Second,
+						MetaTTL:    120 * time.Second,
+						KeyTTL:     30 * time.Second,
+					}
+				},
+			},
+		})
+		broker := mb.make(t, node)
+		ctx := context.Background()
+		channel := randomChannel("test_no_refresh_ttl_meta")
+
+		_, err := broker.Publish(ctx, channel, "k", MapPublishOptions{
+			Data:    []byte("v1"),
+			KeyMode: KeyModeIfNew,
+		})
+		require.NoError(t, err)
+
+		shardWrapper := broker.shards[0]
+		client := shardWrapper.shard.client
+		metaKey := broker.metaKey(shardWrapper.shard, channel)
+		pttl := func(key string) int64 {
+			ms, err := client.Do(ctx, client.B().Pttl().Key(key).Build()).AsInt64()
+			require.NoError(t, err)
+			return ms
+		}
+
+		metaBefore := pttl(metaKey)
+		time.Sleep(200 * time.Millisecond)
+
+		// Suppressed publish without RefreshTTLOnSuppress.
+		res, err := broker.Publish(ctx, channel, "k", MapPublishOptions{
+			Data:    []byte("v1"),
+			KeyMode: KeyModeIfNew,
+		})
+		require.NoError(t, err)
+		require.True(t, res.Suppressed)
+
+		metaAfter := pttl(metaKey)
+		// metaAfter should be ~200ms lower than metaBefore (clock advanced,
+		// no refresh happened). Allow generous slack for scheduling.
+		require.Less(t, metaAfter, metaBefore,
+			"meta_key TTL must NOT be refreshed without RefreshTTLOnSuppress (was %d, now %d)", metaBefore, metaAfter)
+	})
+}
+
+// TestRedisMapBroker_PublishWipesStateOnEpochReset verifies that when meta_key
+// is gone (evicted by TTL or admin DEL) and a fresh publish materializes a new
+// epoch, the lua script wipes lingering state keys before the KeyMode check
+// runs. Without this, a zombie key under the dead epoch would suppress a
+// legitimate fresh-epoch publish via KeyModeIfNew.
+func TestRedisMapBroker_PublishWipesStateOnEpochReset(t *testing.T) {
+	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
+		node, _ := New(Config{
+			Map: MapConfig{
+				GetMapChannelOptions: func(channel string) MapChannelOptions {
+					return MapChannelOptions{
+						Mode:       MapModeRecoverable,
+						StreamSize: 100,
+						StreamTTL:  60 * time.Second,
+						MetaTTL:    120 * time.Second,
+						KeyTTL:     30 * time.Second,
+					}
+				},
+			},
+		})
+		broker := mb.make(t, node)
+		ctx := context.Background()
+		channel := randomChannel("test_wipe_state_on_epoch_reset")
+
+		// Initial publish — establishes meta + state under epoch_old.
+		res, err := broker.Publish(ctx, channel, "k", MapPublishOptions{
+			Data:    []byte("dead"),
+			KeyMode: KeyModeIfNew,
+		})
+		require.NoError(t, err)
+		oldEpoch := res.Position.Epoch
+		require.NotEmpty(t, oldEpoch)
+
+		shardWrapper := broker.shards[0]
+		client := shardWrapper.shard.client
+		metaKey := broker.metaKey(shardWrapper.shard, channel)
+		stateHashKey := broker.stateHashKey(shardWrapper.shard, channel)
+
+		// Sanity: state is populated.
+		hlen, err := client.Do(ctx, client.B().Hlen().Key(stateHashKey).Build()).AsInt64()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), hlen)
+
+		// Simulate meta_key eviction (TTL fired) while state_hash_key
+		// happens to still be there due to lazy eviction.
+		_, err = client.Do(ctx, client.B().Del().Key(metaKey).Build()).AsInt64()
+		require.NoError(t, err)
+
+		// Pre-fix the next publish would either:
+		//   - hit KeyMode=if_new and HEXISTS would treat the zombie as live
+		//     and suppress (test below would fail since res.Suppressed=true), or
+		//   - succeed but leave the zombie row visible to ReadState.
+		// With the fix, the lua script wipes state_hash_key when meta_key is
+		// freshly initialized, so the new publish lands cleanly.
+		res, err = broker.Publish(ctx, channel, "alive_key", MapPublishOptions{
+			Data:    []byte("alive"),
+			KeyMode: KeyModeIfNew,
+		})
+		require.NoError(t, err)
+		require.False(t, res.Suppressed, "fresh-epoch publish must not be suppressed by zombie state")
+		require.NotEqual(t, oldEpoch, res.Position.Epoch, "epoch must rotate after meta_key DEL")
+
+		// State must contain only the new key.
+		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+		require.NoError(t, err)
+		require.Len(t, stateRes.Publications, 1, "state must hold only the new-epoch key")
+		require.Equal(t, "alive_key", stateRes.Publications[0].Key)
+		require.Equal(t, []byte("alive"), stateRes.Publications[0].Data)
+	})
+}
+
+// TestRedisMapBroker_PublishDoesNotWipeStateOnNormalPublish guards against
+// the wipe firing when meta_key is intact — every subsequent publish must
+// preserve the state hash, only the explicit-eviction path triggers the wipe.
+func TestRedisMapBroker_PublishDoesNotWipeStateOnNormalPublish(t *testing.T) {
+	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
+		node, _ := New(Config{
+			Map: MapConfig{
+				GetMapChannelOptions: func(channel string) MapChannelOptions {
+					return MapChannelOptions{
+						Mode:       MapModeRecoverable,
+						StreamSize: 100,
+						StreamTTL:  60 * time.Second,
+						MetaTTL:    120 * time.Second,
+						KeyTTL:     30 * time.Second,
+					}
+				},
+			},
+		})
+		broker := mb.make(t, node)
+		ctx := context.Background()
+		channel := randomChannel("test_no_wipe_on_normal_publish")
+
+		for _, k := range []string{"k1", "k2", "k3"} {
+			_, err := broker.Publish(ctx, channel, k, MapPublishOptions{Data: []byte("v")})
+			require.NoError(t, err)
+		}
+
+		_, err := broker.Publish(ctx, channel, "k4", MapPublishOptions{Data: []byte("v")})
+		require.NoError(t, err)
+
+		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+		require.NoError(t, err)
+		require.Len(t, stateRes.Publications, 4, "all four keys must remain after normal publishes")
+	})
+}
+
+// TestRedisMapBroker_PublishWipesZombieStateWhenStateMetaEvicted reproduces
+// the lazy-eviction skew where state_meta_key has been evicted but
+// state_hash_key still has data. The publish must wipe the orphan state
+// before the KeyMode=if_new check, otherwise a fresh-epoch publish would be
+// suppressed by zombie keys with no live metadata.
+func TestRedisMapBroker_PublishWipesZombieStateWhenStateMetaEvicted(t *testing.T) {
+	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
+		node, _ := New(Config{
+			Map: MapConfig{
+				GetMapChannelOptions: func(channel string) MapChannelOptions {
+					return MapChannelOptions{
+						Mode:       MapModeRecoverable,
+						StreamSize: 100,
+						StreamTTL:  60 * time.Second,
+						MetaTTL:    120 * time.Second,
+						KeyTTL:     30 * time.Second,
+					}
+				},
+			},
+		})
+		broker := mb.make(t, node)
+		ctx := context.Background()
+		channel := randomChannel("test_wipe_state_when_state_meta_evicted")
+
+		// Establish state under epoch_old.
+		res, err := broker.Publish(ctx, channel, "k", MapPublishOptions{
+			Data:    []byte("dead"),
+			KeyMode: KeyModeIfNew,
+		})
+		require.NoError(t, err)
+		oldEpoch := res.Position.Epoch
+
+		shardWrapper := broker.shards[0]
+		client := shardWrapper.shard.client
+		stateMetaKey := broker.stateMetaKey(shardWrapper.shard, channel)
+		stateHashKey := broker.stateHashKey(shardWrapper.shard, channel)
+
+		// Sanity: both keys present.
+		hlen, err := client.Do(ctx, client.B().Hlen().Key(stateHashKey).Build()).AsInt64()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), hlen, "state_hash_key must hold the published key")
+		exists, err := client.Do(ctx, client.B().Exists().Key(stateMetaKey).Build()).AsInt64()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), exists, "state_meta_key must exist after publish")
+
+		// Simulate state_meta_key being evicted while state_hash_key lingers
+		// (lazy-eviction skew). Without the wipe fix, the next publish under
+		// the same epoch would treat zombie "k" as live.
+		_, err = client.Do(ctx, client.B().Del().Key(stateMetaKey).Build()).AsInt64()
+		require.NoError(t, err)
+
+		// Same key, KeyModeIfNew. The if_new check would suppress with
+		// key_exists if the wipe didn't run. With the fix, the wipe fires
+		// (state_hash_key has data, state_meta_key.epoch can't be confirmed)
+		// and the publish proceeds normally.
+		res2, err := broker.Publish(ctx, channel, "k", MapPublishOptions{
+			Data:    []byte("alive"),
+			KeyMode: KeyModeIfNew,
+		})
+		require.NoError(t, err)
+		require.False(t, res2.Suppressed, "publish must not be suppressed by zombie state when state_meta_key is evicted")
+		// Epoch is unchanged because meta_key itself wasn't evicted in this
+		// scenario — only state_meta_key was. The wipe rebuilds state under
+		// the same epoch.
+		require.Equal(t, oldEpoch, res2.Position.Epoch)
+
+		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+		require.NoError(t, err)
+		require.Len(t, stateRes.Publications, 1, "only the new-publish row must remain after wipe")
+		require.Equal(t, []byte("alive"), stateRes.Publications[0].Data)
+	})
+}
+
+// TestRedisMapBroker_StreamReadWipesStreamOnFreshMeta reproduces the case
+// where meta_key was evicted while stream_key still has entries from the
+// dead epoch (lazy-eviction skew). When stream_read materializes a fresh
+// epoch via map_broker_stream_read.lua, it must DEL stream_key — otherwise
+// xrange would return dead-epoch entries under the fresh meta wrapper.
+// Mirrors the publish-path safety net (`if top_offset == 1 then del stream_key`).
+func TestRedisMapBroker_StreamReadWipesStreamOnFreshMeta(t *testing.T) {
+	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
+		node, _ := New(Config{
+			Map: MapConfig{
+				GetMapChannelOptions: func(channel string) MapChannelOptions {
+					return MapChannelOptions{
+						Mode:       MapModeRecoverable,
+						StreamSize: 100,
+						StreamTTL:  60 * time.Second,
+						MetaTTL:    120 * time.Second,
+						KeyTTL:     30 * time.Second,
+					}
+				},
+			},
+		})
+		broker := mb.make(t, node)
+		ctx := context.Background()
+		channel := randomChannel("test_stream_read_wipes_on_fresh_meta")
+
+		// Build dead epoch with three stream entries.
+		var deadEpoch string
+		for i := 0; i < 3; i++ {
+			res, err := broker.Publish(ctx, channel, fmt.Sprintf("k%d", i), MapPublishOptions{
+				Data: []byte(fmt.Sprintf("dead-%d", i)),
+			})
+			require.NoError(t, err)
+			deadEpoch = res.Position.Epoch
+		}
+
+		shardWrapper := broker.shards[0]
+		client := shardWrapper.shard.client
+		metaKey := broker.metaKey(shardWrapper.shard, channel)
+		streamKey := broker.streamKey(shardWrapper.shard, channel)
+
+		// Sanity: stream has entries.
+		streamLen, err := client.Do(ctx, client.B().Xlen().Key(streamKey).Build()).AsInt64()
+		require.NoError(t, err)
+		require.Equal(t, int64(3), streamLen, "stream_key must hold the three dead-epoch entries")
+
+		// Evict only meta_key (simulating native TTL firing on it before
+		// stream_key catches up under lazy eviction).
+		_, err = client.Do(ctx, client.B().Del().Key(metaKey).Build()).AsInt64()
+		require.NoError(t, err)
+
+		// Call ReadStream — internally executes map_broker_stream_read.lua,
+		// which materializes a new epoch on missing meta_key and (with the
+		// fix) wipes stream_key before xrange runs.
+		streamRes, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+			Filter: StreamFilter{
+				Since: &StreamPosition{Offset: 0},
+				Limit: 100,
+			},
+		})
+		require.NoError(t, err)
+		require.NotEqual(t, deadEpoch, streamRes.Position.Epoch, "fresh meta must have a new epoch")
+		require.Empty(t, streamRes.Publications, "stream_read must not return dead-epoch entries on a freshly resurrected meta")
+
+		// Stream is now empty in Redis too.
+		streamLen, err = client.Do(ctx, client.B().Xlen().Key(streamKey).Build()).AsInt64()
+		require.NoError(t, err)
+		require.Equal(t, int64(0), streamLen, "stream_key must be wiped after fresh-meta stream_read")
+	})
+}

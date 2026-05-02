@@ -3784,3 +3784,106 @@ func TestMemoryMapBroker_Close(t *testing.T) {
 	err = broker.Close(context.Background())
 	require.NoError(t, err)
 }
+
+// TestMemoryMapBroker_RefreshTTLOnSuppress_RefreshesMetaTTL verifies that a
+// suppressed if_new+refresh_ttl_on_suppress publish (the periodic presence
+// keepalive path) extends MetaTTL too. Without this, an idle channel with
+// active keepalives still gets garbage-collected by removeChannels when
+// MetaTTL elapses, forcing an epoch reset on the next publish.
+func TestMemoryMapBroker_RefreshTTLOnSuppress_RefreshesMetaTTL(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeRecoverable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Millisecond,
+			KeyTTL:     300 * time.Millisecond,
+			MetaTTL:    300 * time.Millisecond,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_keepalive_meta_ttl"
+
+	// Initial publish creates the channel and records its first epoch.
+	res, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
+		Data:    []byte("v1"),
+		KeyMode: KeyModeIfNew,
+	})
+	require.NoError(t, err)
+	firstEpoch := res.Position.Epoch
+	require.NotEmpty(t, firstEpoch)
+
+	// Issue a suppressed keepalive every 100ms for 600ms — comfortably past
+	// the 300ms MetaTTL. With the fix the channel survives because each
+	// keepalive extends meta's removeAt; without it, removeChannels deletes
+	// the channel and the next publish creates a new epoch.
+	for i := 0; i < 6; i++ {
+		time.Sleep(100 * time.Millisecond)
+		res, err = broker.Publish(ctx, ch, "k", MapPublishOptions{
+			Data:                 []byte("v1"),
+			KeyMode:              KeyModeIfNew,
+			RefreshTTLOnSuppress: true,
+		})
+		require.NoError(t, err)
+		require.True(t, res.Suppressed, "iteration %d: expected key_exists suppression", i)
+	}
+
+	// Channel must still exist with the original epoch.
+	broker.mapHub.RLock()
+	_, exists := broker.mapHub.channels[ch]
+	broker.mapHub.RUnlock()
+	require.True(t, exists, "channel must survive while keepalives run")
+
+	// A real publish (non-suppressed) must use the same epoch — confirms no
+	// reset happened during the keepalive loop.
+	res, err = broker.Publish(ctx, ch, "k2", MapPublishOptions{Data: []byte("v2")})
+	require.NoError(t, err)
+	require.Equal(t, firstEpoch, res.Position.Epoch,
+		"epoch must not flip while keepalives are bumping MetaTTL")
+}
+
+// TestMemoryMapBroker_NoRefreshTTL_LetsMetaExpire is the negative case:
+// without RefreshTTLOnSuppress, plain suppressed publishes do NOT extend
+// MetaTTL. Guards against the fix accidentally bumping meta on every
+// suppressed publish (e.g. version-conflict, idempotency hits).
+func TestMemoryMapBroker_NoRefreshTTL_LetsMetaExpire(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeRecoverable,
+			StreamSize: 100,
+			StreamTTL:  100 * time.Millisecond,
+			KeyTTL:     100 * time.Millisecond,
+			MetaTTL:    100 * time.Millisecond,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_no_keepalive_meta_expires"
+
+	_, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
+		Data:    []byte("v1"),
+		KeyMode: KeyModeIfNew,
+	})
+	require.NoError(t, err)
+
+	// Without RefreshTTLOnSuppress these calls don't refresh anything.
+	for i := 0; i < 3; i++ {
+		time.Sleep(50 * time.Millisecond)
+		_, _ = broker.Publish(ctx, ch, "k", MapPublishOptions{
+			Data:    []byte("v1"),
+			KeyMode: KeyModeIfNew,
+		})
+	}
+
+	// Channel should eventually be removed after MetaTTL elapses (the cleanup
+	// timer runs on 1s ticks, so allow generous slack).
+	require.Eventually(t, func() bool {
+		broker.mapHub.RLock()
+		_, exists := broker.mapHub.channels[ch]
+		broker.mapHub.RUnlock()
+		return !exists
+	}, 5*time.Second, 100*time.Millisecond,
+		"channel must be removed after MetaTTL when keepalives don't refresh it")
+}

@@ -25,6 +25,12 @@ if current_epoch == false then
     current_epoch = new_epoch_if_empty
     top_offset = 0
     redis.call("hset", meta_key, "e", current_epoch)
+    -- meta_key was missing — wipe stream_key too. Each xadd entry stores its
+    -- epoch in the "e" field, but the Go consumer reads only "d" (data) and
+    -- discards "e", so old-epoch entries lingering due to lazy eviction would
+    -- otherwise be returned by xrange under the new epoch wrapper. Mirrors
+    -- the publish-path safety net (`if top_offset == 1 then del stream_key`).
+    redis.call("del", stream_key)
 end
 
 if top_offset == false then

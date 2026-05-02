@@ -811,6 +811,19 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 				if h.nextKeyExpireCheck == 0 || h.nextKeyExpireCheck > expireAt {
 					h.nextKeyExpireCheck = expireAt
 				}
+				// Keepalive must extend MetaTTL too — without this the channel
+				// can be garbage-collected by removeChannels even while keys are
+				// being refreshed, forcing an epoch reset on the next publish.
+				if chOpts.MetaTTL > 0 {
+					removeAt := time.Now().UnixMilli() + chOpts.MetaTTL.Milliseconds()
+					if _, ok := h.removes[ch]; !ok {
+						heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
+					}
+					h.removes[ch] = removeAt
+					if h.nextRemoveCheck == 0 || h.nextRemoveCheck > removeAt {
+						h.nextRemoveCheck = removeAt
+					}
+				}
 			}
 			var pos StreamPosition
 			if channel.stream != nil {

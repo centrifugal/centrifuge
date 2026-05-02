@@ -130,22 +130,51 @@ if meta_key ~= '' then
     end
 
     -- ==== Step 2: Epoch change check for state (moved here for version check correctness) ====
-    if state_meta_key ~= '' and state_hash_key ~= '' then
-        local old_state_epoch = redis.call("hget", state_meta_key, "epoch")
-        if old_state_epoch and old_state_epoch ~= current_epoch then
-            -- Epoch changed - clear old state data (including per-key versions)
-            redis.call("del", state_hash_key)
-            if state_order_key ~= '' then
-                redis.call("del", state_order_key)
+    -- The invariant: state_hash_key data is only valid when state_meta_key.epoch
+    -- matches current_epoch. When that invariant doesn't hold, state is from a
+    -- dead epoch and must be wiped before the KeyMode/version checks below —
+    -- otherwise zombie keys would suppress legitimate fresh-epoch publishes.
+    --
+    -- Three failure modes the wipe must catch:
+    --   (a) state_meta_key.epoch is set and explicitly differs from current.
+    --   (b) state_meta_key was evicted entirely while state_hash_key lingered
+    --       (lazy eviction skew on a fresh meta).
+    --   (c) fresh_meta with empty state_meta_key — same as (b), reached when
+    --       meta_key was the one that disappeared first.
+    --
+    -- Unifying check: if state_hash_key has any entries and we cannot confirm
+    -- state_meta_key.epoch == current_epoch, wipe.
+    local should_wipe_state = false
+    if state_hash_key ~= '' then
+        local has_state_data = tonumber(redis.call("hlen", state_hash_key) or 0) > 0
+        if has_state_data then
+            local state_epoch_valid = false
+            if state_meta_key ~= '' then
+                local stored_epoch = redis.call("hget", state_meta_key, "epoch")
+                if stored_epoch and stored_epoch == current_epoch then
+                    state_epoch_valid = true
+                end
             end
-            if state_expire_key ~= '' then
-                redis.call("del", state_expire_key)
+            if not state_epoch_valid then
+                should_wipe_state = true
             end
+        end
+    end
+    if should_wipe_state then
+        -- Clear all keyed-state structures (including per-key versions stored in state_meta_key).
+        redis.call("del", state_hash_key)
+        if state_order_key ~= '' then
+            redis.call("del", state_order_key)
+        end
+        if state_expire_key ~= '' then
+            redis.call("del", state_expire_key)
+        end
+        if state_meta_key ~= '' then
             redis.call("del", state_meta_key)
-            -- Remove channel from cleanup registration (no entries left after epoch change)
-            if cleanup_registration_key ~= '' and channel_for_cleanup ~= '' then
-                redis.call("zrem", cleanup_registration_key, channel_for_cleanup)
-            end
+        end
+        -- Remove channel from cleanup registration (no entries left after epoch change)
+        if cleanup_registration_key ~= '' and channel_for_cleanup ~= '' then
+            redis.call("zrem", cleanup_registration_key, channel_for_cleanup)
         end
     end
 
@@ -189,7 +218,10 @@ if meta_key ~= '' then
                 if use_hpexpire == "1" then
                     redis.call("hpexpire", state_hash_key, ttl, "FIELDS", "1", message_key)
                 end
-                -- Container-level safety net EXPIRE using MetaTTL (not per-key TTL)
+                -- Container-level safety net EXPIRE using MetaTTL (not per-key TTL).
+                -- Without refreshing meta_key + stream_key here, an idle channel
+                -- whose keys are being kept alive can still lose meta + stream to
+                -- TTL, forcing an epoch reset on the next publish.
                 if meta_expire ~= '0' then
                     local me = tonumber(meta_expire)
                     if state_expire_key ~= '' then
@@ -198,6 +230,12 @@ if meta_key ~= '' then
                     if use_hpexpire ~= "1" then
                         redis.call("pexpire", state_hash_key, me)
                     end
+                    if meta_key ~= '' then
+                        redis.call("pexpire", meta_key, me)
+                    end
+                end
+                if stream_key ~= '' and tonumber(stream_ttl) > 0 then
+                    redis.call("pexpire", stream_key, tonumber(stream_ttl))
                 end
             end
             local current_offset = redis.call("hget", meta_key, "s") or 0
