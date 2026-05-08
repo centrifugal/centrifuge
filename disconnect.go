@@ -114,6 +114,15 @@ var (
 		Code:   3013,
 		Reason: "too many requests",
 	}
+	// DisconnectStateInvalidated may be issued when server determines that
+	// client's cached state and/or token are no longer valid. Upon receiving
+	// this code, the client SDK should clear its connection token (to force
+	// obtaining a new one via getToken) and clear all map subscription state
+	// (to force full state re-sync instead of stream recovery on reconnect).
+	DisconnectStateInvalidated = Disconnect{
+		Code:   3014,
+		Reason: "state invalidated",
+	}
 )
 
 // The codes below are built-in terminal codes.

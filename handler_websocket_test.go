@@ -1239,3 +1239,16 @@ func BenchmarkWsCommandReplyV2MultipleParallel(b *testing.B) {
 		})
 	}
 }
+
+// TestWebsocketTransportAcceptProtocol verifies AcceptProtocol gets propagated from
+// the original HTTP request's protocol version.
+func TestWebsocketTransportAcceptProtocol(t *testing.T) {
+	t.Parallel()
+	transport := &websocketTransport{
+		opts: websocketTransportOptions{
+			protoMajor: 1,
+			protoType:  ProtocolTypeJSON,
+		},
+	}
+	require.Equal(t, "h1", transport.AcceptProtocol())
+}

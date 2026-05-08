@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Scoreboard — Map subscriptions Delta Compression Demo (per key deltas)</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg: #060a13;
+            --card-bg: rgba(255,255,255,0.04);
+            --card-border: rgba(255,255,255,0.08);
+            --green: #00ff87;
+            --gold: #ffd700;
+            --red: #ff4455;
+            --amber: #ffaa00;
+            --blue: #3b82f6;
+            --text-primary: rgba(255,255,255,1);
+            --text-secondary: rgba(255,255,255,0.7);
+            --text-tertiary: rgba(255,255,255,0.4);
+            --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+            --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, system-ui, sans-serif;
+        }
+
+        body {
+            font-family: var(--sans);
+            background: var(--bg);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Animated gradient mesh background */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(ellipse 80% 60% at 20% 30%, rgba(30,40,80,0.4) 0%, transparent 70%),
+                radial-gradient(ellipse 60% 80% at 80% 70%, rgba(20,60,60,0.3) 0%, transparent 70%),
+                radial-gradient(ellipse 70% 50% at 50% 50%, rgba(40,20,60,0.2) 0%, transparent 70%);
+            animation: meshShift 20s ease-in-out infinite alternate;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        @keyframes meshShift {
+            0%   { filter: hue-rotate(0deg); }
+            100% { filter: hue-rotate(30deg); }
+        }
+
+        /* Scanline overlay */
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(255,255,255,0.008) 2px,
+                rgba(255,255,255,0.008) 4px
+            );
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        .container {
+            position: relative;
+            z-index: 1;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px 20px 60px;
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            margin-bottom: 28px;
+        }
+        .header-title {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            margin-bottom: 8px;
+        }
+        .header h1 {
+            font-size: 28px;
+            font-weight: 800;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            text-shadow: 0 0 30px rgba(255,255,255,0.15);
+        }
+        .live-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(255,68,85,0.2);
+            border: 1px solid rgba(255,68,85,0.4);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            color: var(--red);
+        }
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--red);
+            animation: livePulse 1.5s ease-in-out infinite;
+        }
+        @keyframes livePulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50%      { transform: scale(1.4); opacity: 0.6; }
+        }
+        .header .subtitle {
+            color: var(--text-tertiary);
+            font-size: 14px;
+        }
+
+        /* Connection status */
+        .conn-status {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 24px;
+            font-size: 13px;
+            color: var(--text-tertiary);
+        }
+        .conn-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--red);
+            transition: background 0.3s;
+        }
+        .conn-dot.connected { background: var(--green); }
+
+        /* Match cards grid */
+        .matches-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+        }
+        @media (max-width: 800px) {
+            .matches-grid { grid-template-columns: 1fr; }
+        }
+
+        .match-card {
+            background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 18px 20px 14px;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            position: relative;
+            overflow: hidden;
+            opacity: 0;
+            transform: translateY(12px);
+            animation: cardEnter 0.5s ease forwards;
+        }
+        .match-card:nth-child(1) { animation-delay: 0s; }
+        .match-card:nth-child(2) { animation-delay: 0.08s; }
+        .match-card:nth-child(3) { animation-delay: 0.16s; }
+        .match-card:nth-child(4) { animation-delay: 0.24s; }
+        .match-card:nth-child(5) { animation-delay: 0.32s; }
+        .match-card:nth-child(6) { animation-delay: 0.4s; }
+
+        @keyframes cardEnter {
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .match-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3), 0 0 60px rgba(59,130,246,0.06);
+        }
+
+        /* Goal flash overlay */
+        .match-card .goal-flash {
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at 50% 40%, rgba(255,215,0,0.15), transparent 70%);
+            opacity: 0;
+            pointer-events: none;
+            z-index: 2;
+        }
+        .match-card.goal-scored .goal-flash {
+            animation: goalFlash 0.8s ease-out;
+        }
+        @keyframes goalFlash {
+            0%   { opacity: 1; }
+            100% { opacity: 0; }
+        }
+
+        /* Status transition flash */
+        .match-card .status-flash {
+            position: absolute;
+            inset: 0;
+            background: rgba(255,255,255,0.06);
+            opacity: 0;
+            pointer-events: none;
+        }
+        .match-card.status-changed .status-flash {
+            animation: statusFlash 0.4s ease-out;
+        }
+        @keyframes statusFlash {
+            0%   { opacity: 1; }
+            100% { opacity: 0; }
+        }
+
+        /* Card header */
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+        .match-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 10px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 1px;
+        }
+        .match-status.live {
+            background: rgba(0,255,135,0.15);
+            color: var(--green);
+        }
+        .match-status.live .status-indicator {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: var(--green);
+            animation: livePulse 1.5s ease-in-out infinite;
+        }
+        .match-status.ht {
+            background: rgba(255,170,0,0.15);
+            color: var(--amber);
+        }
+        .match-status.ft {
+            background: rgba(255,68,85,0.15);
+            color: var(--red);
+        }
+        .match-minute {
+            font-family: var(--mono);
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Score section */
+        .score-section {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        .team-name {
+            flex: 1;
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .team-name.home { text-align: right; }
+        .team-name.away { text-align: left; }
+
+        .score-display {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: var(--mono);
+            font-variant-numeric: tabular-nums;
+        }
+        .score-num {
+            font-size: 48px;
+            font-weight: 800;
+            line-height: 1;
+            min-width: 36px;
+            text-align: center;
+            transition: color 0.3s;
+        }
+        .score-sep {
+            font-size: 28px;
+            font-weight: 300;
+            color: var(--text-tertiary);
+        }
+
+        /* Score goal animation */
+        .score-num.goal-anim {
+            animation: scoreGoal 0.6s ease-out;
+        }
+        @keyframes scoreGoal {
+            0%   { transform: scale(1); color: var(--text-primary); text-shadow: none; }
+            30%  { transform: scale(1.3); color: var(--gold); text-shadow: 0 0 20px rgba(255,215,0,0.5); }
+            100% { transform: scale(1); color: var(--text-primary); text-shadow: none; }
+        }
+
+        /* Stats grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .stat-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .stat-val {
+            font-family: var(--mono);
+            font-size: 12px;
+            font-variant-numeric: tabular-nums;
+            width: 28px;
+            text-align: center;
+            color: var(--text-secondary);
+        }
+        .stat-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-tertiary);
+            width: 70px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+        .stat-bar-track {
+            flex: 1;
+            height: 4px;
+            background: rgba(255,255,255,0.06);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .stat-bar-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .stat-bar-fill.home { background: var(--blue); }
+        .stat-bar-fill.away { background: var(--red); }
+
+        /* Possession bar (dual-sided) */
+        .poss-bar {
+            display: flex;
+            height: 6px;
+            border-radius: 3px;
+            overflow: hidden;
+            flex: 1;
+        }
+        .poss-bar .home-fill {
+            background: var(--blue);
+            transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .poss-bar .away-fill {
+            background: var(--red);
+            transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        /* Compact stats row */
+        .compact-stats {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+        .compact-stat {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            color: var(--text-tertiary);
+        }
+        .compact-stat .val {
+            font-family: var(--mono);
+            color: var(--text-secondary);
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Events timeline */
+        .events-row {
+            display: flex;
+            gap: 6px;
+            overflow-x: auto;
+            padding: 2px 0;
+            scrollbar-width: none;
+        }
+        .events-row::-webkit-scrollbar { display: none; }
+
+        .event-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 600;
+            white-space: nowrap;
+            flex-shrink: 0;
+            animation: slideInRight 0.4s ease-out;
+        }
+        @keyframes slideInRight {
+            from { transform: translateX(40px); opacity: 0; }
+            to   { transform: translateX(0); opacity: 1; }
+        }
+        .event-pill.goal {
+            background: rgba(255,215,0,0.2);
+            color: var(--gold);
+        }
+        .event-pill.yellow {
+            background: rgba(255,200,0,0.2);
+            color: #ffc800;
+        }
+        .event-pill.red {
+            background: rgba(255,68,85,0.2);
+            color: var(--red);
+        }
+        .event-pill.corner {
+            background: rgba(255,255,255,0.08);
+            color: var(--text-secondary);
+        }
+        .event-pill .minute-tag {
+            font-family: var(--mono);
+            font-size: 9px;
+            opacity: 0.7;
+        }
+
+        /* Delta stats bar */
+        .delta-bar {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-bottom: 24px;
+            padding: 10px 16px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            font-family: var(--mono);
+            font-size: 12px;
+            color: var(--text-tertiary);
+            font-variant-numeric: tabular-nums;
+        }
+        .delta-bar .d-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-tertiary);
+        }
+        .delta-bar .d-val {
+            color: var(--text-secondary);
+        }
+        .delta-bar .d-highlight {
+            color: var(--green);
+            font-weight: 600;
+        }
+        .delta-bar .d-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .delta-bar .d-sep {
+            color: rgba(255,255,255,0.12);
+        }
+        .delta-ratio-bar {
+            width: 80px;
+            height: 6px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .delta-ratio-fill {
+            height: 100%;
+            background: var(--green);
+            border-radius: 3px;
+            transition: width 0.5s ease;
+        }
+
+        /* Back link */
+        .back-link {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            color: var(--text-tertiary);
+            text-decoration: none;
+            font-size: 14px;
+            z-index: 10;
+            transition: color 0.2s;
+        }
+        .back-link:hover { color: var(--text-primary); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="header-title">
+                <h1>Live Football Scoreboard</h1>
+                <span class="live-badge"><span class="live-dot"></span> LIVE</span>
+            </div>
+            <p class="subtitle">Map subscriptions Delta Compression Demo (per key deltas)</p>
+        </div>
+
+        <div class="conn-status">
+            <span class="conn-dot" id="connDot"></span>
+            <span id="connText">Connecting...</span>
+        </div>
+
+        <!-- Delta compression stats -->
+        <div class="delta-bar" id="deltaBar">
+            <span class="d-label">Delta compression</span>
+            <span class="d-sep">|</span>
+            <span class="d-group"><span class="d-val" id="dPubs">0</span> msgs</span>
+            <span class="d-group"><span class="d-val" id="dFull">0</span> full</span>
+            <span class="d-group"><span class="d-val" id="dDelta">0</span> delta</span>
+            <span class="d-sep">|</span>
+            <span class="d-group">wire <span class="d-val" id="dWire">0 B</span></span>
+            <span class="d-group">decoded <span class="d-val" id="dDecoded">0 B</span></span>
+            <span class="d-group">saved <span class="d-highlight" id="dSaved">0 B</span></span>
+            <span class="d-sep">|</span>
+            <span class="d-group">
+                <div class="delta-ratio-bar"><div class="delta-ratio-fill" id="dRatioFill" style="width:0%"></div></div>
+                <span class="d-highlight" id="dRatio">0%</span>
+            </span>
+        </div>
+
+        <!-- Match cards -->
+        <div class="matches-grid" id="matchesGrid"></div>
+    </div>
+
+    <a href="/" class="back-link">&larr; Back to demos</a>
+
+    <script src="http://localhost:2000/centrifuge.js"></script>
+    <script>
+        const userId = 'user_' + Math.random().toString(36).substr(2, 8);
+
+        // --- State ---
+        const matchState = new Map(); // matchID -> MatchData
+        const prevScores = new Map(); // matchID -> { home, away }
+        const prevStatus = new Map(); // matchID -> status string
+
+        // Team flag emoji map.
+        const teamFlags = {
+            'Barcelona': '🇪🇸', 'Real Madrid': '🇪🇸',
+            'Liverpool': '🏴󠁧󠁢󠁥󠁮󠁧󠁿', 'Man City': '🏴󠁧󠁢󠁥󠁮󠁧󠁿',
+            'Bayern Munich': '🇩🇪', 'Dortmund': '🇩🇪',
+            'PSG': '🇫🇷', 'Marseille': '🇫🇷',
+            'Juventus': '🇮🇹', 'AC Milan': '🇮🇹',
+            'Ajax': '🇳🇱', 'Feyenoord': '🇳🇱',
+        };
+
+        // --- Centrifuge setup ---
+        const centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket', {
+            name: userId
+        });
+
+        centrifuge.on('connected', () => {
+            document.getElementById('connDot').classList.add('connected');
+            document.getElementById('connText').textContent = 'Connected';
+        });
+        centrifuge.on('connecting', () => {
+            document.getElementById('connDot').classList.remove('connected');
+            document.getElementById('connText').textContent = 'Connecting...';
+        });
+        centrifuge.on('disconnected', () => {
+            document.getElementById('connDot').classList.remove('connected');
+            document.getElementById('connText').textContent = 'Disconnected';
+        });
+
+        const sub = centrifuge.newMapSubscription('scoreboard', { delta: 'fossil' });
+
+        sub.on('sync', (ctx) => {
+            console.log('Synced scoreboard');
+            matchState.clear();
+            prevScores.clear();
+            prevStatus.clear();
+            renderedEvents.clear();
+            for (const pub of ctx.entries) {
+                if (pub.key && pub.data) {
+                    matchState.set(pub.key, pub.data);
+                    prevScores.set(pub.key, { home: pub.data.home_score, away: pub.data.away_score });
+                    prevStatus.set(pub.key, pub.data.status);
+                }
+            }
+            renderAllCards();
+        });
+
+        let renderPending = false;
+        const pendingGoals = new Set(); // matchIDs with goals this frame
+        const pendingStatusChanges = new Set();
+
+        sub.on('update', (ctx) => {
+            if (!ctx.key || !ctx.data) return;
+            if (ctx.removed) {
+                matchState.delete(ctx.key);
+                prevScores.delete(ctx.key);
+                prevStatus.delete(ctx.key);
+            } else {
+                const data = ctx.data;
+                const prev = prevScores.get(ctx.key);
+                // Only trigger goal animation on score increase (not on match reset to 0-0).
+                if (prev && (data.home_score > prev.home || data.away_score > prev.away)) {
+                    pendingGoals.add(ctx.key);
+                }
+                const prevSt = prevStatus.get(ctx.key);
+                // Skip status flash on match reset (FT → 1H).
+                if (prevSt && prevSt !== data.status && !(prevSt === 'FT' && data.status === '1H')) {
+                    pendingStatusChanges.add(ctx.key);
+                }
+                matchState.set(ctx.key, data);
+                prevScores.set(ctx.key, { home: data.home_score, away: data.away_score });
+                prevStatus.set(ctx.key, data.status);
+            }
+
+            if (!renderPending) {
+                renderPending = true;
+                requestAnimationFrame(() => {
+                    renderPending = false;
+                    renderAllCards();
+                    pendingGoals.clear();
+                    pendingStatusChanges.clear();
+                });
+            }
+        });
+
+        sub.subscribe();
+        centrifuge.connect();
+
+        // --- Delta stats update ---
+        function formatBytes(b) {
+            if (b < 1024) return b + ' B';
+            if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+            return (b / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        setInterval(() => {
+            const s = sub.deltaStats();
+            document.getElementById('dPubs').textContent = s.numPublications;
+            document.getElementById('dFull').textContent = s.numFullPayloads;
+            document.getElementById('dDelta').textContent = s.numDeltaPayloads;
+            document.getElementById('dWire').textContent = formatBytes(s.bytesReceived);
+            document.getElementById('dDecoded').textContent = formatBytes(s.bytesDecoded);
+            document.getElementById('dSaved').textContent = formatBytes(s.bytesDecoded - s.bytesReceived);
+            const pct = (s.compressionRatio * 100).toFixed(1);
+            document.getElementById('dRatio').textContent = pct + '%';
+            document.getElementById('dRatioFill').style.width = pct + '%';
+        }, 500);
+
+        // --- Rendering ---
+        const cardElements = new Map(); // matchID -> DOM element
+
+        function renderAllCards() {
+            const grid = document.getElementById('matchesGrid');
+
+            // Sort matches by ID for stable order.
+            const sorted = Array.from(matchState.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+
+            // Remove cards for matches no longer present.
+            for (const [key, el] of cardElements) {
+                if (!matchState.has(key)) {
+                    el.remove();
+                    cardElements.delete(key);
+                }
+            }
+
+            for (let i = 0; i < sorted.length; i++) {
+                const [matchId, data] = sorted[i];
+                let card = cardElements.get(matchId);
+                if (!card) {
+                    card = createCardElement(matchId);
+                    cardElements.set(matchId, card);
+                }
+                updateCard(card, matchId, data);
+
+                // Maintain order.
+                const next = grid.children[i] || null;
+                if (card !== next) {
+                    grid.insertBefore(card, next);
+                }
+            }
+        }
+
+        function createCardElement(matchId) {
+            const card = document.createElement('div');
+            card.className = 'match-card';
+            card.dataset.matchId = matchId;
+            card.innerHTML = `
+                <div class="goal-flash"></div>
+                <div class="status-flash"></div>
+                <div class="card-header">
+                    <div class="match-status"></div>
+                    <div class="match-minute"></div>
+                </div>
+                <div class="score-section">
+                    <div class="team-name home"></div>
+                    <div class="score-display">
+                        <span class="score-num home-score">0</span>
+                        <span class="score-sep">&mdash;</span>
+                        <span class="score-num away-score">0</span>
+                    </div>
+                    <div class="team-name away"></div>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-row">
+                        <div class="stat-val" data-stat="home-poss">50%</div>
+                        <div class="poss-bar">
+                            <div class="home-fill" style="width:50%"></div>
+                            <div class="away-fill" style="width:50%"></div>
+                        </div>
+                        <div class="stat-val" data-stat="away-poss">50%</div>
+                    </div>
+                    <div class="stat-row">
+                        <div class="stat-val" data-stat="home-shots">0</div>
+                        <div class="stat-bar-track"><div class="stat-bar-fill home" style="width:50%"></div></div>
+                        <div class="stat-label">Shots</div>
+                        <div class="stat-bar-track" style="direction:rtl"><div class="stat-bar-fill away" style="width:50%"></div></div>
+                        <div class="stat-val" data-stat="away-shots">0</div>
+                    </div>
+                    <div class="stat-row">
+                        <div class="stat-val" data-stat="home-passes">0</div>
+                        <div class="stat-bar-track"><div class="stat-bar-fill home" style="width:50%"></div></div>
+                        <div class="stat-label">Passes</div>
+                        <div class="stat-bar-track" style="direction:rtl"><div class="stat-bar-fill away" style="width:50%"></div></div>
+                        <div class="stat-val" data-stat="away-passes">0</div>
+                    </div>
+                </div>
+                <div class="compact-stats">
+                    <div class="compact-stat">Corners <span class="val" data-stat="corners">0-0</span></div>
+                    <div class="compact-stat">Fouls <span class="val" data-stat="fouls">0-0</span></div>
+                    <div class="compact-stat">🟨 <span class="val" data-stat="yellows">0-0</span></div>
+                    <div class="compact-stat">🟥 <span class="val" data-stat="reds">0-0</span></div>
+                </div>
+                <div class="events-row"></div>
+            `;
+            return card;
+        }
+
+        // Track rendered event keys per card to avoid re-creating existing pills.
+        const renderedEvents = new Map(); // matchID -> array of event key strings
+
+        function eventKey(evt) {
+            return evt.minute + ':' + evt.type + ':' + evt.team + ':' + (evt.player || '');
+        }
+
+        function updateCard(card, matchId, data) {
+            // Status badge — only update DOM when status actually changes.
+            const statusEl = card.querySelector('.match-status');
+            const isLive = data.status === '1H' || data.status === '2H';
+            const isHT = data.status === 'HT';
+            const newStatusClass = 'match-status ' + (isLive ? 'live' : isHT ? 'ht' : 'ft');
+            if (statusEl.className !== newStatusClass) {
+                statusEl.className = newStatusClass;
+                if (isLive) {
+                    statusEl.innerHTML = '<span class="status-indicator"></span> LIVE';
+                } else {
+                    statusEl.textContent = data.status;
+                }
+            }
+
+            // Minute.
+            const minuteEl = card.querySelector('.match-minute');
+            if (isLive) {
+                minuteEl.textContent = data.minute + "'";
+            } else if (isHT) {
+                minuteEl.textContent = 'Half-Time';
+            } else {
+                minuteEl.textContent = 'Full-Time';
+            }
+
+            // Teams.
+            const homeFlag = teamFlags[data.home_team] || '';
+            const awayFlag = teamFlags[data.away_team] || '';
+            card.querySelector('.team-name.home').textContent = homeFlag + ' ' + data.home_team;
+            card.querySelector('.team-name.away').textContent = data.away_team + ' ' + awayFlag;
+
+            // Score.
+            const homeScoreEl = card.querySelector('.home-score');
+            const awayScoreEl = card.querySelector('.away-score');
+            homeScoreEl.textContent = data.home_score;
+            awayScoreEl.textContent = data.away_score;
+
+            // Goal animation.
+            if (pendingGoals.has(matchId)) {
+                triggerAnim(homeScoreEl, 'goal-anim');
+                triggerAnim(awayScoreEl, 'goal-anim');
+                triggerAnim(card, 'goal-scored');
+            }
+
+            // Status change flash.
+            if (pendingStatusChanges.has(matchId)) {
+                triggerAnim(card, 'status-changed');
+            }
+
+            // Update stats in-place (preserves DOM elements so CSS transitions work).
+            const homePoss = data.home_poss || 50;
+            const awayPoss = 100 - homePoss;
+            card.querySelector('[data-stat="home-poss"]').textContent = homePoss + '%';
+            card.querySelector('[data-stat="away-poss"]').textContent = awayPoss + '%';
+            card.querySelector('.poss-bar .home-fill').style.width = homePoss + '%';
+            card.querySelector('.poss-bar .away-fill').style.width = awayPoss + '%';
+
+            updateStatBar(card, 'shots', data.home_shots, data.away_shots);
+            updateStatBar(card, 'passes', data.home_passes, data.away_passes);
+
+            card.querySelector('[data-stat="corners"]').textContent = data.home_corners + '-' + data.away_corners;
+            card.querySelector('[data-stat="fouls"]').textContent = data.home_fouls + '-' + data.away_fouls;
+            card.querySelector('[data-stat="yellows"]').textContent = data.home_yellow + '-' + data.away_yellow;
+            card.querySelector('[data-stat="reds"]').textContent = data.home_red + '-' + data.away_red;
+
+            // Events timeline — only append new pills.
+            const eventsRow = card.querySelector('.events-row');
+            const events = data.events || [];
+            const recent = events.slice(-5);
+            const prevKeys = renderedEvents.get(matchId) || [];
+            const newKeys = recent.map(eventKey);
+
+            // If the set of events changed, reconcile.
+            if (newKeys.join('|') !== prevKeys.join('|')) {
+                // Find how many leading events are unchanged.
+                let commonPrefix = 0;
+                while (commonPrefix < prevKeys.length && commonPrefix < newKeys.length
+                       && prevKeys[commonPrefix] === newKeys[commonPrefix]) {
+                    commonPrefix++;
+                }
+
+                // Remove pills that are no longer in the list.
+                while (eventsRow.children.length > commonPrefix) {
+                    eventsRow.removeChild(eventsRow.lastChild);
+                }
+
+                // Append new pills (only these get the animation).
+                for (let i = commonPrefix; i < recent.length; i++) {
+                    const evt = recent[i];
+                    let icon = '', cls = evt.type;
+                    if (evt.type === 'goal') icon = '⚽';
+                    else if (evt.type === 'yellow') icon = '🟨';
+                    else if (evt.type === 'red') icon = '🟥';
+                    else if (evt.type === 'corner') icon = '🚩';
+                    else icon = '⚡';
+                    const teamLabel = evt.team === 'home' ? data.home_team : data.away_team;
+                    const pill = document.createElement('div');
+                    pill.className = 'event-pill ' + cls;
+                    pill.innerHTML = icon + ' ' + (evt.player || teamLabel) + ' <span class="minute-tag">' + evt.minute + "'</span>";
+                    eventsRow.appendChild(pill);
+                }
+
+                renderedEvents.set(matchId, newKeys);
+                eventsRow.scrollLeft = eventsRow.scrollWidth;
+            }
+        }
+
+        function updateStatBar(card, stat, homeVal, awayVal) {
+            const total = (homeVal + awayVal) || 1;
+            const homePct = Math.round((homeVal / total) * 100);
+            const awayPct = 100 - homePct;
+            card.querySelector('[data-stat="home-' + stat + '"]').textContent = homeVal;
+            card.querySelector('[data-stat="away-' + stat + '"]').textContent = awayVal;
+            // The stat bars are in order: first .stat-bar-fill.home for this stat, etc.
+            // Find the parent stat-row by the data-stat attribute's row.
+            const homeEl = card.querySelector('[data-stat="home-' + stat + '"]');
+            const row = homeEl.closest('.stat-row');
+            row.querySelector('.stat-bar-fill.home').style.width = homePct + '%';
+            row.querySelector('.stat-bar-fill.away').style.width = awayPct + '%';
+        }
+
+        function triggerAnim(el, cls) {
+            el.classList.remove(cls);
+            void el.offsetWidth; // force reflow.
+            el.classList.add(cls);
+        }
+
+    </script>
+</body>
+</html>

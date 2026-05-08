@@ -2,6 +2,8 @@ package centrifuge
 
 import (
 	"time"
+
+	"github.com/centrifugal/protocol"
 )
 
 // PublishOption is a type to represent various Publish options.
@@ -23,6 +25,15 @@ func WithHistory(size int, ttl time.Duration, metaTTL ...time.Duration) PublishO
 func WithIdempotencyKey(key string) PublishOption {
 	return func(opts *PublishOptions) {
 		opts.IdempotencyKey = key
+	}
+}
+
+// WithKey sets a key for the publication. When set, the publication is associated
+// with a specific key within the channel. This may enable per-key debouncing or
+// channel level per-key batching. The key is delivered to subscribers in the Publication.
+func WithKey(key string) PublishOption {
+	return func(opts *PublishOptions) {
+		opts.Key = key
 	}
 }
 
@@ -79,6 +90,49 @@ func WithVersion(version uint64, versionEpoch string) PublishOption {
 		opts.VersionEpoch = versionEpoch
 	}
 }
+
+// SubscriptionType defines the type of subscription.
+type SubscriptionType int32
+
+const (
+	// SubscriptionTypeStream is a regular PUB/SUB subscription (default).
+	SubscriptionTypeStream SubscriptionType = 0
+	// SubscriptionTypeMap is a map subscription with keyed state.
+	SubscriptionTypeMap SubscriptionType = 1
+	// SubscriptionTypeMapClients is a client presence subscription on a map channel.
+	SubscriptionTypeMapClients SubscriptionType = 2
+	// SubscriptionTypeMapUsers is a user presence subscription on a map channel.
+	SubscriptionTypeMapUsers SubscriptionType = 3
+	// SubscriptionTypeSharedPoll is a shared poll subscription.
+	SubscriptionTypeSharedPoll SubscriptionType = 4
+)
+
+// IsMapPresence reports whether t is a map presence subscription type
+// (SubscriptionTypeMapClients or SubscriptionTypeMapUsers).
+func (t SubscriptionType) IsMapPresence() bool {
+	return t == SubscriptionTypeMapClients || t == SubscriptionTypeMapUsers
+}
+
+func (t SubscriptionType) String() string {
+	switch t {
+	case SubscriptionTypeStream:
+		return "stream"
+	case SubscriptionTypeMap:
+		return "map"
+	case SubscriptionTypeMapClients:
+		return "map_clients"
+	case SubscriptionTypeMapUsers:
+		return "map_users"
+	case SubscriptionTypeSharedPoll:
+		return "shared_poll"
+	default:
+		return "unknown"
+	}
+}
+
+// FilterNode is a filter expression tree for matching against key-value tags.
+// Used for server-side publication filtering (ServerTagsFilter in SubscribeOptions).
+type FilterNode = protocol.FilterNode
 
 // SubscribeOptions define per-subscription options.
 type SubscribeOptions struct {
@@ -146,6 +200,33 @@ type SubscribeOptions struct {
 	// Important note here, since channel permissions are managed on channel level, tags filtering
 	// must be used as a bandwidth optimization, not an access control mechanism.
 	AllowTagsFilter bool
+	// ServerTagsFilter is a server-controlled tags filter applied to publications before delivery.
+	// Unlike AllowTagsFilter (which enables client-side filtering), this filter is set by the server
+	// (via subscribe proxy or JWT) and cannot be overridden by the client. When both server and
+	// client filters are set, they are applied independently (AND semantics). ServerTagsFilter
+	// can not be used together with Delta Compression in subscription.
+	ServerTagsFilter *FilterNode
+
+	// Type defines the subscription type. Use SubscriptionTypeMap for map subscriptions.
+	// For regular subscriptions this can be left as zero value (SubscriptionTypeStream).
+	Type SubscriptionType
+	// MapClientPresenceChannel is the full channel name for client presence.
+	// When set, client presence will be published to this channel on subscribe.
+	// Empty string means no client presence publishing.
+	MapClientPresenceChannel string
+	// MapUserPresenceChannel is the full channel name for user presence.
+	// When set, user presence will be published to this channel on subscribe.
+	// Empty string means no user presence publishing.
+	MapUserPresenceChannel string
+	// MapRemoveClientOnUnsubscribe enables automatic cleanup of map state when the
+	// subscription ends – the key matching current client ID will be removed.
+	// This is useful for ephemeral state like cursor positions or temporary resources
+	// that should not persist after the client leaves.
+	MapRemoveClientOnUnsubscribe bool
+	// ClientPublishDebounceInterval when > 0, included in the subscribe result
+	// as publish_debounce (milliseconds). The SDK debounces client-initiated publishes
+	// to this channel locally.
+	ClientPublishDebounceInterval time.Duration
 }
 
 // SubscribeOption is a type to represent various Subscribe options.

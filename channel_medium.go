@@ -60,6 +60,7 @@ type channelMedium struct {
 	channel string
 	node    nodeSubset
 	options ChannelMediumOptions
+	isMap   bool
 
 	mu      sync.RWMutex
 	closeCh chan struct{}
@@ -77,6 +78,7 @@ type channelMedium struct {
 type nodeSubset interface {
 	handlePublication(ch string, sp StreamPosition, pub, prevPub *Publication, localPrevPub *Publication) error
 	streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error)
+	mapStreamTop(ch string) (StreamPosition, error)
 }
 
 func newChannelMedium(channel string, node nodeSubset, options ChannelMediumOptions) (*channelMedium, error) {
@@ -156,7 +158,11 @@ func (c *channelMedium) broadcast(qp queuedPub) {
 	prevPub := qp.prevPub
 	var localPrevPub *Publication
 	useLocalLatestPub := c.options.KeepLatestPublication && !qp.isInsufficientState
-	if useLocalLatestPub && qp.delta {
+	if useLocalLatestPub && qp.delta && qp.pub.Key == "" {
+		// Only provide localPrevPub for non-map publications. For map subs,
+		// keys are independent streams — a single latestPublication can't serve
+		// as a correct delta base across different keys. Map subs rely on the
+		// broker-level prevPub (positioned path) for delta instead.
 		localPrevPub = c.latestPublication
 	}
 	if c.options.broadcastDelay > 0 && !c.options.KeepLatestPublication {
@@ -166,7 +172,7 @@ func (c *channelMedium) broadcast(qp queuedPub) {
 		prevPub = nil
 	}
 	_ = c.node.handlePublication(c.channel, spToBroadcast, pubToBroadcast, prevPub, localPrevPub)
-	if useLocalLatestPub {
+	if useLocalLatestPub && qp.pub.Key == "" {
 		c.latestPublication = qp.pub
 	}
 }
@@ -255,7 +261,13 @@ func (c *channelMedium) checkPositionWithRetry(historyMetaTTL time.Duration, cli
 }
 
 func (c *channelMedium) checkPositionOnce(historyMetaTTL time.Duration, clientPosition StreamPosition) (StreamPosition, bool, error) {
-	streamTop, err := c.node.streamTop(c.channel, historyMetaTTL)
+	var streamTop StreamPosition
+	var err error
+	if c.isMap {
+		streamTop, err = c.node.mapStreamTop(c.channel)
+	} else {
+		streamTop, err = c.node.streamTop(c.channel, historyMetaTTL)
+	}
 	if err != nil {
 		return StreamPosition{}, false, err
 	}

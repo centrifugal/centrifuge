@@ -1,0 +1,1384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sync Protocol Visualizer — Map Subscriptions</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg: #1a1a2e;
+            --bg2: #16213e;
+            --card: rgba(255,255,255,0.06);
+            --border: rgba(255,255,255,0.1);
+            --text: rgba(255,255,255,0.92);
+            --text2: rgba(255,255,255,0.6);
+            --text3: rgba(255,255,255,0.35);
+            --state: #4A90E2;
+            --stream: #FF9800;
+            --live: #4CAF50;
+            --error: #f44336;
+            --sys: #888;
+            --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+            --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, system-ui, sans-serif;
+            --sidebar-w: 280px;
+        }
+
+        body {
+            font-family: var(--sans);
+            background: linear-gradient(135deg, var(--bg) 0%, var(--bg2) 100%);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: var(--sidebar-w);
+            min-width: var(--sidebar-w);
+            padding: 16px;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            overflow-y: auto;
+            height: 100vh;
+            position: sticky;
+            top: 0;
+        }
+
+        .sidebar h1 {
+            font-size: 15px;
+            font-weight: 700;
+            margin-bottom: 2px;
+        }
+
+        .sidebar h1 a {
+            color: var(--text2);
+            text-decoration: none;
+            font-size: 11px;
+            font-weight: 400;
+        }
+
+        .section-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text3);
+            margin-bottom: 4px;
+        }
+
+        /* Scenario buttons */
+        .scenarios { display: flex; flex-direction: column; gap: 5px; }
+
+        .scenario-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--card);
+            color: var(--text);
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+            text-align: left;
+        }
+        .scenario-btn:hover { background: rgba(255,255,255,0.1); }
+        .scenario-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .scenario-btn.active { border-color: rgba(255,255,255,0.4); background: rgba(255,255,255,0.12); }
+        .scenario-btn .num {
+            width: 20px; height: 20px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 10px; font-weight: 700;
+            flex-shrink: 0;
+        }
+        .scenario-btn .desc { font-size: 10px; color: var(--text2); }
+
+        .s-state .num { background: var(--state); color: #fff; }
+        .s-stream .num { background: var(--stream); color: #000; }
+        .s-mixed .num { background: linear-gradient(135deg, var(--state), var(--live)); color: #fff; }
+
+        /* Controls */
+        .controls { display: flex; flex-wrap: wrap; gap: 5px; }
+
+        .ctrl-btn {
+            padding: 5px 9px;
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            background: var(--card);
+            color: var(--text);
+            font-size: 11px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .ctrl-btn:hover { background: rgba(255,255,255,0.12); }
+        .ctrl-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .ctrl-btn.danger { border-color: rgba(244,67,54,0.3); color: var(--error); }
+        .ctrl-btn.danger:hover { background: rgba(244,67,54,0.15); }
+
+        .ctrl-input {
+            width: 50px;
+            padding: 5px 6px;
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            background: rgba(0,0,0,0.3);
+            color: var(--text);
+            font-size: 11px;
+            font-family: var(--mono);
+            text-align: center;
+        }
+
+        /* Settings */
+        .setting-row {
+            display: flex; align-items: center; gap: 6px; font-size: 11px;
+        }
+        .setting-row label { color: var(--text2); }
+        .setting-row select {
+            padding: 3px 6px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: rgba(0,0,0,0.3);
+            color: var(--text);
+            font-size: 11px;
+        }
+
+        /* Info panel */
+        .info-panel {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 11px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .info-row {
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .info-label { color: var(--text2); }
+        .info-value { font-family: var(--mono); font-size: 11px; }
+
+        .conn-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--error);
+            display: inline-block;
+            margin-right: 4px;
+            transition: background 0.3s;
+        }
+        .conn-dot.connected { background: var(--live); }
+        .conn-dot.connecting { background: var(--stream); }
+
+        .phase-badge {
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            font-family: var(--mono);
+        }
+        .phase-state { background: var(--state); color: #fff; }
+        .phase-stream { background: var(--stream); color: #000; }
+        .phase-live { background: var(--live); color: #fff; }
+        .phase-none { background: rgba(255,255,255,0.1); color: var(--text3); }
+
+        /* Main timeline area */
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        .timeline-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+        }
+        .timeline-header h2 { font-size: 14px; font-weight: 600; }
+
+        .scenario-banner {
+            display: none;
+            padding: 10px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            border-bottom: 2px solid var(--state);
+            background: rgba(74,144,226,0.08);
+            gap: 10px;
+        }
+        .scenario-banner.visible { display: flex; align-items: center; }
+        .scenario-banner .sb-num {
+            width: 26px; height: 26px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 13px; font-weight: 700;
+            background: var(--state); color: #fff;
+            flex-shrink: 0;
+        }
+        .scenario-banner .sb-name { font-size: 14px; }
+        .scenario-banner .sb-sep { color: var(--text3); }
+        .scenario-banner .sb-desc { font-weight: 400; color: var(--text2); font-size: 12px; }
+
+        /* Step markers in timeline */
+        .tl-step {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            margin: 6px 0;
+            border-radius: 6px;
+            background: rgba(255,255,255,0.04);
+            border-left: 3px solid var(--text3);
+            font-size: 11px;
+            color: var(--text2);
+            animation: slideIn 0.2s ease-out;
+        }
+        .tl-step .step-label {
+            font-weight: 700;
+            color: var(--text);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+        }
+        .tl-step.step-server { border-left-color: var(--stream); }
+        .tl-step.step-client { border-left-color: var(--state); }
+        .tl-step.step-wait { border-left-color: var(--text3); }
+
+        .timeline {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px 16px;
+        }
+
+        .tl-empty {
+            color: var(--text3);
+            text-align: center;
+            margin-top: 80px;
+            font-size: 13px;
+        }
+
+        /* Timeline entries */
+        .tl-entry {
+            display: flex;
+            gap: 10px;
+            padding: 6px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            animation: slideIn 0.2s ease-out;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .tl-time {
+            font-family: var(--mono);
+            font-size: 10px;
+            color: var(--text3);
+            width: 70px;
+            flex-shrink: 0;
+            padding-top: 2px;
+        }
+
+        .tl-arrow {
+            width: 24px;
+            text-align: center;
+            font-size: 14px;
+            flex-shrink: 0;
+            padding-top: 1px;
+        }
+        .tl-arrow.out { color: var(--stream); }
+        .tl-arrow.in { color: var(--state); }
+        .tl-arrow.sys { color: var(--sys); }
+
+        .tl-body { flex: 1; min-width: 0; }
+
+        .tl-headline {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .tl-type {
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .tl-summary {
+            font-size: 11px;
+            color: var(--text2);
+        }
+
+        .tl-tag {
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 9px;
+            font-weight: 600;
+            font-family: var(--mono);
+        }
+
+        .tl-detail {
+            margin-top: 4px;
+            padding: 6px 8px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 4px;
+            font-family: var(--mono);
+            font-size: 10px;
+            color: var(--text2);
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 300px;
+            overflow-y: auto;
+            display: none;
+        }
+        .tl-detail.open { display: block; }
+
+        .tl-toggle {
+            font-size: 10px;
+            color: var(--text3);
+            cursor: pointer;
+            margin-left: 4px;
+        }
+        .tl-toggle:hover { color: var(--text); }
+
+        /* Phase divider */
+        .tl-divider {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 0 4px;
+        }
+        .tl-divider::before, .tl-divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+        }
+        .tl-divider.state::before, .tl-divider.state::after { background: var(--state); opacity: 0.3; }
+        .tl-divider.stream::before, .tl-divider.stream::after { background: var(--stream); opacity: 0.3; }
+        .tl-divider.live::before, .tl-divider.live::after { background: var(--live); opacity: 0.3; }
+        .tl-divider.error::before, .tl-divider.error::after { background: var(--error); opacity: 0.3; }
+
+        /* State panel */
+        .state-panel {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 11px;
+        }
+        .state-panel summary {
+            cursor: pointer;
+            color: var(--text2);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .state-keys {
+            margin-top: 6px;
+            max-height: 140px;
+            overflow-y: auto;
+            font-family: var(--mono);
+            font-size: 10px;
+            color: var(--text2);
+        }
+        .state-keys div {
+            padding: 1px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+        }
+
+        /* Toast notification */
+        .toast {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            padding: 10px 16px;
+            border-radius: 8px;
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-size: 12px;
+            font-family: var(--sans);
+            z-index: 1000;
+            opacity: 0;
+            transform: translateY(-8px);
+            transition: opacity 0.2s, transform 0.2s;
+            pointer-events: none;
+            max-width: 320px;
+        }
+        .toast.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .toast .toast-title {
+            font-weight: 600;
+            margin-bottom: 2px;
+        }
+        .toast .toast-detail {
+            color: var(--text2);
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+
+<aside class="sidebar">
+    <div>
+        <h1>Sync Protocol Visualizer <br><a href="/">&larr; All demos</a></h1>
+    </div>
+
+    <div>
+        <div class="section-label">Scenarios</div>
+        <div class="scenarios">
+            <button class="scenario-btn s-state" onclick="runScenario(1)" id="s1">
+                <span class="num">1</span>
+                <div><div>Fresh Join</div><div class="desc">Empty channel, single round trip</div></div>
+            </button>
+            <button class="scenario-btn s-state" onclick="runScenario(2)" id="s2">
+                <span class="num">2</span>
+                <div><div>Small State</div><div class="desc">5 keys, fits in one page</div></div>
+            </button>
+            <button class="scenario-btn s-mixed" onclick="runScenario(3)" id="s3">
+                <span class="num">3</span>
+                <div><div>Paginated Join</div><div class="desc">50 keys, multi-page STATE</div></div>
+            </button>
+            <button class="scenario-btn s-stream" onclick="runScenario(4)" id="s4">
+                <span class="num">4</span>
+                <div><div>Seamless Recovery</div><div class="desc">Disconnect + reconnect, no missed data</div></div>
+            </button>
+            <button class="scenario-btn s-stream" onclick="runScenario(5)" id="s5">
+                <span class="num">5</span>
+                <div><div>Stream Recovery</div><div class="desc">Disconnect, publish 10, recover</div></div>
+            </button>
+            <button class="scenario-btn s-mixed" onclick="runScenario(6)" id="s6">
+                <span class="num">6</span>
+                <div><div>Full Resync</div><div class="desc">Stream overflow forces STATE restart</div></div>
+            </button>
+        </div>
+    </div>
+
+    <div>
+        <div class="section-label">Populate</div>
+        <div class="controls">
+            <button class="ctrl-btn" onclick="apiPopulate(5)">5</button>
+            <button class="ctrl-btn" onclick="apiPopulate(50)">50</button>
+            <button class="ctrl-btn" onclick="apiPopulate(1000)">1k</button>
+            <button class="ctrl-btn" onclick="apiPopulate(10000)">10k</button>
+            <input type="number" class="ctrl-input" id="populateCount" value="" placeholder="N" min="1" max="100000">
+            <button class="ctrl-btn" onclick="apiPopulate()">Go</button>
+        </div>
+    </div>
+    <div>
+        <div class="section-label">Actions</div>
+        <div class="controls">
+            <button class="ctrl-btn" onclick="apiPublish()">Publish 1</button>
+            <button class="ctrl-btn" onclick="apiRemove()">Remove 1</button>
+            <button class="ctrl-btn danger" onclick="apiClear()">Clear All</button>
+        </div>
+    </div>
+
+    <div>
+        <div class="section-label">Connection</div>
+        <div class="controls">
+            <button class="ctrl-btn" onclick="doDisconnect()" id="btnDisc">Disconnect</button>
+            <button class="ctrl-btn" onclick="doReconnect()" id="btnRecon">Reconnect</button>
+            <button class="ctrl-btn" onclick="doResubscribe()">Resubscribe</button>
+            <button class="ctrl-btn" onclick="doRecreate()">Recreate</button>
+        </div>
+    </div>
+
+    <div>
+        <div class="section-label">Settings</div>
+        <div class="setting-row">
+            <label>Page size:</label>
+            <select id="pageSizeSelect" onchange="updatePageSize()">
+                <option value="5">5</option>
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="500">500</option>
+                <option value="1000">1000</option>
+                <option value="10000">10000</option>
+            </select>
+        </div>
+        <div class="setting-row">
+            <label>Latency:</label>
+            <select id="latencySelect" onchange="updateLatency()">
+                <option value="0" selected>0 ms</option>
+                <option value="5">5 ms</option>
+                <option value="20">20 ms</option>
+                <option value="100">100 ms</option>
+                <option value="250">250 ms</option>
+                <option value="500">500 ms</option>
+                <option value="1000">1 s</option>
+                <option value="2000">2 s</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="info-panel">
+        <div class="info-row">
+            <span class="info-label">Connection</span>
+            <span class="info-value"><span class="conn-dot" id="connDot"></span><span id="connText">Disconnected</span></span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Phase</span>
+            <span id="phaseDisplay"><span class="phase-badge phase-none">-</span></span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Epoch</span>
+            <span class="info-value" id="epochDisplay">-</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Offset</span>
+            <span class="info-value" id="offsetDisplay">-</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Recovered</span>
+            <span class="info-value" id="recoveredDisplay">-</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Round trips</span>
+            <span class="info-value" id="rtDisplay">0</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Sync time</span>
+            <span class="info-value" id="syncTimeDisplay">-</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">State keys</span>
+            <span class="info-value" id="keyCountDisplay">0</span>
+        </div>
+    </div>
+
+    <details class="state-panel">
+        <summary>Current State (<span id="stateCount">0</span> keys)</summary>
+        <div class="state-keys" id="stateKeys"></div>
+    </details>
+</aside>
+
+<main class="main">
+    <div class="timeline-header">
+        <h2>Protocol Timeline</h2>
+        <button class="ctrl-btn" onclick="clearTimeline()">Clear</button>
+    </div>
+    <div class="scenario-banner" id="scenarioBanner">
+        <span class="sb-num" id="sbNum"></span>
+        <span class="sb-name" id="sbName"></span>
+        <span class="sb-sep">&mdash;</span>
+        <span class="sb-desc" id="sbDesc"></span>
+    </div>
+    <div class="timeline" id="timeline">
+        <div class="tl-empty">Run a scenario or use manual controls to see protocol messages.</div>
+    </div>
+</main>
+
+<div class="toast" id="toast">
+    <div class="toast-title" id="toastTitle"></div>
+    <div class="toast-detail" id="toastDetail"></div>
+</div>
+
+<!-- WebSocket interceptor — MUST be before centrifuge.js -->
+<script>
+(function() {
+    const _OrigWS = WebSocket;
+
+    // Shared state for interceptor
+    window.__wsInterceptor = {
+        onSend: null,
+        onMessage: null,
+        onOpen: null,
+        onClose: null,
+        ws: null,
+        latency: 0
+    };
+
+    window.WebSocket = function(url, protocols) {
+        const ws = protocols !== undefined ? new _OrigWS(url, protocols) : new _OrigWS(url);
+        window.__wsInterceptor.ws = ws;
+
+        // The configured latency is round-trip — split it across both legs so
+        // a request→response cycle is delayed by ~latency total, not 2×latency.
+        const oneWayDelay = () => Math.floor((window.__wsInterceptor.latency || 0) / 2);
+
+        // Intercept send — supports artificial latency on outgoing frames.
+        const origSend = ws.send.bind(ws);
+        ws.send = function(data) {
+            const doSend = () => {
+                if (typeof data === 'string' && window.__wsInterceptor.onSend) {
+                    try {
+                        const lines = data.trim().split('\n');
+                        for (const line of lines) {
+                            if (line.trim()) {
+                                window.__wsInterceptor.onSend(JSON.parse(line));
+                            }
+                        }
+                    } catch(e) { /* binary or unparseable */ }
+                }
+                return origSend(data);
+            };
+            const delay = oneWayDelay();
+            if (delay > 0) {
+                setTimeout(doSend, delay);
+            } else {
+                return doSend();
+            }
+        };
+
+        // Intercept incoming data — delay delivery to centrifuge-js's onmessage
+        // handler by half the configured latency so the round-trip total matches
+        // the configured value.
+        let _userOnMessage = null;
+        Object.defineProperty(ws, 'onmessage', {
+            get() { return _userOnMessage; },
+            set(fn) {
+                _userOnMessage = fn;
+                // Real handler on the underlying WS delivers with delay.
+                Object.getOwnPropertyDescriptor(_OrigWS.prototype, 'onmessage').set.call(ws, function(event) {
+                    // Log interceptor (always immediate).
+                    if (typeof event.data === 'string' && window.__wsInterceptor.onMessage) {
+                        try {
+                            const lines = event.data.trim().split('\n');
+                            for (const line of lines) {
+                                if (line.trim()) {
+                                    window.__wsInterceptor.onMessage(JSON.parse(line));
+                                }
+                            }
+                        } catch(e) { /* binary or unparseable */ }
+                    }
+                    const delay = oneWayDelay();
+                    if (delay > 0 && _userOnMessage) {
+                        setTimeout(() => _userOnMessage(event), delay);
+                    } else if (_userOnMessage) {
+                        _userOnMessage(event);
+                    }
+                });
+            }
+        });
+
+        ws.addEventListener('open', function(e) {
+            if (window.__wsInterceptor.onOpen) window.__wsInterceptor.onOpen(e);
+        });
+        ws.addEventListener('close', function(e) {
+            if (window.__wsInterceptor.onClose) window.__wsInterceptor.onClose(e);
+        });
+
+        return ws;
+    };
+    // Copy static properties
+    window.WebSocket.CONNECTING = _OrigWS.CONNECTING;
+    window.WebSocket.OPEN = _OrigWS.OPEN;
+    window.WebSocket.CLOSING = _OrigWS.CLOSING;
+    window.WebSocket.CLOSED = _OrigWS.CLOSED;
+    window.WebSocket.prototype = _OrigWS.prototype;
+})();
+</script>
+
+<script src="http://localhost:2000/centrifuge.js"></script>
+
+<script>
+// ─── Constants ───
+const PHASE_NAMES = { 0: 'LIVE', 1: 'STREAM', 2: 'STATE' };
+const PHASE_CLASSES = { 0: 'phase-live', 1: 'phase-stream', 2: 'phase-state' };
+const SCENARIO_INFO = {
+    1: { name: 'Fresh Join', desc: 'Empty channel, single round trip' },
+    2: { name: 'Small State', desc: '5 keys, fits in one page' },
+    3: { name: 'Paginated Join', desc: '50 keys, multi-page STATE' },
+    4: { name: 'Seamless Recovery', desc: 'Disconnect + reconnect, no missed data' },
+    5: { name: 'Stream Recovery', desc: 'Disconnect, publish 10, recover' },
+    6: { name: 'Full Resync', desc: 'Stream overflow forces STATE restart' },
+};
+
+// ─── Mutable state ───
+let wsLatency = 0; // ms delay on each ws.send
+let pageSize = 10;
+let roundTrips = 0;
+let currentState = new Map();
+let currentPhase = null;
+let lastEpoch = null;
+let lastOffset = null;
+let lastRecovered = null;
+let scenarioRunning = false;
+let pendingSubIds = new Set();
+let pendingUnsubIds = new Set();
+let subId = null;
+
+let syncStartMs = null;   // timestamp of first outgoing subscribe
+let syncEndMs = null;     // timestamp when 'subscribed' fires
+let recoveredPubs = 0;    // publications from stream catch-up in LIVE reply
+
+// Current centrifuge client + subscription (recreated per scenario)
+let centrifuge = null;
+let sub = null;
+
+// ─── Timeline ───
+const timeline = document.getElementById('timeline');
+let timelineStartMs = Date.now();
+
+function resetTimeline() {
+    timeline.innerHTML = '';
+    roundTrips = 0;
+    currentPhase = null;
+    lastEpoch = null;
+    lastOffset = null;
+    lastRecovered = null;
+    currentState.clear();
+    pendingSubIds.clear();
+    pendingUnsubIds.clear();
+    subId = null;
+    syncStartMs = null;
+    syncEndMs = null;
+    recoveredPubs = 0;
+    updateInfoPanel();
+    timelineStartMs = Date.now();
+}
+
+function clearTimeline() {
+    resetTimeline();
+    hideScenarioBanner();
+}
+
+function showScenarioBanner(n) {
+    document.getElementById('sbNum').textContent = n;
+    document.getElementById('sbName').textContent = SCENARIO_INFO[n].name;
+    document.getElementById('sbDesc').textContent = SCENARIO_INFO[n].desc;
+    document.getElementById('scenarioBanner').classList.add('visible');
+    for (let i = 1; i <= 6; i++) {
+        document.getElementById('s' + i).classList.toggle('active', i === n);
+    }
+}
+
+function hideScenarioBanner() {
+    document.getElementById('scenarioBanner').classList.remove('visible');
+    for (let i = 1; i <= 6; i++) {
+        document.getElementById('s' + i).classList.remove('active');
+    }
+}
+
+function timeStr() {
+    const d = Date.now() - timelineStartMs;
+    const s = Math.floor(d / 1000);
+    const ms = d % 1000;
+    return `+${s}.${String(ms).padStart(3, '0')}s`;
+}
+
+function removeEmptyMsg() {
+    const empty = timeline.querySelector('.tl-empty');
+    if (empty) empty.remove();
+}
+
+// Add a visible step marker (explains what the scenario is doing)
+function addStep(text, type) {
+    removeEmptyMsg();
+    const el = document.createElement('div');
+    const cls = type === 'server' ? 'step-server' : type === 'client' ? 'step-client' : 'step-wait';
+    el.className = `tl-step ${cls}`;
+    el.innerHTML = `<span class="step-label">${timeStr()}</span> ${escHtml(text)}`;
+    timeline.appendChild(el);
+    scrollTimeline();
+}
+
+function addDivider(phase) {
+    removeEmptyMsg();
+    const name = PHASE_NAMES[phase] || phase;
+    const cls = phase === 2 ? 'state' : phase === 1 ? 'stream' : phase === 0 ? 'live' : 'error';
+    const div = document.createElement('div');
+    div.className = `tl-divider ${cls}`;
+    div.innerHTML = `<span class="phase-badge ${PHASE_CLASSES[phase] || 'phase-none'}">${name}</span>`;
+    timeline.appendChild(div);
+    scrollTimeline();
+}
+
+function addEntry(direction, type, summary, phase, detail, extraClass) {
+    removeEmptyMsg();
+    const entry = document.createElement('div');
+    entry.className = 'tl-entry';
+
+    const arrowCls = direction === 'out' ? 'out' : direction === 'in' ? 'in' : 'sys';
+    const arrowChar = direction === 'out' ? '\u2192' : direction === 'in' ? '\u2190' : '\u25CB';
+
+    let phaseBadge = '';
+    if (phase !== undefined && phase !== null && PHASE_NAMES[phase] !== undefined) {
+        phaseBadge = `<span class="tl-tag ${PHASE_CLASSES[phase]}">${PHASE_NAMES[phase]}</span>`;
+    }
+
+    let detailHtml = '';
+    if (detail) {
+        const id = 'det_' + Math.random().toString(36).slice(2, 8);
+        detailHtml = `<span class="tl-toggle" onclick="document.getElementById('${id}').classList.toggle('open')">[JSON]</span>
+            <div class="tl-detail" id="${id}">${escHtml(typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2))}</div>`;
+    }
+
+    let typeCls = '';
+    if (extraClass) typeCls = ` style="color:${extraClass}"`;
+
+    entry.innerHTML = `
+        <span class="tl-time">${timeStr()}</span>
+        <span class="tl-arrow ${arrowCls}">${arrowChar}</span>
+        <div class="tl-body">
+            <div class="tl-headline">
+                <span class="tl-type"${typeCls}>${escHtml(type)}</span>
+                ${phaseBadge}
+                <span class="tl-summary">${escHtml(summary)}</span>
+                ${detailHtml}
+            </div>
+        </div>
+    `;
+    timeline.appendChild(entry);
+    scrollTimeline();
+}
+
+function scrollTimeline() {
+    requestAnimationFrame(() => { timeline.scrollTop = timeline.scrollHeight; });
+}
+
+function escHtml(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+let toastTimer = null;
+function showToast(title, detail) {
+    const el = document.getElementById('toast');
+    document.getElementById('toastTitle').textContent = title;
+    document.getElementById('toastDetail').textContent = detail || '';
+    if (toastTimer) clearTimeout(toastTimer);
+    el.classList.add('visible');
+    toastTimer = setTimeout(() => el.classList.remove('visible'), 3000);
+}
+
+// ─── Info Panel ───
+function updateInfoPanel() {
+    document.getElementById('rtDisplay').textContent = roundTrips;
+    document.getElementById('keyCountDisplay').textContent = currentState.size;
+    document.getElementById('stateCount').textContent = currentState.size;
+
+    if (currentPhase !== null && PHASE_NAMES[currentPhase]) {
+        document.getElementById('phaseDisplay').innerHTML =
+            `<span class="phase-badge ${PHASE_CLASSES[currentPhase]}">${PHASE_NAMES[currentPhase]}</span>`;
+    } else {
+        document.getElementById('phaseDisplay').innerHTML =
+            `<span class="phase-badge phase-none">-</span>`;
+    }
+
+    if (syncStartMs != null && syncEndMs != null) {
+        document.getElementById('syncTimeDisplay').textContent = (syncEndMs - syncStartMs).toFixed(0) + ' ms';
+    } else if (syncStartMs != null) {
+        document.getElementById('syncTimeDisplay').textContent = 'syncing...';
+    } else {
+        document.getElementById('syncTimeDisplay').textContent = '-';
+    }
+    document.getElementById('epochDisplay').textContent = lastEpoch !== null ? (lastEpoch === '' ? '""' : lastEpoch) : '-';
+    document.getElementById('offsetDisplay').textContent = lastOffset !== null ? lastOffset : '-';
+    document.getElementById('recoveredDisplay').textContent = lastRecovered != null ? String(lastRecovered) : '-';
+
+    const keysDiv = document.getElementById('stateKeys');
+    if (currentState.size === 0) {
+        keysDiv.innerHTML = '<div style="color:var(--text3)">empty</div>';
+    } else {
+        const sorted = Array.from(currentState.keys()).sort();
+        keysDiv.innerHTML = sorted.map(k => {
+            const v = currentState.get(k);
+            const short = JSON.stringify(v).slice(0, 60);
+            return `<div><strong>${escHtml(k)}</strong>: ${escHtml(short)}</div>`;
+        }).join('');
+    }
+}
+
+function setConnectionStatus(state) {
+    const dot = document.getElementById('connDot');
+    const text = document.getElementById('connText');
+    dot.classList.remove('connected', 'connecting');
+    if (state === 'connected') {
+        dot.classList.add('connected');
+        text.textContent = 'Connected';
+    } else if (state === 'connecting') {
+        dot.classList.add('connecting');
+        text.textContent = 'Connecting...';
+    } else {
+        text.textContent = 'Disconnected';
+    }
+}
+
+// ─── WebSocket Interceptor Handlers ───
+window.__wsInterceptor.onSend = function(msg) {
+    if (msg.subscribe && msg.subscribe.channel === 'visualizer') {
+        pendingSubIds.add(msg.id);
+        const s = msg.subscribe;
+        const phase = s.phase != null ? s.phase : 0;
+        const parts = [];
+        if (s.limit) parts.push(`limit=${s.limit}`);
+        if (s.cursor) parts.push(`cursor="${s.cursor}"`);
+        if (s.offset) parts.push(`offset=${s.offset}`);
+        if (s.epoch) parts.push(`epoch=${s.epoch}`);
+        if (s.recover) parts.push('recover=true');
+
+        if (syncStartMs === null) syncStartMs = performance.now();
+        addDivider(phase);
+        addEntry('out', 'SUBSCRIBE', parts.join(', ') || 'initial', phase, msg);
+        roundTrips++;
+        updateInfoPanel();
+    }
+    if (msg.unsubscribe && msg.unsubscribe.channel === 'visualizer') {
+        pendingUnsubIds.add(msg.id);
+        addEntry('out', 'UNSUBSCRIBE', '', null, msg);
+    }
+    if (msg.connect) {
+        addEntry('out', 'CONNECT', msg.connect.name || '', null, msg);
+    }
+};
+
+window.__wsInterceptor.onMessage = function(msg) {
+    if (msg.id && msg.connect) {
+        addEntry('in', 'CONNECT OK', `client=${msg.connect.client || ''}`, null, msg);
+        return;
+    }
+
+    if (msg.id && pendingUnsubIds.has(msg.id)) {
+        pendingUnsubIds.delete(msg.id);
+        if (msg.error) {
+            addEntry('in', 'UNSUBSCRIBE ERROR', `code=${msg.error.code} ${msg.error.message}`, null, msg, 'var(--error)');
+        } else {
+            addEntry('in', 'UNSUBSCRIBE OK', '', null, msg);
+        }
+        return;
+    }
+
+    if (msg.id && pendingSubIds.has(msg.id)) {
+        pendingSubIds.delete(msg.id);
+
+        if (msg.error) {
+            addEntry('in', 'ERROR', `code=${msg.error.code} ${msg.error.message}`, null, msg, 'var(--error)');
+            return;
+        }
+
+        const s = msg.subscribe || {};
+        const phase = s.phase != null ? s.phase : 0;
+        currentPhase = phase;
+
+        if (s.id) subId = s.id;
+        // Protobuf omits zero/empty default values, so treat undefined as the default.
+        lastEpoch = s.epoch !== undefined ? s.epoch : '';
+        lastOffset = s.offset !== undefined ? s.offset : 0;
+        if (s.recovered != null) lastRecovered = s.recovered;
+
+        const stateCount = s.state ? s.state.length : 0;
+        const pubCount = s.publications ? s.publications.length : 0;
+        if (phase === 0 && pubCount > 0) recoveredPubs += pubCount;
+        const parts = [];
+        if (stateCount > 0) parts.push(`${stateCount} state entries`);
+        if (pubCount > 0) parts.push(`${pubCount} publications`);
+        if (s.cursor) parts.push(`has next page`);
+        if (s.recovered) parts.push('recovered=true');
+        if (s.offset != null) parts.push(`offset=${s.offset}`);
+        parts.push(`epoch=${s.epoch !== undefined ? (s.epoch === '' ? '""' : `"${s.epoch}"`) : '""'}`);
+        if (!s.cursor && stateCount === 0 && pubCount === 0) parts.push('empty');
+
+        addEntry('in', 'SUBSCRIBE OK', parts.join(', '), phase, msg);
+        updateInfoPanel();
+        return;
+    }
+
+    if (msg.push) {
+        const p = msg.push;
+        if (p.channel === 'visualizer' || p.id === subId) {
+            if (p.pub) {
+                const pub = p.pub;
+                if (pub.offset) lastOffset = pub.offset;
+                if (pub.epoch) lastEpoch = pub.epoch;
+                const removed = pub.removed ? ' [REMOVED]' : '';
+                let summary = `key="${pub.key || '?'}"${removed}, offset=${pub.offset || 0}`;
+                if (pub.epoch) summary += `, epoch="${pub.epoch}"`;
+                addEntry('in', 'PUBLICATION', summary, 0, msg);
+                updateInfoPanel();
+            }
+            if (p.unsubscribe) {
+                const u = p.unsubscribe;
+                const parts = [];
+                if (u.code != null) parts.push(`code=${u.code}`);
+                if (u.reason) parts.push(u.reason);
+                addEntry('in', 'UNSUBSCRIBE', parts.join(' ') || 'server-initiated', null, msg, 'var(--error)');
+            }
+        }
+    }
+};
+
+window.__wsInterceptor.onOpen = function() {
+    addEntry('sys', 'WS OPEN', '', null, null, 'var(--live)');
+};
+
+window.__wsInterceptor.onClose = function(e) {
+    addEntry('sys', 'WS CLOSE', `code=${e.code}`, null, null, 'var(--error)');
+};
+
+// ─── Client lifecycle ───
+// Creates a brand-new Centrifuge client + subscription (no stale state).
+function createClient(opts) {
+    const limit = (opts && opts.pageSize) || pageSize;
+
+    // Tear down previous client completely.
+    if (centrifuge) {
+        centrifuge.disconnect();
+        centrifuge = null;
+        sub = null;
+    }
+
+    // Reset sync metrics for the new client.
+    roundTrips = 0;
+    syncStartMs = null;
+    syncEndMs = null;
+    recoveredPubs = 0;
+    pendingSubIds.clear();
+    subId = null;
+    updateInfoPanel();
+
+    centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket', {
+        debug: false,
+        name: 'visualizer'
+    });
+
+    centrifuge.on('connected', () => setConnectionStatus('connected'));
+    centrifuge.on('connecting', () => setConnectionStatus('connecting'));
+    centrifuge.on('disconnected', () => {
+        setConnectionStatus('disconnected');
+        currentPhase = null;
+        updateInfoPanel();
+    });
+
+    sub = centrifuge.newMapSubscription('visualizer', {
+        pageSize: limit,
+        unrecoverableStrategy: 'from_scratch'
+    });
+
+    sub.on('subscribed', onSubscribed);
+    sub.on('publication', onPublication);
+    sub.on('error', onSubError);
+
+    sub.subscribe();
+    centrifuge.connect();
+}
+
+// Wait until subscription reaches 'subscribed' state (or timeout).
+function waitSubscribed(timeoutMs) {
+    return new Promise((resolve) => {
+        if (sub && sub.state === 'subscribed') return resolve();
+        const onSub = () => { sub.off('subscribed', onSub); resolve(); };
+        sub.on('subscribed', onSub);
+        setTimeout(() => { sub.off('subscribed', onSub); resolve(); }, timeoutMs || 3000);
+    });
+}
+
+// ─── Shared subscription event handlers ───
+function onSubscribed(ctx) {
+    syncEndMs = performance.now();
+    // On successful recovery, keep existing state — stream catch-up fills gaps.
+    // Otherwise (fresh join or from_scratch), replace state entirely.
+    if (!ctx.recovered) {
+        currentState.clear();
+        if (ctx.state) {
+            for (const entry of ctx.state) {
+                if (entry.key && entry.data) {
+                    currentState.set(entry.key, entry.data);
+                }
+            }
+        }
+    }
+    currentPhase = 0;
+    const elapsed = syncStartMs != null ? (syncEndMs - syncStartMs).toFixed(0) : null;
+    if (elapsed != null) {
+        const parts = [`${currentState.size.toLocaleString()} keys in state`];
+        if (recoveredPubs > 0) parts.push(`+${recoveredPubs} from stream catch-up`);
+        addStep(`Subscribed — ${parts.join(', ')}, synced in ${elapsed} ms (${roundTrips} round trips)`, 'client');
+    }
+    updateInfoPanel();
+}
+
+function onPublication(ctx) {
+    if (!ctx.key) return;
+    if (ctx.removed) currentState.delete(ctx.key);
+    else if (ctx.data) currentState.set(ctx.key, ctx.data);
+    updateInfoPanel();
+}
+
+function onSubError(ctx) {
+    addEntry('sys', 'SUB ERROR', `code=${ctx.error?.code} ${ctx.error?.message || ''}`, null, ctx, 'var(--error)');
+}
+
+// ─── API Helpers ───
+async function apiCall(method, url, body) {
+    const opts = { method };
+    if (body !== undefined) {
+        opts.headers = { 'Content-Type': 'application/json' };
+        opts.body = JSON.stringify(body);
+    }
+    const res = await fetch(url, opts);
+    if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`${res.status}: ${text.trim()}`);
+    }
+    return res.json();
+}
+
+async function apiPopulate(n) {
+    const count = n || parseInt(document.getElementById('populateCount').value) || 10;
+    if (!n && document.getElementById('populateCount').value) {
+        localStorage.setItem('viz_populateCount', document.getElementById('populateCount').value);
+    }
+    addStep(`Populating ${count.toLocaleString()} keys via HTTP...`, 'server');
+    await apiCall('POST', '/api/viz/populate', { count });
+}
+async function apiPublish() { await apiCall('POST', '/api/viz/publish', {}); }
+async function apiRemove() {
+    const firstKey = currentState.keys().next().value;
+    if (firstKey) await apiCall('POST', '/api/viz/remove', { key: firstKey });
+}
+async function apiClear() {
+    const numKeys = currentState.size;
+    await apiCall('POST', '/api/viz/clear', {});
+    addStep(`Cleared channel via HTTP (had ${numKeys.toLocaleString()} keys in local state)`, 'server');
+    showToast('Channel cleared', `Removed ${numKeys.toLocaleString()} key${numKeys !== 1 ? 's' : ''} from state`);
+}
+
+// ─── Manual Controls ───
+function doDisconnect() { if (centrifuge) centrifuge.disconnect(); }
+function doReconnect() {
+    if (centrifuge) {
+        roundTrips = 0;
+        syncStartMs = null;
+        syncEndMs = null;
+        recoveredPubs = 0;
+        updateInfoPanel();
+        centrifuge.disconnect();
+        centrifuge.connect();
+    }
+}
+function doResubscribe() {
+    if (!sub) return;
+    sub.unsubscribe();
+    roundTrips = 0;
+    syncStartMs = null;
+    syncEndMs = null;
+    recoveredPubs = 0;
+    updateInfoPanel();
+    sub.subscribe();
+}
+function doRecreate() {
+    if (!centrifuge) { createClient(); return; }
+    if (sub) {
+        sub.removeAllListeners();
+        sub.unsubscribe();
+        centrifuge.removeSubscription(sub);
+    }
+    pendingSubIds.clear();
+    subId = null;
+    roundTrips = 0;
+    syncStartMs = null;
+    syncEndMs = null;
+    recoveredPubs = 0;
+    currentState.clear();
+    updateInfoPanel();
+
+    sub = centrifuge.newMapSubscription('visualizer', {
+        pageSize: pageSize,
+        unrecoverableStrategy: 'from_scratch'
+    });
+    sub.on('subscribed', onSubscribed);
+    sub.on('publication', onPublication);
+    sub.on('error', onSubError);
+    sub.subscribe();
+}
+
+function updatePageSize() {
+    pageSize = parseInt(document.getElementById('pageSizeSelect').value) || 10;
+    localStorage.setItem('viz_pageSize', pageSize);
+}
+
+function updateLatency() {
+    wsLatency = parseInt(document.getElementById('latencySelect').value) || 0;
+    window.__wsInterceptor.latency = wsLatency;
+    localStorage.setItem('viz_latency', wsLatency);
+}
+
+function loadSettings() {
+    const savedPageSize = localStorage.getItem('viz_pageSize');
+    if (savedPageSize) {
+        pageSize = parseInt(savedPageSize) || 10;
+        document.getElementById('pageSizeSelect').value = String(pageSize);
+    }
+    const savedPopulate = localStorage.getItem('viz_populateCount');
+    if (savedPopulate) {
+        document.getElementById('populateCount').value = savedPopulate;
+    }
+    const savedLatency = localStorage.getItem('viz_latency');
+    if (savedLatency) {
+        wsLatency = parseInt(savedLatency) || 0;
+        window.__wsInterceptor.latency = wsLatency;
+        document.getElementById('latencySelect').value = String(wsLatency);
+    }
+}
+
+// ─── Scenarios ───
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function disableScenarios(disabled) {
+    scenarioRunning = disabled;
+    for (let i = 1; i <= 6; i++) document.getElementById('s' + i).disabled = disabled;
+}
+
+async function runScenario(n) {
+    if (scenarioRunning) return;
+    disableScenarios(true);
+    showScenarioBanner(n);
+    try {
+        switch (n) {
+            case 1: await scenarioFreshJoin(); break;
+            case 2: await scenarioSmallState(); break;
+            case 3: await scenarioPaginatedJoin(); break;
+            case 4: await scenarioSeamlessRecovery(); break;
+            case 5: await scenarioStreamRecovery(); break;
+            case 6: await scenarioFullResync(); break;
+        }
+    } catch (e) {
+        addEntry('sys', 'SCENARIO ERROR', e.message, null, null, 'var(--error)');
+    }
+    await sleep(500);
+    disableScenarios(false);
+}
+
+// ── 1. Fresh Join ──
+async function scenarioFreshJoin() {
+    resetTimeline();
+
+    addStep('Clearing channel via HTTP', 'server');
+    await apiCall('POST', '/api/viz/clear', {});
+    await sleep(200);
+
+    addStep('Creating new client and subscribing (expect: 1 round trip, 0 keys)', 'client');
+    createClient();
+    await waitSubscribed(3000);
+}
+
+// ── 2. Small State ──
+async function scenarioSmallState() {
+    resetTimeline();
+
+    addStep('Clearing channel via HTTP', 'server');
+    await apiCall('POST', '/api/viz/clear', {});
+    await sleep(100);
+
+    addStep('Populating 5 keys via HTTP', 'server');
+    await apiCall('POST', '/api/viz/populate', { count: 5 });
+    await sleep(200);
+
+    addStep('Creating new client and subscribing (expect: 1 round trip, 5 keys)', 'client');
+    createClient();
+    await waitSubscribed(3000);
+}
+
+// ── 3. Paginated Join ──
+async function scenarioPaginatedJoin() {
+    resetTimeline();
+    pageSize = 10;
+    document.getElementById('pageSizeSelect').value = '10';
+
+    addStep('Clearing channel via HTTP', 'server');
+    await apiCall('POST', '/api/viz/clear', {});
+    await sleep(100);
+
+    addStep('Populating 50 keys via HTTP', 'server');
+    await apiCall('POST', '/api/viz/populate', { count: 50 });
+    await sleep(300);
+
+    addStep('Creating new client with limit=10 (expect: ~5 STATE pages, then LIVE)', 'client');
+    createClient({ pageSize: 10 });
+    await waitSubscribed(8000);
+}
+
+// ── 4. Seamless Recovery ──
+async function scenarioSeamlessRecovery() {
+    resetTimeline();
+
+    addStep('Creating new client and subscribing to establish position', 'client');
+    createClient();
+    await waitSubscribed(3000);
+
+    // Now reset the timeline but keep the client (we need its state).
+    resetTimeline();
+
+    addStep('Disconnecting WebSocket', 'client');
+    centrifuge.disconnect();
+    await sleep(1000);
+
+    addStep('Reconnecting (expect: recover=true, 0 missed publications)', 'client');
+    centrifuge.connect();
+    await waitSubscribed(3000);
+}
+
+// ── 5. Stream Recovery ──
+async function scenarioStreamRecovery() {
+    resetTimeline();
+
+    addStep('Creating new client and subscribing to establish position', 'client');
+    createClient();
+    await waitSubscribed(3000);
+
+    resetTimeline();
+
+    addStep('Disconnecting WebSocket', 'client');
+    centrifuge.disconnect();
+    await sleep(300);
+
+    addStep('Publishing 10 items via HTTP while client is offline', 'server');
+    for (let i = 0; i < 10; i++) {
+        await apiCall('POST', '/api/viz/publish', { key: `recovery_${i}`, value: { i, ts: Date.now() } });
+    }
+    await sleep(200);
+
+    addStep('Reconnecting (expect: recover=true, 10 publications in catch-up)', 'client');
+    centrifuge.connect();
+    await waitSubscribed(3000);
+}
+
+// ── 6. Full Resync ──
+async function scenarioFullResync() {
+    resetTimeline();
+
+    addStep('Clearing channel and populating 3 keys', 'server');
+    await apiCall('POST', '/api/viz/clear', {});
+    await sleep(100);
+    await apiCall('POST', '/api/viz/populate', { count: 3 });
+    await sleep(100);
+
+    addStep('Creating new client and subscribing to establish position', 'client');
+    createClient();
+    await waitSubscribed(3000);
+
+    resetTimeline();
+
+    addStep('Disconnecting WebSocket', 'client');
+    centrifuge.disconnect();
+    await sleep(300);
+
+    addStep('Populating 200 items via HTTP (overflows StreamSize=30)', 'server');
+    await apiCall('POST', '/api/viz/populate', { count: 200 });
+    await sleep(300);
+
+    addStep('Reconnecting (expect: stream overflow → error 112 → full STATE resync)', 'client');
+    centrifuge.connect();
+    await waitSubscribed(10000);
+}
+
+// ─── Init ───
+loadSettings();
+createClient();
+updateInfoPanel();
+</script>
+</body>
+</html>

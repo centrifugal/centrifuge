@@ -6,6 +6,80 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// MapMode controls the synchronization, recovery, and data lifecycle behavior of a map channel.
+type MapMode int
+
+const (
+	// MapModeEphemeral – PUB/SUB only, no stream. Missed updates during disconnect
+	// are lost — reconnect triggers full state resync. Entries expire after KeyTTL.
+	MapModeEphemeral MapMode = iota + 1
+	// MapModeRecoverable – stream-backed with offset-based recovery. Entries expire after
+	// KeyTTL. TTL removal events are logged to the stream (recoverable delivery).
+	MapModeRecoverable
+	// MapModePersistent – stream-backed with offset-based recovery. Entries live
+	// forever (until explicitly removed). No TTL, no expiry.
+	MapModePersistent
+)
+
+// IsEphemeral returns true for MapModeEphemeral.
+func (m MapMode) IsEphemeral() bool { return m == MapModeEphemeral }
+
+// HasStream returns true for modes that maintain a recovery stream (Recoverable, Persistent).
+func (m MapMode) HasStream() bool { return m == MapModeRecoverable || m == MapModePersistent }
+
+// HasExpiry returns true for modes where entries expire via TTL (Ephemeral, Recoverable).
+func (m MapMode) HasExpiry() bool { return m == MapModeEphemeral || m == MapModeRecoverable }
+
+// MapChannelOptions contains configuration for map channels. Every map channel
+// must have Mode explicitly set — zero value is an error.
+//
+// Note on Ephemeral mode: TTL removal events are delivered via pub/sub but
+// NOT logged to a stream (there is no stream). If a client misses the removal
+// pub/sub message (e.g., during a brief disconnect), it will retain stale entries
+// until the next full state resync. This is expected behavior for ephemeral use
+// cases like cursor tracking — use Recoverable mode for data requiring consistency.
+type MapChannelOptions struct {
+	// Mode controls synchronization, recovery, and data lifecycle.
+	// Required. Zero value = not configured = error.
+	Mode MapMode
+	// KeyTTL sets automatic expiration for entries in this channel.
+	// Required when Mode.HasExpiry() (must be > 0).
+	// Must be 0 when Mode is Persistent.
+	KeyTTL time.Duration
+	// StreamSize sets the maximum number of entries in the recovery stream.
+	// Zero = auto-derived (100) for Recoverable/Persistent. Must be 0 for Ephemeral.
+	StreamSize int
+	// StreamTTL sets how long stream entries are retained.
+	// Zero = auto-derived (1 minute) for Recoverable/Persistent. Must be 0 for Ephemeral.
+	StreamTTL time.Duration
+	// MetaTTL sets how long stream metadata (epoch, offset) is retained.
+	// Zero = auto-derived: Recoverable: StreamTTL*10, Persistent: permanent (no expiry).
+	// Must be 0 for Ephemeral.
+	MetaTTL time.Duration
+	// DefaultPageSize sets the default number of items per page when
+	// the client does not specify a page size. Zero means default (100).
+	DefaultPageSize int
+	// MinPageSize sets the minimum number of items per page in map
+	// subscription pagination requests. This prevents excessive round trips when
+	// clients send very small page sizes. Zero means default (100).
+	MinPageSize int
+	// MaxPageSize sets the maximum number of items a client can request
+	// per page in map subscription pagination requests. Zero means default (1000).
+	MaxPageSize int
+	// LiveTransitionMaxPublicationLimit sets the maximum number of stream publications
+	// to recover during map subscription live transition. If limit is reached,
+	// ErrorUnrecoverablePosition is returned. Zero means MaxPageSize.
+	LiveTransitionMaxPublicationLimit int
+	// SubscribeCatchUpTimeout sets the maximum time a client can spend paginating
+	// through state and stream phases before going live. If exceeded, the client is
+	// disconnected with DisconnectSlow. Zero means 5 seconds (default). Negative
+	// means no timeout.
+	SubscribeCatchUpTimeout time.Duration
+	// ordered enables score-based ordering in the state. When true, entries
+	// are returned sorted by Score (descending).
+	ordered bool
+}
+
 // Config contains Node configuration options.
 type Config struct {
 	// Version of server – if set will be sent to a client on connection
@@ -84,7 +158,8 @@ type Config struct {
 	// By default, no limit used.
 	RecoveryMaxPublicationLimit int
 	// UseSingleFlight allows turning on mode where singleflight will be automatically used
-	// for Node.History (including recovery) and Node.Presence/Node.PresenceStats calls.
+	// for Node.History (including recovery), Node.Presence/Node.PresenceStats,
+	// and Node.MapStateRead/Node.MapStreamRead/Node.MapStats calls.
 	UseSingleFlight bool
 	// HistoryMetaTTL sets a time of stream meta key expiration in Redis. Stream
 	// meta key is a Redis HASH that contains top offset in channel and epoch value.
@@ -135,6 +210,130 @@ type Config struct {
 	// ClientTimerScheduler if set will be used for scheduling client timers.
 	// This is an EXPERIMENTAL API.
 	ClientTimerScheduler TimerScheduler
+
+	// Map contains options for map subscriptions.
+	// This is an EXPERIMENTAL API.
+	Map MapConfig
+	// SharedPoll contains options for shared poll subscriptions.
+	// This is an EXPERIMENTAL API.
+	SharedPoll SharedPollConfig
+}
+
+type MapConfig struct {
+	// GetMapBroker when set allows returning a custom MapBroker to use for a specific channel.
+	// This enables sharding map state across multiple databases based on channel. If not set
+	// then the default Node's MapBroker (set via SetMapBroker) is always used for all channels.
+	// It's the responsibility of an application to properly initialize and shutdown all MapBroker
+	// instances. When GetMapBroker returns false as the second argument then Node will use the
+	// default MapBroker for the channel.
+	GetMapBroker func(channel string) (MapBroker, bool)
+	// GetMapChannelOptions returns channel options for map channels.
+	// Required for map channel operations. If nil, any map operation returns an error.
+	// Each channel must have SyncMode and RetentionMode explicitly set.
+	// NOTE: this callback is invoked on every broker operation (Publish, Remove,
+	// ReadState, ReadStream, etc.) — it must be fast and should not perform I/O.
+	// This is an EXPERIMENTAL API.
+	GetMapChannelOptions func(channel string) MapChannelOptions
+}
+
+type SharedPollConfig struct {
+	// GetSharedPollChannelOptions returns per-channel options for shared poll
+	// channels. Required for shared poll operations — if nil, any shared poll
+	// subscribe returns an error. Called when a new channel first appears in
+	// SharedPollManager. Must be fast, no I/O.
+	// This is an EXPERIMENTAL API.
+	GetSharedPollChannelOptions func(channel string) (SharedPollChannelOptions, bool)
+	// ConcurrencyLimit sets the maximum number of concurrent backend
+	// calls across all shared poll channels. All channels share this pool.
+	// Zero means 64.
+	ConcurrencyLimit int
+}
+
+// SharedPollNotificationItem represents a lightweight notification that a specific
+// key in a channel has changed. Used to trigger immediate backend polls for
+// just the affected keys instead of waiting for the next timer-based cycle.
+type SharedPollNotificationItem struct {
+	Channel string `json:"channel"`
+	Key     string `json:"key"`
+}
+
+// SharedPollNotification is the top-level JSON envelope for notifications
+// published to the notification pub/sub channel.
+type SharedPollNotification struct {
+	Items []SharedPollNotificationItem `json:"items"`
+}
+
+const (
+	// SharedPollModeVersionless is the versionless mode where the backend
+	// returns {key, data} without versions. Centrifugo detects changes via content hash
+	// and generates internal synthetic versions. This is the default mode (also "").
+	SharedPollModeVersionless = "versionless"
+	// SharedPollModeVersioned is the versioned mode where the backend
+	// returns items with {key, data, version}. Versions are included in requests,
+	// allowing the backend to skip unchanged items. Enables direct publish and
+	// cached initial data.
+	SharedPollModeVersioned = "versioned"
+)
+
+// SharedPollChannelOptions configures a shared poll channel.
+type SharedPollChannelOptions struct {
+	// MaxKeysPerConnection limits how many keys a single connection
+	// can track in this channel. Zero value means 5000.
+	MaxKeysPerConnection int
+	// RefreshInterval sets how often the refresh worker calls OnSharedPoll.
+	// Zero value means 10 * time.Second.
+	RefreshInterval time.Duration
+	// RefreshBatchSize sets the maximum number of item keys per OnSharedPoll call.
+	// Zero value means 1000.
+	RefreshBatchSize int
+	// Mode controls request format.
+	// "versionless" (default, also ""): backend returns {key, data} without versions.
+	//   Centrifugo detects changes via content hash and generates internal versions.
+	// "versioned": backend returns {key, data, version}. Versions are included in
+	//   requests, allowing the backend to skip unchanged items.
+	Mode string
+	// KeepLatestData controls whether TrackedEntry stores the last data payload
+	// per item. Default false.
+	KeepLatestData bool
+	// RefreshIntervalFn, if set, is called after each refresh cycle with the
+	// cycle's wall time, and returns the interval before the next cycle. Overrides
+	// static RefreshInterval. Used by Centrifugo PRO for adaptive backpressure.
+	RefreshIntervalFn func(cycleDuration time.Duration) time.Duration
+	// CallTimeout sets the maximum duration for each OnSharedPoll callback invocation.
+	// Zero value means 30 * time.Second.
+	CallTimeout time.Duration
+	// ChannelShutdownDelay is the delay before shutting down a channel
+	// state after the last item is untracked. Zero means default (1s).
+	// Set to -1 for immediate shutdown with no delay.
+	ChannelShutdownDelay time.Duration
+	// NotificationBatchMaxSize sets the maximum number of notified keys to
+	// accumulate before triggering an immediate backend poll. The batch fires
+	// when either this size or NotificationBatchMaxDelay is reached first.
+	// Zero means 50.
+	NotificationBatchMaxSize int
+	// NotificationBatchMaxDelay sets the maximum time to wait while
+	// accumulating notified keys before triggering an immediate backend poll.
+	// Zero means 50ms.
+	NotificationBatchMaxDelay time.Duration
+	// TrackExpiredExtraDelay is extra time given to client to refresh track signature
+	// after it expires. Keys not refreshed within this delay are silently removed
+	// from server state. Zero means 25 * time.Second.
+	TrackExpiredExtraDelay time.Duration
+	// PublishEnabled enables cross-node distribution for SharedPollPublish.
+	// When true, SharedPollManager subscribes to the Broker (via node.getBroker)
+	// for this channel, allowing SharedPollPublish to distribute publications
+	// to all nodes. When false, SharedPollPublish is local-only.
+	PublishEnabled bool
+}
+
+func (o SharedPollChannelOptions) isVersionless() bool {
+	return o.Mode == "" || o.Mode == SharedPollModeVersionless
+}
+
+func (o SharedPollChannelOptions) toKeyedChannelOptions() keyedChannelOptions {
+	return keyedChannelOptions{
+		MaxTrackedPerConnection: o.MaxKeysPerConnection,
+	}
 }
 
 const (

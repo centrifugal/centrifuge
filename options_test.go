@@ -158,6 +158,76 @@ func TestWithDisconnectSession(t *testing.T) {
 	require.Equal(t, "session", opts.sessionID)
 }
 
+func TestWithKey(t *testing.T) {
+	opt := WithKey("mykey")
+	opts := &PublishOptions{}
+	opt(opts)
+	require.Equal(t, "mykey", opts.Key)
+}
+
+func TestWithClientInfo(t *testing.T) {
+	info := &ClientInfo{UserID: "user1"}
+	opt := WithClientInfo(info)
+	opts := &PublishOptions{}
+	opt(opts)
+	require.Equal(t, "user1", opts.ClientInfo.UserID)
+}
+
+func TestSubscriptionType_String(t *testing.T) {
+	require.Equal(t, "stream", SubscriptionTypeStream.String())
+	require.Equal(t, "map", SubscriptionTypeMap.String())
+	require.Equal(t, "map_clients", SubscriptionTypeMapClients.String())
+	require.Equal(t, "map_users", SubscriptionTypeMapUsers.String())
+	require.Equal(t, "shared_poll", SubscriptionTypeSharedPoll.String())
+	require.Equal(t, "unknown", SubscriptionType(99).String())
+}
+
+func TestSubscriptionType_IsMapPresence(t *testing.T) {
+	require.False(t, SubscriptionTypeStream.IsMapPresence())
+	require.False(t, SubscriptionTypeMap.IsMapPresence())
+	require.True(t, SubscriptionTypeMapClients.IsMapPresence())
+	require.True(t, SubscriptionTypeMapUsers.IsMapPresence())
+	require.False(t, SubscriptionTypeSharedPoll.IsMapPresence())
+}
+
+func TestWithRecoverSince(t *testing.T) {
+	opt := WithRecoverSince(&StreamPosition{Offset: 10, Epoch: "abc"})
+	opts := &SubscribeOptions{}
+	opt(opts)
+	require.Equal(t, uint64(10), opts.RecoverSince.Offset)
+	require.Equal(t, "abc", opts.RecoverSince.Epoch)
+}
+
+func TestWithHistoryFilter(t *testing.T) {
+	opt := WithHistoryFilter(HistoryFilter{Limit: 5, Reverse: true})
+	opts := &HistoryOptions{}
+	opt(opts)
+	require.Equal(t, 5, opts.Filter.Limit)
+	require.True(t, opts.Filter.Reverse)
+}
+
+func TestWithSince(t *testing.T) {
+	opt := WithSince(&StreamPosition{Offset: 7, Epoch: "xyz"})
+	opts := &HistoryOptions{}
+	opt(opts)
+	require.Equal(t, uint64(7), opts.Filter.Since.Offset)
+	require.Equal(t, "xyz", opts.Filter.Since.Epoch)
+}
+
+func TestWithReverse(t *testing.T) {
+	opt := WithReverse(true)
+	opts := &HistoryOptions{}
+	opt(opts)
+	require.True(t, opts.Filter.Reverse)
+}
+
+func TestWithHistoryMetaTTL(t *testing.T) {
+	opt := WithHistoryMetaTTL(time.Hour)
+	opts := &HistoryOptions{}
+	opt(opts)
+	require.Equal(t, time.Hour, opts.MetaTTL)
+}
+
 func TestRefreshOptions(t *testing.T) {
 	refreshOpts := []RefreshOption{
 		WithRefreshClient("client"),

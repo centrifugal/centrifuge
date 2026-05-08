@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Map presence — 1M members</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+    <h1>Map presence — 1,000,000 members in one browser tab</h1>
+    <div class="subtitle">
+        <a href="index.html">← back</a> ·
+        Stable id pool: keys <code>c_0</code>…<code>c_1048575</code>, each mapped to a single pixel on the 1024 × 1024 grid.
+        Bulk fill goes through canvas <code>ImageData</code> — 1M <code>fillRect</code> calls would block for seconds.
+    </div>
+    <div class="toolbar">
+        <span class="status-pill" id="status"><span class="dot"></span><span id="statusText">Connecting…</span></span>
+        <div class="stat"><span class="label">Total users</span><span class="value" id="totalUsers">—</span></div>
+        <div class="stat"><span class="label">Online</span><span class="value" id="totalCount">0</span></div>
+        <div class="stat"><span class="label">Joins/s</span><span class="value" id="joinRate">0</span></div>
+        <div class="stat"><span class="label">Leaves/s</span><span class="value" id="leaveRate">0</span></div>
+        <div class="stat"><span class="label">Updates</span><span class="value" id="totalUpdates">0</span></div>
+        <div class="config">
+            <label for="pageSize">Page size:</label>
+            <input id="pageSize" type="number" min="1" max="10000">
+            <button id="apply">Re-subscribe</button>
+        </div>
+    </div>
+</header>
+<main>
+    <div class="canvas-wrap">
+        <canvas id="grid"></canvas>
+        <div class="progress"><div id="syncBar"></div></div>
+        <div class="legend">
+            <span><span class="swatch" style="background:#3a7bd5"></span>Connected member</span>
+            <span><span class="swatch" style="background:#80e27e"></span>Just joined</span>
+            <span><span class="swatch" style="background:#ff8a80"></span>Just left</span>
+            <span>Each pixel = one connection in the <code>map_clients</code> presence channel.</span>
+        </div>
+    </div>
+</main>
+
+<script src="http://localhost:2000/centrifuge.js"></script>
+<script>
+window.GRID_CONFIG = {
+    channel: 'clients:massive_1m',
+    poolSize: 1048576,
+    cols: 1024,
+    rows: 1024,
+    cellFill: 1,
+    cellGap: 0,
+    useImageData: true
+};
+</script>
+<script src="grid.js"></script>
+</body>
+</html>

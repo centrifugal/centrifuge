@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Map presence — massive demo</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+    <h1>Map presence — massive demo</h1>
+    <div class="subtitle">
+        A single browser tab subscribes to a <code>map_clients</code> presence channel
+        and sees the entire population synchronized over the protocol. Server pushes
+        synthetic entries directly via the broker — no real WebSocket clients are
+        used to generate load.
+    </div>
+</header>
+<main>
+    <div class="cards">
+        <a class="card" href="100k.html">
+            <div class="scale">100,000</div>
+            <div class="desc">
+                Pegboard view — 320 × 320 grid, 2 px cell + 1 px gap. Each member
+                is a distinct rectangle; cell color shows occupancy.
+            </div>
+        </a>
+        <a class="card" href="1m.html">
+            <div class="scale">1,000,000</div>
+            <div class="desc">
+                Heatmap view — 1024 × 1024 grid, one pixel per member. At this
+                density individual cells aren't visually separable; bulk fill
+                via canvas <code>ImageData</code> for performance.
+            </div>
+        </a>
+    </div>
+</main>
+</body>
+</html>

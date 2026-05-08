@@ -10,6 +10,7 @@ import (
 type Item struct {
 	Data      []byte
 	Channel   string
+	Key       string
 	FrameType protocol.FrameType
 }
 

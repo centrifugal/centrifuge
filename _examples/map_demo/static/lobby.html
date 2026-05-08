@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Lobby - Map Subscriptions Demo</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        h1 {
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: #888;
+            margin-bottom: 20px;
+        }
+        .status {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #f44;
+        }
+        .status-dot.connected {
+            background: #4f4;
+        }
+        .main-content {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            gap: 30px;
+        }
+        /* Sidebar - Online Users */
+        .sidebar {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
+            height: fit-content;
+        }
+        .sidebar h2 {
+            font-size: 16px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .online-count {
+            background: #4caf50;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 12px;
+        }
+        .user-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .user-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 5px;
+            background: rgba(255,255,255,0.05);
+        }
+        .user-item.me {
+            background: rgba(79, 195, 247, 0.2);
+            border: 1px solid rgba(79, 195, 247, 0.3);
+        }
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .user-name {
+            flex: 1;
+            font-size: 14px;
+        }
+        /* Main Area */
+        .main-area {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        /* Create Game Section */
+        .create-game {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
+        }
+        .create-game h2 {
+            font-size: 16px;
+            margin-bottom: 15px;
+        }
+        .create-form {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .create-form input, .create-form select {
+            padding: 10px 15px;
+            border-radius: 8px;
+            border: none;
+            font-size: 14px;
+            background: rgba(255,255,255,0.1);
+            color: white;
+        }
+        .create-form input::placeholder {
+            color: #888;
+        }
+        .create-form input {
+            flex: 1;
+            min-width: 200px;
+        }
+        .btn {
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: none;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .btn-primary:hover {
+            transform: scale(1.02);
+        }
+        .btn-danger {
+            background: #f44336;
+            color: white;
+        }
+        .btn-danger:hover {
+            background: #d32f2f;
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        /* Games List */
+        .games-section {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
+            flex: 1;
+        }
+        .games-section h2 {
+            font-size: 16px;
+            margin-bottom: 15px;
+        }
+        .games-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 15px;
+        }
+        .game-card {
+            background: rgba(255,255,255,0.08);
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.2s;
+        }
+        .game-card:hover {
+            background: rgba(255,255,255,0.12);
+        }
+        .game-card.my-game {
+            border: 1px solid rgba(79, 195, 247, 0.3);
+        }
+        .game-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .game-name {
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .game-id {
+            font-size: 12px;
+            color: #888;
+        }
+        .slots-container {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .slot {
+            flex: 1;
+            background: rgba(0,0,0,0.2);
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+            min-height: 80px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 2px solid transparent;
+        }
+        .slot:hover:not(.occupied) {
+            background: rgba(255,255,255,0.1);
+            border-color: rgba(255,255,255,0.2);
+        }
+        .slot.occupied {
+            background: rgba(76, 175, 80, 0.2);
+            cursor: default;
+        }
+        .slot.occupied.slot-claimed {
+            animation: slot-pop 0.4s ease;
+        }
+        @keyframes slot-pop {
+            0%   { transform: scale(0.85); opacity: 0.5; }
+            50%  { transform: scale(1.05); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .slot.mine {
+            background: rgba(79, 195, 247, 0.2);
+            border-color: rgba(79, 195, 247, 0.5);
+        }
+        .slot-label {
+            font-size: 11px;
+            color: #888;
+            margin-bottom: 5px;
+        }
+        .slot-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            margin-bottom: 5px;
+        }
+        .slot-name {
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .slot-empty {
+            font-size: 24px;
+            color: #555;
+        }
+        .game-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .no-games {
+            text-align: center;
+            color: #888;
+            padding: 40px;
+        }
+        /* Game Started Overlay */
+        .game-started-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .game-started-modal {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border-radius: 20px;
+            padding: 40px;
+            text-align: center;
+            max-width: 400px;
+            animation: scaleIn 0.3s ease;
+        }
+        @keyframes scaleIn {
+            from { transform: scale(0.8); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        .game-started-modal h2 {
+            color: #4caf50;
+            margin-bottom: 20px;
+            font-size: 28px;
+        }
+        .game-started-players {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .game-started-player {
+            text-align: center;
+        }
+        .game-started-player .slot-avatar {
+            width: 60px;
+            height: 60px;
+            font-size: 24px;
+            margin: 0 auto 10px;
+        }
+        .vs-text {
+            font-size: 24px;
+            font-weight: bold;
+            color: #555;
+            display: flex;
+            align-items: center;
+        }
+        .hidden {
+            display: none !important;
+        }
+        .back-link {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            color: #888;
+            text-decoration: none;
+        }
+        .back-link:hover {
+            color: white;
+        }
+        /* Player name input */
+        .player-name-section {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .player-name-section label {
+            font-size: 14px;
+            color: #888;
+        }
+        .player-name-section input {
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: none;
+            font-size: 14px;
+            background: rgba(255,255,255,0.1);
+            color: white;
+            width: 200px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Game Lobby</h1>
+            <p class="subtitle">Create and join multiplayer games with real-time synchronization</p>
+            <div class="status">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Connecting...</span>
+            </div>
+        </header>
+
+        <div class="player-name-section">
+            <label>Your Name:</label>
+            <input type="text" id="playerName" placeholder="Enter your name" maxlength="20">
+        </div>
+
+        <div class="main-content">
+            <aside class="sidebar">
+                <h2>Clients <span class="online-count" id="clientsCount">0</span></h2>
+                <p style="font-size: 11px; color: #666; margin: -10px 0 10px;">:clients channel (key=clientId)</p>
+                <ul class="user-list" id="clientsList"></ul>
+
+                <h2 style="margin-top: 15px;">Unique Users <span class="online-count" id="usersCount">0</span></h2>
+                <p style="font-size: 11px; color: #666; margin: -10px 0 10px;">:users channel (key=userId)</p>
+                <ul class="user-list" id="usersList"></ul>
+            </aside>
+
+            <div class="main-area">
+                <section class="create-game">
+                    <h2>Create New Game</h2>
+                    <div class="create-form">
+                        <input type="text" id="gameName" placeholder="Game name (e.g., 'Quick Match')" maxlength="30">
+                        <select id="maxPlayers">
+                            <option value="2">2 Players</option>
+                            <option value="3">3 Players</option>
+                            <option value="4">4 Players</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="createGame()">Create Game</button>
+                    </div>
+                </section>
+
+                <section class="games-section">
+                    <h2>Available Games</h2>
+                    <div class="games-list" id="gamesList">
+                        <div class="no-games">No games available. Create one to get started!</div>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+
+    <div class="game-started-overlay hidden" id="gameStartedOverlay">
+        <div class="game-started-modal">
+            <h2>Game Starting!</h2>
+            <div class="game-started-players" id="gameStartedPlayers"></div>
+            <p>Get ready to play!</p>
+        </div>
+    </div>
+
+    <a href="/" class="back-link">← Back to demos</a>
+
+    <script src="http://localhost:2000/centrifuge.js"></script>
+    <script>
+        const userId = 'user_' + Math.random().toString(36).substr(2, 8);
+        let myClientId = null;
+
+        // State
+        const uniqueUsers = new Map(); // userId -> {userId}
+        const onlineClients = new Map(); // clientId -> {userId, name, color}
+        const availableGames = new Map(); // gameId -> GameInfo
+        const gameSubscriptions = new Map(); // gameId -> {sub, slots}
+        const mySlots = new Map(); // gameId -> slotNum
+        const justClaimed = new Set(); // "gameId:slot_N" — cleared after render
+
+        // Generate a stable color from a string identifier using HSL for pleasant colors.
+        function stringToColor(str) {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                hash = str.charCodeAt(i) + ((hash << 5) - hash);
+                hash = hash & hash;
+            }
+            const hue = Math.abs(hash) % 360;
+            return `hsl(${hue}, 70%, 50%)`;
+        }
+
+        function getPlayerName() {
+            return document.getElementById('playerName').value.trim() || 'Player ' + userId.substr(5, 4).toUpperCase();
+        }
+
+        // Initialize player name
+        document.getElementById('playerName').value = 'Player ' + userId.substr(5, 4).toUpperCase();
+
+        // Connect to Centrifuge
+        const centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket', {
+            name: userId
+        });
+
+        centrifuge.on('connected', (ctx) => {
+            // Clean up old entry if clientId changed (reconnection)
+            if (myClientId && myClientId !== ctx.client) {
+                onlineClients.delete(myClientId);
+            }
+            myClientId = ctx.client;
+            document.getElementById('statusDot').classList.add('connected');
+            document.getElementById('statusText').textContent = 'Connected';
+            // Presence will be populated from server data via subscriptions
+        });
+
+        centrifuge.on('connecting', () => {
+            document.getElementById('statusDot').classList.remove('connected');
+            document.getElementById('statusText').textContent = 'Connecting...';
+        });
+
+        centrifuge.on('disconnected', () => {
+            document.getElementById('statusDot').classList.remove('connected');
+            document.getElementById('statusText').textContent = 'Disconnected';
+        });
+
+        // Subscribe to games list (map channel)
+        // Fetches state in pages, then catches up from stream if needed.
+        const gamesSub = centrifuge.newMapSubscription('games');
+
+        gamesSub.on('sync', (ctx) => {
+            console.log('Synced games list');
+            // Fresh snapshot - clear old state and subscriptions.
+            availableGames.clear();
+            for (const [gameId, gameState] of gameSubscriptions) {
+                gameState.sub.unsubscribe();
+                centrifuge.removeSubscription(gameState.sub);
+            }
+            gameSubscriptions.clear();
+            mySlots.clear();
+
+            for (const pub of ctx.entries) {
+                if (pub.key && !pub.removed && pub.data) {
+                    availableGames.set(pub.key, pub.data);
+                    subscribeToGame(pub.key, pub.data.maxPlayers);
+                }
+            }
+            renderGames();
+        });
+
+        gamesSub.on('update', (ctx) => {
+            if (!ctx.key) return;
+
+            if (ctx.removed) {
+                availableGames.delete(ctx.key);
+                unsubscribeFromGame(ctx.key);
+            } else if (ctx.data) {
+                availableGames.set(ctx.key, ctx.data);
+                subscribeToGame(ctx.key, ctx.data.maxPlayers);
+            }
+            renderGames();
+        });
+
+        // Subscribe to clients:games channel for tracking individual connections.
+        // Key is clientId, contains full ClientInfo.
+        // Use this to see all connected browser tabs/sessions.
+        const clientsSub = centrifuge.newMapClientsSubscription('clients:games');
+
+        clientsSub.on('sync', (ctx) => {
+            console.log('Synced clients');
+            onlineClients.clear();
+            for (const pub of ctx.entries) {
+                if (pub.key && pub.info) {
+                    onlineClients.set(pub.key, {
+                        userId: pub.info.user,
+                        name: pub.info.user ? 'Player ' + pub.info.user.substr(5, 4).toUpperCase() : 'Anonymous',
+                        color: stringToColor(pub.info.user || pub.key)
+                    });
+                }
+            }
+            renderPresence();
+        });
+
+        clientsSub.on('update', (ctx) => {
+            console.log('Clients publication:', ctx);
+            if (!ctx.key) return;
+
+            if (ctx.removed) {
+                onlineClients.delete(ctx.key);
+            } else if (ctx.info) {
+                onlineClients.set(ctx.key, {
+                    userId: ctx.info.user,
+                    name: ctx.info.user ? 'Player ' + ctx.info.user.substr(5, 4).toUpperCase() : 'Anonymous',
+                    color: stringToColor(ctx.info.user || ctx.key)
+                });
+            }
+            renderPresence();
+        });
+
+        // Subscribe to users:games channel for tracking unique users.
+        // Key is userId, no ClientInfo (just key for uniqueness).
+        // Users expire via TTL - provides debounce for quick reconnects.
+        const usersSub = centrifuge.newMapUsersSubscription('users:games');
+
+        usersSub.on('sync', (ctx) => {
+            console.log('Synced users');
+            uniqueUsers.clear();
+            for (const pub of ctx.entries) {
+                if (pub.key) {
+                    uniqueUsers.set(pub.key, { userId: pub.key });
+                }
+            }
+            renderPresence();
+        });
+
+        usersSub.on('update', (ctx) => {
+            console.log('Users publication:', ctx);
+            if (!ctx.key) return;
+
+            if (ctx.removed) {
+                uniqueUsers.delete(ctx.key);
+            } else {
+                uniqueUsers.set(ctx.key, { userId: ctx.key });
+            }
+            renderPresence();
+        });
+
+        // Subscribe to a specific game channel
+        function subscribeToGame(gameId, maxPlayers) {
+            if (gameSubscriptions.has(gameId)) return;
+
+            const channel = 'game:' + gameId;
+            const sub = centrifuge.newMapSubscription(channel);
+
+            const gameState = {
+                sub: sub,
+                slots: {},
+                maxPlayers: maxPlayers
+            };
+
+            sub.on('sync', (ctx) => {
+                console.log('Synced game:', gameId);
+                gameState.slots = {};
+                mySlots.delete(gameId);
+                for (const pub of ctx.entries) {
+                    if (pub.key && pub.key.startsWith('slot_') && pub.data) {
+                        gameState.slots[pub.key] = pub.data;
+                        if (pub.data.userId === userId) {
+                            mySlots.set(gameId, pub.data.slot);
+                        }
+                    }
+                }
+                renderGames();
+            });
+
+            sub.on('update', (ctx) => {
+                if (ctx.key === 'game_event') {
+                    if (!ctx.removed && ctx.data && ctx.data.event === 'game_start') {
+                        showGameStarted(ctx.data.players);
+                    }
+                    return;
+                }
+
+                if (ctx.key && ctx.key.startsWith('slot_')) {
+                    if (ctx.removed) {
+                        const oldPlayer = gameState.slots[ctx.key];
+                        if (oldPlayer && oldPlayer.userId === userId) {
+                            mySlots.delete(gameId);
+                        }
+                        delete gameState.slots[ctx.key];
+                    } else if (ctx.data) {
+                        if (!gameState.slots[ctx.key]) {
+                            justClaimed.add(gameId + ':' + ctx.key);
+                        }
+                        gameState.slots[ctx.key] = ctx.data;
+                        if (ctx.data.userId === userId) {
+                            mySlots.set(gameId, ctx.data.slot);
+                        }
+                    }
+                    renderGames();
+                }
+            });
+
+            sub.subscribe();
+            gameSubscriptions.set(gameId, gameState);
+        }
+
+        function unsubscribeFromGame(gameId) {
+            const gameState = gameSubscriptions.get(gameId);
+            if (gameState) {
+                gameState.sub.unsubscribe();
+                centrifuge.removeSubscription(gameState.sub);
+                gameSubscriptions.delete(gameId);
+                mySlots.delete(gameId);
+            }
+        }
+
+        // Render functions
+        function renderPresence() {
+            // Render unique users (:users channel)
+            const usersList = document.getElementById('usersList');
+            const usersCount = document.getElementById('usersCount');
+
+            usersCount.textContent = uniqueUsers.size;
+
+            if (uniqueUsers.size === 0) {
+                usersList.innerHTML = '<li class="user-item" style="color: #888;">No users</li>';
+            } else {
+                let html = '';
+                for (const [uid, user] of uniqueUsers) {
+                    const isMe = uid === userId;
+                    const name = 'Player ' + uid.substr(5, 4).toUpperCase();
+                    html += `
+                        <li class="user-item ${isMe ? 'me' : ''}">
+                            <div class="user-avatar" style="background: ${stringToColor(uid)}">${name.charAt(0).toUpperCase()}</div>
+                            <span class="user-name">${name}${isMe ? ' (you)' : ''}</span>
+                        </li>
+                    `;
+                }
+                usersList.innerHTML = html;
+            }
+
+            // Render connections (:clients channel)
+            const clientsList = document.getElementById('clientsList');
+            const clientsCount = document.getElementById('clientsCount');
+
+            clientsCount.textContent = onlineClients.size;
+
+            if (onlineClients.size === 0) {
+                clientsList.innerHTML = '<li class="user-item" style="color: #888;">No clients</li>';
+            } else {
+                let html = '';
+                for (const [clientId, client] of onlineClients) {
+                    const isMe = clientId === myClientId;
+                    html += `
+                        <li class="user-item ${isMe ? 'me' : ''}">
+                            <div class="user-avatar" style="background: ${client.color}">${client.name.charAt(0).toUpperCase()}</div>
+                            <span class="user-name">${client.name}${isMe ? ' (you)' : ''}</span>
+                        </li>
+                    `;
+                }
+                clientsList.innerHTML = html;
+            }
+        }
+
+        function renderGames() {
+            const container = document.getElementById('gamesList');
+
+            if (availableGames.size === 0) {
+                container.innerHTML = '<div class="no-games">No games available. Create one to get started!</div>';
+                return;
+            }
+
+            let html = '';
+            for (const [gameId, game] of availableGames) {
+                const gameState = gameSubscriptions.get(gameId);
+                const slots = gameState ? gameState.slots : {};
+                const mySlot = mySlots.get(gameId);
+                const isMyGame = mySlot !== undefined;
+
+                html += `
+                    <div class="game-card ${isMyGame ? 'my-game' : ''}">
+                        <div class="game-header">
+                            <div>
+                                <div class="game-name">${escapeHtml(game.name || 'Unnamed Game')}</div>
+                                <div class="game-id">${gameId}</div>
+                            </div>
+                        </div>
+                        <div class="slots-container">
+                            ${renderSlots(gameId, game.maxPlayers, slots, mySlot)}
+                        </div>
+                    </div>
+                `;
+            }
+            container.innerHTML = html;
+            justClaimed.clear();
+        }
+
+        function renderSlots(gameId, maxPlayers, slots, mySlot) {
+            let html = '';
+            for (let i = 1; i <= maxPlayers; i++) {
+                const slotKey = 'slot_' + i;
+                const player = slots[slotKey];
+                const isOccupied = !!player;
+                const isMine = player && player.userId === userId;
+
+                if (isOccupied) {
+                    const claimed = justClaimed.has(gameId + ':' + slotKey) ? ' slot-claimed' : '';
+                    html += `
+                        <div class="slot occupied${claimed} ${isMine ? 'mine' : ''}" ${isMine ? `onclick="leaveGame('${gameId}', ${i})"` : ''}>
+                            <div class="slot-label">Slot ${i}</div>
+                            <div class="slot-avatar" style="background: ${stringToColor(player.userId)}">${player.name.charAt(0).toUpperCase()}</div>
+                            <div class="slot-name">${escapeHtml(player.name)}${isMine ? ' (you)' : ''}</div>
+                        </div>
+                    `;
+                } else {
+                    const canJoin = mySlot === undefined;
+                    html += `
+                        <div class="slot" onclick="${canJoin ? `joinGame('${gameId}', ${i})` : ''}">
+                            <div class="slot-label">Slot ${i}</div>
+                            <div class="slot-empty">+</div>
+                            <div class="slot-name">${canJoin ? 'Click to join' : 'Empty'}</div>
+                        </div>
+                    `;
+                }
+            }
+            return html;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function showGameStarted(players) {
+            const overlay = document.getElementById('gameStartedOverlay');
+            const playersDiv = document.getElementById('gameStartedPlayers');
+
+            let html = '';
+            players.forEach((player, index) => {
+                if (index > 0) {
+                    html += '<div class="vs-text">VS</div>';
+                }
+                const isMe = player.userId === userId;
+                html += `
+                    <div class="game-started-player">
+                        <div class="slot-avatar" style="background: ${stringToColor(player.userId)}">${player.name.charAt(0).toUpperCase()}</div>
+                        <div>${escapeHtml(player.name)}${isMe ? ' (you)' : ''}</div>
+                    </div>
+                `;
+            });
+            playersDiv.innerHTML = html;
+
+            overlay.classList.remove('hidden');
+
+            // Reset my slots since game started
+            for (const [gameId, slot] of mySlots) {
+                mySlots.delete(gameId);
+            }
+
+            setTimeout(() => {
+                overlay.classList.add('hidden');
+            }, 3000);
+        }
+
+        // Actions
+        async function createGame() {
+            const nameInput = document.getElementById('gameName');
+            const maxPlayersSelect = document.getElementById('maxPlayers');
+
+            const name = nameInput.value.trim() || 'Game ' + Math.floor(Math.random() * 1000);
+            const maxPlayers = parseInt(maxPlayersSelect.value);
+
+            try {
+                await centrifuge.rpc('game:create', { name, maxPlayers });
+                nameInput.value = '';
+            } catch (err) {
+                console.error('Error creating game:', err);
+                alert('Failed to create game: ' + err.message);
+            }
+        }
+
+        async function joinGame(gameId, slot) {
+            if (mySlots.has(gameId)) {
+                alert('You are already in this game!');
+                return;
+            }
+
+            try {
+                await centrifuge.rpc('game:join', {
+                    gameId: gameId,
+                    slot: slot,
+                    name: getPlayerName()
+                });
+            } catch (err) {
+                console.error('Error joining game:', err);
+                if (err.message === 'slot already taken') {
+                    alert('This slot is already taken!');
+                } else {
+                    alert('Failed to join game: ' + err.message);
+                }
+            }
+        }
+
+        async function leaveGame(gameId, slot) {
+            try {
+                await centrifuge.rpc('game:leave', {
+                    gameId: gameId,
+                    slot: slot
+                });
+                mySlots.delete(gameId);
+                renderGames();
+            } catch (err) {
+                console.error('Error leaving game:', err);
+            }
+        }
+
+        // Start connection
+        gamesSub.subscribe();
+        clientsSub.subscribe();  // Subscribe to games:clients to see all connections
+        usersSub.subscribe();  // Subscribe to games:users to see unique users
+        centrifuge.connect();
+
+        // Update name in online clients when changed
+        document.getElementById('playerName').addEventListener('input', () => {
+            if (myClientId && onlineClients.has(myClientId)) {
+                onlineClients.get(myClientId).name = getPlayerName();
+                renderPresence();
+            }
+        });
+    </script>
+</body>
+</html>

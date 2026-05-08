@@ -303,3 +303,92 @@ func TestWriterWriteError(t *testing.T) {
 		t.Fatal("timeout waiting for write routine close")
 	}
 }
+
+// TestWriterEnqueueMany covers the multi-item enqueue path.
+func TestWriterEnqueueMany(t *testing.T) {
+	t.Parallel()
+	transport := newFakeTransport(nil)
+	w := newWriter(writerConfig{
+		MaxQueueSize: 10 * 1024,
+		WriteFn:      transport.write,
+		WriteManyFn:  transport.writeMany,
+	}, 0)
+	go w.run(0, 8, 0, false)
+	defer func() { _ = w.close(true) }()
+
+	dis := w.enqueueMany(
+		queue.Item{Data: []byte("a")},
+		queue.Item{Data: []byte("b")},
+		queue.Item{Data: []byte("c")},
+	)
+	require.Nil(t, dis)
+	for i := 0; i < 3; i++ {
+		select {
+		case <-transport.ch:
+		case <-time.After(time.Second):
+			t.Fatal("did not receive expected message")
+		}
+	}
+}
+
+// TestWriterEnqueueManyClosed verifies that enqueueing into a closed queue returns
+// DisconnectConnectionClosed.
+func TestWriterEnqueueManyClosed(t *testing.T) {
+	t.Parallel()
+	transport := newFakeTransport(nil)
+	w := newWriter(writerConfig{
+		MaxQueueSize: 1,
+		WriteFn:      transport.write,
+		WriteManyFn:  transport.writeMany,
+	}, 0)
+	go w.run(0, 0, 0, false)
+	_ = w.close(true)
+
+	dis := w.enqueueMany(queue.Item{Data: []byte("x")})
+	require.NotNil(t, dis)
+	require.Equal(t, DisconnectConnectionClosed.Code, dis.Code)
+}
+
+// TestWriterEnqueueManyDisconnectSlow exercises the size-exceeded branch
+// in enqueueMany.
+func TestWriterEnqueueManyDisconnectSlow(t *testing.T) {
+	t.Parallel()
+	transport := newFakeTransport(nil)
+	w := newWriter(writerConfig{
+		MaxQueueSize: 1, // 1 byte cap so even a tiny payload trips DisconnectSlow.
+		WriteFn:      transport.write,
+		WriteManyFn:  transport.writeMany,
+	}, 0)
+	defer func() { _ = w.close(true) }()
+
+	dis := w.enqueueMany(queue.Item{Data: []byte("biggerthanonebyte")})
+	require.NotNil(t, dis)
+	require.Equal(t, DisconnectSlow.Code, dis.Code)
+}
+
+// TestWriterEnqueueManyTimerMode covers the timerMode branch of enqueueMany,
+// which schedules a flush via the writer's flush timer.
+func TestWriterEnqueueManyTimerMode(t *testing.T) {
+	t.Parallel()
+	transport := newFakeTransport(nil)
+	w := newWriter(writerConfig{
+		MaxQueueSize: 10 * 1024,
+		WriteFn:      transport.write,
+		WriteManyFn:  transport.writeMany,
+	}, 0)
+	w.run(20*time.Millisecond, 16, 0, true) // useWriteTimer=true → timer mode
+	defer func() { _ = w.close(true) }()
+
+	dis := w.enqueueMany(
+		queue.Item{Data: []byte("a")},
+		queue.Item{Data: []byte("b")},
+	)
+	require.Nil(t, dis)
+	for i := 0; i < 2; i++ {
+		select {
+		case <-transport.ch:
+		case <-time.After(time.Second):
+			t.Fatal("timer-mode flush did not deliver message")
+		}
+	}
+}
