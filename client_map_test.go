@@ -4883,3 +4883,518 @@ func TestCleanupMapSubscribingAll(t *testing.T) {
 		t.Fatal("subscribingCh was not closed by cleanupMapSubscribingAll")
 	}
 }
+
+// TestMapSubscribe_InvalidPhase covers the default case in handleMapSubscribe
+// (invalid phase value).
+func TestMapSubscribe_InvalidPhase(t *testing.T) {
+	node, _ := newTestNodeWithMapBroker(t)
+
+	channel := "test_invalid_phase"
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{Type: SubscriptionTypeMap},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   42, // Not 0/1/2.
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.NotNil(t, rwWrapper.replies[0].Error)
+	require.Equal(t, ErrorBadRequest.Code, rwWrapper.replies[0].Error.Code)
+}
+
+// TestMapSubscribe_StreamPhase_ConcurrentPagination covers the
+// ErrorConcurrentPagination branch of handleMapStreamPhase.
+func TestMapSubscribe_StreamPhase_ConcurrentPagination(t *testing.T) {
+	node, _ := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_stream_concurrent"
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{Type: SubscriptionTypeMap},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Pre-populate mapSubscribing so handleMapStreamPhase finds existing state
+	// (avoids the recovery branch and goes straight to the pagination lock check).
+	client.mu.Lock()
+	if client.mapSubscribing == nil {
+		client.mapSubscribing = make(map[string]*mapSubscribeState)
+	}
+	client.mapSubscribing[channel] = &mapSubscribeState{
+		options:       SubscribeOptions{Type: SubscriptionTypeMap, EnablePositioning: true, EnableRecovery: true},
+		subscribingCh: make(chan struct{}),
+		startedAt:     time.Now().UnixNano(),
+	}
+	if client.mapPaginationLocks == nil {
+		client.mapPaginationLocks = make(map[string]struct{})
+	}
+	client.mapPaginationLocks[channel] = struct{}{} // Simulate ongoing pagination.
+	client.mu.Unlock()
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseStream,
+		Limit:   5,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.NotNil(t, rwWrapper.replies[0].Error)
+	require.Equal(t, ErrorConcurrentPagination.Code, rwWrapper.replies[0].Error.Code)
+
+	// Release lock for cleanup.
+	client.mu.Lock()
+	delete(client.mapPaginationLocks, channel)
+	client.mu.Unlock()
+}
+
+// TestMapSubscribe_LivePhase_NoMapBroker covers the `getMapBroker == nil`
+// branch in handleMapLivePhase.
+func TestMapSubscribe_LivePhase_NoMapBroker(t *testing.T) {
+	node, _ := newTestNodeWithMapBroker(t)
+
+	channel := "no_broker_channel"
+
+	// Override GetMapBroker to return (nil, true) for our channel — forces
+	// getMapBroker to return nil even though a default mapBroker exists.
+	node.config.Map.GetMapBroker = func(ch string) (MapBroker, bool) {
+		if ch == channel {
+			return nil, true
+		}
+		return nil, false
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{Type: SubscriptionTypeMap},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseLive,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.NotNil(t, rwWrapper.replies[0].Error)
+	require.Equal(t, ErrorNotAvailable.Code, rwWrapper.replies[0].Error.Code)
+}
+
+// TestMapSubscribe_LivePhase_StateEpochMismatch covers the epoch-mismatch
+// branch in handleMapLivePhase when in-progress mapSubscribing state has a
+// captured epoch and the client sends a different one.
+func TestMapSubscribe_LivePhase_StateEpochMismatch(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_live_state_epoch_mismatch"
+	ctx := context.Background()
+
+	// Populate enough entries that page 1 returns a cursor and the state
+	// remains in mapSubscribing (not yet promoted to live).
+	for i := 0; i < 10; i++ {
+		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+			Data: []byte(`{"v":"data"}`),
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{Type: SubscriptionTypeMap},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Advance state via STATE phase first page (small limit → cursor remains,
+	// state is captured with epoch).
+	page1 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   2,
+	})
+	require.Equal(t, MapPhaseState, page1.Phase)
+	require.NotEmpty(t, page1.Cursor)
+
+	// Sanity: state present with captured epoch.
+	client.mu.RLock()
+	st, ok := client.mapSubscribing[channel]
+	client.mu.RUnlock()
+	require.True(t, ok)
+	require.NotEmpty(t, st.epoch)
+
+	// Send LIVE phase with non-empty but wrong epoch — must hit the
+	// state.epoch != req.Epoch branch.
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseLive,
+		Epoch:   "definitely-not-the-right-epoch",
+		Offset:  page1.Offset,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.NotNil(t, rwWrapper.replies[0].Error)
+	require.Equal(t, ErrorUnrecoverablePosition.Code, rwWrapper.replies[0].Error.Code)
+
+	// Subscribing state must be cleaned up.
+	client.mu.RLock()
+	_, present := client.mapSubscribing[channel]
+	client.mu.RUnlock()
+	require.False(t, present)
+}
+
+// TestMapSubscribe_Streamless_StateToLive_ClientTagsFilter covers the
+// streamless-with-tags-filter branch in handleMapTransitionToLive
+// (allowStreamless==true && sub.tagsFilter != nil).
+func TestMapSubscribe_Streamless_StateToLive_ClientTagsFilter(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	// Ephemeral mode → streamless. Also enable AllowTagsFilter via reply options.
+
+	channel := "test_streamless_client_tags"
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		_, err := broker.Publish(ctx, channel, string(rune('a'+i)), MapPublishOptions{
+			Data: []byte(`{"v":"data"}`),
+			Tags: map[string]string{"role": "admin"},
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:            SubscriptionTypeMap,
+					AllowTagsFilter: true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+		Tf:      &protocol.FilterNode{Op: "", Cmp: "eq", Key: "role", Val: "admin"},
+	})
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.False(t, result.Recoverable) // Streamless.
+	require.Len(t, result.State, 3)
+	require.Contains(t, client.channels, channel)
+}
+
+// TestMapSubscribe_StateToLive_TagsFilter_OnRecoveredPubs covers the
+// server/client tags filter loops applied to publications recovered during
+// the live transition. Uses STATE→LIVE flow so the state struct captures
+// both server and client filters and they apply to gap publications.
+func TestMapSubscribe_StateToLive_TagsFilter_OnRecoveredPubs(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_state_to_live_tags_filter"
+	ctx := context.Background()
+
+	// Multiple seed entries with passing tags so STATE pagination has multiple pages.
+	for i := 0; i < 3; i++ {
+		_, err := broker.Publish(ctx, channel, "seed"+string(rune('a'+i)), MapPublishOptions{
+			Data: []byte(`{"v":"seed"}`),
+			Tags: map[string]string{"team": "eng", "role": "admin"},
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:             SubscriptionTypeMap,
+					AllowTagsFilter:  true,
+					ServerTagsFilter: &FilterNode{Key: "team", Cmp: "eq", Val: "eng"},
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// First STATE page (small limit so cursor remains and state is captured).
+	page1 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   1,
+		Tf:      &protocol.FilterNode{Op: "", Cmp: "eq", Key: "role", Val: "admin"},
+	})
+	require.Equal(t, MapPhaseState, page1.Phase)
+	frozenOffset := page1.Offset
+	frozenEpoch := page1.Epoch
+
+	// Publish gap entries while paginated so stream advances past frozenOffset.
+	// Mix of tags so we can verify both filters fire on the recovered set.
+	tagPairs := []struct{ team, role string }{
+		{"eng", "admin"},    // passes both
+		{"sales", "admin"},  // server filter drops
+		{"eng", "viewer"},   // client filter drops
+		{"sales", "viewer"}, // both drop
+	}
+	for i, tp := range tagPairs {
+		_, err := broker.Publish(ctx, channel, "gap"+string(rune('a'+i)), MapPublishOptions{
+			Data: []byte(`{"v":"x"}`),
+			Tags: map[string]string{"team": tp.team, "role": tp.role},
+		})
+		require.NoError(t, err)
+	}
+
+	// Last STATE page → state-to-live transition reads stream gap and applies
+	// both server and client tags filters to recoveredPubs.
+	page2 := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+		Cursor:  page1.Cursor,
+		Offset:  frozenOffset,
+		Epoch:   frozenEpoch,
+		Tf:      &protocol.FilterNode{Op: "", Cmp: "eq", Key: "role", Val: "admin"},
+	})
+	require.Equal(t, MapPhaseLive, page2.Phase)
+	for _, pub := range page2.Publications {
+		require.Equal(t, "eng", pub.Tags["team"], "server filter must drop non-eng")
+		require.Equal(t, "admin", pub.Tags["role"], "client filter must drop non-admin")
+	}
+}
+
+// TestMapSubscribe_Recovery_FossilDelta covers the makeRecoveredMapPubsDeltaFossil
+// invocation inside handleMapTransitionToLive (deltaEnabled + Fossil).
+func TestMapSubscribe_Recovery_FossilDelta(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_recovery_fossil"
+	ctx := context.Background()
+
+	// Initial pub anchors the stream offset/epoch we'll resume from.
+	res, err := broker.Publish(ctx, channel, "seed", MapPublishOptions{
+		Data: []byte(`{"v":"seed"}`),
+	})
+	require.NoError(t, err)
+	startOffset := res.Position.Offset
+	startEpoch := res.Position.Epoch
+
+	// Publish a few updates to the same key so Fossil per-key delta has prior data.
+	for i := 0; i < 3; i++ {
+		_, err := broker.Publish(ctx, channel, "k", MapPublishOptions{
+			Data: []byte(`{"v":"This is a fossil delta payload that needs enough length to compress, version=` + string(rune('A'+i)) + `"}`),
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					AllowedDeltaTypes: []DeltaType{DeltaTypeFossil},
+				},
+			}, nil)
+		})
+	})
+
+	// Use Protobuf transport so makeRecoveredMapPubsDeltaFossil's binary delta
+	// fits the response without needing to JSON-escape.
+	transport := newTestTransport(func() {})
+	transport.setProtocolVersion(ProtocolVersion2)
+	transport.setProtocolType(ProtocolTypeProtobuf)
+	newCtx := SetCredentials(context.Background(), &Credentials{UserID: "user1"})
+	client, _ := newClient(newCtx, node, transport)
+	connectClientV2(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err = client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseLive,
+		Offset:  startOffset,
+		Epoch:   startEpoch,
+		Recover: true,
+		Delta:   string(DeltaTypeFossil),
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	result := rwWrapper.replies[0].Subscribe
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.True(t, result.Delta)
+	require.Greater(t, len(result.Publications), 0)
+	// First publication for the key is full; subsequent same-key pubs are deltas.
+	hasDelta := false
+	for _, pub := range result.Publications {
+		if pub.Delta {
+			hasDelta = true
+			break
+		}
+	}
+	require.True(t, hasDelta, "expected at least one fossil-delta publication")
+}
+
+// TestMapSubscribe_StateToLive_PublishDebounce covers the PublishDebounce
+// branch in handleMapTransitionToLive.
+func TestMapSubscribe_StateToLive_PublishDebounce(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+
+	channel := "test_publish_debounce"
+	ctx := context.Background()
+
+	_, err := broker.Publish(ctx, channel, "k", MapPublishOptions{
+		Data: []byte(`{"v":"x"}`),
+	})
+	require.NoError(t, err)
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:                          SubscriptionTypeMap,
+					ClientPublishDebounceInterval: 250 * time.Millisecond,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.Equal(t, uint32(250), result.PublishDebounce)
+}
+
+// TestUpdateMapPresence_BothChannels exercises the client + user presence
+// branches of updateMapPresence (used by the periodic presence refresh).
+func TestUpdateMapPresence_BothChannels(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+
+	clientPresenceCh := "clients:room"
+	userPresenceCh := "users:room"
+
+	client := newTestConnectedClientV2(t, node, "user42")
+	info := &ClientInfo{ClientID: client.uid, UserID: client.user}
+	chCtx := ChannelContext{
+		mapClientPresenceChannel: clientPresenceCh,
+		mapUserPresenceChannel:   userPresenceCh,
+	}
+	require.NoError(t, client.updateMapPresence(info, chCtx))
+
+	// Client presence channel keyed by client ID.
+	state, err := broker.ReadState(context.Background(), clientPresenceCh, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 1)
+	require.Equal(t, client.uid, state.Publications[0].Key)
+
+	// User presence channel keyed by user ID.
+	state, err = broker.ReadState(context.Background(), userPresenceCh, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 1)
+	require.Equal(t, "user42", state.Publications[0].Key)
+}
+
+// TestMapSubscribe_StreamPhase_TagsFilter_IntermediatePage covers the
+// per-page tags-filter branch inside handleMapStreamPhase (intermediate
+// page path, not transition-to-live).
+func TestMapSubscribe_StreamPhase_TagsFilter_IntermediatePage(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_stream_tags_intermediate"
+	ctx := context.Background()
+
+	// Publish 50 entries with mixed tags so a small STREAM page stays
+	// intermediate (not yet at streamStart).
+	var startEpoch string
+	var startOffset uint64
+	res, err := broker.Publish(ctx, channel, "seed", MapPublishOptions{
+		Data: []byte(`{"v":"seed"}`),
+		Tags: map[string]string{"role": "viewer"},
+	})
+	require.NoError(t, err)
+	startEpoch = res.Position.Epoch
+	startOffset = res.Position.Offset
+
+	for i := 0; i < 50; i++ {
+		role := "admin"
+		if i%2 == 0 {
+			role = "viewer"
+		}
+		_, err := broker.Publish(ctx, channel, "key"+string(rune('A'+(i%26)))+string(rune('0'+(i/26))), MapPublishOptions{
+			Data: []byte(`{"v":"x"}`),
+			Tags: map[string]string{"role": role},
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:            SubscriptionTypeMap,
+					AllowTagsFilter: true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Use a small page size so the first STREAM request stays intermediate.
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseStream,
+		Offset:  startOffset,
+		Epoch:   startEpoch,
+		Limit:   5,
+		Recover: true,
+		Tf:      &protocol.FilterNode{Op: "", Cmp: "eq", Key: "role", Val: "admin"},
+	})
+	require.Equal(t, MapPhaseStream, result.Phase)
+	for _, pub := range result.Publications {
+		require.Equal(t, "admin", pub.Tags["role"])
+	}
+}

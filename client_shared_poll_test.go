@@ -3926,3 +3926,90 @@ func TestKeyedWriteRemoval_EarlyReturns(t *testing.T) {
 		client.keyedWriteRemoval("not-tracked", "k", &protocol.Publication{Removed: true})
 	})
 }
+
+// TestSharedPollSubscribe_ExpireAtPast covers the ttl <= 0 branch which
+// returns ErrorExpired during the OnSubscribe callback.
+func TestSharedPollSubscribe_ExpireAtPast(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t)
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{ExpireAt: time.Now().Unix() - 10},
+			}, nil)
+		})
+	})
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test:channel",
+		Type:    int32(SubscriptionTypeSharedPoll),
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return len(rwWrapper.replies) > 0 }, time.Second, time.Millisecond)
+	require.NotNil(t, rwWrapper.replies[0].Error)
+	require.Equal(t, uint32(ErrorExpired.Code), rwWrapper.replies[0].Error.Code)
+}
+
+// TestSharedPollSubscribe_ChannelLimitExceeded covers the channel-limit
+// branch that returns ErrorLimitExceeded. We bypass the
+// subscribeSharedPollClient helper because it pre-registers the channel,
+// which would itself trip the limit on the first call.
+func TestSharedPollSubscribe_ChannelLimitExceeded(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t)
+	node.config.ClientChannelLimit = 1
+	setupSharedPollHandlers(node)
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+
+	rw1 := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test:first",
+		Type:    int32(SubscriptionTypeSharedPoll),
+	}, &protocol.Command{Id: 1}, time.Now(), rw1.rw))
+	require.Eventually(t, func() bool { return len(rw1.replies) > 0 }, time.Second, time.Millisecond)
+	require.Nil(t, rw1.replies[0].Error)
+
+	rw2 := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test:second",
+		Type:    int32(SubscriptionTypeSharedPoll),
+	}, &protocol.Command{Id: 2}, time.Now(), rw2.rw)
+	require.Equal(t, ErrorLimitExceeded, err)
+}
+
+// TestSharedPollSubscribe_PresenceFlags covers the presence-flag branches
+// (PushJoinLeave + MapClientPresenceChannel + MapUserPresenceChannel) in
+// handleSharedPollSubscribe.
+func TestSharedPollSubscribe_PresenceFlags(t *testing.T) {
+	node := newTestNodeWithSharedPoll(t)
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					ExpireAt:                 time.Now().Unix() + 3600,
+					EmitPresence:             true,
+					EmitJoinLeave:            true,
+					PushJoinLeave:            true,
+					MapClientPresenceChannel: "clients:room",
+					MapUserPresenceChannel:   "users:room",
+				},
+				ClientSideRefresh: true,
+			}, nil)
+		})
+	})
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+
+	subscribeSharedPollClient(t, client, "test:room")
+
+	client.mu.RLock()
+	ctx := client.channels["test:room"]
+	client.mu.RUnlock()
+	require.True(t, channelHasFlag(ctx.flags, flagEmitPresence))
+	require.True(t, channelHasFlag(ctx.flags, flagEmitJoinLeave))
+	require.True(t, channelHasFlag(ctx.flags, flagPushJoinLeave))
+	require.True(t, channelHasFlag(ctx.flags, flagMapClientPresence))
+	require.True(t, channelHasFlag(ctx.flags, flagMapUserPresence))
+}

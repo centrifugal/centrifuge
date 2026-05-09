@@ -3887,3 +3887,285 @@ func TestMemoryMapBroker_NoRefreshTTL_LetsMetaExpire(t *testing.T) {
 	}, 5*time.Second, 100*time.Millisecond,
 		"channel must be removed after MetaTTL when keepalives don't refresh it")
 }
+
+// newMapBrokerNoOptions builds a node + broker pair where the channel options
+// resolver returns an invalid MapChannelOptions (Mode unset) for any channel.
+// This forces ResolveAndValidateMapChannelOptions to return an error so we
+// can hit the error-return branches in Publish/Remove/ReadState.
+func newMapBrokerNoOptions(t *testing.T) (*Node, *MemoryMapBroker) {
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				// Mode=0 is invalid → resolver returns an error.
+				return MapChannelOptions{}
+			},
+		},
+	})
+	require.NoError(t, err)
+	broker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	require.NoError(t, broker.RegisterEventHandler(nil))
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+	return node, broker
+}
+
+// TestMapBroker_Publish_InvalidOptions covers the error path from
+// ResolveAndValidateMapChannelOptions in Publish.
+func TestMapBroker_Publish_InvalidOptions(t *testing.T) {
+	_, broker := newMapBrokerNoOptions(t)
+	_, err := broker.Publish(context.Background(), "ch", "k", MapPublishOptions{Data: []byte(`{}`)})
+	require.Error(t, err)
+}
+
+// TestMapBroker_Remove_InvalidOptions covers the error path in Remove.
+func TestMapBroker_Remove_InvalidOptions(t *testing.T) {
+	_, broker := newMapBrokerNoOptions(t)
+	_, err := broker.Remove(context.Background(), "ch", "k", MapRemoveOptions{})
+	require.Error(t, err)
+}
+
+// TestMapBroker_ReadState_InvalidOptions covers the error path in ReadState.
+func TestMapBroker_ReadState_InvalidOptions(t *testing.T) {
+	_, broker := newMapBrokerNoOptions(t)
+	_, err := broker.ReadState(context.Background(), "ch", MapReadStateOptions{Limit: 10})
+	require.Error(t, err)
+}
+
+// TestMapBroker_ReadState_LimitZero covers the Limit==0 branch in mapHub.getState
+// (returns just stream position, no entries).
+func TestMapBroker_ReadState_LimitZero(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{Mode: MapModeRecoverable, StreamSize: 100, StreamTTL: 5 * time.Minute, KeyTTL: 5 * time.Minute}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	_, err := broker.Publish(ctx, "ch", "k1", MapPublishOptions{Data: []byte(`{"v":1}`)})
+	require.NoError(t, err)
+
+	res, err := broker.ReadState(ctx, "ch", MapReadStateOptions{Limit: 0})
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Position.Epoch)
+	require.Empty(t, res.Publications)
+}
+
+// TestMapBroker_Clear_NonExistentChannel covers the early-return branch in
+// mapHub.clear when the channel isn't in the map.
+func TestMapBroker_Clear_NonExistentChannel(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{Mode: MapModeRecoverable, StreamSize: 100, StreamTTL: 5 * time.Minute, KeyTTL: 5 * time.Minute}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	// Clear before any publish — channel doesn't exist in the hub.
+	broker.mapHub.clear("never-published")
+}
+
+// TestMapBroker_KeyModeIfNew_RefreshTTL_TimerSetters covers the
+// nextKeyExpireCheck and nextRemoveCheck update branches inside the
+// IfNew + RefreshTTLOnSuppress code path.
+func TestMapBroker_KeyModeIfNew_RefreshTTL_TimerSetters(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeRecoverable,
+			StreamSize: 100,
+			StreamTTL:  10 * time.Minute,
+			KeyTTL:     10 * time.Minute,
+			MetaTTL:    20 * time.Minute,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	_, err := broker.Publish(ctx, "ch", "k", MapPublishOptions{
+		Data:    []byte(`{"v":1}`),
+		KeyMode: KeyModeIfNew,
+	})
+	require.NoError(t, err)
+
+	// Force next-check timestamps to be in the far future so the suppress
+	// path is the one that ratchets them down to the new earlier values.
+	broker.mapHub.Lock()
+	broker.mapHub.nextKeyExpireCheck = time.Now().Add(time.Hour).UnixMilli()
+	broker.mapHub.nextRemoveCheck = time.Now().Add(time.Hour).UnixMilli()
+	broker.mapHub.Unlock()
+
+	// Second publish with IfNew → key already exists → suppressed. With
+	// RefreshTTLOnSuppress, the new earlier expireAt should ratchet down
+	// nextKeyExpireCheck and nextRemoveCheck.
+	res, err := broker.Publish(ctx, "ch", "k", MapPublishOptions{
+		Data:                 []byte(`{"v":2}`),
+		KeyMode:              KeyModeIfNew,
+		RefreshTTLOnSuppress: true,
+	})
+	require.NoError(t, err)
+	require.True(t, res.Suppressed)
+	require.Equal(t, SuppressReasonKeyExists, res.SuppressReason)
+}
+
+// TestMapBroker_Remove_RefreshesRemoveCheck covers the nextRemoveCheck update
+// branch in mapHub.remove (when MetaTTL is set and the new removeAt earlier
+// than current nextRemoveCheck).
+func TestMapBroker_Remove_RefreshesRemoveCheck(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeRecoverable,
+			StreamSize: 100,
+			StreamTTL:  10 * time.Minute,
+			KeyTTL:     10 * time.Minute,
+			MetaTTL:    20 * time.Minute,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+
+	_, err := broker.Publish(ctx, "ch", "k", MapPublishOptions{Data: []byte(`{"v":1}`)})
+	require.NoError(t, err)
+
+	// Force nextRemoveCheck way out so the Remove path ratchets it down.
+	broker.mapHub.Lock()
+	broker.mapHub.nextRemoveCheck = time.Now().Add(2 * time.Hour).UnixMilli()
+	broker.mapHub.Unlock()
+
+	_, err = broker.Remove(ctx, "ch", "k", MapRemoveOptions{})
+	require.NoError(t, err)
+
+	broker.mapHub.RLock()
+	updated := broker.mapHub.nextRemoveCheck
+	broker.mapHub.RUnlock()
+	require.Less(t, updated, time.Now().Add(time.Hour).UnixMilli())
+}
+
+// TestMapBroker_ExpireKeysIteration_Refreshed covers the path in
+// expireKeysIteration where the popped queue entry is stale (storedExpireAt
+// has been pushed forward by a refresh).
+func TestMapBroker_ExpireKeysIteration_Refreshed(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeRecoverable,
+			StreamSize: 100,
+			StreamTTL:  10 * time.Minute,
+			KeyTTL:     200 * time.Millisecond,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+
+	_, err := broker.Publish(ctx, "ch", "k", MapPublishOptions{Data: []byte(`{"v":1}`)})
+	require.NoError(t, err)
+
+	// Refresh the key — pushes a new heap entry with later expireAt so the
+	// older popped entry will be stale.
+	time.Sleep(50 * time.Millisecond)
+	_, err = broker.Publish(ctx, "ch", "k", MapPublishOptions{
+		Data:                 []byte(`{"v":2}`),
+		KeyMode:              KeyModeIfNew,
+		RefreshTTLOnSuppress: true,
+	})
+	require.NoError(t, err)
+
+	// Force the iteration to run by setting nextKeyExpireCheck into the past.
+	broker.mapHub.Lock()
+	broker.mapHub.nextKeyExpireCheck = 1
+	broker.mapHub.Unlock()
+
+	var nextCheck int64
+	broker.mapHub.expireKeysIteration(&nextCheck)
+}
+
+// TestMapBroker_GetStream_NoChannel covers the path in getStream where the
+// channel doesn't exist and we must allocate a stream-position holder so the
+// epoch is stable.
+func TestMapBroker_GetStream_NoChannel(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeRecoverable,
+			StreamSize: 100,
+			StreamTTL:  5 * time.Minute,
+			KeyTTL:     5 * time.Minute,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	// Channel does not exist yet — should still return an empty stream result
+	// with a freshly-minted epoch.
+	res, err := broker.ReadStream(context.Background(), "ch-untouched", MapReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Position.Epoch)
+	require.Empty(t, res.Publications)
+}
+
+// TestMapBroker_GetStream_ConcurrentChannelCreation exercises the race-recovery
+// path in getStream where the channel is created by another goroutine between
+// RUnlock and Lock.
+func TestMapBroker_GetStream_ConcurrentChannelCreation(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeRecoverable,
+			StreamSize: 100,
+			StreamTTL:  5 * time.Minute,
+			KeyTTL:     5 * time.Minute,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	// Hammer ReadStream + Publish from multiple goroutines on a fresh channel
+	// to maximize the chance of hitting the race-recovery branch.
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			ch := "race"
+			_, _ = broker.ReadStream(context.Background(), ch, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			ch := "race"
+			_, _ = broker.Publish(context.Background(), ch, "k", MapPublishOptions{Data: []byte(`{}`)})
+		}(i)
+	}
+	wg.Wait()
+}
+
+// TestMapBroker_ReadState_ConcurrentChannelCreation exercises the race-recovery
+// path in getState where another goroutine creates the channel between unlock
+// and re-lock.
+func TestMapBroker_ReadState_ConcurrentChannelCreation(t *testing.T) {
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeRecoverable,
+			StreamSize: 100,
+			StreamTTL:  5 * time.Minute,
+			KeyTTL:     5 * time.Minute,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = broker.ReadState(context.Background(), "race-state", MapReadStateOptions{Limit: 100})
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = broker.Publish(context.Background(), "race-state", "k", MapPublishOptions{Data: []byte(`{}`)})
+		}()
+	}
+	wg.Wait()
+}
