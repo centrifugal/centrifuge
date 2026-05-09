@@ -2439,3 +2439,223 @@ func TestSharedPollManager_TrackKeys_ConcurrentBatch(t *testing.T) {
 	// 6 unique keys = 6 broker subscribe calls.
 	require.Equal(t, int32(6), broker.subscribeCount.Load())
 }
+
+// TestSharedPoll_Untrack_UnknownChannel covers the early-return branch in
+// SharedPollManager.untrack when the channel isn't tracked at all.
+func TestSharedPoll_Untrack_UnknownChannel(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+	// Pure no-op call — nothing should panic, nothing happens.
+	node.sharedPollManager.untrack("never-seen", "any-key")
+}
+
+// TestSharedPoll_GetWarmKeyData_UnknownChannel covers the early-return branch
+// when the channel isn't tracked.
+func TestSharedPoll_GetWarmKeyData_UnknownChannel(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+	got := node.sharedPollManager.getWarmKeyData("never-seen", []string{"k"})
+	require.Nil(t, got)
+}
+
+// TestSharedPoll_GetCachedData_UnknownChannel covers the early-return branch
+// when the channel isn't tracked.
+func TestSharedPoll_GetCachedData_UnknownChannel(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+	got := node.sharedPollManager.getCachedData("never-seen", []TrackItem{{Key: "k", Version: 1}})
+	require.Nil(t, got)
+}
+
+// TestSharedPoll_MarkNeedsBroadcast_UnknownChannel covers the early-return branch
+// when the channel isn't tracked.
+func TestSharedPoll_MarkNeedsBroadcast_UnknownChannel(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+	// Should be a silent no-op.
+	node.sharedPollManager.markNeedsBroadcast("never-seen", []string{"k"})
+}
+
+// TestSharedPoll_HandlePublishedData_UnknownChannel covers the early-return
+// branch in handlePublishedData when the channel isn't tracked.
+func TestSharedPoll_HandlePublishedData_UnknownChannel(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+	node.sharedPollManager.handlePublishedData("never-seen", "k", 1, "epoch", []byte(`{}`))
+}
+
+// TestSharedPoll_HandlePublishedData_VersionlessGuard covers the defensive
+// versionless guard in handlePublishedData (publish should never reach this
+// path in versionless mode, but the guard exists).
+func TestSharedPoll_HandlePublishedData_VersionlessGuard(t *testing.T) {
+	t.Parallel()
+	// Versionless channel options.
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshIntervalFn: func(time.Duration) time.Duration {
+			return 0 // 0 means versionless mode (no version tracking).
+		},
+		RefreshInterval:      100 * time.Millisecond,
+		MaxKeysPerConnection: 100,
+	})
+	setupSharedPollHandlers(node)
+	client := newTestClientV2(t, node, "u-vless")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{{Key: "k", Version: 0}})
+
+	// Direct call to handlePublishedData on a versionless channel should hit
+	// the defensive guard and return without effect.
+	node.sharedPollManager.handlePublishedData("test:channel", "k", 5, "epoch", []byte(`{}`))
+}
+
+// TestSharedPoll_SubscribeBrokerKeys_Empty covers the early-return when
+// subscribeToBrokerKeys is called with no keys.
+func TestSharedPoll_SubscribeBrokerKeys_Empty(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+	require.NoError(t, node.sharedPollManager.subscribeToBrokerKeys("ch", nil))
+	require.NoError(t, node.sharedPollManager.subscribeToBrokerKeys("ch", []string{}))
+}
+
+// TestSharedPoll_UnsubscribeBrokerKeys_Empty covers the early-return in
+// unsubscribeFromBrokerKeys when keys is empty.
+func TestSharedPoll_UnsubscribeBrokerKeys_Empty(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+	node.sharedPollManager.unsubscribeFromBrokerKeys("ch", nil)
+	node.sharedPollManager.unsubscribeFromBrokerKeys("ch", []string{})
+}
+
+// TestSharedPoll_Publish_VersionlessRejected covers the publish error path
+// when called on a versionless channel.
+func TestSharedPoll_Publish_VersionlessRejected(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshIntervalFn: func(time.Duration) time.Duration {
+			return 0
+		},
+		RefreshInterval:      100 * time.Millisecond,
+		MaxKeysPerConnection: 100,
+	})
+	setupSharedPollHandlers(node)
+	client := newTestClientV2(t, node, "u-vless")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{{Key: "k", Version: 0}})
+
+	err := node.sharedPollManager.publish(context.Background(), "test:channel", "k", 1, "ep", []byte(`{}`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "versionless")
+}
+
+// TestSharedPoll_Publish_LocalOnly covers the "channel not active, no broker"
+// path of publish — falls through to handlePublishedData (which then early-returns
+// since the channel isn't tracked).
+func TestSharedPoll_Publish_LocalOnly(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+	require.NoError(t, node.sharedPollManager.publish(
+		context.Background(), "never-seen", "k", 1, "ep", []byte(`{}`),
+	))
+}
+
+// TestSharedPoll_ScheduleShutdown_Immediate covers the negative-delay
+// (immediate shutdown) path.
+func TestSharedPoll_ScheduleShutdown_Immediate(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+	setupSharedPollHandlers(node)
+	client := newTestClientV2(t, node, "u-imm")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{{Key: "k1", Version: 0}})
+
+	node.sharedPollManager.mu.RLock()
+	s := node.sharedPollManager.channels["test:channel"]
+	node.sharedPollManager.mu.RUnlock()
+	require.NotNil(t, s)
+
+	// Immediate shutdown via negative delay.
+	s.scheduleShutdown(node.sharedPollManager, "test:channel", -1)
+
+	// Channel state should now be removed from the manager.
+	node.sharedPollManager.mu.RLock()
+	_, exists := node.sharedPollManager.channels["test:channel"]
+	node.sharedPollManager.mu.RUnlock()
+	require.False(t, exists)
+}
+
+// TestSharedPoll_ScheduleShutdown_StopsExistingTimer covers the branch in
+// scheduleShutdown that stops a previously-scheduled shutdown timer when
+// invoked again.
+func TestSharedPoll_ScheduleShutdown_StopsExistingTimer(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+	setupSharedPollHandlers(node)
+	client := newTestClientV2(t, node, "u-twoshutdown")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{{Key: "k1", Version: 0}})
+
+	node.sharedPollManager.mu.RLock()
+	s := node.sharedPollManager.channels["test:channel"]
+	node.sharedPollManager.mu.RUnlock()
+	require.NotNil(t, s)
+
+	// First schedule with a long delay so the timer doesn't fire.
+	s.scheduleShutdown(node.sharedPollManager, "test:channel", time.Hour)
+	// Second schedule must stop the first timer (covers the
+	// `if s.shutdownTimer != nil { Stop }` branch).
+	s.scheduleShutdown(node.sharedPollManager, "test:channel", time.Hour)
+
+	// Cleanup so the channel doesn't linger.
+	s.scheduleShutdown(node.sharedPollManager, "test:channel", -1)
+}
+
+// TestSharedPoll_Track_AfterShutdown covers the early-return branch in
+// SharedPollManager.track when the manager's shutdownCh is already closed.
+// We call close() once and rely on the in-test t.Cleanup to skip a second close.
+func TestSharedPoll_Track_AfterShutdown(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+
+	opts, _ := node.config.SharedPoll.GetSharedPollChannelOptions("test:channel")
+
+	// Close the manager once — this closes shutdownCh.
+	node.sharedPollManager.close()
+
+	// Subsequent track / trackKeys calls must hit the shutdown-guard early return.
+	isNew, ver, err := node.sharedPollManager.track("test:channel", opts, "k")
+	require.NoError(t, err)
+	require.False(t, isNew)
+	require.Equal(t, uint64(0), ver)
+
+	results, err := node.sharedPollManager.trackKeys("test:channel", opts, []string{"k1", "k2"})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	for _, r := range results {
+		require.False(t, r.isNew)
+	}
+
+	// Replace shutdownCh with a fresh open channel so the t.Cleanup → Shutdown
+	// → close() doesn't double-close.
+	node.sharedPollManager.shutdownCh = make(chan struct{})
+}
+
+// TestSharedPoll_Stats covers the stats() helper.
+func TestSharedPoll_Stats(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+	setupSharedPollHandlers(node)
+	client := newTestClientV2(t, node, "u-stats")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
+		{Key: "k1", Version: 0},
+		{Key: "k2", Version: 0},
+	})
+
+	channels, keys := node.sharedPollManager.stats()
+	require.GreaterOrEqual(t, channels, 1)
+	require.GreaterOrEqual(t, keys, 2)
+}

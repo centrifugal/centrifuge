@@ -2030,3 +2030,284 @@ func TestNodeMapStatsWithSingleFlight(t *testing.T) {
 	require.NoError(t, err)
 	_ = stats
 }
+
+// TestNode_HandleSurveyResponse_Coverage targets the entirely-uncovered
+// handleSurveyResponse: unknown ID is silently ignored; matching ID delivers
+// the result; full channel drops without blocking.
+func TestNode_HandleSurveyResponse_Coverage(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	// Unknown survey ID → silent no-op.
+	require.NoError(t, n.handleSurveyResponse("other-uid", &controlpb.SurveyResponse{
+		Id: 999, Code: 1, Data: []byte("x"),
+	}))
+
+	// Register a channel and deliver a response.
+	ch := make(chan survey, 1)
+	n.surveyMu.Lock()
+	n.surveyID++
+	id := n.surveyID
+	n.surveyRegistry[id] = ch
+	n.surveyMu.Unlock()
+
+	require.NoError(t, n.handleSurveyResponse("from-uid", &controlpb.SurveyResponse{
+		Id: id, Code: 7, Data: []byte("hello"),
+	}))
+	select {
+	case s := <-ch:
+		require.Equal(t, "from-uid", s.UID)
+		require.Equal(t, uint32(7), s.Result.Code)
+		require.Equal(t, []byte("hello"), s.Result.Data)
+	case <-time.After(time.Second):
+		t.Fatal("response not delivered")
+	}
+
+	// Channel full → silently drops (channel has cap=1, fill it first).
+	ch <- survey{} // pre-fill
+	require.NoError(t, n.handleSurveyResponse("from-uid", &controlpb.SurveyResponse{
+		Id: id, Code: 99, Data: nil,
+	}))
+
+	// Cleanup.
+	n.surveyMu.Lock()
+	delete(n.surveyRegistry, id)
+	n.surveyMu.Unlock()
+}
+
+// TestNode_HandleSurveyRequest_CustomHandler covers the non-emulation path
+// of handleSurveyRequest where surveyHandler runs and a SurveyResponse is
+// published back via publishControl.
+func TestNode_HandleSurveyRequest_CustomHandler(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	called := make(chan SurveyEvent, 1)
+	n.OnSurvey(func(e SurveyEvent, cb SurveyCallback) {
+		called <- e
+		cb(SurveyReply{Code: 42, Data: []byte("ok")})
+	})
+
+	req := &controlpb.SurveyRequest{Id: 1, Op: "custom-op", Data: []byte("payload")}
+	require.NoError(t, n.handleSurveyRequest("peer", req))
+
+	select {
+	case e := <-called:
+		require.Equal(t, "custom-op", e.Op)
+		require.Equal(t, []byte("payload"), e.Data)
+	case <-time.After(time.Second):
+		t.Fatal("survey handler not invoked")
+	}
+}
+
+// TestNode_SetBroker_PreservesController verifies that SetBroker does NOT
+// overwrite an explicitly-set controller, even if the new broker also
+// implements the Controller interface.
+func TestNode_SetBroker_PreservesController(t *testing.T) {
+	t.Parallel()
+	n, err := New(Config{})
+	require.NoError(t, err)
+
+	c := NewTestController()
+	n.SetController(c)
+
+	// MemoryBroker doesn't implement Controller, but the type-assertion branch
+	// is where this matters; the previous controller must remain set.
+	b, err := NewMemoryBroker(n, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	n.SetBroker(b)
+
+	require.Same(t, c, n.controller, "explicitly-set controller must survive SetBroker")
+}
+
+// TestNode_HandleControl_OwnUID covers the early-return branch in handleControl
+// when cmd.Uid matches the receiving node's own UID.
+func TestNode_HandleControl_OwnUID(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	enc := controlproto.NewProtobufEncoder()
+	data, err := enc.EncodeCommand(&controlpb.Command{
+		Uid:  n.uid, // ← same as node UID; should be ignored.
+		Node: &controlpb.Node{Name: "should-be-ignored"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, n.handleControl(data))
+}
+
+// TestNode_HandleControl_SurveyResponse covers handleControl's
+// SurveyResponse routing branch.
+func TestNode_HandleControl_SurveyResponse(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	enc := controlproto.NewProtobufEncoder()
+	data, err := enc.EncodeCommand(&controlpb.Command{
+		Uid:            "peer",
+		SurveyResponse: &controlpb.SurveyResponse{Id: 9999, Code: 1},
+	})
+	require.NoError(t, err)
+	require.NoError(t, n.handleControl(data))
+}
+
+// TestNode_HandleControl_SurveyRequest covers handleControl's
+// SurveyRequest routing branch.
+func TestNode_HandleControl_SurveyRequest(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	called := make(chan struct{})
+	n.OnSurvey(func(e SurveyEvent, cb SurveyCallback) {
+		close(called)
+		cb(SurveyReply{})
+	})
+
+	enc := controlproto.NewProtobufEncoder()
+	data, err := enc.EncodeCommand(&controlpb.Command{
+		Uid:           "peer",
+		SurveyRequest: &controlpb.SurveyRequest{Id: 1, Op: "custom-op"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, n.handleControl(data))
+
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatal("survey handler not called")
+	}
+}
+
+// TestNode_HandleControl_Notification covers handleControl's Notification
+// routing branch.
+func TestNode_HandleControl_Notification(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	got := make(chan NotificationEvent, 1)
+	n.OnNotification(func(e NotificationEvent) {
+		got <- e
+	})
+
+	enc := controlproto.NewProtobufEncoder()
+	data, err := enc.EncodeCommand(&controlpb.Command{
+		Uid:          "peer",
+		Notification: &controlpb.Notification{Op: "ping", Data: []byte("d")},
+	})
+	require.NoError(t, err)
+	require.NoError(t, n.handleControl(data))
+
+	select {
+	case e := <-got:
+		require.Equal(t, "ping", e.Op)
+		require.Equal(t, []byte("d"), e.Data)
+		require.Equal(t, "peer", e.FromNodeID)
+	case <-time.After(time.Second):
+		t.Fatal("notification handler not called")
+	}
+}
+
+// TestNode_SharedPollNotify_NilManager covers the early-return branch in
+// SharedPollNotify when shared poll manager isn't configured.
+func TestNode_SharedPollNotify_NilManager(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	require.Nil(t, n.sharedPollManager)
+	// Should be a silent no-op.
+	n.SharedPollNotify([]SharedPollNotificationItem{{Channel: "ch", Key: "k"}})
+}
+
+// TestNode_SharedPollPublish_NoManager covers the error-return branch when
+// shared poll manager isn't configured.
+func TestNode_SharedPollPublish_NoManager(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	err := n.SharedPollPublish(context.Background(), "ch", "k", 1, "ep", []byte(`{}`))
+	require.Error(t, err)
+}
+
+// TestNode_MapStreamPosition_NoBroker covers the nil-broker error return.
+func TestNode_MapStreamPosition_NoBroker(t *testing.T) {
+	t.Parallel()
+	n, err := New(Config{
+		Map: MapConfig{
+			GetMapBroker: func(channel string) (MapBroker, bool) {
+				return nil, true // returns nil broker for our channel
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	_, err = n.mapStreamPosition(context.Background(), "no-broker-channel")
+	require.ErrorIs(t, err, ErrorNotAvailable)
+}
+
+// TestNode_MapClear_NoBroker covers the nil-broker error return.
+func TestNode_MapClear_NoBroker(t *testing.T) {
+	t.Parallel()
+	n, err := New(Config{
+		Map: MapConfig{
+			GetMapBroker: func(channel string) (MapBroker, bool) {
+				return nil, true
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	err = n.MapClear(context.Background(), "no-broker", MapClearOptions{})
+	require.ErrorIs(t, err, ErrorNotAvailable)
+}
+
+// TestNode_MapPublish_EmptyKey covers the empty-key validation branch.
+func TestNode_MapPublish_EmptyKey(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	_, err := n.MapPublish(context.Background(), "ch", "", MapPublishOptions{Data: []byte("{}")})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "key is required")
+}
+
+// TestNode_MapRemove_EmptyKey covers the empty-key validation branch.
+func TestNode_MapRemove_EmptyKey(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	_, err := n.MapRemove(context.Background(), "ch", "", MapRemoveOptions{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "key is required")
+}
+
+// TestNode_HandlePublication_RoutesToSharedPollManager covers the route in
+// HandlePublication that detects a shared-poll key-channel and forwards to
+// SharedPollManager.handlePublishedData.
+func TestNode_HandlePublication_RoutesToSharedPollManager(t *testing.T) {
+	t.Parallel()
+	n := newTestNodeWithSharedPoll(t)
+	setupSharedPollHandlers(n)
+	client := newTestClientV2(t, n, "u-route")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{{Key: "k1", Version: 0}})
+
+	// Wire-channel decodes back to the base channel, so handlePublishedData runs.
+	keyCh := sharedPollKeyChannel("test:channel", "k1")
+	require.NoError(t, n.HandlePublication(keyCh, &Publication{
+		Key:     "k1",
+		Data:    []byte(`{"v":1}`),
+		Version: 1,
+	}, StreamPosition{}, false, nil))
+}
