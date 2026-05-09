@@ -854,3 +854,59 @@ func TestMemoryHistoryHubPrevPub(t *testing.T) {
 	_, prevPub, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, UseDelta: true})
 	require.NotNil(t, prevPub)
 }
+
+// TestMemoryBroker_Publish_StreamWithCustomIdempotentTTL covers the
+// IdempotentResultTTL != 0 branch in the HistorySize > 0 path of Publish.
+func TestMemoryBroker_Publish_StreamWithCustomIdempotentTTL(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	broker, ok := node.broker.(*MemoryBroker)
+	require.True(t, ok)
+
+	res, err := broker.Publish("test_idemp_stream", []byte(`{"x":1}`), PublishOptions{
+		HistorySize:         10,
+		HistoryTTL:          time.Minute,
+		IdempotencyKey:      "abc",
+		IdempotentResultTTL: 30 * time.Second,
+	})
+	require.NoError(t, err)
+	require.False(t, res.Suppressed)
+	require.Greater(t, res.Offset, uint64(0))
+
+	// Second publish with same idempotency key is suppressed and returns the
+	// cached position.
+	res2, err := broker.Publish("test_idemp_stream", []byte(`{"x":2}`), PublishOptions{
+		HistorySize:         10,
+		HistoryTTL:          time.Minute,
+		IdempotencyKey:      "abc",
+		IdempotentResultTTL: 30 * time.Second,
+	})
+	require.NoError(t, err)
+	require.True(t, res2.Suppressed)
+	require.Equal(t, SuppressReasonIdempotency, res2.SuppressReason)
+	require.Equal(t, res.Offset, res2.Offset)
+}
+
+// TestMemoryBroker_Publish_StreamlessWithCustomIdempotentTTL covers the
+// IdempotentResultTTL != 0 branch in the no-stream path of Publish.
+func TestMemoryBroker_Publish_StreamlessWithCustomIdempotentTTL(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	broker, ok := node.broker.(*MemoryBroker)
+	require.True(t, ok)
+
+	_, err := broker.Publish("test_idemp_streamless", []byte(`{"x":1}`), PublishOptions{
+		IdempotencyKey:      "k",
+		IdempotentResultTTL: 30 * time.Second,
+	})
+	require.NoError(t, err)
+
+	res2, err := broker.Publish("test_idemp_streamless", []byte(`{"x":2}`), PublishOptions{
+		IdempotencyKey:      "k",
+		IdempotentResultTTL: 30 * time.Second,
+	})
+	require.NoError(t, err)
+	require.True(t, res2.Suppressed)
+}

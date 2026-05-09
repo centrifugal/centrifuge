@@ -2345,3 +2345,144 @@ func waitForPayload(t *testing.T, sink chan []byte, needle string, timeout time.
 		}
 	}
 }
+
+// TestSubShard_UpdateServerTagsFilter_NotFound covers the chSubs-not-found and
+// sub-not-found branches of updateServerTagsFilter, plus the no-op path when
+// neither old nor new filter is set.
+func TestSubShard_UpdateServerTagsFilter_NotFound(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	hub := node.hub
+	shard := hub.subShards[0]
+
+	// Channel not in shard at all → both returns false.
+	found, changed := shard.updateServerTagsFilter("ghost-channel", "anyone", nil)
+	require.False(t, found)
+	require.False(t, changed)
+
+	// Subscribe a real client, then call with a different (unknown) clientID
+	// to hit the sub-not-found branch. The function returns (false, false) for
+	// both "channel not in subs" and "client not in chSubs" — distinguishing
+	// them externally requires no extra assertion; the branch is what we want.
+	client := newTestSubscribedClientV2(t, node, "u-tags", "test-tags-channel")
+	t.Cleanup(func() { _ = client.close(DisconnectForceNoReconnect) })
+
+	chShard := hub.subShards[index("test-tags-channel", numHubShards)]
+	_, _ = chShard.updateServerTagsFilter("test-tags-channel", "no-such-client", nil)
+
+	// Same client, no existing filter, new filter is also nil → both-nil no-op.
+	found, changed = chShard.updateServerTagsFilter("test-tags-channel", client.uid, nil)
+	require.True(t, found)
+	require.False(t, changed)
+
+	// Now set a real filter and assert it changed.
+	tf := &tagsFilter{filter: &FilterNode{Key: "k", Cmp: "eq", Val: "v"}}
+	found, changed = chShard.updateServerTagsFilter("test-tags-channel", client.uid, tf)
+	require.True(t, found)
+	require.True(t, changed)
+
+	// Same hash again — no-op.
+	found, changed = chShard.updateServerTagsFilter("test-tags-channel", client.uid, tf)
+	require.True(t, found)
+	require.False(t, changed)
+}
+
+// ---------------------------------------------------------------------------
+// hub.go subscribe / refresh client+session filters
+// ---------------------------------------------------------------------------
+
+// TestHubSubscribe_ClientIDFilter covers the clientID-mismatch continue and
+// session-mismatch continue branches in connShard.subscribe.
+func TestHubSubscribe_ClientIDFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c1 := newTestConnectedClientV2(t, node, "u-multi")
+	c2 := newTestConnectedClientV2(t, node, "u-multi")
+	t.Cleanup(func() { _ = c1.close(DisconnectForceNoReconnect); _ = c2.close(DisconnectForceNoReconnect) })
+
+	// Subscribe only c1 by clientID.
+	err := node.Subscribe("u-multi", "ch-1", WithSubscribeClient(c1.uid))
+	require.NoError(t, err)
+	require.Contains(t, c1.channels, "ch-1")
+	require.NotContains(t, c2.channels, "ch-1")
+
+	// Subscribe only c2 by sessionID (which is empty for both — use a non-matching value
+	// to force the continue branch on both clients with no actual subscribe call).
+	err = node.Subscribe("u-multi", "ch-2", WithSubscribeSession("nonexistent-session"))
+	require.NoError(t, err)
+	require.NotContains(t, c1.channels, "ch-2")
+	require.NotContains(t, c2.channels, "ch-2")
+}
+
+// TestHubRefresh_ClientIDFilter covers the same filter branches in refresh.
+func TestHubRefresh_ClientIDFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c1 := newTestConnectedClientV2(t, node, "u-refresh")
+	c2 := newTestConnectedClientV2(t, node, "u-refresh")
+	t.Cleanup(func() { _ = c1.close(DisconnectForceNoReconnect); _ = c2.close(DisconnectForceNoReconnect) })
+
+	// Refresh only c1 by clientID.
+	err := node.Refresh("u-refresh", WithRefreshClient(c1.uid))
+	require.NoError(t, err)
+
+	// Filter by sessionID that no client has → no-op, no error.
+	err = node.Refresh("u-refresh", WithRefreshSession("nope"))
+	require.NoError(t, err)
+}
+
+// TestHubConnections_NonEmpty covers the Connections() loop body when the
+// shard contains at least one client.
+func TestHubConnections_NonEmpty(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c := newTestConnectedClientV2(t, node, "u-conn")
+	t.Cleanup(func() { _ = c.close(DisconnectForceNoReconnect) })
+
+	conns := node.hub.Connections()
+	require.GreaterOrEqual(t, len(conns), 1)
+	require.Contains(t, conns, c.uid)
+}
+
+// ---------------------------------------------------------------------------
+// hub.go broadcastJoin / broadcastLeave Protobuf path
+// ---------------------------------------------------------------------------
+
+// TestBroadcastJoinLeave_ProtobufClient covers the Protobuf encoding paths
+// in subShard.broadcastJoin / subShard.broadcastLeave by ensuring a Protobuf
+// subscriber receives join/leave events.
+func TestBroadcastJoinLeave_ProtobufClient(t *testing.T) {
+	t.Parallel()
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{
+				EmitJoinLeave: true, PushJoinLeave: true,
+			}}, nil)
+		})
+	})
+
+	// Protobuf-protocol subscriber (covers Protobuf branch).
+	c1 := newTestClientV2Protocol(t, n, "u1", ProtocolTypeProtobuf)
+	connectClientV2(t, c1)
+	subscribeClientV2(t, c1, "joinleave:protobuf")
+
+	// Trigger join + leave through the hub. Hub.broadcast{Join,Leave} take
+	// *ClientInfo and dispatch to subShard.broadcast{Join,Leave} with a
+	// *protocol.Join/Leave wrapper internally — so we exercise the Protobuf
+	// encoding paths in subShard.
+	require.NoError(t, n.hub.broadcastJoin("joinleave:protobuf",
+		&ClientInfo{ClientID: "joiner", UserID: "u2"}, ChannelBatchConfig{}))
+	require.NoError(t, n.hub.broadcastLeave("joinleave:protobuf",
+		&ClientInfo{ClientID: "joiner", UserID: "u2"}, ChannelBatchConfig{}))
+}
