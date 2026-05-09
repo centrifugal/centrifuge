@@ -5398,3 +5398,68 @@ func TestMapSubscribe_StreamPhase_TagsFilter_IntermediatePage(t *testing.T) {
 		require.Equal(t, "admin", pub.Tags["role"])
 	}
 }
+
+// TestMapSubscribe_DirectLiveRecovery_ServerTagsFilter is a regression test for
+// a server-side filter bypass on the direct phase=LIVE + recover=true path.
+// On clean reconnect (no in-progress STATE/STREAM state on the server),
+// handleMapLivePhase took the !hasState branch and never propagated
+// reply.Options.ServerTagsFilter into the subInfo used for delivery, so the
+// reconnecting subscriber received publications that should have been filtered
+// out by the server-side RBAC filter.
+func TestMapSubscribe_DirectLiveRecovery_ServerTagsFilter(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_live_recovery_server_filter"
+	ctx := context.Background()
+
+	// Anchor offset/epoch.
+	res, err := broker.Publish(ctx, channel, "seed", MapPublishOptions{
+		Data: []byte(`{"v":"seed"}`),
+		Tags: map[string]string{"team": "eng"},
+	})
+	require.NoError(t, err)
+	startOffset := res.Position.Offset
+	startEpoch := res.Position.Epoch
+
+	// Mix of matching (team=eng) and non-matching (team=sales) entries in the gap.
+	for i, team := range []string{"eng", "sales", "eng", "sales"} {
+		_, err := broker.Publish(ctx, channel, "k"+string(rune('a'+i)), MapPublishOptions{
+			Data: []byte(`{"v":"x"}`),
+			Tags: map[string]string{"team": team},
+		})
+		require.NoError(t, err)
+	}
+
+	// Server-side filter: team=eng. Client cannot override.
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:             SubscriptionTypeMap,
+					ServerTagsFilter: &FilterNode{Key: "team", Cmp: "eq", Val: "eng"},
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Direct LIVE recovery — no prior STATE/STREAM. This triggers the
+	// !hasState branch in handleMapLivePhase.
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseLive,
+		Offset:  startOffset,
+		Epoch:   startEpoch,
+		Recover: true,
+	})
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.True(t, result.Recovered)
+
+	for _, pub := range result.Publications {
+		require.Equal(t, "eng", pub.Tags["team"],
+			"server filter team=eng must drop sales entries even on direct LIVE recovery")
+	}
+}

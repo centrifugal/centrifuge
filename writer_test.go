@@ -392,3 +392,185 @@ func TestWriterEnqueueManyTimerMode(t *testing.T) {
 		}
 	}
 }
+
+// TestWriter_NextPrevLogBase2_Zero covers the early-return branches for
+// nextLogBase2(0) and prevLogBase2(0).
+func TestWriter_NextPrevLogBase2_Zero(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, uint32(0), nextLogBase2(0))
+	require.Equal(t, uint32(0), prevLogBase2(0))
+}
+
+// TestWriter_PrevLogBase2_NonPowerOfTwo covers the final return next-1
+// branch in prevLogBase2 (input is not a power of two).
+func TestWriter_PrevLogBase2_NonPowerOfTwo(t *testing.T) {
+	t.Parallel()
+	// 5 is between 4 (2^2) and 8 (2^3); rounded down → log2(4) = 2.
+	require.Equal(t, uint32(2), prevLogBase2(5))
+	// 100 is between 64 (2^6) and 128 (2^7); rounded down → 6.
+	require.Equal(t, uint32(6), prevLogBase2(100))
+}
+
+// TestWriter_GetItemBuf_ZeroLength covers the length<=0 branch in getItemBuf
+// which falls back to defaultMaxMessagesInFrame.
+func TestWriter_GetItemBuf_ZeroLength(t *testing.T) {
+	t.Parallel()
+	buf := getItemBuf(0)
+	require.NotNil(t, buf)
+	require.Equal(t, defaultMaxMessagesInFrame, len(buf.B))
+	putItemBuf(buf)
+}
+
+// TestWriter_GetItemBuf_OversizedLength covers the length>maxItemBufLength
+// branch which bypasses the pool and allocates fresh.
+func TestWriter_GetItemBuf_OversizedLength(t *testing.T) {
+	t.Parallel()
+	buf := getItemBuf(maxItemBufLength + 1)
+	require.NotNil(t, buf)
+	require.Equal(t, maxItemBufLength+1, len(buf.B))
+	// putItemBuf must drop oversized buffers (cap > maxItemBufLength branch).
+	putItemBuf(buf)
+}
+
+// TestWriter_PutItemBuf_EmptyCapacity covers the cap==0 drop branch in
+// putItemBuf. We construct an itemBuf with empty backing slice manually.
+func TestWriter_PutItemBuf_EmptyCapacity(t *testing.T) {
+	t.Parallel()
+	// Empty buf — cap is 0 → drop.
+	putItemBuf(&itemBuf{B: nil})
+	// Sanity: also pass an oversized cap which goes through the same drop path.
+	putItemBuf(&itemBuf{B: make([]queue.Item, 0, maxItemBufLength+8)})
+}
+
+// TestWriter_WriteDelay_SingleMessage covers the writeDelay path where exactly
+// one message is in the queue, hitting the n==1 → WriteFn branch (instead of
+// WriteManyFn).
+func TestWriter_WriteDelay_SingleMessage(t *testing.T) {
+	t.Parallel()
+	transport := newFakeTransport(nil)
+	w := newWriter(writerConfig{
+		MaxQueueSize: 10 * 1024,
+		WriteFn:      transport.write,
+		WriteManyFn:  transport.writeMany,
+	}, 0)
+	// Goroutine mode (useWriteTimer=false) with writeDelay > 0 — exercises the
+	// writeDelay branch in waitSendMessage.
+	go w.run(20*time.Millisecond, 16, 0, false)
+	defer func() { _ = w.close(true) }()
+
+	dis := w.enqueue(queue.Item{Data: []byte("only-one")})
+	require.Nil(t, dis)
+
+	select {
+	case <-transport.ch:
+	case <-time.After(time.Second):
+		t.Fatal("single message in delay mode not delivered")
+	}
+	require.GreaterOrEqual(t, transport.writeCalls, 1)
+}
+
+// TestWriter_WriteDelay_Unlimited covers the maxMessagesInFrame=-1 branch in
+// the writeDelay path of waitSendMessage (bufSize := w.messages.Len()).
+func TestWriter_WriteDelay_Unlimited(t *testing.T) {
+	t.Parallel()
+	transport := newFakeTransport(nil)
+	w := newWriter(writerConfig{
+		MaxQueueSize: 10 * 1024,
+		WriteFn:      transport.write,
+		WriteManyFn:  transport.writeMany,
+	}, 0)
+	go w.run(20*time.Millisecond, -1, 0, false)
+	defer func() { _ = w.close(true) }()
+
+	for i := 0; i < 4; i++ {
+		require.Nil(t, w.enqueue(queue.Item{Data: []byte("x")}))
+	}
+	for i := 0; i < 4; i++ {
+		select {
+		case <-transport.ch:
+		case <-time.After(time.Second):
+			t.Fatal("delivery timed out")
+		}
+	}
+}
+
+// TestWriter_WriteDelay_WriteError covers the writeErr != nil branch in
+// the writeDelay path of waitSendMessage.
+func TestWriter_WriteDelay_WriteError(t *testing.T) {
+	t.Parallel()
+	transport := newFakeTransport(errors.New("boom"))
+	w := newWriter(writerConfig{
+		MaxQueueSize: 10 * 1024,
+		WriteFn:      transport.write,
+		WriteManyFn:  transport.writeMany,
+	}, 0)
+	done := make(chan struct{})
+	go func() {
+		w.run(20*time.Millisecond, 16, 0, false)
+		close(done)
+	}()
+	defer func() { _ = w.close(false) }()
+
+	require.Nil(t, w.enqueue(queue.Item{Data: []byte("err")}))
+	// WriteFn returns error → waitSendMessage returns false → run loop exits.
+	select {
+	case <-transport.ch:
+	case <-time.After(time.Second):
+		t.Fatal("write was not attempted")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("writer goroutine did not exit on write error")
+	}
+}
+
+// TestWriter_TimerFlush_Unlimited covers the bufSize<0 branch in the timer
+// flush path (when maxMessagesInFrame is -1).
+func TestWriter_TimerFlush_Unlimited(t *testing.T) {
+	t.Parallel()
+	transport := newFakeTransport(nil)
+	w := newWriter(writerConfig{
+		MaxQueueSize: 10 * 1024,
+		WriteFn:      transport.write,
+		WriteManyFn:  transport.writeMany,
+	}, 0)
+	w.run(20*time.Millisecond, -1, 0, true) // timer mode + unlimited frame
+	defer func() { _ = w.close(true) }()
+
+	require.Nil(t, w.enqueueMany(
+		queue.Item{Data: []byte("a")},
+		queue.Item{Data: []byte("b")},
+		queue.Item{Data: []byte("c")},
+	))
+	for i := 0; i < 3; i++ {
+		select {
+		case <-transport.ch:
+		case <-time.After(time.Second):
+			t.Fatal("delivery timed out")
+		}
+	}
+}
+
+// TestWriter_ScheduleFlushLocked_AlreadyScheduled covers the early-return
+// branches in scheduleFlushLocked and scheduleFlushImmediateLocked when a
+// timer is already scheduled.
+func TestWriter_ScheduleFlushLocked_AlreadyScheduled(t *testing.T) {
+	t.Parallel()
+	transport := newFakeTransport(nil)
+	w := newWriter(writerConfig{
+		MaxQueueSize: 10 * 1024,
+		WriteFn:      transport.write,
+		WriteManyFn:  transport.writeMany,
+	}, 0)
+	w.run(time.Hour, 1, 0, true) // timer mode with very long delay
+	defer func() { _ = w.close(false) }()
+
+	w.mu.Lock()
+	w.scheduleFlushLocked()
+	require.True(t, w.timerScheduled)
+	// Second call must early-return (no panic, no double-Reset).
+	w.scheduleFlushLocked()
+	w.scheduleFlushImmediateLocked()
+	w.mu.Unlock()
+}

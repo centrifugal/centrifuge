@@ -1110,6 +1110,16 @@ func (c *Client) handleMapLivePhase(
 	} else {
 		opts = reply.Options
 		isPresence = opts.Type.IsMapPresence()
+		// Direct-LIVE recovery: no STATE phase ran, so the server filter from
+		// reply.Options never landed in mapSubscribing. Inherit it here so it
+		// applies to recovered + live publications. Without this the server-side
+		// RBAC filter is bypassed on clean reconnect.
+		if opts.ServerTagsFilter != nil {
+			serverTagsFilterFromState = &tagsFilter{
+				filter: opts.ServerTagsFilter,
+				hash:   filter.Hash(opts.ServerTagsFilter),
+			}
+		}
 	}
 
 	// Recovery or paginated join - stream catch-up needed.
