@@ -47,8 +47,12 @@ func viol(c, lo, hi int) int {
 // findBalancedSlots uses simulated annealing to find numPartitions slots
 // that distribute evenly across cluster sizes 1..numPartitions.
 func findBalancedSlots(numPartitions int) []int {
-	// Deterministic seed based on parameters.
-	rng := rand.New(rand.NewSource(int64(numPartitions) * 100003))
+	// Deterministic seed: same numPartitions always produces the same tags.
+	// 100003 is an arbitrary prime used to scatter consecutive partition
+	// counts into distant seeds. Do not change — every entry in
+	// precomputed.go was generated against this seed; altering it would
+	// invalidate the bundled tables.
+	rng := rand.New(rand.NewSource(int64(numPartitions) * 100003)) //nolint:gosec // Determinism is required; not security-sensitive.
 
 	maxCluster := numPartitions
 

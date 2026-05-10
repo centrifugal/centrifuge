@@ -74,7 +74,7 @@ func main() {
 	}
 
 	src := renderSource(sizes, tagsBySize)
-	if err := os.WriteFile(out, []byte(src), 0644); err != nil {
+	if err := os.WriteFile(out, []byte(src), 0644); err != nil { //nolint:gosec // Generated Go source committed to repo; 0644 matches other source files.
 		fmt.Fprintf(os.Stderr, "write %s: %v\n", out, err)
 		os.Exit(1)
 	}
