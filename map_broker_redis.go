@@ -15,6 +15,7 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/epoch"
+	"github.com/centrifugal/centrifuge/internal/redispartition"
 	"github.com/centrifugal/protocol"
 	"github.com/redis/rueidis"
 )
@@ -95,6 +96,11 @@ type RedisMapBroker struct {
 
 	shards []*brokerShardWrapper
 
+	// partitionTags is non-nil when UsePrecomputedPartitionTags is enabled;
+	// indexed by partition index, returns the hash tag string. Read-only
+	// after construction (shared with the package-level precomputed table).
+	partitionTags []string
+
 	addScript           *rueidis.Lua
 	readOrderedScript   *rueidis.Lua
 	readUnorderedScript *rueidis.Lua
@@ -135,6 +141,20 @@ type RedisMapBrokerConfig struct {
 	// broker will use Redis Cluster with sharded PUB/SUB feature available in
 	// Redis >= 7: https://redis.io/docs/manual/pubsub/#sharded-pubsub
 	NumShardedPubSubPartitions int
+
+	// UsePrecomputedPartitionTags switches sharded PUB/SUB partition hash tags
+	// from the bare partition index ("0", "1", ...) to a precomputed table
+	// chosen so CRC16 hash slots distribute evenly across any cluster size.
+	// See RedisBrokerConfig.UsePrecomputedPartitionTags for details and
+	// migration constraints.
+	//
+	// When enabled, NumShardedPubSubPartitions must equal one of the sizes
+	// returned by redispartition.PrecomputedSizes() (16, 32, 64, 128, 256,
+	// 512, 1024, 2048, 4096). Construction returns an error otherwise.
+	//
+	// Default: false (backward-compatible bare-index tags).
+	UsePrecomputedPartitionTags bool
+
 	// numSubscribeShards defines how many subscribe shards will be used.
 	numSubscribeShards int
 	// numResubscribeShards defines how many subscriber goroutines will be used for
@@ -197,15 +217,28 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 		conf.CleanupInterval = time.Second
 	}
 
+	var partitionTags []string
+	if conf.UsePrecomputedPartitionTags {
+		if conf.NumShardedPubSubPartitions <= 0 {
+			return nil, errors.New("state broker: UsePrecomputedPartitionTags requires NumShardedPubSubPartitions > 0")
+		}
+		tags, err := redispartition.FindTags(conf.NumShardedPubSubPartitions)
+		if err != nil {
+			return nil, fmt.Errorf("state broker: %w", err)
+		}
+		partitionTags = tags
+	}
+
 	shardWrappers := make([]*brokerShardWrapper, 0, len(conf.Shards))
 	for _, s := range conf.Shards {
 		shardWrappers = append(shardWrappers, &brokerShardWrapper{shard: s})
 	}
 
 	e := &RedisMapBroker{
-		node:   n,
-		conf:   conf,
-		shards: shardWrappers,
+		node:          n,
+		conf:          conf,
+		shards:        shardWrappers,
+		partitionTags: partitionTags,
 		addScript: rueidis.NewLuaScript(
 			brokerStatePublishScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
@@ -347,7 +380,7 @@ func (e *RedisMapBroker) cleanupRegistrationKeyForChannel(s *RedisShard, ch stri
 		return e.conf.Prefix + ":cleanup:channels"
 	}
 	idx := consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
-	return e.conf.Prefix + ":cleanup:channels:{" + strconv.Itoa(idx) + "}"
+	return e.conf.Prefix + ":cleanup:channels:{" + e.pubSubPartitionHashTag(idx) + "}"
 }
 
 func (e *RedisMapBroker) resultCacheKey(s *RedisShard, ch string, idempotencyKey string) string {
@@ -363,7 +396,7 @@ func (e *RedisMapBroker) resultCacheKey(s *RedisShard, ch string, idempotencyKey
 	}
 
 	idx := consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
-	idxStr := strconv.Itoa(idx)
+	idxStr := e.pubSubPartitionHashTag(idx)
 
 	var builder strings.Builder
 	capacity := len(e.conf.Prefix) + 9 + 1 + len(idxStr) + 2 + len(ch) + 1 + len(idempotencyKey)
@@ -391,7 +424,7 @@ func (e *RedisMapBroker) buildKey(s *RedisShard, ch string, infix string) string
 	}
 
 	idx := consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
-	idxStr := strconv.Itoa(idx)
+	idxStr := e.pubSubPartitionHashTag(idx)
 
 	var builder strings.Builder
 	capacity := len(e.conf.Prefix) + len(infix) + 1 + len(idxStr) + 2 + len(ch)
@@ -416,7 +449,7 @@ func (e *RedisMapBroker) messageChannelID(s *RedisShard, ch string) string {
 	}
 
 	idx := consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
-	idxStr := strconv.Itoa(idx)
+	idxStr := e.pubSubPartitionHashTag(idx)
 
 	capacity := len(e.messagePrefix) + 1 + len(idxStr) + 2 + len(ch)
 
@@ -2772,7 +2805,14 @@ func (e *RedisMapBroker) runPubSub(s *brokerShardWrapper, logFields map[string]a
 // to a specific slot) and by alternative pub/sub strategies that need to
 // determine slot ownership for a partition. Publisher and subscriber must
 // agree on the scheme — keep this as the single source of truth.
+//
+// When UsePrecomputedPartitionTags is enabled, returns the precomputed tag
+// for the index (selected for even slot distribution). Otherwise returns
+// the bare integer index, preserving backward-compatible behaviour.
 func (e *RedisMapBroker) pubSubPartitionHashTag(partitionIdx int) string {
+	if e.partitionTags != nil {
+		return e.partitionTags[partitionIdx]
+	}
 	return strconv.Itoa(partitionIdx)
 }
 

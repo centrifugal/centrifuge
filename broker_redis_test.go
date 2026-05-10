@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/redispartition"
 	"github.com/centrifugal/protocol"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -2477,6 +2478,244 @@ func TestRedisBroker_ClusterHashTags_Consistency(t *testing.T) {
 	// Both should have the same hash tag {test-channel}, ensuring they're in the same slot.
 	require.Contains(t, string(channelID), "{test-channel}")
 	require.Contains(t, string(streamKey), "{test-channel}")
+}
+
+func TestRedisBroker_PubSubPartitionHashTag(t *testing.T) {
+	t.Run("default scheme returns bare integer", func(t *testing.T) {
+		broker := &RedisBroker{
+			config: RedisBrokerConfig{NumShardedPubSubPartitions: 16},
+		}
+		for i := 0; i < 16; i++ {
+			require.Equal(t, strconv.Itoa(i), broker.pubSubPartitionHashTag(i))
+		}
+	})
+
+	t.Run("precomputed scheme returns table tag", func(t *testing.T) {
+		tags, err := redispartition.FindTags(16)
+		require.NoError(t, err)
+		broker := &RedisBroker{
+			config:        RedisBrokerConfig{NumShardedPubSubPartitions: 16, UsePrecomputedPartitionTags: true},
+			partitionTags: tags,
+		}
+		for i := 0; i < 16; i++ {
+			require.Equal(t, tags[i], broker.pubSubPartitionHashTag(i))
+		}
+	})
+}
+
+// TestRedisBroker_PrecomputedTags_KeyConsistency walks every key/channel
+// builder for a sample channel and asserts they all embed the precomputed
+// hash tag (not the bare partition index). This locks in that no builder
+// regresses to using strconv.Itoa(idx) directly.
+func TestRedisBroker_PrecomputedTags_KeyConsistency(t *testing.T) {
+	tags, err := redispartition.FindTags(16)
+	require.NoError(t, err)
+
+	broker := &RedisBroker{
+		config: RedisBrokerConfig{
+			Prefix:                      "centrifuge",
+			NumShardedPubSubPartitions:  16,
+			UsePrecomputedPartitionTags: true,
+		},
+		messagePrefix: "centrifuge.client.",
+		partitionTags: tags,
+	}
+	clusterShard := &RedisShard{isCluster: true}
+
+	channelName := "my-channel"
+	idx := consistentIndex(channelName, 16)
+	expectedTag := tags[idx]
+	bareIdx := strconv.Itoa(idx)
+	wrapped := "{" + expectedTag + "}"
+
+	cases := []struct {
+		name string
+		got  string
+	}{
+		{"messageChannelID", string(broker.messageChannelID(clusterShard, channelName))},
+		{"resultCacheKey", string(broker.resultCacheKey(clusterShard, channelName, "idem"))},
+		{"historyListKey", string(broker.historyListKey(clusterShard, channelName))},
+		{"historyStreamKey", string(broker.historyStreamKey(clusterShard, channelName))},
+		{"historyMetaKey", string(broker.historyMetaKey(clusterShard, channelName))},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			require.Contains(t, c.got, wrapped, "should embed precomputed tag {%s}", expectedTag)
+			// And must NOT contain the bare integer wrapped as a hash tag.
+			require.NotContains(t, c.got, "{"+bareIdx+"}", "should not embed bare partition index as hash tag")
+		})
+	}
+}
+
+// TestRedisBroker_UsePrecomputedPartitionTags_ClusterE2E exercises the full
+// publish/subscribe path with the precomputed-tag scheme enabled against a
+// live Redis Cluster. Requires a 3-node cluster on 7001-7003 with sharded
+// PUB/SUB support (Redis 7+); skipped otherwise.
+func TestRedisBroker_UsePrecomputedPartitionTags_ClusterE2E(t *testing.T) {
+	redisConf := RedisShardConfig{
+		ClusterAddresses: []string{"localhost:7001", "localhost:7002", "localhost:7003"},
+		IOTimeout:        10 * time.Second,
+		ConnectTimeout:   10 * time.Second,
+	}
+
+	prefix := getUniquePrefix()
+
+	// Subscriber node.
+	node1, _ := New(Config{})
+	s1, err := NewRedisShard(node1, redisConf)
+	require.NoError(t, err)
+	skipIfNoShardedPubSub(t, s1, prefix)
+
+	b1, err := NewRedisBroker(node1, RedisBrokerConfig{
+		Prefix:                      prefix,
+		Shards:                      []*RedisShard{s1},
+		numSubscribeShards:          2,
+		NumShardedPubSubPartitions:  16,
+		UsePrecomputedPartitionTags: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, b1.partitionTags, "partitionTags must be loaded when option is enabled")
+	require.Len(t, b1.partitionTags, 16)
+	node1.SetBroker(b1)
+	defer func() { _ = node1.Shutdown(context.Background()) }()
+	defer stopRedisBroker(b1)
+
+	const msgNum = 32 // > 16 so we exercise channels across all partitions
+	var numPublications int64
+	pubCh := make(chan struct{})
+	brokerEventHandler := &testBrokerEventHandler{
+		HandleControlFunc: func([]byte) error { return nil },
+		HandlePublicationFunc: func(_ string, _ *Publication, _ StreamPosition, _ bool, _ *Publication) error {
+			if atomic.AddInt64(&numPublications, 1) == int64(msgNum) {
+				close(pubCh)
+			}
+			return nil
+		},
+		HandleJoinFunc:  func(string, *ClientInfo) error { return nil },
+		HandleLeaveFunc: func(string, *ClientInfo) error { return nil },
+	}
+	require.NoError(t, b1.RegisterControlEventHandler(brokerEventHandler))
+	require.NoError(t, b1.RegisterBrokerEventHandler(brokerEventHandler))
+
+	for i := 0; i < msgNum; i++ {
+		require.NoError(t, b1.Subscribe("ch_precomputed_"+strconv.Itoa(i)))
+	}
+
+	// Publisher node — separate broker, same configuration.
+	node2, _ := New(Config{})
+	s2, err := NewRedisShard(node2, redisConf)
+	require.NoError(t, err)
+	b2, err := NewRedisBroker(node2, RedisBrokerConfig{
+		Prefix:                      prefix,
+		Shards:                      []*RedisShard{s2},
+		numSubscribeShards:          2,
+		NumShardedPubSubPartitions:  16,
+		UsePrecomputedPartitionTags: true,
+	})
+	require.NoError(t, err)
+	node2.SetBroker(b2)
+	require.NoError(t, node2.Run())
+	defer func() { _ = node2.Shutdown(context.Background()) }()
+	defer stopRedisBroker(b2)
+
+	for i := 0; i < msgNum; i++ {
+		_, err = node2.Publish("ch_precomputed_"+strconv.Itoa(i), []byte("payload"))
+		require.NoError(t, err)
+	}
+
+	select {
+	case <-pubCh:
+	case <-time.After(5 * time.Second):
+		require.Failf(t, "timeout", "received %d / %d publications", atomic.LoadInt64(&numPublications), msgNum)
+	}
+}
+
+// TestRedisBroker_PartitionSlotInvariant asserts that for any channel, the
+// cluster slot of its messageChannelID equals the slot of its partition's
+// shard channel (pubSubShardChannelID). Strategies that derive node ownership
+// from the partition's hash tag rely on this — if the slots diverged, a
+// subscriber and publisher could end up on different nodes for the same
+// partition. Run for both tag schemes.
+func TestRedisBroker_PartitionSlotInvariant(t *testing.T) {
+	clusterShard := &RedisShard{isCluster: true}
+	const numPartitions = 16
+	const numPsShards = 2
+	channels := []string{"alpha", "beta", "user-42", "long-channel-name-with-dashes", "x"}
+
+	check := func(t *testing.T, broker *RedisBroker) {
+		t.Helper()
+		for _, ch := range channels {
+			partIdx := consistentIndex(ch, numPartitions)
+			msgID := string(broker.messageChannelID(clusterShard, ch))
+			msgSlot := redisSlot(msgID)
+			for psShard := 0; psShard < numPsShards; psShard++ {
+				shardID := string(broker.pubSubShardChannelID(partIdx, psShard, true))
+				shardSlot := redisSlot(shardID)
+				require.Equal(t, msgSlot, shardSlot,
+					"channel=%q partIdx=%d psShard=%d msgID=%s shardID=%s", ch, partIdx, psShard, msgID, shardID)
+			}
+		}
+	}
+
+	t.Run("default scheme", func(t *testing.T) {
+		broker := &RedisBroker{
+			config:        RedisBrokerConfig{Prefix: "centrifuge", NumShardedPubSubPartitions: numPartitions},
+			messagePrefix: "centrifuge.client.",
+			shardChannel:  "centrifuge" + redisPubSubShardChannelSuffix,
+		}
+		check(t, broker)
+	})
+
+	t.Run("precomputed scheme", func(t *testing.T) {
+		tags, err := redispartition.FindTags(numPartitions)
+		require.NoError(t, err)
+		broker := &RedisBroker{
+			config: RedisBrokerConfig{
+				Prefix:                      "centrifuge",
+				NumShardedPubSubPartitions:  numPartitions,
+				UsePrecomputedPartitionTags: true,
+			},
+			messagePrefix: "centrifuge.client.",
+			shardChannel:  "centrifuge" + redisPubSubShardChannelSuffix,
+			partitionTags: tags,
+		}
+		check(t, broker)
+	})
+}
+
+func TestRedisBroker_UsePrecomputedPartitionTags_Validation(t *testing.T) {
+	n, err := New(Config{LogHandler: func(LogEntry) {}})
+	require.NoError(t, err)
+
+	t.Run("rejects zero partition count", func(t *testing.T) {
+		_, err := NewRedisBroker(n, RedisBrokerConfig{
+			Shards:                      []*RedisShard{{}},
+			UsePrecomputedPartitionTags: true,
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "UsePrecomputedPartitionTags")
+		require.Contains(t, err.Error(), "NumShardedPubSubPartitions")
+	})
+
+	t.Run("rejects unsupported partition count", func(t *testing.T) {
+		_, err := NewRedisBroker(n, RedisBrokerConfig{
+			Shards:                      []*RedisShard{{}},
+			NumShardedPubSubPartitions:  3,
+			UsePrecomputedPartitionTags: true,
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "not precomputed")
+	})
+
+	t.Run("rejects partition count above max", func(t *testing.T) {
+		_, err := NewRedisBroker(n, RedisBrokerConfig{
+			Shards:                      []*RedisShard{{}},
+			NumShardedPubSubPartitions:  100,
+			UsePrecomputedPartitionTags: true,
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "not precomputed")
+	})
 }
 
 func TestRedisClusterMultipleChannelsTwoNodes(t *testing.T) {

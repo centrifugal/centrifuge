@@ -6,9 +6,11 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"strconv"
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/redispartition"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -3549,6 +3551,206 @@ func TestNewRedisMapBrokerErrors(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "sharded PUB/SUB")
+
+	// UsePrecomputedPartitionTags without partition count set.
+	_, err = NewRedisMapBroker(node, RedisMapBrokerConfig{
+		Shards:                      []*RedisShard{{}},
+		UsePrecomputedPartitionTags: true,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "UsePrecomputedPartitionTags")
+	require.Contains(t, err.Error(), "NumShardedPubSubPartitions")
+
+	// UsePrecomputedPartitionTags with unsupported partition count.
+	_, err = NewRedisMapBroker(node, RedisMapBrokerConfig{
+		Shards:                      []*RedisShard{{}},
+		NumShardedPubSubPartitions:  3,
+		UsePrecomputedPartitionTags: true,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not precomputed")
+}
+
+// TestRedisMapBroker_UsePrecomputedPartitionTags_ClusterE2E exercises the
+// full publish + read-state path with the precomputed-tag scheme enabled
+// against a live Redis Cluster. Requires a 3-node cluster on 7001-7003 with
+// sharded PUB/SUB support (Redis 7+); skipped otherwise.
+func TestRedisMapBroker_UsePrecomputedPartitionTags_ClusterE2E(t *testing.T) {
+	node, _ := New(Config{
+		Map: MapConfig{
+			GetMapChannelOptions: func(string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeRecoverable,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
+		},
+	})
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	redisConf := RedisShardConfig{
+		ClusterAddresses: []string{"127.0.0.1:7001", "127.0.0.1:7002", "127.0.0.1:7003"},
+		IOTimeout:        10 * time.Second,
+		ConnectTimeout:   10 * time.Second,
+	}
+	shard, err := NewRedisShard(node, redisConf)
+	require.NoError(t, err)
+	defer shard.Close()
+	skipIfNoShardedPubSub(t, shard, "centrifuge-test-skip-probe-"+randString(4))
+
+	broker, err := NewRedisMapBroker(node, RedisMapBrokerConfig{
+		Shards:                      []*RedisShard{shard},
+		NumShardedPubSubPartitions:  16,
+		UsePrecomputedPartitionTags: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, broker.partitionTags, "partitionTags must be loaded when option is enabled")
+	require.Len(t, broker.partitionTags, 16)
+
+	ctx := context.Background()
+
+	// Touch enough channels to spread across partitions and validate
+	// publish + read-state work end to end with the precomputed scheme.
+	const numChannels = 32
+	channels := make([]string, numChannels)
+	for i := 0; i < numChannels; i++ {
+		channels[i] = randomChannel("test_precomputed_e2e")
+		_, err := broker.Publish(ctx, channels[i], "key1", MapPublishOptions{Data: []byte("v1")})
+		require.NoError(t, err)
+		_, err = broker.Publish(ctx, channels[i], "key2", MapPublishOptions{Data: []byte("v2")})
+		require.NoError(t, err)
+	}
+
+	for _, ch := range channels {
+		res, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+		require.NoError(t, err)
+		state := stateToMap(res.Publications)
+		require.Equal(t, []byte("v1"), state["key1"])
+		require.Equal(t, []byte("v2"), state["key2"])
+		require.NotEmpty(t, res.Position.Epoch)
+		require.Greater(t, res.Position.Offset, uint64(0))
+	}
+}
+
+// TestRedisMapBroker_PartitionSlotInvariant asserts that for any channel, the
+// cluster slot of its messageChannelID equals the slot of its partition's
+// shard channel (pubSubShardChannelID). Strategies that derive node ownership
+// from the partition's hash tag rely on this — if the slots diverged, a
+// subscriber and publisher could end up on different nodes for the same
+// partition. Run for both tag schemes.
+func TestRedisMapBroker_PartitionSlotInvariant(t *testing.T) {
+	clusterShard := &RedisShard{isCluster: true}
+	const numPartitions = 16
+	const numPsShards = 2
+	channels := []string{"alpha", "beta", "user-42", "long-channel-name-with-dashes", "x"}
+
+	check := func(t *testing.T, broker *RedisMapBroker) {
+		t.Helper()
+		for _, ch := range channels {
+			partIdx := consistentIndex(ch, numPartitions)
+			msgID := broker.messageChannelID(clusterShard, ch)
+			msgSlot := redisSlot(msgID)
+			for psShard := 0; psShard < numPsShards; psShard++ {
+				shardID := broker.pubSubShardChannelID(partIdx, psShard, true)
+				shardSlot := redisSlot(shardID)
+				require.Equal(t, msgSlot, shardSlot,
+					"channel=%q partIdx=%d psShard=%d msgID=%s shardID=%s", ch, partIdx, psShard, msgID, shardID)
+			}
+		}
+	}
+
+	t.Run("default scheme", func(t *testing.T) {
+		broker := &RedisMapBroker{
+			conf:          RedisMapBrokerConfig{Prefix: "centrifuge", NumShardedPubSubPartitions: numPartitions},
+			messagePrefix: "centrifuge.client.",
+			shardChannel:  "centrifuge" + redisPubSubShardChannelSuffix,
+		}
+		check(t, broker)
+	})
+
+	t.Run("precomputed scheme", func(t *testing.T) {
+		tags, err := redispartition.FindTags(numPartitions)
+		require.NoError(t, err)
+		broker := &RedisMapBroker{
+			conf: RedisMapBrokerConfig{
+				Prefix:                      "centrifuge",
+				NumShardedPubSubPartitions:  numPartitions,
+				UsePrecomputedPartitionTags: true,
+			},
+			messagePrefix: "centrifuge.client.",
+			shardChannel:  "centrifuge" + redisPubSubShardChannelSuffix,
+			partitionTags: tags,
+		}
+		check(t, broker)
+	})
+}
+
+func TestRedisMapBroker_PubSubPartitionHashTag(t *testing.T) {
+	t.Run("default scheme returns bare integer", func(t *testing.T) {
+		broker := &RedisMapBroker{
+			conf: RedisMapBrokerConfig{NumShardedPubSubPartitions: 16},
+		}
+		for i := 0; i < 16; i++ {
+			require.Equal(t, strconv.Itoa(i), broker.pubSubPartitionHashTag(i))
+		}
+	})
+
+	t.Run("precomputed scheme returns table tag", func(t *testing.T) {
+		tags, err := redispartition.FindTags(16)
+		require.NoError(t, err)
+		broker := &RedisMapBroker{
+			conf:          RedisMapBrokerConfig{NumShardedPubSubPartitions: 16, UsePrecomputedPartitionTags: true},
+			partitionTags: tags,
+		}
+		for i := 0; i < 16; i++ {
+			require.Equal(t, tags[i], broker.pubSubPartitionHashTag(i))
+		}
+	})
+}
+
+// TestRedisMapBroker_PrecomputedTags_KeyConsistency walks the four key/channel
+// builders that thread partition tags through and verifies they all use the
+// precomputed tag rather than the bare partition index.
+func TestRedisMapBroker_PrecomputedTags_KeyConsistency(t *testing.T) {
+	tags, err := redispartition.FindTags(16)
+	require.NoError(t, err)
+
+	broker := &RedisMapBroker{
+		conf: RedisMapBrokerConfig{
+			Prefix:                      "centrifuge",
+			NumShardedPubSubPartitions:  16,
+			UsePrecomputedPartitionTags: true,
+		},
+		messagePrefix: "centrifuge.client.",
+		partitionTags: tags,
+	}
+	clusterShard := &RedisShard{isCluster: true}
+
+	channelName := "my-channel"
+	idx := consistentIndex(channelName, 16)
+	expectedTag := tags[idx]
+	bareIdx := strconv.Itoa(idx)
+	wrapped := "{" + expectedTag + "}"
+
+	cases := []struct {
+		name string
+		got  string
+	}{
+		{"messageChannelID", broker.messageChannelID(clusterShard, channelName)},
+		{"resultCacheKey", broker.resultCacheKey(clusterShard, channelName, "idem")},
+		{"cleanupRegistrationKeyForChannel", broker.cleanupRegistrationKeyForChannel(clusterShard, channelName)},
+		// buildKey is exercised via the public state-meta key builder.
+		{"buildKey/state-meta", broker.stateMetaKey(clusterShard, channelName)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			require.Contains(t, c.got, wrapped, "should embed precomputed tag {%s}", expectedTag)
+			require.NotContains(t, c.got, "{"+bareIdx+"}", "should not embed bare partition index as hash tag")
+		})
+	}
 }
 
 // TestRedisMapBrokerReadPresenceState verifies the presence-state read wrapper

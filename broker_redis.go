@@ -16,6 +16,7 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/epoch"
+	"github.com/centrifugal/centrifuge/internal/redispartition"
 
 	"github.com/centrifugal/protocol"
 	"github.com/redis/rueidis"
@@ -90,6 +91,10 @@ type RedisBroker struct {
 	sharding                bool
 	config                  RedisBrokerConfig
 	shards                  []*shardWrapper
+	// partitionTags is non-nil when UsePrecomputedPartitionTags is enabled;
+	// indexed by partition index, returns the hash tag string. Read-only
+	// after construction (shared with the package-level precomputed table).
+	partitionTags           []string
 	publishIdempotentScript *rueidis.Lua
 	historyListScript       *rueidis.Lua
 	historyStreamScript     *rueidis.Lua
@@ -155,6 +160,26 @@ type RedisBrokerConfig struct {
 	// Redis Cluster mode due to reasons outlined above.
 	NumShardedPubSubPartitions int
 
+	// UsePrecomputedPartitionTags switches sharded PUB/SUB partition hash tags
+	// from the bare partition index ("0", "1", ...) to a precomputed table
+	// chosen so CRC16 hash slots distribute evenly across any cluster size.
+	// The bare-index scheme can collide badly on larger clusters — see
+	// https://github.com/centrifugal/centrifuge/issues/554. Enabling this
+	// option spreads partitions across slots so cluster nodes get balanced
+	// PUB/SUB load even at higher shard counts.
+	//
+	// When enabled, NumShardedPubSubPartitions must equal one of the sizes
+	// returned by redispartition.PrecomputedSizes() (16, 32, 64, 128, 256,
+	// 512, 1024, 2048, 4096). Construction returns an error otherwise.
+	//
+	// Toggling this option changes the Redis key/channel naming scheme, so
+	// flipping it on a running deployment requires a coordinated restart
+	// with state cleared (existing channels and history will appear under
+	// different keys).
+	//
+	// Default: false (backward-compatible bare-index tags).
+	UsePrecomputedPartitionTags bool
+
 	// numSubscribeShards defines how many subscribe shards will be used by Centrifuge.
 	// Each subscribe shard uses a dedicated connection to Redis for making subscriptions.
 	// Zero value means 1.
@@ -216,6 +241,18 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		}
 	}
 
+	var partitionTags []string
+	if config.UsePrecomputedPartitionTags {
+		if config.NumShardedPubSubPartitions <= 0 {
+			return nil, errors.New("broker: UsePrecomputedPartitionTags requires NumShardedPubSubPartitions > 0")
+		}
+		tags, err := redispartition.FindTags(config.NumShardedPubSubPartitions)
+		if err != nil {
+			return nil, fmt.Errorf("broker: %w", err)
+		}
+		partitionTags = tags
+	}
+
 	shardWrappers := make([]*shardWrapper, 0, len(config.Shards))
 	for _, s := range config.Shards {
 		logFields := map[string]any{
@@ -231,6 +268,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		node:                    n,
 		config:                  config,
 		shards:                  shardWrappers,
+		partitionTags:           partitionTags,
 		sharding:                len(config.Shards) > 1,
 		publishIdempotentScript: rueidis.NewLuaScript(publishIdempotentSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
 		historyStreamScript:     rueidis.NewLuaScript(historyStreamSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
@@ -1113,7 +1151,7 @@ func (b *RedisBroker) messageChannelID(s *RedisShard, ch string) channelID {
 
 	// Sharded pub/sub path: uses partition-based hash tags
 	idx := consistentIndex(ch, b.config.NumShardedPubSubPartitions)
-	idxStr := strconv.Itoa(idx)
+	idxStr := b.pubSubPartitionHashTag(idx)
 
 	// Pre-calculate capacity: messagePrefix + "{" + idxStr + "}." + ch
 	capacity := len(b.messagePrefix) + 1 + len(idxStr) + 2 + len(ch)
@@ -1134,7 +1172,14 @@ func (b *RedisBroker) messageChannelID(s *RedisShard, ch string) channelID {
 // to a specific slot) and by alternative pub/sub strategies that need to
 // determine slot ownership for a partition. Publisher and subscriber must
 // agree on the scheme — keep this as the single source of truth.
+//
+// When UsePrecomputedPartitionTags is enabled, returns the precomputed tag
+// for the index (selected for even slot distribution). Otherwise returns
+// the bare integer index, preserving backward-compatible behaviour.
 func (b *RedisBroker) pubSubPartitionHashTag(partitionIdx int) string {
+	if b.partitionTags != nil {
+		return b.partitionTags[partitionIdx]
+	}
 	return strconv.Itoa(partitionIdx)
 }
 
@@ -1188,7 +1233,7 @@ func (b *RedisBroker) resultCacheKey(s *RedisShard, ch string, idempotencyKey st
 	if b.config.NumShardedPubSubPartitions > 0 {
 		// Sharded cluster: prefix + ".result." + "{" + idx + "}." + ch + "." + idempotencyKey
 		idx := consistentIndex(ch, b.config.NumShardedPubSubPartitions)
-		idxStr := strconv.Itoa(idx)
+		idxStr := b.pubSubPartitionHashTag(idx)
 		capacity := len(b.config.Prefix) + 9 + 1 + len(idxStr) + 2 + len(ch) + 1 + len(idempotencyKey)
 		builder.Grow(capacity)
 		builder.WriteString(b.config.Prefix)
@@ -1228,7 +1273,7 @@ func (b *RedisBroker) historyListKey(s *RedisShard, ch string) channelID {
 	if b.config.NumShardedPubSubPartitions > 0 {
 		// Sharded cluster: prefix + ".list." + "{" + idx + "}." + ch
 		idx := consistentIndex(ch, b.config.NumShardedPubSubPartitions)
-		idxStr := strconv.Itoa(idx)
+		idxStr := b.pubSubPartitionHashTag(idx)
 		capacity := len(b.config.Prefix) + 6 + 1 + len(idxStr) + 2 + len(ch)
 		builder.Grow(capacity)
 		builder.WriteString(b.config.Prefix)
@@ -1265,7 +1310,7 @@ func (b *RedisBroker) historyStreamKey(s *RedisShard, ch string) channelID {
 	if b.config.NumShardedPubSubPartitions > 0 {
 		// Sharded cluster: prefix + ".stream." + "{" + idx + "}." + ch
 		idx := consistentIndex(ch, b.config.NumShardedPubSubPartitions)
-		idxStr := strconv.Itoa(idx)
+		idxStr := b.pubSubPartitionHashTag(idx)
 		capacity := len(b.config.Prefix) + 8 + 1 + len(idxStr) + 2 + len(ch)
 		builder.Grow(capacity)
 		builder.WriteString(b.config.Prefix)
@@ -1307,7 +1352,7 @@ func (b *RedisBroker) historyMetaKey(s *RedisShard, ch string) channelID {
 	if b.config.NumShardedPubSubPartitions > 0 {
 		// Sharded cluster: prefix + infix + "{" + idx + "}." + ch
 		idx := consistentIndex(ch, b.config.NumShardedPubSubPartitions)
-		idxStr := strconv.Itoa(idx)
+		idxStr := b.pubSubPartitionHashTag(idx)
 		capacity := len(b.config.Prefix) + len(infix) + 1 + len(idxStr) + 2 + len(ch)
 		builder.Grow(capacity)
 		builder.WriteString(b.config.Prefix)
