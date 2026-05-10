@@ -170,7 +170,9 @@ type RedisBrokerConfig struct {
 	//
 	// When enabled, NumShardedPubSubPartitions must equal one of the sizes
 	// returned by redispartition.PrecomputedSizes() (16, 32, 64, 128, 256,
-	// 512, 1024, 2048, 4096). Construction returns an error otherwise.
+	// 512, 1024, 2048, 4096). Construction returns an error otherwise. The
+	// exact tag table is bundled in internal/redispartition/precomputed.go;
+	// the tags are stable and will not change.
 	//
 	// Toggling this option changes the Redis key/channel naming scheme, so
 	// flipping it on a running deployment requires a coordinated restart

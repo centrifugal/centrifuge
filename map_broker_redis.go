@@ -150,7 +150,9 @@ type RedisMapBrokerConfig struct {
 	//
 	// When enabled, NumShardedPubSubPartitions must equal one of the sizes
 	// returned by redispartition.PrecomputedSizes() (16, 32, 64, 128, 256,
-	// 512, 1024, 2048, 4096). Construction returns an error otherwise.
+	// 512, 1024, 2048, 4096). Construction returns an error otherwise. The
+	// exact tag table is bundled in internal/redispartition/precomputed.go;
+	// the tags are stable and will not change.
 	//
 	// Default: false (backward-compatible bare-index tags).
 	UsePrecomputedPartitionTags bool
