@@ -1330,7 +1330,7 @@ func (s *sharedPollChannelState) runRefreshCycle(ctx context.Context, node *Node
 				return
 			}
 
-			s.onRefreshResponse(channel, chunk, result.Epoch, result.Items, hub, node)
+			s.onRefreshResponse(channel, result.Epoch, result.Items, hub, node)
 		}(chunk, semStart)
 	}
 
@@ -1523,7 +1523,7 @@ func (s *sharedPollChannelState) onNotifiedRefreshResponse(channel string, respE
 	}
 }
 
-func (s *sharedPollChannelState) onRefreshResponse(channel string, queriedKeys []string, respEpoch string, items []SharedPollRefreshItem, hub *keyedHub, node *Node) {
+func (s *sharedPollChannelState) onRefreshResponse(channel string, respEpoch string, items []SharedPollRefreshItem, hub *keyedHub, node *Node) {
 	// Versioned channels: detect publisher epoch change before any per-item
 	// processing. See onNotifiedRefreshResponse for rationale.
 	if !s.opts.isVersionless() {

@@ -63,30 +63,61 @@ const (
 // A request can carry multiple signed batches (req.Track) — the SDK packs
 // every cached signature library entry into a single sub_refresh frame on
 // reconnect replay, so one handler invocation may cover N signatures.
+//
+// Duplicate keys across batches are deduped with last-batch-wins semantics:
+// version and per-batch ExpireAt come from the LAST batch the key appears
+// in. Both batches' signatures are still validated, so the client is fully
+// authorized for the key either way.
 func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
 	channel := req.Channel
 
 	if len(req.Track) == 0 {
 		return ErrorBadRequest
 	}
-	var totalItems int
-	for _, b := range req.Track {
-		totalItems += len(b.Items)
+	// Build a deduped key index up front. Used to (a) drive the optimistic
+	// limit check against DISTINCT-key count (matches the per-connection map
+	// shape) and (b) flatten items inside the trackHandler callback.
+	type flatItem struct {
+		key      string
+		version  uint64
+		batchIdx int // index into req.Track / eventBatches — picks the per-batch ExpireAt.
 	}
-	if totalItems == 0 {
+	flatIdx := make(map[string]int, 16)
+	var flat []flatItem
+	for i, b := range req.Track {
+		for _, it := range b.Items {
+			fi := flatItem{key: it.Key, version: it.Version, batchIdx: i}
+			if existing, ok := flatIdx[it.Key]; ok {
+				flat[existing] = fi // last batch wins for version + batchIdx
+			} else {
+				flatIdx[it.Key] = len(flat)
+				flat = append(flat, fi)
+			}
+		}
+	}
+	if len(flat) == 0 {
 		return ErrorBadRequest
 	}
 
-	// Check MaxKeysPerConnection limit (optimistic — re-checked under write lock below).
+	// Optimistic limit check — counts DISTINCT keys not already tracked.
+	// Re-checked under the write lock inside the callback.
 	c.mu.RLock()
-	var currentCount int
+	var currentCount, newKeyCountOpt int
 	if c.keyed != nil {
-		currentCount = len(c.keyed.trackedKeys[channel])
+		chanKeys := c.keyed.trackedKeys[channel]
+		currentCount = len(chanKeys)
+		for _, f := range flat {
+			if _, exists := chanKeys[f.key]; !exists {
+				newKeyCountOpt++
+			}
+		}
+	} else {
+		newKeyCountOpt = len(flat)
 	}
 	c.mu.RUnlock()
 
 	maxTracked := c.node.keyedManager.maxTrackedPerConnection(channel)
-	if currentCount+totalItems > maxTracked {
+	if currentCount+newKeyCountOpt > maxTracked {
 		return ErrorLimitExceeded
 	}
 
@@ -121,23 +152,7 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 			return
 		}
 
-		// Flatten batches into a per-item slice carrying the batch's ExpireAt.
-		// Downstream state mgmt is per-key, not per-batch — once authorized,
-		// all keys flow through the same trackKeys / getCachedData / addSubscriber
-		// pipeline. The per-key expireAt is recorded so signature expiry timers
-		// fire at the earliest deadline per channel.
-		type flatItem struct {
-			key      string
-			version  uint64
-			expireAt int64
-		}
-		flat := make([]flatItem, 0, totalItems)
-		for i, b := range req.Track {
-			ea := batchReplies[i].ExpireAt
-			for _, it := range b.Items {
-				flat = append(flat, flatItem{key: it.Key, version: it.Version, expireAt: ea})
-			}
-		}
+		// Build per-call helper slices from the deduped flat index.
 		items := make([]TrackItem, len(flat))
 		allKeys := make([]string, len(flat))
 		for i, f := range flat {
@@ -226,9 +241,10 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		// Commit: store client-provided versions + per-batch expireAt in per-connection state.
 		var minExpireAt int64
 		for _, f := range flat {
-			chanKeys[f.key] = &keyedKeyState{version: f.version, expireAt: f.expireAt}
-			if f.expireAt > 0 && (minExpireAt == 0 || f.expireAt < minExpireAt) {
-				minExpireAt = f.expireAt
+			expireAt := batchReplies[f.batchIdx].ExpireAt
+			chanKeys[f.key] = &keyedKeyState{version: f.version, expireAt: expireAt}
+			if expireAt > 0 && (minExpireAt == 0 || expireAt < minExpireAt) {
+				minExpireAt = expireAt
 			}
 		}
 		// Update fast-path hint for track expiry checks.
@@ -289,10 +305,10 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		}
 
 		// Step 4: Build and write response (enqueued before any broadcasts).
-		// res.Ttl/Expires reflects the EARLIEST batch expiry — a hint to SDKs
-		// that don't parse the iat:expiry:hmac signature locally. The JS SDK
-		// derives per-batch expiry from each signature directly, so this is
-		// purely informational.
+		// For type=1 (track) the response carries the MIN TTL across all
+		// batches in the request — the SDK schedules its consolidating
+		// refresh at the earliest deadline received across all responses
+		// (single global timer, no per-entry expiry tracking needed).
 		res := &protocol.SubRefreshResult{}
 		if minExpireAt > 0 {
 			nowUnix := time.Now().Unix()

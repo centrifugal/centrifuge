@@ -309,11 +309,14 @@ type SharedPollChannelOptions struct {
 	// NotificationBatchMaxSize sets the maximum number of notified keys to
 	// accumulate before triggering an immediate backend poll. The batch fires
 	// when either this size or NotificationBatchMaxDelay is reached first.
-	// Zero means 50.
+	// Zero disables size-based batching (batching still fires on delay if
+	// NotificationBatchMaxDelay is set).
 	NotificationBatchMaxSize int
 	// NotificationBatchMaxDelay sets the maximum time to wait while
 	// accumulating notified keys before triggering an immediate backend poll.
-	// Zero means 50ms.
+	// Zero disables delay-based batching (batching still fires on size if
+	// NotificationBatchMaxSize is set). When neither is set, notifications
+	// are dispatched immediately (no batching).
 	NotificationBatchMaxDelay time.Duration
 	// TrackExpiredExtraDelay is extra time given to client to refresh track signature
 	// after it expires. Keys not refreshed within this delay are silently removed

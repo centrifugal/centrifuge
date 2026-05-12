@@ -2151,7 +2151,7 @@ func (n *Node) MapStats(ctx context.Context, ch string) (MapStatsResult, error) 
 // This updates the snapshot and optionally broadcasts to subscribers.
 func (n *Node) MapPublish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapUpdateResult, error) {
 	if key == "" {
-		return MapUpdateResult{}, errors.New("key is required for map publish")
+		return MapUpdateResult{}, ErrorBadRequest
 	}
 	mapBroker := n.getMapBroker(ch)
 	if mapBroker == nil {
@@ -2170,7 +2170,7 @@ func (n *Node) MapPublish(ctx context.Context, ch string, key string, opts MapPu
 // This removes the key from snapshot and optionally broadcasts removal to subscribers.
 func (n *Node) MapRemove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapUpdateResult, error) {
 	if key == "" {
-		return MapUpdateResult{}, errors.New("key is required for map remove")
+		return MapUpdateResult{}, ErrorBadRequest
 	}
 	mapBroker := n.getMapBroker(ch)
 	if mapBroker == nil {
