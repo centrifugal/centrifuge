@@ -3385,7 +3385,7 @@ func TestRedisMapBroker_CAS_Publish(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, res2.Suppressed)
 
-		// CAS with stale offset → mismatch, returns CurrentPublication
+		// CAS with stale offset → mismatch, returns CurrentEntry
 		res3, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
 			Data:             []byte("v3"),
 			ExpectedPosition: &StreamPosition{Offset: 1, Epoch: epoch}, // stale
@@ -3393,8 +3393,8 @@ func TestRedisMapBroker_CAS_Publish(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, res3.Suppressed)
 		require.Equal(t, SuppressReasonPositionMismatch, res3.SuppressReason)
-		require.NotNil(t, res3.CurrentPublication, "CAS mismatch should return CurrentPublication")
-		require.Equal(t, []byte("v2"), res3.CurrentPublication.Data)
+		require.NotNil(t, res3.CurrentEntry, "CAS mismatch should return CurrentEntry")
+		require.Equal(t, []byte("v2"), res3.CurrentEntry.Data)
 
 		// CAS with wrong epoch → mismatch
 		res4, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
@@ -3429,15 +3429,15 @@ func TestRedisMapBroker_CAS_Remove(t *testing.T) {
 		require.NoError(t, err)
 		epoch := res1.Position.Epoch
 
-		// CAS remove with wrong offset → mismatch, returns CurrentPublication
+		// CAS remove with wrong offset → mismatch, returns CurrentEntry
 		res2, err := broker.Remove(ctx, ch, "key1", MapRemoveOptions{
 			ExpectedPosition: &StreamPosition{Offset: 999, Epoch: epoch},
 		})
 		require.NoError(t, err)
 		require.True(t, res2.Suppressed)
 		require.Equal(t, SuppressReasonPositionMismatch, res2.SuppressReason)
-		require.NotNil(t, res2.CurrentPublication)
-		require.Equal(t, []byte("v1"), res2.CurrentPublication.Data)
+		require.NotNil(t, res2.CurrentEntry)
+		require.Equal(t, []byte("v1"), res2.CurrentEntry.Data)
 
 		// CAS remove with correct position → succeeds
 		res3, err := broker.Remove(ctx, ch, "key1", MapRemoveOptions{

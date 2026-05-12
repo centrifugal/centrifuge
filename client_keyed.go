@@ -60,14 +60,24 @@ const (
 )
 
 // handleTrack processes SubRefreshRequest with type=typeTrack (track).
+// A request can carry multiple signed batches (req.Track) — the SDK packs
+// every cached signature library entry into a single sub_refresh frame on
+// reconnect replay, so one handler invocation may cover N signatures.
 func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
 	channel := req.Channel
 
-	if len(req.Items) == 0 {
+	if len(req.Track) == 0 {
+		return ErrorBadRequest
+	}
+	var totalItems int
+	for _, b := range req.Track {
+		totalItems += len(b.Items)
+	}
+	if totalItems == 0 {
 		return ErrorBadRequest
 	}
 
-	// Check MaxKeysPerConnection limit.
+	// Check MaxKeysPerConnection limit (optimistic — re-checked under write lock below).
 	c.mu.RLock()
 	var currentCount int
 	if c.keyed != nil {
@@ -76,33 +86,110 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 	c.mu.RUnlock()
 
 	maxTracked := c.node.keyedManager.maxTrackedPerConnection(channel)
-	if currentCount+len(req.Items) > maxTracked {
+	if currentCount+totalItems > maxTracked {
 		return ErrorLimitExceeded
 	}
 
-	// Call OnTrack handler (Centrifugo validates HMAC).
+	// Call OnTrack handler (Centrifugo validates HMAC for every batch).
 	if c.eventHub.trackHandler == nil {
 		return ErrorNotAvailable
 	}
 
-	items := make([]TrackItem, len(req.Items))
-	for i, it := range req.Items {
-		items[i] = TrackItem{Key: it.Key, Version: it.Version}
+	eventBatches := make([]TrackBatch, len(req.Track))
+	for i, b := range req.Track {
+		items := make([]TrackItem, len(b.Items))
+		for j, it := range b.Items {
+			items[j] = TrackItem{Key: it.Key, Version: it.Version}
+		}
+		eventBatches[i] = TrackBatch{Items: items, Signature: b.Signature}
 	}
-
-	event := TrackEvent{
-		Channel:   channel,
-		Items:     items,
-		Signature: req.Signature,
-	}
+	event := TrackEvent{Channel: channel, Batches: eventBatches}
 
 	c.eventHub.trackHandler(event, func(reply TrackReply, err error) {
 		if err != nil {
 			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, err, started, rw)
 			return
 		}
+		// Handlers that don't care about per-batch TTL may return an empty
+		// reply.Batches — treat that as "no expiry to record" for every batch.
+		// A non-empty Batches slice of the wrong length is a programmer error.
+		batchReplies := reply.Batches
+		if len(batchReplies) == 0 {
+			batchReplies = make([]TrackBatchReply, len(eventBatches))
+		} else if len(batchReplies) != len(eventBatches) {
+			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, ErrorInternal, started, rw)
+			return
+		}
 
-		// Initialize keyed state if needed.
+		// Flatten batches into a per-item slice carrying the batch's ExpireAt.
+		// Downstream state mgmt is per-key, not per-batch — once authorized,
+		// all keys flow through the same trackKeys / getCachedData / addSubscriber
+		// pipeline. The per-key expireAt is recorded so signature expiry timers
+		// fire at the earliest deadline per channel.
+		type flatItem struct {
+			key      string
+			version  uint64
+			expireAt int64
+		}
+		flat := make([]flatItem, 0, totalItems)
+		for i, b := range req.Track {
+			ea := batchReplies[i].ExpireAt
+			for _, it := range b.Items {
+				flat = append(flat, flatItem{key: it.Key, version: it.Version, expireAt: ea})
+			}
+		}
+		items := make([]TrackItem, len(flat))
+		allKeys := make([]string, len(flat))
+		for i, f := range flat {
+			items[i] = TrackItem{Key: f.key, Version: f.version}
+			allKeys[i] = f.key
+		}
+
+		// Get or create keyed channel state.
+		opts, ok := c.node.config.SharedPoll.GetSharedPollChannelOptions(channel)
+		if !ok {
+			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, ErrorNotAvailable, started, rw)
+			return
+		}
+		keyedOpts := opts.toKeyedChannelOptions()
+		c.node.keyedManager.getOrCreateChannel(channel, keyedOpts)
+
+		// Step 1: Register in SharedPollManager FIRST (before any per-connection
+		// state is written). This ensures per-connection state never points to
+		// keys the server isn't tracking — fixing the state-divergence bug
+		// where a failed broker subscribe left phantom keys in trackedKeys.
+		// Do NOT addSubscriber yet — client must not receive broadcasts before response.
+		// Classification:
+		//   cold: new to server → auto-poll (backend call) after addSubscriber.
+		//   warm: existing key, client needs data (version=0 or stale version) →
+		//         direct delivery from cache if KeepLatestData, else notify +
+		//         needsBroadcast for near-immediate backend poll.
+		//   (none): existing key, client up to date → no action.
+		var coldKeys []string
+		var warmKeys []string
+		if c.node.sharedPollManager != nil {
+			trackResults, err := c.node.sharedPollManager.trackKeys(channel, opts, allKeys)
+			if err != nil {
+				c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, ErrorInternal, started, rw)
+				return
+			}
+			for i, f := range flat {
+				tr := trackResults[i]
+				if tr.isNew && f.version == 0 {
+					coldKeys = append(coldKeys, f.key)
+				} else if !tr.isNew && f.version == 0 {
+					warmKeys = append(warmKeys, f.key)
+				} else if tr.entryVersion > f.version {
+					warmKeys = append(warmKeys, f.key)
+				}
+			}
+		}
+
+		// Step 2: Commit per-connection state under the write lock with a
+		// final limit re-check. This re-check is the authoritative gate —
+		// concurrent track calls that passed the optimistic RLock check at the
+		// top all converge here and only the first to fit wins. On failure we
+		// roll back the server-side track from Step 1.
 		c.mu.Lock()
 		if c.keyed == nil {
 			c.keyed = &keyedState{
@@ -115,65 +202,46 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		}
 		chanKeys := c.keyed.trackedKeys[channel]
 
-		// Store client-provided versions in per-connection state.
-		for _, it := range req.Items {
-			chanKeys[it.Key] = &keyedKeyState{version: it.Version, expireAt: reply.ExpireAt}
+		// Re-tracking an existing key is a version update, not a new slot —
+		// only count keys not already present.
+		var newKeyCount int
+		for _, f := range flat {
+			if _, exists := chanKeys[f.key]; !exists {
+				newKeyCount++
+			}
+		}
+		if len(chanKeys)+newKeyCount > maxTracked {
+			c.mu.Unlock()
+			// Roll back the server-side track from Step 1 so we don't leak
+			// per-channel itemIndex entries for keys the client doesn't hold.
+			if c.node.sharedPollManager != nil {
+				for _, key := range allKeys {
+					c.node.sharedPollManager.untrack(channel, key)
+				}
+			}
+			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, ErrorLimitExceeded, started, rw)
+			return
+		}
+
+		// Commit: store client-provided versions + per-batch expireAt in per-connection state.
+		var minExpireAt int64
+		for _, f := range flat {
+			chanKeys[f.key] = &keyedKeyState{version: f.version, expireAt: f.expireAt}
+			if f.expireAt > 0 && (minExpireAt == 0 || f.expireAt < minExpireAt) {
+				minExpireAt = f.expireAt
+			}
 		}
 		// Update fast-path hint for track expiry checks.
-		if reply.ExpireAt > 0 {
+		if minExpireAt > 0 {
 			if c.keyed.minTrackExpireAt == nil {
 				c.keyed.minTrackExpireAt = make(map[string]int64)
 			}
 			existing := c.keyed.minTrackExpireAt[channel]
-			if existing == 0 || reply.ExpireAt < existing {
-				c.keyed.minTrackExpireAt[channel] = reply.ExpireAt
+			if existing == 0 || minExpireAt < existing {
+				c.keyed.minTrackExpireAt[channel] = minExpireAt
 			}
 		}
 		c.mu.Unlock()
-
-		// Get or create keyed channel state.
-		opts, ok := c.node.config.SharedPoll.GetSharedPollChannelOptions(channel)
-		if !ok {
-			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, ErrorNotAvailable, started, rw)
-			return
-		}
-		keyedOpts := opts.toKeyedChannelOptions()
-		c.node.keyedManager.getOrCreateChannel(channel, keyedOpts)
-
-		// Step 1: Register in SharedPollManager (ensures channel/key state exists).
-		// Do NOT addSubscriber yet — client must not receive broadcasts before response.
-		// Classification:
-		//   cold: new to server → auto-poll (backend call) after addSubscriber.
-		//   warm: existing key, client needs data (version=0 or stale version) →
-		//         direct delivery from cache if KeepLatestData, else notify +
-		//         needsBroadcast for near-immediate backend poll.
-		//   (none): existing key, client up to date → no action.
-		var coldKeys []string
-		var warmKeys []string
-		if c.node.sharedPollManager != nil {
-			allKeys := make([]string, len(req.Items))
-			for i, it := range req.Items {
-				allKeys[i] = it.Key
-			}
-			trackResults, err := c.node.sharedPollManager.trackKeys(channel, opts, allKeys)
-			if err != nil {
-				c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, ErrorInternal, started, rw)
-				return
-			}
-			for i, it := range req.Items {
-				tr := trackResults[i]
-				if tr.isNew && it.Version == 0 {
-					// New to server, client has no data → cold key auto-poll.
-					coldKeys = append(coldKeys, it.Key)
-				} else if !tr.isNew && it.Version == 0 {
-					// Existing key, client has no data → warm key.
-					warmKeys = append(warmKeys, it.Key)
-				} else if tr.entryVersion > it.Version {
-					// Existing key, client has stale version → warm key.
-					warmKeys = append(warmKeys, it.Key)
-				}
-			}
-		}
 
 		// Compute warm key delivery plan. KeepLatestData → direct delivery
 		// from cache (zero backend calls). Otherwise → deferred via notify
@@ -221,12 +289,16 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		}
 
 		// Step 4: Build and write response (enqueued before any broadcasts).
+		// res.Ttl/Expires reflects the EARLIEST batch expiry — a hint to SDKs
+		// that don't parse the iat:expiry:hmac signature locally. The JS SDK
+		// derives per-batch expiry from each signature directly, so this is
+		// purely informational.
 		res := &protocol.SubRefreshResult{}
-		if reply.ExpireAt > 0 {
+		if minExpireAt > 0 {
 			nowUnix := time.Now().Unix()
 			res.Expires = true
-			if reply.ExpireAt > nowUnix {
-				res.Ttl = uint32(reply.ExpireAt - nowUnix)
+			if minExpireAt > nowUnix {
+				res.Ttl = uint32(minExpireAt - nowUnix)
 			}
 		}
 		if len(cachedItems) > 0 {
@@ -247,8 +319,8 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		// keyedWritePublication checks pubVersion <= keyState.version, so cached
 		// items won't be re-delivered.
 		hub := c.node.keyedManager.getHub(channel)
-		for _, it := range req.Items {
-			hub.addSubscriber(it.Key, c)
+		for _, key := range allKeys {
+			hub.addSubscriber(key, c)
 		}
 
 		// Step 5.5: Direct delivery for warm keys with cached data.
@@ -282,7 +354,7 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 func (c *Client) handleUntrack(req *protocol.SubRefreshRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
 	channel := req.Channel
 
-	if len(req.UntrackKeys) == 0 {
+	if len(req.Untrack) == 0 {
 		return ErrorBadRequest
 	}
 
@@ -290,7 +362,7 @@ func (c *Client) handleUntrack(req *protocol.SubRefreshRequest, cmd *protocol.Co
 	if c.keyed != nil {
 		chanKeys := c.keyed.trackedKeys[channel]
 		if chanKeys != nil {
-			for _, key := range req.UntrackKeys {
+			for _, key := range req.Untrack {
 				delete(chanKeys, key)
 			}
 			if len(chanKeys) == 0 {
@@ -305,7 +377,7 @@ func (c *Client) handleUntrack(req *protocol.SubRefreshRequest, cmd *protocol.Co
 
 	hub := c.node.keyedManager.getHub(channel)
 	if hub != nil {
-		for _, key := range req.UntrackKeys {
+		for _, key := range req.Untrack {
 			keyEmpty := hub.removeSubscriber(key, c)
 			if c.node.sharedPollManager != nil && keyEmpty {
 				c.node.sharedPollManager.untrack(channel, key)
@@ -316,7 +388,7 @@ func (c *Client) handleUntrack(req *protocol.SubRefreshRequest, cmd *protocol.Co
 	if c.eventHub.untrackHandler != nil {
 		c.eventHub.untrackHandler(UntrackEvent{
 			Channel: channel,
-			Keys:    req.UntrackKeys,
+			Keys:    req.Untrack,
 		})
 	}
 

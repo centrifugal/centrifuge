@@ -2174,11 +2174,14 @@ func (c *Client) handleMapPublish(req *protocol.PublishRequest, cmd *protocol.Co
 			return
 		}
 
-		// Server handler can override the key.
+		// Handler must return the key explicitly. There is no fallback to the
+		// client-supplied event.Key — for namespaces where the client supplies
+		// the key, the handler should pass it through (reply.Key = event.Key).
+		// For namespaces with server-driven keying (e.g. client_id / user_id),
+		// the handler resolves the key and returns it; if the resolution yields
+		// an empty key (e.g. user_id for an anonymous user), the handler should
+		// reject the publish itself with an explicit error.
 		key := reply.Key
-		if key == "" {
-			key = event.Key
-		}
 		if key == "" {
 			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypePublish, cmd, ErrorBadRequest, started, rw)
 			return
@@ -2240,11 +2243,9 @@ func (c *Client) handleMapRemove(req *protocol.PublishRequest, cmd *protocol.Com
 			return
 		}
 
-		// Server handler can override the key.
+		// Handler must return the key explicitly. There is no fallback to the
+		// client-supplied event.Key — see handleMapPublish for the reasoning.
 		key := reply.Key
-		if key == "" {
-			key = event.Key
-		}
 		if key == "" {
 			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypePublish, cmd, ErrorBadRequest, started, rw)
 			return

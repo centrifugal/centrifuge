@@ -151,10 +151,10 @@ func (e *MemoryMapBroker) Publish(ctx context.Context, ch string, key string, op
 	}
 	if suppressReason != "" {
 		result := MapUpdateResult{Position: streamTop, Suppressed: true, SuppressReason: suppressReason}
-		// For CAS mismatch, include current publication for immediate retry.
-		// Client uses: CurrentPublication.Offset + Position.Epoch for next CAS attempt.
-		if suppressReason == SuppressReasonPositionMismatch {
-			result.CurrentPublication = prevPub
+		// For CAS mismatch, include current key state for immediate retry.
+		// Client uses: CurrentEntry.Offset + Position.Epoch for the next CAS attempt.
+		if suppressReason == SuppressReasonPositionMismatch && prevPub != nil {
+			result.CurrentEntry = &MapCurrentEntry{Offset: prevPub.Offset, Data: prevPub.Data}
 		}
 		return result, nil
 	}
@@ -207,8 +207,8 @@ func (e *MemoryMapBroker) Remove(ctx context.Context, ch string, key string, opt
 
 	if suppressReason != "" {
 		result := MapUpdateResult{Position: streamTop, Suppressed: true, SuppressReason: suppressReason}
-		if suppressReason == SuppressReasonPositionMismatch {
-			result.CurrentPublication = removePub
+		if suppressReason == SuppressReasonPositionMismatch && removePub != nil {
+			result.CurrentEntry = &MapCurrentEntry{Offset: removePub.Offset, Data: removePub.Data}
 		}
 		return result, nil
 	}
@@ -856,7 +856,7 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 		if existing.Publication.Offset != opts.ExpectedPosition.Offset ||
 			pos.Epoch != opts.ExpectedPosition.Epoch {
 			// Return current publication for immediate retry.
-			// Client uses: CurrentPublication.Offset + Position.Epoch for next CAS attempt.
+			// Client uses: CurrentEntry.Offset + Position.Epoch for the next CAS attempt.
 			return pos, existing.Publication, SuppressReasonPositionMismatch, nil
 		}
 	}

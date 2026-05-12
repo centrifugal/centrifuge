@@ -1286,12 +1286,12 @@ func TestMapBroker_CASConflict(t *testing.T) {
 	require.True(t, res.Suppressed)
 	require.Equal(t, SuppressReasonPositionMismatch, res.SuppressReason)
 
-	// CurrentPublication should contain the current state for immediate retry
-	require.NotNil(t, res.CurrentPublication)
-	require.Equal(t, []byte(`{"value":12}`), res.CurrentPublication.Data)
+	// CurrentEntry should contain the current state for immediate retry
+	require.NotNil(t, res.CurrentEntry)
+	require.Equal(t, []byte(`{"value":12}`), res.CurrentEntry.Data)
 
 	// Immediate retry using returned position - should succeed
-	retryPos := StreamPosition{Offset: res.CurrentPublication.Offset, Epoch: res.Position.Epoch}
+	retryPos := StreamPosition{Offset: res.CurrentEntry.Offset, Epoch: res.Position.Epoch}
 	res2, err := broker.Publish(ctx, ch, "counter", MapPublishOptions{
 		Data:             []byte(`{"value":15}`),
 		ExpectedPosition: &retryPos,
@@ -1369,9 +1369,9 @@ func TestMapBroker_CASWrongEpoch(t *testing.T) {
 	require.True(t, res.Suppressed)
 	require.Equal(t, SuppressReasonPositionMismatch, res.SuppressReason)
 
-	// CurrentPublication should contain the current state for immediate retry
-	require.NotNil(t, res.CurrentPublication)
-	require.Equal(t, []byte(`{"value":10}`), res.CurrentPublication.Data)
+	// CurrentEntry should contain the current state for immediate retry
+	require.NotNil(t, res.CurrentEntry)
+	require.Equal(t, []byte(`{"value":10}`), res.CurrentEntry.Data)
 
 	// Verify value unchanged
 	stateRes, err = broker.ReadState(ctx, ch, MapReadStateOptions{Key: "counter"})
@@ -4523,8 +4523,8 @@ func TestClientHandleMapPublish(t *testing.T) {
 		node.OnConnect(func(c *Client) {
 			c.OnMapPublish(func(e MapPublishEvent, cb MapPublishCallback) {
 				invoked <- struct{}{}
-				_ = e
-				cb(MapPublishReply{}, nil)
+				// Handler must return the key explicitly — pass the client key through.
+				cb(MapPublishReply{Key: e.Key}, nil)
 			})
 		})
 		client := newTestConnectedClientV2(t, node, "u")
@@ -4568,8 +4568,9 @@ func TestClientHandleMapPublish(t *testing.T) {
 	t.Run("HandlerSuppliesResultSkipsBrokerPublish", func(t *testing.T) {
 		node, broker := newTestNodeWithMapBroker(t)
 		node.OnConnect(func(c *Client) {
-			c.OnMapPublish(func(_ MapPublishEvent, cb MapPublishCallback) {
+			c.OnMapPublish(func(e MapPublishEvent, cb MapPublishCallback) {
 				cb(MapPublishReply{
+					Key:    e.Key,
 					Result: &MapUpdateResult{Position: StreamPosition{Offset: 42, Epoch: "fake"}},
 				}, nil)
 			})
@@ -4665,8 +4666,9 @@ func TestClientHandleMapRemove(t *testing.T) {
 		require.NoError(t, err)
 
 		node.OnConnect(func(c *Client) {
-			c.OnMapRemove(func(_ MapRemoveEvent, cb MapRemoveCallback) {
-				cb(MapRemoveReply{}, nil)
+			c.OnMapRemove(func(e MapRemoveEvent, cb MapRemoveCallback) {
+				// Handler must return the key explicitly — pass client key through.
+				cb(MapRemoveReply{Key: e.Key}, nil)
 			})
 		})
 		client := newTestConnectedClientV2(t, node, "u")

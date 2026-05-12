@@ -506,7 +506,7 @@
             mySlots.clear();
 
             for (const pub of ctx.entries) {
-                if (pub.key && !pub.removed && pub.data) {
+                if (pub.key && pub.data) {
                     availableGames.set(pub.key, pub.data);
                     subscribeToGame(pub.key, pub.data.maxPlayers);
                 }

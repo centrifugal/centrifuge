@@ -169,15 +169,8 @@ func handleInventoryBuy(client *centrifuge.Client, node *centrifuge.Node, data [
 
 		// CAS failed - someone else modified the item.
 		if result.SuppressReason == centrifuge.SuppressReasonPositionMismatch {
-			log.Printf("CAS conflict for %s (attempt %d), retrying with current state...", req.ItemID, attempt+1)
-
-			// Use CurrentPublication for immediate retry (no extra read needed).
-			if result.CurrentPublication != nil {
-				// Update pubs[0] with current state for next iteration.
-				pubs[0] = result.CurrentPublication
-				pos = result.Position
-			}
-			// Continue to next retry attempt.
+			log.Printf("CAS conflict for %s (attempt %d), retrying with fresh state...", req.ItemID, attempt+1)
+			// Loop re-reads state at the top of the next iteration.
 			continue
 		}
 
@@ -272,9 +265,8 @@ func handleInventoryRestock(_ *centrifuge.Client, node *centrifuge.Node, data []
 			return
 		}
 
-		if result.SuppressReason == centrifuge.SuppressReasonPositionMismatch && result.CurrentPublication != nil {
-			pubs[0] = result.CurrentPublication
-			pos = result.Position
+		if result.SuppressReason == centrifuge.SuppressReasonPositionMismatch {
+			// Loop re-reads state at the top of the next iteration.
 			continue
 		}
 

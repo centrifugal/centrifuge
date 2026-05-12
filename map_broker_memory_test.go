@@ -2775,7 +2775,7 @@ func TestMemoryMapBroker_CAS_Publish(t *testing.T) {
 	require.False(t, res2.Suppressed)
 	require.Equal(t, uint64(2), res2.Position.Offset)
 
-	// CAS with stale offset → mismatch, returns CurrentPublication
+	// CAS with stale offset → mismatch, returns CurrentEntry
 	res3, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
 		Data:             []byte("v3"),
 		ExpectedPosition: &StreamPosition{Offset: 1, Epoch: epoch}, // stale offset
@@ -2783,9 +2783,9 @@ func TestMemoryMapBroker_CAS_Publish(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, res3.Suppressed)
 	require.Equal(t, SuppressReasonPositionMismatch, res3.SuppressReason)
-	require.NotNil(t, res3.CurrentPublication)
-	require.Equal(t, []byte("v2"), res3.CurrentPublication.Data)
-	require.Equal(t, uint64(2), res3.CurrentPublication.Offset)
+	require.NotNil(t, res3.CurrentEntry)
+	require.Equal(t, []byte("v2"), res3.CurrentEntry.Data)
+	require.Equal(t, uint64(2), res3.CurrentEntry.Offset)
 
 	// CAS with wrong epoch → mismatch
 	res4, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
@@ -2796,7 +2796,7 @@ func TestMemoryMapBroker_CAS_Publish(t *testing.T) {
 	require.True(t, res4.Suppressed)
 	require.Equal(t, SuppressReasonPositionMismatch, res4.SuppressReason)
 
-	// CAS on non-existent key → mismatch (no current pub)
+	// CAS on non-existent key → mismatch (no current entry)
 	res5, err := broker.Publish(ctx, ch, "nonexistent", MapPublishOptions{
 		Data:             []byte("data"),
 		ExpectedPosition: &StreamPosition{Offset: 1, Epoch: epoch},
@@ -2804,7 +2804,7 @@ func TestMemoryMapBroker_CAS_Publish(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, res5.Suppressed)
 	require.Equal(t, SuppressReasonPositionMismatch, res5.SuppressReason)
-	require.Nil(t, res5.CurrentPublication)
+	require.Nil(t, res5.CurrentEntry)
 
 	// Verify state unchanged
 	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
@@ -2833,15 +2833,15 @@ func TestMemoryMapBroker_CAS_Remove(t *testing.T) {
 	require.NoError(t, err)
 	epoch := res1.Position.Epoch
 
-	// CAS remove with wrong offset → mismatch, returns CurrentPublication
+	// CAS remove with wrong offset → mismatch, returns CurrentEntry
 	res2, err := broker.Remove(ctx, ch, "key1", MapRemoveOptions{
 		ExpectedPosition: &StreamPosition{Offset: 999, Epoch: epoch},
 	})
 	require.NoError(t, err)
 	require.True(t, res2.Suppressed)
 	require.Equal(t, SuppressReasonPositionMismatch, res2.SuppressReason)
-	require.NotNil(t, res2.CurrentPublication)
-	require.Equal(t, []byte("v1"), res2.CurrentPublication.Data)
+	require.NotNil(t, res2.CurrentEntry)
+	require.Equal(t, []byte("v1"), res2.CurrentEntry.Data)
 
 	// CAS remove with wrong epoch → mismatch
 	res3, err := broker.Remove(ctx, ch, "key1", MapRemoveOptions{

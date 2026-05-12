@@ -271,7 +271,7 @@
             lastUpdate = now;
 
             // Send cursor update via map publish (server assigns key to client ID).
-            sub.mapPublish('', {
+            sub.publish('', {
                 x: e.clientX,
                 y: e.clientY,
                 color: userColor,

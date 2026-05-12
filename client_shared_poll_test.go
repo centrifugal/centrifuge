@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"bytes"
 	"context"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -106,7 +107,7 @@ func trackSharedPollClientWithReply(t testing.TB, client *Client, channel string
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: channel,
 		Type:    typeTrack,
-		Items:   items,
+		Track:   []*protocol.TrackBatch{{Items: items}},
 	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 
@@ -121,9 +122,9 @@ func trackSharedPollClientWithReply(t testing.TB, client *Client, channel string
 func untrackSharedPollClient(t testing.TB, client *Client, channel string, keys []string) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
-		Channel:     channel,
-		Type:        typeUntrack,
-		UntrackKeys: keys,
+		Channel: channel,
+		Type:    typeUntrack,
+		Untrack: keys,
 	}, &protocol.Command{Id: 3}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
@@ -291,7 +292,7 @@ func TestSharedPollTrack_SignatureRejected(t *testing.T) {
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: "test:channel",
 		Type:    typeTrack,
-		Items:   []*protocol.KeyedItem{{Key: "key1", Version: 1}},
+		Track:   []*protocol.TrackBatch{{Items: []*protocol.KeyedItem{{Key: "key1", Version: 1}}}},
 	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
@@ -324,9 +325,121 @@ func TestSharedPollTrack_MaxTrackedExceeded(t *testing.T) {
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: "test:channel",
 		Type:    typeTrack,
-		Items:   []*protocol.KeyedItem{{Key: "key3", Version: 3}},
+		Track:   []*protocol.TrackBatch{{Items: []*protocol.KeyedItem{{Key: "key3", Version: 3}}}},
 	}, &protocol.Command{Id: 3}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorLimitExceeded, err)
+}
+
+// TestSharedPollTrack_ConcurrentLimitNotBypassed exercises the race between
+// the optimistic RLock-based limit check at the top of handleTrack and the
+// async write in the trackHandler callback. Many goroutines fire single-key
+// track requests simultaneously; each picks a distinct key but the total
+// exceeds MaxKeysPerConnection. The final trackedKeys count must stay at or
+// under the limit — earlier code wrote per-connection state before any
+// re-check and could bypass the limit.
+func TestSharedPollTrack_ConcurrentLimitNotBypassed(t *testing.T) {
+	const limit = 4
+	const goroutines = 16
+
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:      100 * time.Millisecond,
+		MaxKeysPerConnection: limit,
+	})
+
+	// Synchronise all OnTrack callbacks at a barrier so they release together
+	// — this maximises the chance of multiple goroutines being mid-callback
+	// when they each try to commit per-connection state.
+	var entered, released sync.WaitGroup
+	entered.Add(goroutines)
+	released.Add(1)
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options:           SubscribeOptions{ExpireAt: time.Now().Unix() + 3600},
+				ClientSideRefresh: true,
+			}, nil)
+		})
+		client.OnTrack(func(e TrackEvent, cb TrackCallback) {
+			entered.Done()
+			released.Wait()
+			cb(TrackReply{}, nil)
+		})
+	})
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+
+	// Fire `goroutines` concurrent single-key track requests.
+	// Use a small enum so we don't pollute the test with reflection across the
+	// two error shapes (Error from handleSubRefresh, *protocol.Error from reply).
+	const (
+		outcomeOK = iota
+		outcomeLimit
+		outcomeOther
+	)
+	results := make(chan int, goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func(i int) {
+			rwWrapper := testReplyWriterWrapper()
+			key := "k" + strconv.Itoa(i)
+			err := client.handleSubRefresh(&protocol.SubRefreshRequest{
+				Channel: "test:channel",
+				Type:    typeTrack,
+				Track:   []*protocol.TrackBatch{{Items: []*protocol.KeyedItem{{Key: key, Version: 1}}}},
+			}, &protocol.Command{Id: uint32(100 + i)}, time.Now(), rwWrapper.rw)
+			if err != nil {
+				if e, ok := err.(*Error); ok && e.Code == ErrorLimitExceeded.Code {
+					results <- outcomeLimit
+				} else {
+					results <- outcomeOther
+				}
+				return
+			}
+			// Wait for callback reply (success or error) to land.
+			require.Eventually(t, func() bool {
+				return len(rwWrapper.replies) > 0
+			}, 2*time.Second, time.Millisecond)
+			rerr := rwWrapper.replies[0].Error
+			if rerr == nil {
+				results <- outcomeOK
+			} else if rerr.Code == ErrorLimitExceeded.Code {
+				results <- outcomeLimit
+			} else {
+				results <- outcomeOther
+			}
+		}(i)
+	}
+
+	// Wait until every callback has entered the trackHandler, then release.
+	entered.Wait()
+	released.Done()
+
+	// Collect outcomes.
+	var ok, exceeded int
+	for i := 0; i < goroutines; i++ {
+		switch <-results {
+		case outcomeOK:
+			ok++
+		case outcomeLimit:
+			exceeded++
+		default:
+			t.Fatalf("unexpected outcome from goroutine #%d", i)
+		}
+	}
+
+	// Final trackedKeys size must respect the limit.
+	client.mu.RLock()
+	count := 0
+	if client.keyed != nil {
+		count = len(client.keyed.trackedKeys["test:channel"])
+	}
+	client.mu.RUnlock()
+	require.LessOrEqual(t, count, limit, "per-connection trackedKeys exceeded limit: %d > %d", count, limit)
+	require.Equal(t, ok, count, "successful tracks should match committed trackedKeys count")
+	require.Equal(t, goroutines, ok+exceeded, "every goroutine should return success or ErrorLimitExceeded")
 }
 
 func TestSharedPollTrack_ItemIndexVersion0(t *testing.T) {
@@ -427,7 +540,7 @@ func TestSharedPollTrack_EmptyItems(t *testing.T) {
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: "test:channel",
 		Type:    typeTrack,
-		Items:   nil,
+		Track:   nil,
 	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorBadRequest, err)
 }
@@ -441,9 +554,9 @@ func TestSharedPollUntrack_EmptyKeys(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
-		Channel:     "test:channel",
-		Type:        typeUntrack,
-		UntrackKeys: nil,
+		Channel: "test:channel",
+		Type:    typeUntrack,
+		Untrack: nil,
 	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorBadRequest, err)
 }
@@ -2138,7 +2251,7 @@ func setupSharedPollHandlersWithExpiry(node *Node, expireAt int64) {
 			}, nil)
 		})
 		client.OnTrack(func(e TrackEvent, cb TrackCallback) {
-			cb(TrackReply{ExpireAt: expireAt}, nil)
+			cb(TrackReply{Batches: []TrackBatchReply{{ExpireAt: expireAt}}}, nil)
 		})
 		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
 			cb(SubRefreshReply{}, nil)
@@ -2199,7 +2312,7 @@ func TestSharedPollTrackExpiry_RefreshResetsExpiry(t *testing.T) {
 	newExpireAt := int64(200)
 	// Update handler to return new expiry.
 	client.eventHub.trackHandler = func(e TrackEvent, cb TrackCallback) {
-		cb(TrackReply{ExpireAt: newExpireAt}, nil)
+		cb(TrackReply{Batches: []TrackBatchReply{{ExpireAt: newExpireAt}}}, nil)
 	}
 	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
 		{Key: "keyA", Version: 1},
@@ -2251,7 +2364,7 @@ func TestSharedPollTrackExpiry_PartialRefresh(t *testing.T) {
 	// Refresh only A and B with new expiry (C keeps old expiry).
 	newExpireAt := int64(200)
 	client.eventHub.trackHandler = func(e TrackEvent, cb TrackCallback) {
-		cb(TrackReply{ExpireAt: newExpireAt}, nil)
+		cb(TrackReply{Batches: []TrackBatchReply{{ExpireAt: newExpireAt}}}, nil)
 	}
 	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
 		{Key: "keyA", Version: 1},

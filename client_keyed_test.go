@@ -65,7 +65,7 @@ func TestKeyedTrack_NoTrackHandler(t *testing.T) {
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: "test:channel",
 		Type:    typeTrack,
-		Items:   []*protocol.KeyedItem{{Key: "k", Version: 1}},
+		Track:   []*protocol.TrackBatch{{Items: []*protocol.KeyedItem{{Key: "k", Version: 1}}}},
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorNotAvailable, err)
 }
@@ -82,7 +82,7 @@ func TestKeyedTrack_TtlField(t *testing.T) {
 			}, nil)
 		})
 		client.OnTrack(func(e TrackEvent, cb TrackCallback) {
-			cb(TrackReply{ExpireAt: time.Now().Unix() + 60}, nil)
+			cb(TrackReply{Batches: []TrackBatchReply{{ExpireAt: time.Now().Unix() + 60}}}, nil)
 		})
 	})
 	client := newTestClientV2(t, node, "user1")
@@ -108,7 +108,7 @@ func TestKeyedUntrack_InvokesUntrackHandler(t *testing.T) {
 		})
 		client.OnTrack(func(e TrackEvent, cb TrackCallback) {
 			// Use ExpireAt so minTrackExpireAt gets populated and exercised on cleanup.
-			cb(TrackReply{ExpireAt: time.Now().Unix() + 60}, nil)
+			cb(TrackReply{Batches: []TrackBatchReply{{ExpireAt: time.Now().Unix() + 60}}}, nil)
 		})
 		client.OnUntrack(func(e UntrackEvent) {
 			called <- e

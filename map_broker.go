@@ -326,6 +326,30 @@ const (
 	SuppressReasonPositionMismatch SuppressReason = "position_mismatch"
 )
 
+// MapCurrentEntry contains the current state of a map entry when an operation
+// is suppressed due to a CAS position mismatch (SuppressReasonPositionMismatch).
+// It lets the caller retry the CAS without an extra ReadState round-trip:
+//
+//	newData := compute(result.CurrentEntry.Data)
+//	retry := MapPublishOptions{
+//	    Data:             newData,
+//	    ExpectedPosition: &StreamPosition{
+//	        Offset: result.CurrentEntry.Offset,
+//	        Epoch:  result.Position.Epoch,  // channel epoch lives on the outer Position
+//	    },
+//	}
+//
+// Set only when MapUpdateResult.SuppressReason == SuppressReasonPositionMismatch.
+// Treat as read-only — implementations may point Data at internal storage.
+type MapCurrentEntry struct {
+	// Offset is the current offset of the entry — use as ExpectedPosition.Offset
+	// when retrying CAS.
+	Offset uint64
+	// Data is the current value of the entry — typically used to compute the
+	// next value in a read-modify-write CAS pattern.
+	Data []byte
+}
+
 // MapUpdateResult contains the result of Publish operation.
 type MapUpdateResult struct {
 	// Position is the current stream position after the operation.
@@ -336,12 +360,9 @@ type MapUpdateResult struct {
 	Suppressed bool
 	// SuppressReason explains why the operation was suppressed (empty when Suppressed is false).
 	SuppressReason SuppressReason
-	// CurrentPublication contains the current state when suppressed due to CAS mismatch.
-	// Allows immediate retry without extra ReadState call.
-	// Only set when SuppressReason is SuppressReasonPositionMismatch.
-	// NOTE: This points to an internal state entry. Do not modify the Publication
-	// or its fields (Data, Tags, etc.) — treat it as read-only.
-	CurrentPublication *Publication
+	// CurrentEntry — set only when SuppressReason is SuppressReasonPositionMismatch.
+	// See the MapCurrentEntry doc for usage in CAS-retry patterns.
+	CurrentEntry *MapCurrentEntry
 }
 
 // MapStreamResult contains the result of a ReadStream operation.

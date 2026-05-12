@@ -3228,8 +3228,8 @@ func parseAddScriptResult(replies []rueidis.RedisMessage) (MapUpdateResult, erro
 		result.Suppressed = true
 		result.SuppressReason = suppressReason
 
-		// For CAS mismatch, parse and return current publication for immediate retry.
-		// Client uses: CurrentPublication.Offset + Position.Epoch for next CAS attempt.
+		// For CAS mismatch, return current key state for immediate retry.
+		// Client uses: CurrentEntry.Offset + Position.Epoch for the next CAS attempt.
 		if suppressReason == SuppressReasonPositionMismatch && len(replies) >= 4 {
 			currentValue, err := replies[3].AsBytes()
 			if err == nil && len(currentValue) > 0 {
@@ -3238,9 +3238,7 @@ func parseAddScriptResult(replies []rueidis.RedisMessage) (MapUpdateResult, erro
 				if parseErr == nil {
 					var protoPub protocol.Publication
 					if protoPub.UnmarshalVT(payload) == nil {
-						pub := pubFromProto(&protoPub)
-						pub.Offset = entryOffset
-						result.CurrentPublication = pub
+						result.CurrentEntry = &MapCurrentEntry{Offset: entryOffset, Data: protoPub.Data}
 					}
 				}
 			}
