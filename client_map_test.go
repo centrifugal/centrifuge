@@ -4731,8 +4731,8 @@ func TestValidateAndCreateTagsFilter(t *testing.T) {
 
 // TestMapUserPresence_AnonymousSkipped verifies that user-presence operations
 // are no-ops when the connecting client has no user ID. Otherwise MapPublish
-// would reject the empty user as "key is required for map publish" — which is
-// what surfaces in lobby/games-style demos that allow anonymous connections.
+// would reject the empty user with ErrorBadRequest — which is what surfaces
+// in lobby/games-style demos that allow anonymous connections.
 func TestMapUserPresence_AnonymousSkipped(t *testing.T) {
 	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)

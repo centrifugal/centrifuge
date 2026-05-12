@@ -1735,8 +1735,7 @@ func TestNode_MapRemoveEmptyKey(t *testing.T) {
 	node.SetMapBroker(mapBroker)
 
 	_, err = node.MapRemove(context.Background(), "test_ch", "", MapRemoveOptions{})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "key is required")
+	require.ErrorIs(t, err, ErrorBadRequest)
 }
 
 func TestNode_Config(t *testing.T) {
@@ -1876,8 +1875,7 @@ func TestNode_MapPublishEmptyKey(t *testing.T) {
 	node.SetMapBroker(mapBroker)
 
 	_, err = node.MapPublish(context.Background(), "ch", "", MapPublishOptions{Data: []byte(`"v"`)})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "key is required")
+	require.ErrorIs(t, err, ErrorBadRequest)
 }
 
 func TestNode_MapPublish(t *testing.T) {
@@ -1965,12 +1963,10 @@ func TestNodeMapPublishRemoveKeyRequired(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := node.MapPublish(ctx, "ch", "", MapPublishOptions{Data: []byte(`{}`)})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "key is required")
+	require.ErrorIs(t, err, ErrorBadRequest)
 
 	_, err = node.MapRemove(ctx, "ch", "", MapRemoveOptions{})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "key is required")
+	require.ErrorIs(t, err, ErrorBadRequest)
 }
 
 // TestNodeMapStateReadWithSingleFlight covers the UseSingleFlight branch.
@@ -2276,8 +2272,7 @@ func TestNode_MapPublish_EmptyKey(t *testing.T) {
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	_, err := n.MapPublish(context.Background(), "ch", "", MapPublishOptions{Data: []byte("{}")})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "key is required")
+	require.ErrorIs(t, err, ErrorBadRequest)
 }
 
 // TestNode_MapRemove_EmptyKey covers the empty-key validation branch.
@@ -2287,8 +2282,7 @@ func TestNode_MapRemove_EmptyKey(t *testing.T) {
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	_, err := n.MapRemove(context.Background(), "ch", "", MapRemoveOptions{})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "key is required")
+	require.ErrorIs(t, err, ErrorBadRequest)
 }
 
 // TestNode_HandlePublication_RoutesToSharedPollManager covers the route in
