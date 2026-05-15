@@ -1760,13 +1760,11 @@ func nodeWithRedisBroker(tb testing.TB, useStreams bool, useCluster bool, port i
 	return n
 }
 
-func testRedisClientSubscribeRecover(t *testing.T, tt historyRedisTest, rt recoverTest) {
+func testRedisClientSubscribeRecover(t *testing.T, tt historyRedisTest, rt recoverTest, channel string) {
 	node := nodeWithRedisBroker(t, tt.UseStreams, tt.UseCluster, tt.Port)
 	node.config.RecoveryMaxPublicationLimit = rt.Limit
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	defer stopRedisBroker(node.broker.(*RedisBroker))
-
-	channel := "test_recovery_redis_" + tt.Name
 
 	for i := 1; i <= rt.NumPublications; i++ {
 		_, err := node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`), WithHistory(rt.HistorySize, time.Duration(rt.HistoryTTLSeconds)*time.Second))
@@ -1807,7 +1805,9 @@ func TestRedisClientSubscribeRecover(t *testing.T) {
 	for _, tt := range historyRedisTests {
 		for _, rt := range brokerRecoverTests {
 			t.Run(tt.Name+"_"+rt.Name, func(t *testing.T) {
-				testRedisClientSubscribeRecover(t, tt, rt)
+				t.Parallel()
+				channel := "test_recovery_redis_" + tt.Name + "_" + rt.Name
+				testRedisClientSubscribeRecover(t, tt, rt, channel)
 			})
 		}
 	}

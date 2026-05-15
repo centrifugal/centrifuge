@@ -367,6 +367,7 @@ func TestMemoryHistoryHub(t *testing.T) {
 }
 
 func TestMemoryHistoryHubMetaTTL(t *testing.T) {
+	t.Parallel()
 	h := newHistoryHub(1*time.Second, make(chan struct{}))
 	h.runCleanups()
 
@@ -405,6 +406,7 @@ func TestMemoryHistoryHubMetaTTL(t *testing.T) {
 }
 
 func TestMemoryHistoryHubMetaTTLPerChannel(t *testing.T) {
+	t.Parallel()
 	h := newHistoryHub(300*time.Second, make(chan struct{}))
 	h.runCleanups()
 
@@ -650,6 +652,7 @@ func TestClientSubscribeRecover(t *testing.T) {
 	t.Parallel()
 	for _, tt := range clientRecoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
+			t.Parallel()
 			node := defaultNodeNoHandlers()
 			node.config.RecoveryMaxPublicationLimit = tt.Limit
 			node.config.Metrics.EnableRecoveredPublicationsHistogram = true

@@ -1919,6 +1919,7 @@ func TestSharedPollManager_BrokerUnsubscribeViaDissolver(t *testing.T) {
 }
 
 func TestSharedPollManager_BrokerUnsubscribeRetryOnFailure(t *testing.T) {
+	t.Parallel()
 	// When broker.Unsubscribe fails, dissolver should retry until success.
 	var failCount atomic.Int32
 	broker := &controllableBroker{

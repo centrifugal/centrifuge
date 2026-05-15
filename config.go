@@ -412,18 +412,27 @@ type PingPongConfig struct {
 	PongTimeout time.Duration
 }
 
+// Defaults applied by getPingPongPeriodValues when callers pass a zero value
+// (the "use library default" sentinel). Declared as vars rather than inline
+// constants so test binaries can override them in an init() hook to keep the
+// test suite fast — production behavior is unchanged.
+var (
+	defaultPingInterval = 25 * time.Second
+	defaultPongTimeout  = 10 * time.Second
+)
+
 func getPingPongPeriodValues(config PingPongConfig) (time.Duration, time.Duration) {
 	pingInterval := config.PingInterval
 	if pingInterval < 0 {
 		pingInterval = 0
 	} else if pingInterval == 0 {
-		pingInterval = 25 * time.Second
+		pingInterval = defaultPingInterval
 	}
 	pongTimeout := config.PongTimeout
 	if pongTimeout < 0 {
 		pongTimeout = 0
 	} else if pongTimeout == 0 {
-		pongTimeout = 10 * time.Second
+		pongTimeout = defaultPongTimeout
 	}
 	return pingInterval, pongTimeout
 }

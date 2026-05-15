@@ -307,6 +307,7 @@ func TestClientEventHub(t *testing.T) {
 }
 
 func TestNodeRegistry(t *testing.T) {
+	t.Parallel()
 	registry := newNodeRegistry("node1")
 	nodeInfo1 := controlpb.Node{Uid: "node1"}
 	nodeInfo2 := controlpb.Node{Uid: "node2"}

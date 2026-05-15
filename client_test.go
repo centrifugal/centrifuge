@@ -3907,10 +3907,14 @@ func TestNoClientLevelPing(t *testing.T) {
 	transport.setPing(-1, 0)
 	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
 	connectClientV2(t, client)
+	// Wait must exceed defaultPingInterval+defaultPongTimeout so a regression
+	// where the -1 disable falls through to defaults would still produce a
+	// disconnect within the window. Test-init shrinks the defaults to a few
+	// hundred ms (see config_test.go); production keeps 25s/10s.
 	select {
 	case <-done:
 		t.Fatal("should not disconnect when ping is disabled")
-	case <-time.After(36 * time.Second):
+	case <-time.After(defaultPingInterval + defaultPongTimeout + 200*time.Millisecond):
 	}
 }
 

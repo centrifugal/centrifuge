@@ -3017,6 +3017,7 @@ func TestMemoryMapBroker_PublishCustomIdempotentTTL(t *testing.T) {
 
 // TestMemoryMapBroker_KeyTTLExpiration tests that keys expire after KeyTTL.
 func TestMemoryMapBroker_KeyTTLExpiration(t *testing.T) {
+	t.Parallel()
 	node, _ := New(Config{})
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
@@ -3451,6 +3452,7 @@ func TestMemoryMapBroker_RemoveKeyNotFoundWithStream(t *testing.T) {
 
 // TestMemoryMapBroker_EphemeralPublishAndExpire tests ephemeral mode publish and auto-expiration.
 func TestMemoryMapBroker_EphemeralPublishAndExpire(t *testing.T) {
+	t.Parallel()
 	node, _ := New(Config{})
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
@@ -3849,6 +3851,7 @@ func TestMemoryMapBroker_RefreshTTLOnSuppress_RefreshesMetaTTL(t *testing.T) {
 // MetaTTL. Guards against the fix accidentally bumping meta on every
 // suppressed publish (e.g. version-conflict, idempotency hits).
 func TestMemoryMapBroker_NoRefreshTTL_LetsMetaExpire(t *testing.T) {
+	t.Parallel()
 	node, _ := New(Config{})
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
