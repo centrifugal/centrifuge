@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -3875,9 +3876,13 @@ func TestMemoryMapBroker_RefreshTTLOnSuppress_RefreshesMetaTTL(t *testing.T) {
 		return MapChannelOptions{
 			Mode:       MapModeRecoverable,
 			StreamSize: 100,
-			StreamTTL:  300 * time.Millisecond,
-			KeyTTL:     300 * time.Millisecond,
-			MetaTTL:    300 * time.Millisecond,
+			// TTLs are deliberately generous relative to the tick interval
+			// below so a stretched -race scheduler can't reap the key
+			// between keepalives — the test should fail on missing
+			// keepalive logic, not on tick scheduling.
+			StreamTTL: 2 * time.Second,
+			KeyTTL:    2 * time.Second,
+			MetaTTL:   2 * time.Second,
 		}
 	}
 	broker := newTestMemoryMapBroker(t, node)
@@ -3893,13 +3898,12 @@ func TestMemoryMapBroker_RefreshTTLOnSuppress_RefreshesMetaTTL(t *testing.T) {
 	firstEpoch := res.Position.Epoch
 	require.NotEmpty(t, firstEpoch)
 
-	// Drive keepalives every 100ms via require.Eventually's tick — under -race
+	// Drive keepalives every 200ms via require.Eventually's tick — under -race
 	// this is more robust than a fixed time.Sleep loop, because each tick
 	// issues the keepalive AND verifies the channel is still alive in one
-	// step. With the fix, each suppressed keepalive extends meta's removeAt
-	// by 300ms; the assertion fails fast if the channel was reaped between
-	// ticks instead of silently passing.
-	keepaliveDeadline := time.Now().Add(600 * time.Millisecond)
+	// step. Each suppressed keepalive extends meta's removeAt by 2s; the
+	// assertion fails fast if the channel was reaped between ticks.
+	keepaliveDeadline := time.Now().Add(3 * time.Second)
 	require.Eventually(t, func() bool {
 		res, err := broker.Publish(ctx, ch, "k", MapPublishOptions{
 			Data:                 []byte("v1"),
@@ -3913,7 +3917,7 @@ func TestMemoryMapBroker_RefreshTTLOnSuppress_RefreshesMetaTTL(t *testing.T) {
 		broker.mapHub.RUnlock()
 		require.True(t, exists, "channel must survive while keepalives run")
 		return time.Now().After(keepaliveDeadline)
-	}, 5*time.Second, 100*time.Millisecond)
+	}, 15*time.Second, 200*time.Millisecond)
 
 	// A real publish (non-suppressed) must use the same epoch — confirms no
 	// reset happened during the keepalive loop.
@@ -4260,4 +4264,126 @@ func TestMapBroker_ReadState_ConcurrentChannelCreation(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestMemoryMapBroker_KeyExpire_FreshSubscriber_NoOrphanRemoval covers audit
+// finding 1: a fresh subscriber's ReadState→ReadStream sequence must never
+// observe a removal event for a key that was not in its state snapshot.
+//
+// Pre-fix: Phase 1 of expireKeysIteration deleted from channel.state under
+// h.Lock without appending to the stream; Phase 2 added the removal stream
+// entry under pubLock(ch) → h.Lock. Between phases, a fresh subscriber's
+// ReadState saw the key gone but ReadStream's position was unchanged —
+// then live PUB/SUB delivered a removal for a key the subscriber never
+// saw in state.
+//
+// Post-fix: Phase 1 only collects expired candidates; Phase 2 atomically
+// deletes state + appends removal stream entry under pubLock(ch) → h.Lock.
+// The (state, stream-since-state.position) snapshot is internally
+// consistent — any removal for key K must have K in state at snapshot time.
+//
+// Test pattern: many concurrent fresh-subscriber snapshots while keys
+// expire and republish in the background. Statistically catches the race
+// if the fix regresses.
+func TestMemoryMapBroker_KeyExpire_FreshSubscriber_NoOrphanRemoval(t *testing.T) {
+	t.Parallel()
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeRecoverable,
+			StreamSize: 500,
+			StreamTTL:  60 * time.Second,
+			KeyTTL:     80 * time.Millisecond, // short — drives expirations
+			MetaTTL:    60 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+
+	ctx := context.Background()
+	ch := "test_fresh_sub_no_orphan"
+
+	// Pre-populate keys.
+	const numKeys = 16
+	for i := 0; i < numKeys; i++ {
+		_, err := broker.Publish(ctx, ch, fmt.Sprintf("k%02d", i), MapPublishOptions{Data: []byte("v")})
+		require.NoError(t, err)
+	}
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+
+	// Background republisher: keeps a subset of keys alive while others expire.
+	// Avoids "everything gone" steady state which would make the test trivial.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(60 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+			}
+			for i := 0; i < numKeys/2; i++ {
+				_, _ = broker.Publish(ctx, ch, fmt.Sprintf("k%02d", i), MapPublishOptions{Data: []byte("v")})
+			}
+		}
+	}()
+
+	// Multiple subscriber goroutines. Each snapshot loop:
+	//   1. ReadState → keys present + position P
+	//   2. ReadStream(since P) → events strictly after P
+	//   3. For each removed event, key must be in state snapshot.
+	const subscribers = 4
+	var violations atomic.Int64
+	var iterations atomic.Int64
+	for w := 0; w < subscribers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+				if err != nil {
+					continue
+				}
+				stateKeys := make(map[string]bool, len(stateRes.Publications))
+				for _, pub := range stateRes.Publications {
+					stateKeys[pub.Key] = true
+				}
+				streamRes, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{
+					Filter: StreamFilter{Since: &stateRes.Position, Limit: 100},
+				})
+				if err != nil {
+					continue
+				}
+				for _, pub := range streamRes.Publications {
+					if pub.Removed && !stateKeys[pub.Key] {
+						// Pre-fix bug: removal of a key that was not in
+						// our state snapshot.
+						violations.Add(1)
+					}
+				}
+				iterations.Add(1)
+			}
+		}()
+	}
+
+	// Run long enough to span at least one expiration cycle (cleanup ticks
+	// at 1s). One cycle plus a small slack is sufficient — under -race the
+	// 4 subscriber loops easily clear the 200-iteration regression-test
+	// threshold within ~1.2s.
+	time.Sleep(1200 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+
+	require.Greater(t, iterations.Load(), int64(200),
+		"too few snapshot iterations to be a meaningful regression test")
+	require.Equal(t, int64(0), violations.Load(),
+		"fresh subscriber observed removal for key not present in state snapshot")
 }

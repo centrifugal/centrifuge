@@ -443,6 +443,15 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
+	// This test stresses the buffer pool with 100 concurrent connections; the
+	// default test-init pong timeout (500ms) is too tight when -race + parallel
+	// suite contention stretches read scheduling. Disable pings/pongs entirely
+	// — they are unrelated to the buffer-pool invariant under test.
+	n.OnConnecting(func(_ context.Context, _ ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			PingPongConfig: &PingPongConfig{PingInterval: -1},
+		}, nil
+	})
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
@@ -519,6 +528,15 @@ func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
 	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
+	// Same rationale as TestWebsocketHandlerConcurrentConnections: 100
+	// concurrent connections under -race stretch read scheduling past
+	// the test-init 500 ms pong timeout. The test asserts buffer-pool
+	// invariants, not ping/pong behavior, so disable pings for this run.
+	n.OnConnecting(func(_ context.Context, _ ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			PingPongConfig: &PingPongConfig{PingInterval: -1},
+		}, nil
+	})
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{

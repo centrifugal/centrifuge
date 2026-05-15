@@ -130,10 +130,13 @@ func TestMemoryBrokerResultCacheExpires(t *testing.T) {
 	e.resultCacheMu.Lock()
 	require.Len(t, e.resultCache, 1)
 	e.resultCacheMu.Unlock()
-	time.Sleep(2 * time.Second)
-	e.resultCacheMu.Lock()
-	require.Len(t, e.resultCache, 0)
-	e.resultCacheMu.Unlock()
+	// Wait for the expire-cache goroutine to clean the entry. Its tick can
+	// stretch past 2s under -race; require.Eventually keeps polling.
+	require.Eventually(t, func() bool {
+		e.resultCacheMu.Lock()
+		defer e.resultCacheMu.Unlock()
+		return len(e.resultCache) == 0
+	}, 10*time.Second, 50*time.Millisecond, "result cache should expire after TTL")
 }
 
 func TestMemoryBrokerPublishIdempotent(t *testing.T) {
@@ -684,6 +687,20 @@ func TestClientSubscribeRecover(t *testing.T) {
 				}
 
 				time.Sleep(time.Duration(tt.Sleep) * time.Second)
+
+				// If the scenario expects history to be expired by now
+				// (Sleep > HistoryTTL), wait for the broker's periodic
+				// cleanup tick to actually clear it. Under -race the 1s
+				// cleanup tick can stretch past the configured Sleep,
+				// leaving stale state and causing flaky asserts.
+				if tt.HistoryTTLSeconds > 0 && tt.Sleep > tt.HistoryTTLSeconds {
+					require.Eventually(t, func() bool {
+						pubs, _, err := node.broker.History(channel, HistoryOptions{
+							Filter: HistoryFilter{Limit: -1},
+						})
+						return err == nil && len(pubs) == 0
+					}, 10*time.Second, 50*time.Millisecond, "expected history to be expired")
+				}
 
 				connectClientV2(t, client)
 

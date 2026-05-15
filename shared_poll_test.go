@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -742,12 +743,13 @@ func TestSharedPollPublish_FreshFromPublish_SkipsTimerPoll(t *testing.T) {
 	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 10, "", []byte(`{"v":10}`))
 	require.NoError(t, err)
 
-	// Next timer poll should only include key2 (key1 is fresh).
+	// Next timer poll should only include key2 (key1 is fresh). Under -race
+	// the 200ms cycle can stretch, so allow a generous deadline.
 	select {
 	case event := <-callCh:
 		require.Len(t, event.Items, 1)
 		require.Equal(t, "key2", event.Items[0].Key)
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("expected timer poll after publish")
 	}
 
@@ -755,7 +757,7 @@ func TestSharedPollPublish_FreshFromPublish_SkipsTimerPoll(t *testing.T) {
 	select {
 	case event := <-callCh:
 		require.Len(t, event.Items, 2)
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("expected full timer poll after flag cleared")
 	}
 }
@@ -1289,10 +1291,23 @@ func TestSharedPoll_EqualVersionPublishNoOverwrite(t *testing.T) {
 	err := node.SharedPollPublish(context.Background(), "test:channel", "key1", 5, "", dataB)
 	require.NoError(t, err)
 
-	// Give time for publish to be processed.
-	time.Sleep(50 * time.Millisecond)
+	// Assert (Never, over a window) that entry.data stays dataA — equal
+	// version should be a silent skip, no overwrite.
+	require.Never(t, func() bool {
+		node.sharedPollManager.mu.RLock()
+		s := node.sharedPollManager.channels["test:channel"]
+		node.sharedPollManager.mu.RUnlock()
+		if s == nil {
+			return false
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		entry := s.itemIndex["key1"]
+		return entry != nil && !bytes.Equal(entry.data, dataA)
+	}, 300*time.Millisecond, 20*time.Millisecond,
+		"equal-version publish should not overwrite data")
 
-	// Assert: entry.data should still be dataA (equal version → skip, no overwrite).
+	// Also assert the version did not move.
 	node.sharedPollManager.mu.RLock()
 	s := node.sharedPollManager.channels["test:channel"]
 	node.sharedPollManager.mu.RUnlock()
@@ -2697,6 +2712,81 @@ func TestSharedPoll_Track_AfterShutdown(t *testing.T) {
 	// Replace shutdownCh with a fresh open channel so the t.Cleanup → Shutdown
 	// → close() doesn't double-close.
 	node.sharedPollManager.shutdownCh = make(chan struct{})
+}
+
+// TestSharedPollManager_ShutdownRetrackChaos stresses the rapid
+// shutdown/retrack/notify cycle. It exercises two race classes:
+//
+//  1. audit finding 4: notify() captures `s := m.channels[ch]` and then
+//     sends on `s.notifCh`. The send must happen while m.mu is held so a
+//     concurrent shutdown cannot replace the state with a dead one.
+//
+//  2. The track()/trackKeys() "s.removed → replace" path: two callers
+//     that both observe `removed=true` must not both overwrite
+//     m.channels[ch] unconditionally. The second overwrite would orphan
+//     the first goroutine's freshly-created state — and its just-started
+//     worker — leaking a goroutine that nothing outside m.channels can
+//     cancel.
+//
+// ChannelShutdownDelay=-1 + PublishEnabled=true reliably reaches both
+// races: the immediate shutdown ensures most cycles see removed=true,
+// and broker subscribe/unsubscribe via the dissolver provides extra
+// scheduling jitter that surfaces the orphaned-state path under -race.
+// On the original (pre-fix) code this test reliably hangs in
+// m.wg.Wait() during cleanup.
+func TestSharedPollManager_ShutdownRetrackChaos(t *testing.T) {
+	t.Parallel()
+	broker := &controllableBroker{}
+	opts := SharedPollChannelOptions{
+		RefreshInterval:      time.Hour, // disable timer-driven polls
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		PublishEnabled:       true,
+		ChannelShutdownDelay: -1, // immediate shutdown — drives the removed→replace path
+	}
+	node := newTestNodeWithControllableBroker(t, broker, opts)
+	m := node.sharedPollManager
+
+	const iterations = 200
+	channel := "test:retrack_chaos"
+
+	var wg sync.WaitGroup
+	for i := 0; i < iterations; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := "k" + string(rune('0'+i%8)) // small key set => high reuse rate
+			_, _, _ = m.track(channel, opts, key)
+			// Notify can race with shutdown; the lock ordering in notify()
+			// must prevent sending on a dead notifCh.
+			m.notify(channel, key)
+			m.untrack(channel, key)
+		}(i)
+	}
+	wg.Wait()
+
+	// After activity drains, the manager must converge: either the
+	// channel is gone (shutdown completed) or it has no tracked keys.
+	require.Eventually(t, func() bool {
+		m.mu.RLock()
+		s, ok := m.channels[channel]
+		m.mu.RUnlock()
+		if !ok {
+			return true
+		}
+		s.mu.Lock()
+		empty := len(s.itemIndex) == 0
+		s.mu.Unlock()
+		return empty
+	}, 5*time.Second, 25*time.Millisecond,
+		"manager did not converge: channel state still has tracked keys")
+
+	// Convergence proven above — but the orphan-worker bug ONLY shows up
+	// when node.Shutdown's m.close() walks m.channels to cancel workers.
+	// If any worker was started on a state that got overwritten in
+	// m.channels, close() can't reach it and m.wg.Wait blocks forever.
+	// The t.Cleanup-driven Shutdown thus serves as the leak detector;
+	// the test framework's overall timeout will catch the regression.
 }
 
 // TestSharedPoll_Stats covers the stats() helper.

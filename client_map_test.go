@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -5647,4 +5649,74 @@ func TestMapSubscribe_DirectLiveRecovery_ServerTagsFilter(t *testing.T) {
 		require.Equal(t, "eng", pub.Tags["team"],
 			"server filter team=eng must drop sales entries even on direct LIVE recovery")
 	}
+}
+
+// TestMapSubscribe_DisconnectRace_NoGhostSubscription stresses the race
+// between handleMapTransitionToLive's late c.channels[channel] write and
+// Client.close()'s c.channels snapshot. The fix re-checks c.status under
+// c.mu before writing channelContext — without it, a close() that runs
+// after addSubscription but before the channelContext write would snapshot
+// c.channels without our entry (no cleanup queued), and the late write
+// would leave a hub subscription with no cleanup path.
+//
+// Pattern: many short-lived clients subscribe to the same map channel and
+// Disconnect concurrently. After all activity drains the hub must show
+// zero subscribers — any ghost would persist forever.
+func TestMapSubscribe_DisconnectRace_NoGhostSubscription(t *testing.T) {
+	t.Parallel()
+	node, _ := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{Type: SubscriptionTypeMap},
+			}, nil)
+		})
+	})
+
+	channel := "test_map_disc_race"
+	const iterations = 300
+
+	rng := rand.New(rand.NewSource(1))
+	var jitterMu sync.Mutex
+	nextJitter := func() time.Duration {
+		jitterMu.Lock()
+		defer jitterMu.Unlock()
+		return time.Duration(rng.Intn(2000)) * time.Microsecond
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < iterations; i++ {
+		wg.Add(1)
+		jitter := nextJitter()
+		go func(i int, jitter time.Duration) {
+			defer wg.Done()
+			client := newTestClientV2(t, node, fmt.Sprintf("u%d", i))
+			connectClientV2(t, client)
+
+			// Spawn the disconnect with random jitter to land at varying
+			// points relative to addSubscription / the channelContext write.
+			go func() {
+				time.Sleep(jitter)
+				client.Disconnect(DisconnectForceNoReconnect)
+			}()
+
+			// Best-effort subscribe — may succeed, error, or be interrupted
+			// by the close. Any panic would surface via the test harness.
+			rwWrapper := testReplyWriterWrapper()
+			_ = client.handleSubscribe(&protocol.SubscribeRequest{
+				Channel: channel,
+				Type:    int32(SubscriptionTypeMap),
+				Phase:   MapPhaseState,
+				Limit:   100,
+			}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+		}(i, jitter)
+	}
+	wg.Wait()
+
+	// Hub must converge to zero subscribers — a ghost would never be cleaned.
+	require.Eventually(t, func() bool {
+		return node.hub.NumSubscribers(channel) == 0
+	}, 15*time.Second, 50*time.Millisecond,
+		"expected zero hub subscribers, got %d", node.hub.NumSubscribers(channel))
 }

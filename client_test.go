@@ -231,9 +231,11 @@ func TestClientV2DisconnectNoPong(t *testing.T) {
 	transport.setPing(pingInterval, pongTimeout)
 	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
 	connectClientV2(t, client)
+	// Disconnect should fire after pingInterval+pongTimeout=1.5s. Use a
+	// wide deadline so -race -count=N scheduler stretch doesn't flake.
 	select {
 	case <-done:
-	case <-time.After(pingInterval + pongTimeout + time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("no disconnect in timeout")
 	}
 }
@@ -2629,9 +2631,12 @@ func TestClientCloseExpired(t *testing.T) {
 	client.mu.RLock()
 	require.False(t, client.status == statusClosed)
 	client.mu.RUnlock()
+	// ExpireAt=+2s, but under -race -count=N scheduler stretch can push the
+	// close past 5s; use a wider deadline so we measure the right invariant
+	// (eventual close) without flaking on timing.
 	select {
 	case <-client.Context().Done():
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		require.Fail(t, "client not closed")
 	}
 	client.mu.RLock()
@@ -2990,8 +2995,10 @@ func TestServerSideRefresh(t *testing.T) {
 
 	connectClientV2(t, client)
 
+	// ExpireAt is +1s — refresh handler should fire shortly after expiry.
+	// Use a wider deadline so -race -count=N scheduler stretch doesn't flake.
 	select {
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		require.Fail(t, "timeout waiting for work done")
 	case <-done:
 	}

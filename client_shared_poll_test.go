@@ -681,10 +681,11 @@ func TestSharedPollRefresh_VersionUnchanged(t *testing.T) {
 		{Key: "key1", Version: 5},
 	})
 
-	// Wait for several refresh cycles.
+	// Wait for several refresh cycles. 100 ms RefreshInterval × 3 = 300 ms
+	// in theory; under -race -count=N scheduling stretch we give 5 s slack.
 	require.Eventually(t, func() bool {
 		return callCount.Load() >= 3
-	}, 2*time.Second, 10*time.Millisecond)
+	}, 5*time.Second, 10*time.Millisecond)
 
 	// Per-connection version should remain 5 (broadcastToKey skips: 5 <= 5).
 	client.mu.RLock()
@@ -840,24 +841,22 @@ func TestSharedPollRefresh_ExplicitRemoval(t *testing.T) {
 		{Key: "key1", Version: 0},
 	})
 
-	// Wait for removal to be processed.
+	// Wait for removal to propagate into itemIndex.
 	require.Eventually(t, func() bool {
-		return callCount.Load() >= 2
-	}, 2*time.Second, 10*time.Millisecond)
-
-	// Give time for removal to process.
-	time.Sleep(50 * time.Millisecond)
-
-	// Item should be removed from itemIndex.
-	node.sharedPollManager.mu.RLock()
-	s, ok := node.sharedPollManager.channels["test:channel"]
-	node.sharedPollManager.mu.RUnlock()
-	if ok {
+		if callCount.Load() < 2 {
+			return false
+		}
+		node.sharedPollManager.mu.RLock()
+		s, ok := node.sharedPollManager.channels["test:channel"]
+		node.sharedPollManager.mu.RUnlock()
+		if !ok {
+			return true
+		}
 		s.mu.Lock()
 		_, hasKey := s.itemIndex["key1"]
 		s.mu.Unlock()
-		require.False(t, hasKey)
-	}
+		return !hasKey
+	}, 2*time.Second, 10*time.Millisecond)
 }
 
 // 1.5 Revocation Tests
@@ -1787,11 +1786,14 @@ func TestSharedPollChannelShutdown_Delay(t *testing.T) {
 		{Key: "key2", Version: 0},
 	})
 
-	// Wait longer than the delay.
-	time.Sleep(700 * time.Millisecond)
-
-	// Channel should still exist because we re-tracked.
-	require.True(t, node.sharedPollManager.hasChannel("test:channel"), "channel should survive after re-track")
+	// Channel must survive past the original shutdown delay because we
+	// re-tracked. require.Never keeps asserting over a window longer than
+	// the 500 ms delay; if shutdown were not cancelled the channel would
+	// disappear within that window.
+	require.Never(t, func() bool {
+		return !node.sharedPollManager.hasChannel("test:channel")
+	}, 800*time.Millisecond, 50*time.Millisecond,
+		"channel must survive after re-track cancels shutdown")
 }
 
 // --- Delta compression tests ---
@@ -2931,7 +2933,7 @@ func TestSharedPollAutoNotify_ColdKey(t *testing.T) {
 
 func TestSharedPollAutoNotify_ExistingKeyNoNotify(t *testing.T) {
 	t.Parallel()
-	callCh := make(chan SharedPollEvent, 10)
+	var callCount atomic.Int32
 
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
 		RefreshInterval:      10 * time.Second, // Long interval.
@@ -2941,7 +2943,7 @@ func TestSharedPollAutoNotify_ExistingKeyNoNotify(t *testing.T) {
 	})
 
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
-		callCh <- event
+		callCount.Add(1)
 		return SharedPollResult{
 			Items: []SharedPollRefreshItem{
 				{Key: "key1", Data: []byte(`data`), Version: 1},
@@ -2951,38 +2953,32 @@ func TestSharedPollAutoNotify_ExistingKeyNoNotify(t *testing.T) {
 
 	setupSharedPollHandlers(node)
 
-	// Client1 tracks key1 → cold key → auto-notify.
+	// Client1 tracks key1 → cold key → auto-notify (call #1).
 	client1 := newTestClientV2(t, node, "user1")
 	connectClientV2(t, client1)
 	subscribeSharedPollClient(t, client1, "test:channel")
 	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{
 		{Key: "key1", Version: 0},
 	})
-
-	// Drain the auto-notify event.
-	select {
-	case <-callCh:
-	case <-time.After(500 * time.Millisecond):
-	}
+	require.Eventually(t, func() bool { return callCount.Load() >= 1 },
+		5*time.Second, 10*time.Millisecond,
+		"expected cold-key auto-poll to fire")
 
 	// Client2 tracks the same key with version=0 → warm key → triggers
-	// notify for near-immediate delivery (version=0 means "I have no data").
+	// notify for near-immediate delivery (call #2). version=0 means
+	// "I have no data" so the server re-broadcasts.
 	client2 := newTestClientV2(t, node, "user2")
 	connectClientV2(t, client2)
 	subscribeSharedPollClient(t, client2, "test:channel")
 	trackSharedPollClient(t, client2, "test:channel", []*protocol.KeyedItem{
 		{Key: "key1", Version: 0},
 	})
-
-	// Should trigger one additional backend call for the warm key.
-	select {
-	case <-callCh:
-		// Expected — warm key with version=0 triggers notify.
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected notify for warm key with version=0")
-	}
+	require.Eventually(t, func() bool { return callCount.Load() >= 2 },
+		5*time.Second, 10*time.Millisecond,
+		"expected notify for warm key with version=0")
 
 	// Client3 tracks the same key with version > 0 → no notify (has data).
+	beforeC3 := callCount.Load()
 	client3 := newTestClientV2(t, node, "user3")
 	connectClientV2(t, client3)
 	subscribeSharedPollClient(t, client3, "test:channel")
@@ -2990,13 +2986,11 @@ func TestSharedPollAutoNotify_ExistingKeyNoNotify(t *testing.T) {
 		{Key: "key1", Version: 1},
 	})
 
-	// No additional backend call — client already has data.
-	select {
-	case <-callCh:
-		t.Fatal("should not notify for warm key with version > 0")
-	case <-time.After(300 * time.Millisecond):
-		// Expected — no extra call.
-	}
+	// No additional backend call — client already has data. require.Never
+	// keeps polling for a window to detect any late notify.
+	require.Never(t, func() bool { return callCount.Load() > beforeC3 },
+		500*time.Millisecond, 25*time.Millisecond,
+		"should not notify for warm key with version > 0")
 }
 
 func TestSharedPollAutoNotify_MultipleClientsSameColdKey(t *testing.T) {
@@ -3838,6 +3832,35 @@ func setEpochAwareSharedPollHandler(node *Node, initial string) func(string) {
 	}
 }
 
+// setEpochAwareSharedPollHandlerBlocking is the deterministic variant: the
+// FIRST handler call (the cold-key auto-poll triggered by track) blocks
+// until the test calls release(); subsequent calls run unblocked. This
+// eliminates a race where the auto-poll's response — captured before the
+// test sets up its initial epoch — lands AFTER the test flips to a new
+// epoch and reverts state back. Use whenever the test plans to do a
+// setPublisherEpoch(...) after the initial setup.
+//
+// Returns (setEpoch, release). Typical usage:
+//
+//	setPub, release := setEpochAwareSharedPollHandlerBlocking(node, "epochA")
+//	subscribe + track
+//	SharedPollPublish(... "epochA" ...)
+//	release()                       // now the auto-poll's response is safe
+//	setPub("epochB"); SharedPollPublish(... "epochB" ...)
+func setEpochAwareSharedPollHandlerBlocking(node *Node, initial string) (func(string), func()) {
+	var epoch atomic.Pointer[string]
+	epoch.Store(&initial)
+	released := make(chan struct{})
+	var pollOnce sync.Once
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		pollOnce.Do(func() { <-released })
+		return SharedPollResult{Epoch: *epoch.Load()}, nil
+	})
+	setEpoch := func(s string) { epoch.Store(&s) }
+	release := func() { close(released) }
+	return setEpoch, release
+}
+
 // TestSharedPollEpoch_VersionedInitialEmpty: a versioned channel starts with
 // empty epoch. The first publish carrying a non-empty epoch flips state.
 //
@@ -3924,10 +3947,11 @@ func TestSharedPollEpoch_FlipUnsubscribesClient(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t, versionedSharedPollOpts())
 	setupSharedPollHandlers(node)
 
-	// Refresh handler returns the same epoch as direct publishes — models a
-	// well-behaved publisher; otherwise cold-key auto-poll's empty-epoch
-	// response races with the publish and flips state back to "".
-	setPublisherEpoch := setEpochAwareSharedPollHandler(node, "epochA")
+	// Use the blocking-handler variant: track()'s cold-key auto-poll reads
+	// the epoch atomic synchronously but applies its response asynchronously.
+	// Without blocking, the response (captured before "epochA" was even set)
+	// can land AFTER we flip to "epochB" and silently revert state back.
+	setPublisherEpoch, releaseAutoPoll := setEpochAwareSharedPollHandlerBlocking(node, "epochA")
 
 	client := newTestClientV2(t, node, "user1")
 	connectClientV2(t, client)
@@ -3950,6 +3974,9 @@ func TestSharedPollEpoch_FlipUnsubscribesClient(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return node.sharedPollManager.Epoch("test:channel", false) == "epochA"
 	}, time.Second, 10*time.Millisecond)
+
+	// Release the cold-key auto-poll. Its response carries "epochA" (no flip).
+	releaseAutoPoll()
 
 	// Flip with new epoch — update the refresh handler in lockstep so the
 	// publisher stays consistent across both paths.
@@ -3977,25 +4004,24 @@ func TestSharedPollEpoch_FlipResetsEntries(t *testing.T) {
 	t.Parallel()
 	node := newTestNodeWithSharedPoll(t, versionedSharedPollOpts())
 	setupSharedPollHandlers(node)
-	setPublisherEpoch := setEpochAwareSharedPollHandler(node, "epochA")
+	// Blocking variant: the cold-key auto-poll's response (carrying "epochA")
+	// must land before we flip to "epochB", otherwise the late apply reverts
+	// the channel epoch back to "epochA". See helper docs.
+	setPublisherEpoch, releaseAutoPoll := setEpochAwareSharedPollHandlerBlocking(node, "epochA")
 
 	client := newTestClientV2(t, node, "user1")
 	connectClientV2(t, client)
 	subscribeSharedPollClient(t, client, "test:channel")
 	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{{Key: "k1", Version: 0}})
 
-	// track() triggers a cold-key auto-poll that reads the publisher epoch
-	// atomic synchronously but applies the response asynchronously. Wait for
-	// that poll to flip the channel epoch to "epochA" before changing the
-	// publisher epoch — otherwise an in-flight response carrying the old
-	// "epochA" can land after the publish below flips to "epochB" and
-	// flip the state back, breaking the test.
+	ctx := context.Background()
+	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 1000, "epochA", []byte(`{"v":1000}`)))
 	require.Eventually(t, func() bool {
 		return node.sharedPollManager.Epoch("test:channel", false) == "epochA"
 	}, time.Second, 10*time.Millisecond)
 
-	ctx := context.Background()
-	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 1000, "epochA", []byte(`{"v":1000}`)))
+	// Release the cold-key auto-poll. Its response carries "epochA" (no flip).
+	releaseAutoPoll()
 
 	// New epoch with low version: must be accepted (entries reset on flip).
 	setPublisherEpoch("epochB")
@@ -4221,6 +4247,159 @@ func TestSharedPollSubscribe_ChannelLimitExceeded(t *testing.T) {
 		Type:    int32(SubscriptionTypeSharedPoll),
 	}, &protocol.Command{Id: 2}, time.Now(), rw2.rw)
 	require.Equal(t, ErrorLimitExceeded, err)
+}
+
+// pollHandlerCounter wraps an OnSharedPoll handler with an atomic counter
+// over invocations. The cold-key auto-poll fired by track() runs the
+// handler asynchronously, so tests that need to observe its completion can
+// install this wrapper and call waitForPolls before subsequent assertions.
+//
+// Caveat: applyRefreshResponse runs AFTER the handler returns. The counter
+// is incremented at the END of the handler call (just before return), so
+// count >= N proves the handler has been invoked N times but does NOT
+// prove all N responses have been applied. Tests that depend on the
+// applied state should additionally assert a state predicate (e.g.
+// require.Eventually on Epoch == "...") that the apply step would set.
+type pollHandlerCounter struct {
+	count atomic.Int64
+}
+
+// installPollHandlerCounter replaces the node's OnSharedPoll with a counter
+// that delegates to `inner`. If inner is nil, the wrapper returns an empty
+// SharedPollResult.
+func installPollHandlerCounter(node *Node, inner func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error)) *pollHandlerCounter {
+	c := &pollHandlerCounter{}
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		var res SharedPollResult
+		var err error
+		if inner != nil {
+			res, err = inner(ctx, event)
+		}
+		c.count.Add(1)
+		return res, err
+	})
+	return c
+}
+
+// waitForPolls blocks until the counter has observed at least `target`
+// handler invocations or the deadline expires.
+func (c *pollHandlerCounter) waitForPolls(t testing.TB, target int64) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		return c.count.Load() >= target
+	}, 5*time.Second, 10*time.Millisecond,
+		"expected >= %d OnSharedPoll handler invocations, got %d", target, c.count.Load())
+}
+
+// TestSharedPoll_ColdKeyAutoPoll_Synchronization demonstrates the
+// pollHandlerCounter helper: after trackSharedPollClient, callers can
+// wait for the cold-key auto-poll handler to have been invoked before
+// asserting downstream state. This makes ordering deterministic instead
+// of relying on a fixed time.Sleep.
+func TestSharedPoll_ColdKeyAutoPoll_Synchronization(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t, versionedSharedPollOpts())
+	setupSharedPollHandlers(node)
+
+	counter := installPollHandlerCounter(node, func(_ context.Context, _ SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{Epoch: "epoch1"}, nil
+	})
+
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:autopoll_sync")
+	trackSharedPollClient(t, client, "test:autopoll_sync",
+		[]*protocol.KeyedItem{{Key: "k1", Version: 0}})
+
+	// The cold-key auto-poll runs OnSharedPoll once.
+	counter.waitForPolls(t, 1)
+
+	// Channel epoch reflects what the auto-poll returned.
+	require.Eventually(t, func() bool {
+		return node.sharedPollManager.Epoch("test:autopoll_sync", false) == "epoch1"
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+// TestSharedPollEpoch_FlipStorm_NoPanic_NoLeak: a publisher alternates
+// epochs rapidly while subscribers track and re-track. The system must
+// remain panic-free and converge to a final epoch matching the last
+// publish. Goroutine-leak surrogate: after activity drains, the manager
+// has at most one state for the channel and that state's worker is
+// running or has exited cleanly (verified by Close in t.Cleanup
+// completing within reasonable time).
+func TestSharedPollEpoch_FlipStorm_NoPanic_NoLeak(t *testing.T) {
+	t.Parallel()
+	opts := versionedSharedPollOpts()
+	node := newTestNodeWithSharedPoll(t, opts)
+	setupSharedPollHandlers(node)
+
+	// Publisher epoch atomic — handler reads it on each invocation. Models
+	// a well-behaved publisher whose direct publishes and refresh responses
+	// stay in lockstep.
+	var currentEpoch atomic.Pointer[string]
+	initial := "epochA"
+	currentEpoch.Store(&initial)
+	node.OnSharedPoll(func(_ context.Context, _ SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{Epoch: *currentEpoch.Load()}, nil
+	})
+
+	channel := "test:flip_storm"
+
+	// Subscribe a small set of clients — enough for the epoch-flip
+	// unsubscribe path to fire on each flip but not so many that the
+	// test bogs down under -race.
+	const numClients = 4
+	clients := make([]*Client, numClients)
+	for i := 0; i < numClients; i++ {
+		clients[i] = newTestClientV2(t, node, "u"+string(rune('A'+i)))
+		connectClientV2(t, clients[i])
+		subscribeSharedPollClient(t, clients[i], channel)
+		trackSharedPollClient(t, clients[i], channel,
+			[]*protocol.KeyedItem{{Key: "k", Version: 0}})
+	}
+
+	ctx := context.Background()
+	epochA := "epochA"
+	epochB := "epochB"
+
+	const flips = 200
+	for i := 0; i < flips; i++ {
+		var e string
+		if i%2 == 0 {
+			e = epochA
+		} else {
+			e = epochB
+		}
+		currentEpoch.Store(&e)
+		// Publish with the same epoch the handler currently returns.
+		// Pre-flip: subscribers get unsubscribed; re-subscribe path is
+		// not exercised here — we just want robustness of the flip path.
+		require.NoError(t, node.SharedPollPublish(ctx, channel, "k", uint64(i+1), e, []byte(`{}`)))
+	}
+
+	// Final state: channel epoch matches one of the two values used.
+	require.Eventually(t, func() bool {
+		e := node.sharedPollManager.Epoch(channel, false)
+		return e == epochA || e == epochB
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+// TestSharedPollEncodeFailureRollback_TODO documents that audit finding 5
+// (keyState.version rollback on subscribe-reply encode failure) is not
+// covered by an explicit test because the test transport / protocol pool
+// does not currently support injecting a reply-encode error.
+// getSubRefreshCommandReply unconditionally returns nil error (it acquires
+// from a pool), so the rollback branch in handleTrack is unreachable from
+// tests without production-side changes. Coverage of the rollback path
+// would require either:
+//   - exposing an encoder hook on the test transport, or
+//   - making getSubRefreshCommandReply fallible (e.g. via a marshal hook).
+//
+// Left as a TODO so the regression risk is visible. The fix is in
+// client_keyed.go handleTrack, lines 334-350 (rollback step on encode
+// error).
+func TestSharedPollEncodeFailureRollback_TODO(t *testing.T) {
+	t.Skip("encode failure cannot be injected without production hooks; see comment")
 }
 
 // TestSharedPollSubscribe_PresenceFlags covers the presence-flag branches

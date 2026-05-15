@@ -10,7 +10,7 @@ var stringReaderPool sync.Pool
 
 // GetStringReader from pool.
 func GetStringReader(data string) *strings.Reader {
-	r := bytesReaderPool.Get()
+	r := stringReaderPool.Get()
 	if r == nil {
 		return strings.NewReader(data)
 	}

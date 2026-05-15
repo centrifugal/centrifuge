@@ -165,17 +165,35 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 	default:
 	}
 
-	// If this state was removed by shutdown timer, replace it.
-	if s.removed {
+	// If this state was removed by shutdown timer, replace it and loop
+	// until we hold the lock on a non-removed state.
+	//
+	// Re-check m.channels[channel] under m.mu and reuse any fresh state a
+	// concurrent caller installed — an unconditional overwrite would
+	// orphan that caller's worker (nothing outside m.channels keeps a
+	// reference for cancellation, so the lost worker would stay parked in
+	// select with an uncancelled context, and m.close()'s wg.Wait would
+	// hang forever).
+	//
+	// Loop, because the cur we ended up with may itself be removed by a
+	// third goroutine between when it was placed and when we acquire
+	// cur.mu — that would otherwise fall through to add a key + restart
+	// the worker on an about-to-be-finalized state, leaking the new
+	// worker the same way.
+	for s.removed {
 		s.mu.Unlock()
 		m.mu.Lock()
-		s = &sharedPollChannelState{
-			opts:      opts,
-			epoch:     initialChannelEpoch(opts),
-			itemIndex: make(map[string]*sharedPollTrackedEntry),
-			notifCh:   make(chan string, notifChCapacity),
+		cur, ok := m.channels[channel]
+		if !ok || cur == s {
+			cur = &sharedPollChannelState{
+				opts:      opts,
+				epoch:     initialChannelEpoch(opts),
+				itemIndex: make(map[string]*sharedPollTrackedEntry),
+				notifCh:   make(chan string, notifChCapacity),
+			}
+			m.channels[channel] = cur
 		}
-		m.channels[channel] = s
+		s = cur
 		m.mu.Unlock()
 		s.mu.Lock()
 		select {
@@ -289,17 +307,25 @@ func (m *SharedPollManager) trackKeys(channel string, opts SharedPollChannelOpti
 	default:
 	}
 
-	// If this state was removed by shutdown timer, replace it.
-	if s.removed {
+	// If this state was removed by shutdown timer, replace it. See the
+	// matching loop in track() for the race rationale: both an
+	// unconditional overwrite and a single-shot re-check would still
+	// orphan a worker — a fresh state we land on may itself be in the
+	// process of being shut down by a third goroutine.
+	for s.removed {
 		s.mu.Unlock()
 		m.mu.Lock()
-		s = &sharedPollChannelState{
-			opts:      opts,
-			epoch:     initialChannelEpoch(opts),
-			itemIndex: make(map[string]*sharedPollTrackedEntry),
-			notifCh:   make(chan string, notifChCapacity),
+		cur, ok := m.channels[channel]
+		if !ok || cur == s {
+			cur = &sharedPollChannelState{
+				opts:      opts,
+				epoch:     initialChannelEpoch(opts),
+				itemIndex: make(map[string]*sharedPollTrackedEntry),
+				notifCh:   make(chan string, notifChCapacity),
+			}
+			m.channels[channel] = cur
 		}
-		m.channels[channel] = s
+		s = cur
 		m.mu.Unlock()
 		s.mu.Lock()
 		select {

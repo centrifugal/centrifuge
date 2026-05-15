@@ -51,8 +51,6 @@ func (o ChannelMediumOptions) isMediumEnabled() bool {
 	return o.SharedPositionSync || o.KeepLatestPublication || o.enableQueue || o.broadcastDelay > 0
 }
 
-// Keep global to save 8 byte per-channel. Must be only changed by tests.
-var channelMediumTimeNow = time.Now
 
 // channelMedium is initialized when first subscriber comes into channel, and dropped as soon as last
 // subscriber leaves the channel on the Node.
@@ -73,6 +71,10 @@ type channelMedium struct {
 	latestPublication *Publication
 	// positionCheckTime is a time (Unix Nanoseconds) when last position check was performed.
 	positionCheckTime int64
+	// nowFn is the clock used by this medium. Defaults to time.Now in
+	// newChannelMedium; tests override it on the medium instance instead of
+	// mutating a package-level variable (which races with parallel readers).
+	nowFn func() time.Time
 }
 
 type nodeSubset interface {
@@ -86,12 +88,13 @@ func newChannelMedium(channel string, node nodeSubset, options ChannelMediumOpti
 		return nil, errors.New("broadcast delay can only be used with queue enabled")
 	}
 	c := &channelMedium{
-		channel:           channel,
-		node:              node,
-		options:           options,
-		closeCh:           make(chan struct{}),
-		positionCheckTime: channelMediumTimeNow().UnixNano(),
+		channel: channel,
+		node:    node,
+		options: options,
+		closeCh: make(chan struct{}),
+		nowFn:   time.Now,
 	}
+	c.positionCheckTime = c.nowFn().UnixNano()
 	if options.enableQueue {
 		c.messages = newPublicationQueue(2)
 		go c.writer()
@@ -112,7 +115,7 @@ const defaultChannelLayerQueueMaxSize = 16 * 1024 * 1024
 func (c *channelMedium) broadcastPublication(pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) {
 	bp := queuedPub{pub: pub, sp: sp, prevPub: prevPub, delta: delta}
 	c.mu.Lock()
-	c.positionCheckTime = channelMediumTimeNow().UnixNano()
+	c.positionCheckTime = c.nowFn().UnixNano()
 	c.mu.Unlock()
 
 	if c.options.enableQueue {
@@ -134,7 +137,7 @@ func (c *channelMedium) broadcastPublication(pub *Publication, sp StreamPosition
 func (c *channelMedium) broadcastInsufficientState() {
 	bp := queuedPub{prevPub: nil, isInsufficientState: true}
 	c.mu.Lock()
-	c.positionCheckTime = channelMediumTimeNow().UnixNano()
+	c.positionCheckTime = c.nowFn().UnixNano()
 	c.mu.Unlock()
 	if c.options.enableQueue {
 		// TODO: possibly support c.messages.dropQueued() for this path ?
@@ -231,7 +234,7 @@ func (c *channelMedium) waitSendPub(delay time.Duration) bool {
 }
 
 func (c *channelMedium) CheckPosition(historyMetaTTL time.Duration, clientPosition StreamPosition, checkDelay time.Duration) bool {
-	nowUnixNano := channelMediumTimeNow().UnixNano()
+	nowUnixNano := c.nowFn().UnixNano()
 	c.mu.Lock()
 	needCheckPosition := nowUnixNano-c.positionCheckTime >= checkDelay.Nanoseconds()
 	if needCheckPosition {
