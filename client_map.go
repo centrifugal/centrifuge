@@ -1339,29 +1339,25 @@ func (c *Client) sweepExpiredMapSubscribing(skipChannel string) {
 		c.mu.RUnlock()
 		return
 	}
-	type sweepCandidate struct {
-		ch    string
-		state *mapSubscribeState
-	}
-	candidates := make([]sweepCandidate, 0, n)
-	for ch, state := range c.mapSubscribing {
-		if ch == skipChannel {
-			continue
-		}
-		candidates = append(candidates, sweepCandidate{ch: ch, state: state})
-	}
-	c.mu.RUnlock()
-
-	// Resolve options + check expiry outside any lock.
 	type sweepExpired struct {
 		ch    string
 		state *mapSubscribeState
 	}
+	candidates := make([]sweepExpired, 0, n)
+	for ch, state := range c.mapSubscribing {
+		if ch == skipChannel {
+			continue
+		}
+		candidates = append(candidates, sweepExpired{ch: ch, state: state})
+	}
+	c.mu.RUnlock()
+
+	// Resolve options + check expiry outside any lock.
 	var expired []sweepExpired
 	for _, cand := range candidates {
 		sweepChOpts, _ := c.node.resolveMapChannelOptions(cand.ch)
 		if c.isMapCatchUpExpired(cand.state, sweepChOpts) {
-			expired = append(expired, sweepExpired{ch: cand.ch, state: cand.state})
+			expired = append(expired, cand)
 		}
 	}
 	if len(expired) == 0 {
