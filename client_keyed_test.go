@@ -13,6 +13,7 @@ import (
 // encodeKeyedPush: JSON+bidi (already covered), JSON+uni, Protobuf+bidi,
 // Protobuf+uni.
 func TestEncodeKeyedPush_AllProtocols(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		proto ProtocolType
@@ -47,6 +48,7 @@ func TestEncodeKeyedPush_AllProtocols(t *testing.T) {
 
 // TestKeyedTrack_NoTrackHandler covers the trackHandler == nil branch.
 func TestKeyedTrack_NoTrackHandler(t *testing.T) {
+	t.Parallel()
 	node := newTestNodeWithSharedPoll(t)
 	// Subscribe handler only, no OnTrack.
 	node.OnConnect(func(client *Client) {
@@ -73,6 +75,7 @@ func TestKeyedTrack_NoTrackHandler(t *testing.T) {
 // TestKeyedTrack_TtlField covers the inner branch in handleTrack that sets
 // res.Ttl when reply.ExpireAt > now.
 func TestKeyedTrack_TtlField(t *testing.T) {
+	t.Parallel()
 	node := newTestNodeWithSharedPoll(t)
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
@@ -97,6 +100,7 @@ func TestKeyedTrack_TtlField(t *testing.T) {
 // TestKeyedUntrack_InvokesUntrackHandler covers the optional untrackHandler
 // invocation in handleUntrack and the minTrackExpireAt cleanup branch.
 func TestKeyedUntrack_InvokesUntrackHandler(t *testing.T) {
+	t.Parallel()
 	node := newTestNodeWithSharedPoll(t)
 	called := make(chan UntrackEvent, 1)
 	node.OnConnect(func(client *Client) {
@@ -140,6 +144,7 @@ func TestKeyedUntrack_InvokesUntrackHandler(t *testing.T) {
 // TestCleanupKeyed_NoKeyedState covers the early-return branch in cleanupKeyed
 // when c.keyed is nil (client never tracked anything).
 func TestCleanupKeyed_NoKeyedState(t *testing.T) {
+	t.Parallel()
 	node := newTestNodeWithSharedPoll(t)
 	setupSharedPollHandlers(node)
 	client := newTestClientV2(t, node, "user1")
@@ -158,6 +163,7 @@ func TestCleanupKeyed_NoKeyedState(t *testing.T) {
 // in checkTrackExpiration: no keyed state, no minExpire entry, and re-check
 // after acquiring write lock.
 func TestCheckTrackExpiration_EarlyReturns(t *testing.T) {
+	t.Parallel()
 	node := newTestNodeWithSharedPoll(t)
 	setupSharedPollHandlers(node)
 	client := newTestClientV2(t, node, "user1")

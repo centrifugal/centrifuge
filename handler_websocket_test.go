@@ -23,6 +23,7 @@ import (
 )
 
 func TestWebsocketHandler(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -48,6 +49,7 @@ func TestWebsocketHandler(t *testing.T) {
 }
 
 func TestWebsocketHandlerProtocolV2(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -73,6 +75,7 @@ func TestWebsocketHandlerProtocolV2(t *testing.T) {
 }
 
 func TestWebsocketHandlerSubprotocol(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -104,6 +107,7 @@ func TestWebsocketHandlerSubprotocol(t *testing.T) {
 }
 
 func TestWebsocketHandlerURLParams(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -136,6 +140,7 @@ func TestWebsocketHandlerURLParams(t *testing.T) {
 }
 
 func TestWebsocketTransportWrite(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -175,6 +180,7 @@ func TestWebsocketTransportWrite(t *testing.T) {
 }
 
 func TestWebsocketTransportWriteMany(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -235,6 +241,7 @@ func waitWithTimeout(t *testing.T, ch chan struct{}) {
 }
 
 func TestWebsocketHandlerProtobuf(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -259,6 +266,7 @@ func TestWebsocketHandlerProtobuf(t *testing.T) {
 }
 
 func TestWebsocketHandlerPing(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -373,6 +381,7 @@ func TestWebsocketHandler_FramePingPong(t *testing.T) {
 }
 
 func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -431,6 +440,7 @@ func testAuthMiddleware(h http.Handler) http.Handler {
 // TestWebsocketHandlerConcurrentConnections allows catching errors related
 // to invalid buffer pool usages.
 func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -506,6 +516,7 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 }
 
 func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -802,6 +813,7 @@ func BenchmarkWsPubSub(b *testing.B) {
 }
 
 func TestWsBroadcastCompressionCache(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 

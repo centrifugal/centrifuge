@@ -101,6 +101,7 @@ func excludeClusterPresenceTests(tests []redisPresenceTest) []redisPresenceTest 
 }
 
 func TestRedisPresenceManager(t *testing.T) {
+	t.Parallel()
 	for _, tt := range redisPresenceTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
@@ -131,6 +132,7 @@ func TestRedisPresenceManager(t *testing.T) {
 }
 
 func TestRedisPresenceManagerWithUserMapping(t *testing.T) {
+	t.Parallel()
 	for _, tt := range redisPresenceTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
@@ -205,6 +207,7 @@ func TestRedisPresenceManagerWithUserMapping(t *testing.T) {
 }
 
 func TestRedisPresenceManagerWithHashFieldTTL(t *testing.T) {
+	t.Parallel()
 	t.Skip() // Will work on Redis 7.4 for now, so skipping for now since CI also runs on Redis 6.
 	for _, tt := range redisPresenceTests {
 		for _, userMapping := range []bool{true, false} {

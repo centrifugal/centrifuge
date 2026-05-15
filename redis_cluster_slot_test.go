@@ -6,6 +6,7 @@ import (
 )
 
 func TestRedisSlot_KnownValues(t *testing.T) {
+	t.Parallel()
 	// These values match Redis CLUSTER KEYSLOT output.
 	tests := []struct {
 		key  string
@@ -35,6 +36,7 @@ func TestRedisSlot_KnownValues(t *testing.T) {
 }
 
 func TestRedisSlot_HashTagEdgeCases(t *testing.T) {
+	t.Parallel()
 	// Empty hash tag {}: no valid tag, hash full key.
 	slotFull := redisSlot("abc{}")
 	slotABC := redisSlot("abc{}")
@@ -58,6 +60,7 @@ func TestRedisSlot_HashTagEdgeCases(t *testing.T) {
 }
 
 func TestRedisSlot_PartitionHashTags(t *testing.T) {
+	t.Parallel()
 	// Verify that partition hash tags {0}, {1}, ... map to different slots.
 	seen := make(map[uint16]bool)
 	for i := 0; i < 256; i++ {

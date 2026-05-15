@@ -351,11 +351,18 @@ func TestClientLevelPingCustomTimerScheduler(t *testing.T) {
 	node.timerScheduler = &testTimerScheduler{}
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	done := make(chan struct{})
+	// Short ping/pong durations so the test finishes quickly. The first ping
+	// fires in [PingInterval/2, PingInterval], then PongTimeout starts before
+	// DisconnectNoPong; total ≤ PingInterval + PongTimeout. Test purpose
+	// (custom scheduler is invoked and disconnect fires after the window) is
+	// duration-agnostic.
+	pingInterval := 1 * time.Second
+	pongTimeout := 500 * time.Millisecond
 	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
 		return ConnectReply{
 			PingPongConfig: &PingPongConfig{
-				PingInterval: 5 * time.Second,
-				PongTimeout:  3 * time.Second,
+				PingInterval: pingInterval,
+				PongTimeout:  pongTimeout,
 			},
 		}, nil
 	})
@@ -373,7 +380,7 @@ func TestClientLevelPingCustomTimerScheduler(t *testing.T) {
 	connectClientV2(t, client)
 	select {
 	case <-done:
-	case <-time.After(9 * time.Second):
+	case <-time.After(pingInterval + pongTimeout + time.Second):
 		t.Fatal("no disconnect in timeout")
 	}
 }

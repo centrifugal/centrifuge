@@ -7,6 +7,7 @@ import (
 )
 
 func TestLogLevelToString(t *testing.T) {
+	t.Parallel()
 	level := LogLevelToString(LogLevelDebug)
 	require.Equal(t, "debug", level)
 }
@@ -20,6 +21,7 @@ func (h *testHandler) Handle(_ LogEntry) {
 }
 
 func TestLogger(t *testing.T) {
+	t.Parallel()
 	h := testHandler{}
 	l := newLogger(LogLevelError, h.Handle)
 	require.NotNil(t, l)
@@ -32,6 +34,7 @@ func TestLogger(t *testing.T) {
 }
 
 func TestNewLogEntry(t *testing.T) {
+	t.Parallel()
 	entry := newLogEntry(LogLevelDebug, "test", nil)
 	require.Equal(t, LogLevelDebug, entry.Level)
 	require.Equal(t, "test", entry.Message)

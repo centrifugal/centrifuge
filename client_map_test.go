@@ -98,6 +98,7 @@ func subscribeMapClientExpectError(t testing.TB, client *Client, req *protocol.S
 }
 
 func TestMapSubscribe_StatePhase(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_keyed"
@@ -150,6 +151,7 @@ func TestMapSubscribe_StatePhase(t *testing.T) {
 }
 
 func TestMapSubscribe_StatePagination(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_map_pagination"
@@ -209,6 +211,7 @@ func TestMapSubscribe_StatePagination(t *testing.T) {
 }
 
 func TestMapSubscribe_StreamPhase(t *testing.T) {
+	t.Parallel()
 	// Test that STREAM phase is used when the stream advances too far during
 	// STATE pagination for state-to-live to kick in.
 	node, broker := newTestNodeWithMapBroker(t)
@@ -289,6 +292,7 @@ func TestMapSubscribe_StreamPhase(t *testing.T) {
 }
 
 func TestMapSubscribe_LivePhase(t *testing.T) {
+	t.Parallel()
 	// With always-on state-to-live, positioned mode STATE goes directly to LIVE
 	// on the last page when stream is close. Verify client is properly subscribed.
 	node, broker := newTestNodeWithMapBroker(t)
@@ -336,6 +340,7 @@ func TestMapSubscribe_LivePhase(t *testing.T) {
 }
 
 func TestMapSubscribe_DirectLive(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_direct_live"
@@ -374,6 +379,7 @@ func TestMapSubscribe_DirectLive(t *testing.T) {
 }
 
 func TestMapSubscribe_FullTwoPhase(t *testing.T) {
+	t.Parallel()
 	// With always-on state-to-live, positioned mode STATE goes directly to LIVE
 	// on the last page when all entries fit. This effectively becomes a single step.
 	node, broker := newTestNodeWithMapBroker(t)
@@ -417,6 +423,7 @@ func TestMapSubscribe_FullTwoPhase(t *testing.T) {
 }
 
 func TestMapSubscribe_NotEnabled(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 
 	channel := "test_not_enabled"
@@ -448,6 +455,7 @@ func TestMapSubscribe_NotEnabled(t *testing.T) {
 }
 
 func TestMapSubscribe_AlreadySubscribed(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 
 	channel := "test_already_subscribed"
@@ -483,6 +491,7 @@ func TestMapSubscribe_AlreadySubscribed(t *testing.T) {
 }
 
 func TestMapSubscribe_WithPresence(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_with_presence"
@@ -533,6 +542,7 @@ func TestMapSubscribe_WithPresence(t *testing.T) {
 }
 
 func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_presence_cleanup"
@@ -581,6 +591,7 @@ func TestMapSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 }
 
 func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_presence_disconnect"
@@ -632,6 +643,7 @@ func TestMapSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 }
 
 func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_cleanup_on_unsub"
@@ -688,6 +700,7 @@ func TestMapSubscribe_CleanupOnUnsubscribe(t *testing.T) {
 }
 
 func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_cleanup_on_disconnect"
@@ -746,6 +759,7 @@ func TestMapSubscribe_CleanupOnDisconnect(t *testing.T) {
 }
 
 func TestPresenceSubscribe_State(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	ctx := context.Background()
@@ -787,6 +801,7 @@ func TestPresenceSubscribe_State(t *testing.T) {
 }
 
 func TestPresenceSubscribe_Live(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	ctx := context.Background()
@@ -826,6 +841,7 @@ func TestPresenceSubscribe_Live(t *testing.T) {
 }
 
 func TestPresenceSubscribe_Positioned_TwoPhase(t *testing.T) {
+	t.Parallel()
 	// Presence subscriptions can also be positioned (EnablePositioning: true).
 	// With always-on state-to-live, positioned STATE goes directly to LIVE
 	// on the last page when stream is close.
@@ -871,6 +887,7 @@ func TestPresenceSubscribe_Positioned_TwoPhase(t *testing.T) {
 }
 
 func TestPresenceSubscribe_NotAllowed(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 
 	presenceChannel := "clients:test_presence_not_allowed"
@@ -897,6 +914,7 @@ func TestPresenceSubscribe_NotAllowed(t *testing.T) {
 }
 
 func TestPresenceSubscribe_NoHandler(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 
 	presenceChannel := "clients:test_presence_no_handler"
@@ -918,6 +936,7 @@ func TestPresenceSubscribe_NoHandler(t *testing.T) {
 }
 
 func TestPresenceSubscribe_AlreadySubscribed(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 
 	presenceChannel := "clients:test_presence_already_sub"
@@ -950,6 +969,7 @@ func TestPresenceSubscribe_AlreadySubscribed(t *testing.T) {
 }
 
 func TestMapPresenceTTL(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 
 	// Default ClientPresenceUpdateInterval is 27 seconds.
@@ -968,6 +988,7 @@ func TestMapPresenceTTL(t *testing.T) {
 }
 
 func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_map_presence"
@@ -1031,6 +1052,7 @@ func TestMapSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
 }
 
 func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_map_presence_cleanup"
@@ -1094,6 +1116,7 @@ func TestMapSubscribePresenceCleanupOnDisconnect(t *testing.T) {
 }
 
 func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_multi_clients"
@@ -1167,6 +1190,7 @@ func TestMapSubscribe_MultipleClientsPerUser(t *testing.T) {
 
 // TestMapBroker_ReadStateByKey tests the Key filter for ReadState.
 func TestMapBroker_ReadStateByKey(t *testing.T) {
+	t.Parallel()
 	_, broker := newTestNodeWithMapBroker(t)
 	ctx := context.Background()
 	ch := "test_read_by_key"
@@ -1212,6 +1236,7 @@ func TestMapBroker_ReadStateByKey(t *testing.T) {
 
 // TestMapBroker_CASSuccess tests successful CAS update.
 func TestMapBroker_CASSuccess(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 	ctx := context.Background()
@@ -1252,6 +1277,7 @@ func TestMapBroker_CASSuccess(t *testing.T) {
 
 // TestMapBroker_CASConflict tests CAS conflict when position has changed.
 func TestMapBroker_CASConflict(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 	ctx := context.Background()
@@ -1310,6 +1336,7 @@ func TestMapBroker_CASConflict(t *testing.T) {
 
 // TestMapBroker_CASNonExistent tests CAS on a key that doesn't exist.
 func TestMapBroker_CASNonExistent(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 	ctx := context.Background()
@@ -1340,6 +1367,7 @@ func TestMapBroker_CASNonExistent(t *testing.T) {
 
 // TestMapBroker_CASWrongEpoch tests CAS with correct offset but wrong epoch.
 func TestMapBroker_CASWrongEpoch(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 	ctx := context.Background()
@@ -1385,6 +1413,7 @@ func TestMapBroker_CASWrongEpoch(t *testing.T) {
 // Tests for STATE→LIVE direct transition optimization.
 
 func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
+	t.Parallel()
 	// Test that when stream is close enough, server transitions directly
 	// from STATE to LIVE on the last state page.
 	node, err := New(Config{
@@ -1461,6 +1490,7 @@ func TestMapSubscribe_StateToLive_DirectTransition(t *testing.T) {
 }
 
 func TestMapSubscribe_StateToLive_WithStreamPublications(t *testing.T) {
+	t.Parallel()
 	// Test that STATE→LIVE transition includes stream publications when
 	// there are updates between state read and going live.
 	node, err := New(Config{
@@ -1531,6 +1561,7 @@ func TestMapSubscribe_StateToLive_WithStreamPublications(t *testing.T) {
 }
 
 func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
+	t.Parallel()
 	// Test that with pagination, only the LAST page can trigger STATE→LIVE.
 	// Earlier pages should return phase=2 (STATE) with cursor.
 	node, err := New(Config{
@@ -1617,6 +1648,7 @@ func TestMapSubscribe_StateToLive_Pagination_LastPageGoesLive(t *testing.T) {
 }
 
 func TestMapSubscribe_StateToLive_PublishDuringPagination(t *testing.T) {
+	t.Parallel()
 	// Regression test: publications made between STATE pages must not be lost
 	// when server transitions directly from STATE to LIVE.
 	//
@@ -1733,6 +1765,7 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination(t *testing.T) {
 }
 
 func TestMapSubscribe_StateToLive_PublishDuringPagination_ManyPublishes(t *testing.T) {
+	t.Parallel()
 	// Regression test with publications happening at multiple points during
 	// multi-page pagination. Verifies the frozen offset stays consistent and
 	// ALL publications during the entire pagination are recovered.
@@ -1865,6 +1898,7 @@ func TestMapSubscribe_StateToLive_PublishDuringPagination_ManyPublishes(t *testi
 }
 
 func TestMapSubscribe_StreamPhaseRecovery(t *testing.T) {
+	t.Parallel()
 	// Test that a reconnecting client can use phase=1 (STREAM) with recover=true
 	// to catch up from its last known position without going through STATE phase.
 	// This simulates a client reconnection after disconnect.
@@ -1937,6 +1971,7 @@ func TestMapSubscribe_StreamPhaseRecovery(t *testing.T) {
 }
 
 func TestMapSubscribe_StreamPhaseRecovery_WithoutRecoverFlag(t *testing.T) {
+	t.Parallel()
 	// Test that phase=1 (STREAM) without recover=true and without prior STATE
 	// phase returns permission denied.
 	node, broker := newTestNodeWithMapBroker(t)
@@ -1979,6 +2014,7 @@ func TestMapSubscribe_StreamPhaseRecovery_WithoutRecoverFlag(t *testing.T) {
 }
 
 func TestMapSubscribe_StreamPhaseRecovery_LargeGap(t *testing.T) {
+	t.Parallel()
 	// Test stream phase recovery with a larger gap that requires multiple
 	// pagination rounds before going LIVE.
 	node, broker := newTestNodeWithMapBroker(t)
@@ -2060,6 +2096,7 @@ func TestMapSubscribe_StreamPhaseRecovery_LargeGap(t *testing.T) {
 }
 
 func TestMapSubscribe_LivePhaseRecovery(t *testing.T) {
+	t.Parallel()
 	// Test that a reconnecting client can use phase=0 (LIVE) with recover=true
 	// to catch up directly without any pagination.
 	node, broker := newTestNodeWithMapBroker(t)
@@ -2122,6 +2159,7 @@ func TestMapSubscribe_LivePhaseRecovery(t *testing.T) {
 
 // Streamless mode: phase=1 (STREAM) should be rejected with ErrorBadRequest.
 func TestMapSubscribe_Streamless_StreamPhaseRejected(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_streamless_stream_rejected"
@@ -2162,6 +2200,7 @@ func TestMapSubscribe_Streamless_StreamPhaseRejected(t *testing.T) {
 
 // Streamless mode: reconnection uses STATE phase to re-sync full state.
 func TestMapSubscribe_Streamless_RecoveryUsesStatePhase(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_streamless_recovery_state"
@@ -2207,6 +2246,7 @@ func TestMapSubscribe_Streamless_RecoveryUsesStatePhase(t *testing.T) {
 
 // Positioned mode: epoch mismatch during STREAM phase should return ErrorUnrecoverablePosition.
 func TestMapSubscribe_Positioned_StreamEpochMismatch(t *testing.T) {
+	t.Parallel()
 	// Test that STREAM phase with wrong epoch returns ErrorUnrecoverablePosition.
 	// We create a scenario where STATE doesn't go LIVE (large stream gap) so
 	// the client needs to use STREAM phase, and then send wrong epoch.
@@ -2287,6 +2327,7 @@ func TestMapSubscribe_Positioned_StreamEpochMismatch(t *testing.T) {
 
 // Positioned mode: concurrent pagination requests on the same channel should return ErrorConcurrentPagination.
 func TestMapSubscribe_ConcurrentPagination(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -2343,6 +2384,7 @@ func TestMapSubscribe_ConcurrentPagination(t *testing.T) {
 // When client is exactly at the limit, recovery should succeed.
 // When client is beyond the limit, should get ErrorUnrecoverablePosition.
 func TestMapSubscribe_RecoveryMaxPublicationLimit(t *testing.T) {
+	t.Parallel()
 	node, err := New(Config{
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
@@ -2426,6 +2468,7 @@ func TestMapSubscribe_RecoveryMaxPublicationLimit(t *testing.T) {
 // Positioned mode: State consistency filtering. Entries modified after the saved position
 // during pagination should be filtered out from later pages to prevent duplicates.
 func TestMapSubscribe_Positioned_StateConsistencyFiltering(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -2495,6 +2538,7 @@ func TestMapSubscribe_Positioned_StateConsistencyFiltering(t *testing.T) {
 
 // Positioned mode: multi-page state pagination followed by STREAM and LIVE phases.
 func TestMapSubscribe_Positioned_FullThreePhaseFlow(t *testing.T) {
+	t.Parallel()
 	// Test the full three-phase flow: STATE → STREAM → LIVE.
 	// This requires the stream to advance during STATE pagination so that
 	// state-to-live can't kick in on the last page.
@@ -2602,6 +2646,7 @@ func TestMapSubscribe_Positioned_FullThreePhaseFlow(t *testing.T) {
 
 // Positioned mode: LIVE recovery with epoch mismatch should return ErrorUnrecoverablePosition.
 func TestMapSubscribe_Positioned_LiveRecoveryEpochMismatch(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -2645,6 +2690,7 @@ func TestMapSubscribe_Positioned_LiveRecoveryEpochMismatch(t *testing.T) {
 
 // Streamless mode: STATE phase on last page transitions directly to LIVE with full state.
 func TestMapSubscribe_Streamless_StateToLive(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_streamless_state_to_live"
@@ -2685,6 +2731,7 @@ func TestMapSubscribe_Streamless_StateToLive(t *testing.T) {
 
 // Positioned mode: STATE phase with small state transitions to LIVE with full state.
 func TestMapSubscribe_Positioned_StateToLive_SmallState(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -2730,6 +2777,7 @@ func TestMapSubscribe_Positioned_StateToLive_SmallState(t *testing.T) {
 // the last publication's offset (not stream.Top()), preventing the client
 // from jumping ahead and skipping publications in multi-page STREAM scenarios.
 func TestMapSubscribe_StreamPhaseOffset(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 	channel := "test_stream_offset"
@@ -2834,6 +2882,7 @@ func TestMapSubscribe_StreamPhaseOffset(t *testing.T) {
 // TestMapSubscribe_WasRecovering verifies that WasRecovering flag is set
 // correctly on recovery join responses.
 func TestMapSubscribe_CatchUpTimeout_StatePagination(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	// Set a very short timeout so we can trigger it without sleeping.
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
@@ -2896,6 +2945,7 @@ func TestMapSubscribe_CatchUpTimeout_StatePagination(t *testing.T) {
 }
 
 func TestMapSubscribe_CatchUpTimeout_PhaseTransition(t *testing.T) {
+	t.Parallel()
 	// Test that catch-up timeout fires when client takes too long between phases.
 	// We use multi-page STATE with stream advancing between pages so that
 	// state-to-live doesn't kick in, then manipulate startedAt before STREAM.
@@ -2981,6 +3031,7 @@ func TestMapSubscribe_CatchUpTimeout_PhaseTransition(t *testing.T) {
 }
 
 func TestMapSubscribe_CatchUpTimeout_Sweep(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
 		return MapChannelOptions{
@@ -3053,6 +3104,7 @@ func TestMapSubscribe_CatchUpTimeout_Sweep(t *testing.T) {
 }
 
 func TestMapSubscribe_CatchUpTimeout_Disabled(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	// Negative timeout disables the check.
 	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
@@ -3111,6 +3163,7 @@ func TestMapSubscribe_CatchUpTimeout_Disabled(t *testing.T) {
 }
 
 func TestMapSubscribe_WasRecovering(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 	channel := "test_was_recovering"
@@ -3183,6 +3236,7 @@ func TestMapSubscribe_WasRecovering(t *testing.T) {
 // epoch="" still trigger insufficient state on epoch mismatch
 // (tested in TestClientUnexpectedOffsetEpochClientV2 and below).
 func TestMapSubscribe_EmptyEpochAdoption(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -3332,6 +3386,7 @@ func TestEmptyEpochAdoption_AllChannelTypes(t *testing.T) {
 // real (non-empty) epoch triggers handleInsufficientState when a publication
 // arrives with a different epoch. The epoch adoption only applies to epoch="".
 func TestMapSubscribe_RealEpochMismatch(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -3394,6 +3449,7 @@ func TestMapSubscribe_RealEpochMismatch(t *testing.T) {
 // against stale state after a Clear event: the client SDK stores the epoch from
 // the subscribe response and never updates it from publication deliveries.
 func TestMapSubscribe_RecoveryEmptyEpochGuard(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -3437,6 +3493,7 @@ func TestMapSubscribe_RecoveryEmptyEpochGuard(t *testing.T) {
 // TestMapSubscribe_RecoveryEmptyEpochGuard_StreamPhase tests the same guard
 // via STREAM phase recovery (the default SDK recovery path).
 func TestMapSubscribe_RecoveryEmptyEpochGuard_StreamPhase(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -3482,6 +3539,7 @@ func TestMapSubscribe_RecoveryEmptyEpochGuard_StreamPhase(t *testing.T) {
 // (non-empty) matching epoch succeeds normally — the empty-epoch guard only
 // triggers when the client sends epoch="" but the server has a real epoch.
 func TestMapSubscribe_RecoveryMatchingEpoch(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -3525,6 +3583,7 @@ func TestMapSubscribe_RecoveryMatchingEpoch(t *testing.T) {
 // after MapClear (which deletes channel state) returns ErrorUnrecoverablePosition.
 // After Clear, ReadStream returns a new epoch — the guard must catch real→different mismatch.
 func TestMapSubscribe_RecoveryAfterClear(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -3578,6 +3637,7 @@ func TestMapSubscribe_RecoveryAfterClear(t *testing.T) {
 // would merge prior-epoch state with new-epoch live publications and silently
 // orphan any keys not republished in the new epoch.
 func TestMapSubscribe_StateToLive_EpochFlipDuringPagination(t *testing.T) {
+	t.Parallel()
 	node, err := New(Config{
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
@@ -3672,6 +3732,7 @@ func TestMapSubscribe_StateToLive_EpochFlipDuringPagination(t *testing.T) {
 // This allows the client SDK to learn the channel epoch from the first publication
 // without redundant epoch bytes in every message.
 func TestMapSubscribe_EpochInFirstPublication(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -3757,6 +3818,7 @@ func TestMapSubscribe_EpochInFirstPublication(t *testing.T) {
 // with MapClientPresenceChannel sets the right flags, stores presence in MapBroker,
 // and cleans up on unsubscribe. Covers Steps 4, 6, 7 of the plan.
 func TestStreamSubscribe_WithMapClientPresence(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 
 	presenceChannel := "clients:test_channel"
@@ -3799,6 +3861,7 @@ func TestStreamSubscribe_WithMapClientPresence(t *testing.T) {
 // TestStreamSubscribe_WithMapPresenceDisconnect verifies that disconnect cleans up
 // map client presence for stream subscriptions.
 func TestStreamSubscribe_WithMapPresenceDisconnect(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 
 	presenceChannel := "clients:test_channel"
@@ -3833,6 +3896,7 @@ func TestStreamSubscribe_WithMapPresenceDisconnect(t *testing.T) {
 // TestStreamSubscribe_WithMapUserPresence verifies that user presence is NOT removed
 // on unsubscribe (TTL-based expiry by design).
 func TestStreamSubscribe_WithMapUserPresence(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 
 	presenceChannel := "users:test_channel"
@@ -3868,6 +3932,7 @@ func TestStreamSubscribe_WithMapUserPresence(t *testing.T) {
 // TestStreamSubscribe_WithRegularAndMapPresence verifies that regular presence and
 // map client presence can coexist on a stream subscribe.
 func TestStreamSubscribe_WithRegularAndMapPresence(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 
 	presenceChannel := "clients:test_channel"
@@ -3910,6 +3975,7 @@ func TestStreamSubscribe_WithRegularAndMapPresence(t *testing.T) {
 // TestStreamSubscribe_MapPresencePeriodicUpdate verifies that updateChannelPresence
 // works for stream channels with map presence (Step 6: flagMap gate removed).
 func TestStreamSubscribe_MapPresencePeriodicUpdate(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 
 	presenceChannel := "clients:test_channel"
@@ -3944,6 +4010,7 @@ func TestStreamSubscribe_MapPresencePeriodicUpdate(t *testing.T) {
 // TestSharedPollSubscribe_WithMapPresence verifies that shared poll subscribe
 // with MapClientPresenceChannel sets up presence correctly.
 func TestSharedPollSubscribe_WithMapPresence(t *testing.T) {
+	t.Parallel()
 	presenceChannel := "clients:test_channel"
 
 	node, err := New(Config{
@@ -4031,6 +4098,7 @@ func TestSharedPollSubscribe_WithMapPresence(t *testing.T) {
 // TestSharedPollSubscribe_WithRegularPresence verifies that shared poll subscribe
 // with EmitPresence and EmitJoinLeave sets the right flags.
 func TestSharedPollSubscribe_WithRegularPresence(t *testing.T) {
+	t.Parallel()
 	node := newTestNodeWithSharedPoll(t)
 
 	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
@@ -4071,6 +4139,7 @@ func TestSharedPollSubscribe_WithRegularPresence(t *testing.T) {
 // with only EmitPresence (no map presence channels) still works correctly after
 // the unsubscribe refactoring (Step 7 regression test).
 func TestMapSubscribe_WithOnlyEmitPresence_Regression(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 
 	node.OnConnect(func(client *Client) {
@@ -4105,6 +4174,7 @@ func TestMapSubscribe_WithOnlyEmitPresence_Regression(t *testing.T) {
 }
 
 func TestMapSubscribe_ServerTagsFilter_StatePhase(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -4156,6 +4226,7 @@ func TestMapSubscribe_ServerTagsFilter_StatePhase(t *testing.T) {
 }
 
 func TestMapSubscribe_ServerTagsFilter_LiveDelivery(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -4231,6 +4302,7 @@ func TestMapSubscribe_ServerTagsFilter_LiveDelivery(t *testing.T) {
 }
 
 func TestMapSubscribe_ServerAndClientTagsFilter_AND(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -4289,6 +4361,7 @@ func TestMapSubscribe_ServerAndClientTagsFilter_AND(t *testing.T) {
 }
 
 func TestMapSubscribe_ServerTagsFilter_RemovalFiltering(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -4369,6 +4442,7 @@ func TestMapSubscribe_ServerTagsFilter_RemovalFiltering(t *testing.T) {
 }
 
 func TestSubRefresh_ServerTagsFilter_MapUnsubscribed(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -4433,6 +4507,7 @@ func TestSubRefresh_ServerTagsFilter_MapUnsubscribed(t *testing.T) {
 }
 
 func TestSubRefresh_ServerTagsFilter_SameFilterNoUnsubscribe(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -4500,6 +4575,7 @@ func TestSubRefresh_ServerTagsFilter_SameFilterNoUnsubscribe(t *testing.T) {
 }
 
 func TestSubRefresh_ServerTagsFilter_NilNoChange(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -4985,6 +5061,7 @@ func TestCleanupMapSubscribingAll(t *testing.T) {
 // TestMapSubscribe_InvalidPhase covers the default case in handleMapSubscribe
 // (invalid phase value).
 func TestMapSubscribe_InvalidPhase(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 
 	channel := "test_invalid_phase"
@@ -5014,6 +5091,7 @@ func TestMapSubscribe_InvalidPhase(t *testing.T) {
 // TestMapSubscribe_StreamPhase_ConcurrentPagination covers the
 // ErrorConcurrentPagination branch of handleMapStreamPhase.
 func TestMapSubscribe_StreamPhase_ConcurrentPagination(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -5067,6 +5145,7 @@ func TestMapSubscribe_StreamPhase_ConcurrentPagination(t *testing.T) {
 // TestMapSubscribe_LivePhase_NoMapBroker covers the `getMapBroker == nil`
 // branch in handleMapLivePhase.
 func TestMapSubscribe_LivePhase_NoMapBroker(t *testing.T) {
+	t.Parallel()
 	node, _ := newTestNodeWithMapBroker(t)
 
 	channel := "no_broker_channel"
@@ -5106,6 +5185,7 @@ func TestMapSubscribe_LivePhase_NoMapBroker(t *testing.T) {
 // branch in handleMapLivePhase when in-progress mapSubscribing state has a
 // captured epoch and the client sends a different one.
 func TestMapSubscribe_LivePhase_StateEpochMismatch(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -5175,6 +5255,7 @@ func TestMapSubscribe_LivePhase_StateEpochMismatch(t *testing.T) {
 // streamless-with-tags-filter branch in handleMapTransitionToLive
 // (allowStreamless==true && sub.tagsFilter != nil).
 func TestMapSubscribe_Streamless_StateToLive_ClientTagsFilter(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	// Ephemeral mode → streamless. Also enable AllowTagsFilter via reply options.
 
@@ -5220,6 +5301,7 @@ func TestMapSubscribe_Streamless_StateToLive_ClientTagsFilter(t *testing.T) {
 // the live transition. Uses STATE→LIVE flow so the state struct captures
 // both server and client filters and they apply to gap publications.
 func TestMapSubscribe_StateToLive_TagsFilter_OnRecoveredPubs(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -5299,6 +5381,7 @@ func TestMapSubscribe_StateToLive_TagsFilter_OnRecoveredPubs(t *testing.T) {
 // TestMapSubscribe_Recovery_FossilDelta covers the makeRecoveredMapPubsDeltaFossil
 // invocation inside handleMapTransitionToLive (deltaEnabled + Fossil).
 func TestMapSubscribe_Recovery_FossilDelta(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -5372,6 +5455,7 @@ func TestMapSubscribe_Recovery_FossilDelta(t *testing.T) {
 // TestMapSubscribe_StateToLive_PublishDebounce covers the PublishDebounce
 // branch in handleMapTransitionToLive.
 func TestMapSubscribe_StateToLive_PublishDebounce(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	channel := "test_publish_debounce"
@@ -5407,6 +5491,7 @@ func TestMapSubscribe_StateToLive_PublishDebounce(t *testing.T) {
 // TestUpdateMapPresence_BothChannels exercises the client + user presence
 // branches of updateMapPresence (used by the periodic presence refresh).
 func TestUpdateMapPresence_BothChannels(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 
 	clientPresenceCh := "clients:room"
@@ -5437,6 +5522,7 @@ func TestUpdateMapPresence_BothChannels(t *testing.T) {
 // per-page tags-filter branch inside handleMapStreamPhase (intermediate
 // page path, not transition-to-live).
 func TestMapSubscribe_StreamPhase_TagsFilter_IntermediatePage(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 
@@ -5505,6 +5591,7 @@ func TestMapSubscribe_StreamPhase_TagsFilter_IntermediatePage(t *testing.T) {
 // reconnecting subscriber received publications that should have been filtered
 // out by the server-side RBAC filter.
 func TestMapSubscribe_DirectLiveRecovery_ServerTagsFilter(t *testing.T) {
+	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
 	setTestMapChannelOptionsConverging(node)
 

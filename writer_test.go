@@ -157,6 +157,7 @@ func (t *fakeTransport) write(_ queue.Item) error {
 }
 
 func TestWriter(t *testing.T) {
+	t.Parallel()
 	transport := newFakeTransport(nil)
 	w := newWriter(writerConfig{
 		WriteFn:     transport.write,
@@ -177,6 +178,7 @@ func TestWriter(t *testing.T) {
 }
 
 func TestWriterWriteMany(t *testing.T) {
+	t.Parallel()
 	transport := newFakeTransport(nil)
 
 	w := newWriter(writerConfig{
@@ -208,6 +210,7 @@ func TestWriterWriteMany(t *testing.T) {
 }
 
 func TestWriterWriteRemaining(t *testing.T) {
+	t.Parallel()
 	transport := newFakeTransport(nil)
 
 	w := newWriter(writerConfig{
@@ -237,6 +240,7 @@ func TestWriterWriteRemaining(t *testing.T) {
 }
 
 func TestWriterDisconnectSlow(t *testing.T) {
+	t.Parallel()
 	transport := newFakeTransport(nil)
 
 	w := newWriter(writerConfig{
@@ -251,6 +255,7 @@ func TestWriterDisconnectSlow(t *testing.T) {
 }
 
 func TestWriterDisconnectNormalOnClosedQueue(t *testing.T) {
+	t.Parallel()
 	transport := newFakeTransport(nil)
 
 	w := newWriter(writerConfig{
@@ -266,6 +271,7 @@ func TestWriterDisconnectNormalOnClosedQueue(t *testing.T) {
 }
 
 func TestWriterWriteError(t *testing.T) {
+	t.Parallel()
 	errWrite := errors.New("write error")
 	transport := newFakeTransport(errWrite)
 

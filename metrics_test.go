@@ -158,6 +158,7 @@ func BenchmarkIncUnsubscribe(b *testing.B) {
 }
 
 func TestMetrics(t *testing.T) {
+	t.Parallel()
 	_, err := newMetricsRegistry(MetricsConfig{
 		GetChannelNamespaceLabel: func(channel string) string {
 			return channel
@@ -295,6 +296,7 @@ func TestMetrics(t *testing.T) {
 }
 
 func Test_getHTTPTransportProto(t *testing.T) {
+	t.Parallel()
 	type args struct {
 		protoMajor int8
 	}
@@ -334,6 +336,7 @@ func Test_getHTTPTransportProto(t *testing.T) {
 }
 
 func TestMetrics_MapBrokerAndRedisBrokerCounters(t *testing.T) {
+	t.Parallel()
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test_map",
 		GetChannelNamespaceLabel: func(channel string) string {

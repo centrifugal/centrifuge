@@ -278,11 +278,13 @@ func defaultTestNode() *Node {
 }
 
 func TestErrorMessage(t *testing.T) {
+	t.Parallel()
 	errMessage := ErrorTooManyRequests.Error()
 	require.Equal(t, "111: too many requests", errMessage)
 }
 
 func TestNode_Shutdown(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	require.NoError(t, n.Shutdown(context.Background()))
 	require.True(t, n.shutdown)
@@ -291,6 +293,7 @@ func TestNode_Shutdown(t *testing.T) {
 }
 
 func TestNode_shutdownCmd(t *testing.T) {
+	t.Parallel()
 	// Testing that shutdownCmd removes node from nodes registry.
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -300,6 +303,7 @@ func TestNode_shutdownCmd(t *testing.T) {
 }
 
 func TestClientEventHub(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	n.OnConnect(func(_ *Client) {})
@@ -328,6 +332,7 @@ func TestNodeRegistry(t *testing.T) {
 }
 
 func TestNodeLogHandler(t *testing.T) {
+	t.Parallel()
 	doneCh := make(chan struct{})
 	n, _ := New(Config{
 		LogLevel: LogLevelInfo,
@@ -348,6 +353,7 @@ func TestNodeLogHandler(t *testing.T) {
 }
 
 func TestNode_SetBroker(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	broker := testMemoryBroker()
 	n.SetBroker(broker)
@@ -355,6 +361,7 @@ func TestNode_SetBroker(t *testing.T) {
 }
 
 func TestNode_SetPresenceManager_NilPresenceManager(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	n.SetPresenceManager(nil)
 	require.NoError(t, n.addPresence("test", "uid", &ClientInfo{}))
@@ -366,6 +373,7 @@ func TestNode_SetPresenceManager_NilPresenceManager(t *testing.T) {
 }
 
 func TestNode_LogEnabled(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{
 		LogLevel:   LogLevelInfo,
 		LogHandler: func(entry LogEntry) {},
@@ -375,6 +383,7 @@ func TestNode_LogEnabled(t *testing.T) {
 }
 
 func TestNode_RunError(t *testing.T) {
+	t.Parallel()
 	broker := NewTestBroker()
 	broker.errorOnRegister = true
 	node, err := New(Config{})
@@ -385,6 +394,7 @@ func TestNode_RunError(t *testing.T) {
 }
 
 func TestNode_RunPubControlError(t *testing.T) {
+	t.Parallel()
 	controller := NewTestController()
 	controller.errorOnPublishControl = true
 	node, err := New(Config{})
@@ -395,6 +405,7 @@ func TestNode_RunPubControlError(t *testing.T) {
 }
 
 func TestNode_SetPresenceManager(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	presenceManager := testMemoryPresenceManager(t)
 	n.SetPresenceManager(presenceManager)
@@ -402,6 +413,7 @@ func TestNode_SetPresenceManager(t *testing.T) {
 }
 
 func TestNode_Info(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	info, err := n.Info()
@@ -410,6 +422,7 @@ func TestNode_Info(t *testing.T) {
 }
 
 func TestNode_handleJoin(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	err := n.handleJoin("test", &ClientInfo{})
@@ -417,6 +430,7 @@ func TestNode_handleJoin(t *testing.T) {
 }
 
 func TestNode_handleLeave(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	err := n.handleLeave("test", &ClientInfo{})
@@ -424,6 +438,7 @@ func TestNode_handleLeave(t *testing.T) {
 }
 
 func TestNode_Subscribe(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -455,6 +470,7 @@ func TestNode_Subscribe(t *testing.T) {
 }
 
 func TestNode_Unsubscribe(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -486,6 +502,7 @@ func TestNode_Unsubscribe(t *testing.T) {
 }
 
 func TestNode_Disconnect(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -514,6 +531,7 @@ func TestNode_Disconnect(t *testing.T) {
 }
 
 func TestNode_pubUnsubscribe(t *testing.T) {
+	t.Parallel()
 	node := nodeWithTestController()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -526,6 +544,7 @@ func TestNode_pubUnsubscribe(t *testing.T) {
 }
 
 func TestNode_pubDisconnect(t *testing.T) {
+	t.Parallel()
 	node := nodeWithTestController()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -538,6 +557,7 @@ func TestNode_pubDisconnect(t *testing.T) {
 }
 
 func TestNode_publishJoin(t *testing.T) {
+	t.Parallel()
 	n := nodeWithTestBroker()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -556,6 +576,7 @@ func TestNode_publishJoin(t *testing.T) {
 }
 
 func TestNode_publishLeave(t *testing.T) {
+	t.Parallel()
 	n := nodeWithTestBroker()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -574,6 +595,7 @@ func TestNode_publishLeave(t *testing.T) {
 }
 
 func TestNode_RemoveHistory(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -582,6 +604,7 @@ func TestNode_RemoveHistory(t *testing.T) {
 }
 
 func TestNode_History_ErrorOnReverseWithZeroOffset(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	_, err := n.History("test", WithReverse(true), WithSince(&StreamPosition{Offset: 0}))
@@ -589,6 +612,7 @@ func TestNode_History_ErrorOnReverseWithZeroOffset(t *testing.T) {
 }
 
 func TestIndex(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, 0, index("2121", 1))
 }
 
@@ -740,6 +764,7 @@ func BenchmarkHistory(b *testing.B) {
 }
 
 func TestNode_handleControl(t *testing.T) {
+	t.Parallel()
 	t.Run("BrokenData", func(t *testing.T) {
 		t.Parallel()
 
@@ -927,6 +952,7 @@ func TestNode_handleControl(t *testing.T) {
 }
 
 func Test_infoFromProto(t *testing.T) {
+	t.Parallel()
 	info := infoFromProto(nil)
 	require.Nil(t, info)
 
@@ -954,6 +980,7 @@ func Test_infoFromProto(t *testing.T) {
 }
 
 func Test_infoToProto(t *testing.T) {
+	t.Parallel()
 	info := infoToProto(nil)
 	require.Nil(t, info)
 
@@ -981,6 +1008,7 @@ func Test_infoToProto(t *testing.T) {
 }
 
 func Test_pubToProto(t *testing.T) {
+	t.Parallel()
 	pub := pubToProto(nil)
 	require.Nil(t, pub)
 
@@ -998,6 +1026,7 @@ func Test_pubToProto(t *testing.T) {
 }
 
 func Test_pubFromProto(t *testing.T) {
+	t.Parallel()
 	pub := pubFromProto(nil)
 	require.Nil(t, pub)
 
@@ -1015,6 +1044,7 @@ func Test_pubFromProto(t *testing.T) {
 }
 
 func TestNode_OnSurvey(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1039,6 +1069,7 @@ func TestNode_OnSurvey(t *testing.T) {
 }
 
 func TestNode_OnSurveyWithNodeID(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1063,6 +1094,7 @@ func TestNode_OnSurveyWithNodeID(t *testing.T) {
 }
 
 func TestNode_OnSurvey_NoHandler(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1072,6 +1104,7 @@ func TestNode_OnSurvey_NoHandler(t *testing.T) {
 }
 
 func TestNode_OnSurvey_Timeout(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1097,6 +1130,7 @@ func TestNode_OnSurvey_Timeout(t *testing.T) {
 }
 
 func TestNode_OnNotification(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1115,6 +1149,7 @@ func TestNode_OnNotification(t *testing.T) {
 }
 
 func TestNode_OnNotification_SameNode(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1133,6 +1168,7 @@ func TestNode_OnNotification_SameNode(t *testing.T) {
 }
 
 func TestNode_OnNotification_NoHandler(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	err := node.Notify("notification", []byte(`notification`), "")
@@ -1140,6 +1176,7 @@ func TestNode_OnNotification_NoHandler(t *testing.T) {
 }
 
 func TestNode_handleNotification_NoHandler(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	err := node.handleNotification("test", &controlpb.Notification{})
@@ -1147,6 +1184,7 @@ func TestNode_handleNotification_NoHandler(t *testing.T) {
 }
 
 func TestNode_handleSurveyRequest_NoHandler(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	err := node.handleSurveyRequest("test", &controlpb.SurveyRequest{})
@@ -1154,6 +1192,7 @@ func TestNode_handleSurveyRequest_NoHandler(t *testing.T) {
 }
 
 func TestErrors(t *testing.T) {
+	t.Parallel()
 	err := ErrorUnauthorized
 	protoErr := err.toProto()
 	require.Equal(t, ErrorUnauthorized.Code, protoErr.Code)
@@ -1163,6 +1202,7 @@ func TestErrors(t *testing.T) {
 }
 
 func TestSingleFlightHistory(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	node.config.UseSingleFlight = true
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1182,6 +1222,7 @@ func TestSingleFlightHistory(t *testing.T) {
 }
 
 func TestSingleFlightPresence(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	node.config.UseSingleFlight = true
 
@@ -1215,6 +1256,7 @@ func TestSingleFlightPresence(t *testing.T) {
 }
 
 func TestBrokerEventHandler_PanicsOnNil(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	require.Panics(t, func() {
@@ -1229,6 +1271,7 @@ func TestBrokerEventHandler_PanicsOnNil(t *testing.T) {
 }
 
 func TestNode_OnNodeInfoSend(t *testing.T) {
+	t.Parallel()
 	n, err := New(Config{})
 	if err != nil {
 		panic(err)
@@ -1258,6 +1301,7 @@ func TestNode_OnNodeInfoSend(t *testing.T) {
 }
 
 func TestNode_OnTransportWrite(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1293,6 +1337,7 @@ func TestNode_OnTransportWrite(t *testing.T) {
 }
 
 func TestNode_OnTransportWriteProtocolV2(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1317,6 +1362,7 @@ func TestNode_OnTransportWriteProtocolV2(t *testing.T) {
 }
 
 func TestNode_OnTransportWriteSkip(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1343,6 +1389,7 @@ func TestNode_OnTransportWriteSkip(t *testing.T) {
 }
 
 func TestNode_OnCommandRead(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1394,6 +1441,7 @@ func TestNode_OnCommandRead(t *testing.T) {
 }
 
 func TestNodeCheckPosition(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1428,6 +1476,7 @@ func TestNodeCheckPosition(t *testing.T) {
 }
 
 func TestNodeCheckPositionMap(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1493,6 +1542,7 @@ func TestNodeCheckPositionMap(t *testing.T) {
 }
 
 func TestNodeCheckPositionMapWithMedium(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1567,6 +1617,7 @@ func TestNodeCheckPositionMapWithMedium(t *testing.T) {
 }
 
 func TestGetBroker(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	customBroker := NewTestBroker()
 	node.config.GetBroker = func(channel string) (Broker, bool) {
@@ -1591,6 +1642,7 @@ func TestGetBroker(t *testing.T) {
 }
 
 func TestGetPresenceManager(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	customPresenceManager := NewTestPresenceManager()
 	node.config.GetPresenceManager = func(channel string) (PresenceManager, bool) {
@@ -1613,6 +1665,7 @@ func TestGetPresenceManager(t *testing.T) {
 }
 
 func TestGetMapBroker(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1683,6 +1736,7 @@ func TestGetMapBroker(t *testing.T) {
 }
 
 func TestNode_MapStreamReadUnrecoverablePosition(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1721,6 +1775,7 @@ func TestNode_MapStreamReadUnrecoverablePosition(t *testing.T) {
 }
 
 func TestNode_MapRemoveEmptyKey(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1740,6 +1795,7 @@ func TestNode_MapRemoveEmptyKey(t *testing.T) {
 }
 
 func TestNode_Config(t *testing.T) {
+	t.Parallel()
 	cfg := Config{
 		LogLevel: LogLevelInfo,
 	}
@@ -1750,6 +1806,7 @@ func TestNode_Config(t *testing.T) {
 }
 
 func TestNode_MapMetricMethods(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	// These should not panic even when metrics are initialized.
@@ -1759,6 +1816,7 @@ func TestNode_MapMetricMethods(t *testing.T) {
 }
 
 func TestNode_MapMetricMethods_NilMetrics(t *testing.T) {
+	t.Parallel()
 	n, err := New(Config{})
 	require.NoError(t, err)
 	// Before Run(), metrics may be nil — should not panic.
@@ -1768,6 +1826,7 @@ func TestNode_MapMetricMethods_NilMetrics(t *testing.T) {
 }
 
 func TestNode_mapStateKey(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1788,6 +1847,7 @@ func TestNode_mapStateKey(t *testing.T) {
 }
 
 func TestNode_mapStreamKey(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1809,6 +1869,7 @@ func TestNode_mapStreamKey(t *testing.T) {
 }
 
 func TestNode_MapStats(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1833,6 +1894,7 @@ func TestNode_MapStats(t *testing.T) {
 }
 
 func TestNode_MapClear(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1861,6 +1923,7 @@ func TestNode_MapClear(t *testing.T) {
 }
 
 func TestNode_MapPublishEmptyKey(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1880,6 +1943,7 @@ func TestNode_MapPublishEmptyKey(t *testing.T) {
 }
 
 func TestNode_MapPublish(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1897,6 +1961,7 @@ func TestNode_MapPublish(t *testing.T) {
 }
 
 func TestNode_MapRemove(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1920,6 +1985,7 @@ func TestNode_MapRemove(t *testing.T) {
 }
 
 func TestHub_Connections(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 

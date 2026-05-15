@@ -172,12 +172,14 @@ func stopRedisBroker(b *RedisBroker) {
 }
 
 func TestRedisBroker_NoShards(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	_, err := NewRedisBroker(n, RedisBrokerConfig{})
 	require.Error(t, err)
 }
 
 func TestRedisBrokerSentinel(t *testing.T) {
+	t.Parallel()
 	b := NewTestRedisBrokerSentinel(t)
 	defer stopRedisBroker(b)
 	_, _, err := b.History("test", HistoryOptions{
@@ -252,6 +254,7 @@ func excludeNoHistoryClusterTests(tests []noHistoryRedisTest) []noHistoryRedisTe
 }
 
 func TestRedisBroker(t *testing.T) {
+	t.Parallel()
 	for _, tt := range historyRedisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
@@ -340,6 +343,7 @@ func TestRedisBroker(t *testing.T) {
 }
 
 func TestRedisBrokerPublishNoPubSub(t *testing.T) {
+	t.Parallel()
 	node := testNode(t)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -364,6 +368,7 @@ func TestRedisBrokerPublishNoPubSub(t *testing.T) {
 }
 
 func TestRedisBrokerPublishIdempotent(t *testing.T) {
+	t.Parallel()
 	for _, tt := range historyRedisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
@@ -422,6 +427,7 @@ func TestRedisBrokerPublishIdempotent(t *testing.T) {
 }
 
 func TestRedisBrokerPublishSkipOldVersion(t *testing.T) {
+	t.Parallel()
 	for _, tt := range historyRedisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			if !tt.UseStreams {
@@ -501,6 +507,7 @@ func TestRedisBrokerPublishSkipOldVersion(t *testing.T) {
 }
 
 func TestRedisCurrentPosition(t *testing.T) {
+	t.Parallel()
 	for _, tt := range historyRedisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
@@ -534,6 +541,7 @@ func TestRedisCurrentPosition(t *testing.T) {
 }
 
 func TestRedisBrokerRecover(t *testing.T) {
+	t.Parallel()
 	for _, tt := range historyRedisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
@@ -611,6 +619,7 @@ func pubSubChannels(t *testing.T, e *RedisBroker) ([]string, error) {
 }
 
 func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
+	t.Parallel()
 	for _, tt := range noHistoryRedisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			// Custom prefix to not collide with other tests.
@@ -795,6 +804,7 @@ func randString(n int) string {
 // We just expect +-equal distribution and keeping most of chans on
 // the same shard after resharding.
 func TestRedisConsistentIndex(t *testing.T) {
+	t.Parallel()
 	numChans := 10000
 	numShards := 10
 	chans := make([]string, numChans)
@@ -839,6 +849,7 @@ func TestRedisConsistentIndex(t *testing.T) {
 }
 
 func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
+	t.Parallel()
 	for _, tt := range excludeNoHistoryClusterTests(noHistoryRedisTests) {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
@@ -922,6 +933,7 @@ func BenchmarkRedisExtractPushData(b *testing.B) {
 }
 
 func TestRedisExtractPushData(t *testing.T) {
+	t.Parallel()
 	data := []byte(`__p1:16901:xyz.123__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
 	pushData, pushType, sp, _, _, ok := extractPushData(data)
 	require.True(t, ok)
@@ -961,6 +973,7 @@ func TestRedisExtractPushData(t *testing.T) {
 }
 
 func TestNode_OnSurvey_TwoNodes(t *testing.T) {
+	t.Parallel()
 	for _, tt := range excludeNoHistoryClusterTests(noHistoryRedisTests) {
 		t.Run(tt.Name, func(t *testing.T) {
 			redisConf := testSingleRedisConf(tt.Port)
@@ -1030,6 +1043,7 @@ func TestNode_OnSurvey_TwoNodes(t *testing.T) {
 }
 
 func TestNode_OnNotification_TwoNodes(t *testing.T) {
+	t.Parallel()
 	for _, tt := range excludeNoHistoryClusterTests(noHistoryRedisTests) {
 		t.Run(tt.Name, func(t *testing.T) {
 			redisConf := testSingleRedisConf(tt.Port)
@@ -1102,6 +1116,7 @@ func TestNode_OnNotification_TwoNodes(t *testing.T) {
 }
 
 func TestRedisPubSubTwoNodes(t *testing.T) {
+	t.Parallel()
 	for _, tt := range excludeNoHistoryClusterTests(noHistoryRedisTests) {
 		t.Run(tt.Name, func(t *testing.T) {
 			redisConf := testSingleRedisConf(tt.Port)
@@ -1210,6 +1225,7 @@ type testDeltaPublishHandle struct {
 }
 
 func TestRedisPubSubTwoNodesWithDelta(t *testing.T) {
+	t.Parallel()
 	// This is special because it actually uses history, but we re-use existing infrastructure.
 	for _, tt := range excludeNoHistoryClusterTests(noHistoryRedisTests) {
 		t.Run(tt.Name, func(t *testing.T) {
@@ -1299,6 +1315,7 @@ func TestRedisPubSubTwoNodesWithDelta(t *testing.T) {
 }
 
 func TestRedisClusterShardedPubSub(t *testing.T) {
+	t.Parallel()
 	redisConf := RedisShardConfig{
 		ClusterAddresses: []string{"localhost:7001", "localhost:7002", "localhost:7003"},
 		IOTimeout:        10 * time.Second,
@@ -1802,6 +1819,7 @@ var brokerRecoverTests = []recoverTest{
 }
 
 func TestRedisClientSubscribeRecover(t *testing.T) {
+	t.Parallel()
 	for _, tt := range historyRedisTests {
 		for _, rt := range brokerRecoverTests {
 			t.Run(tt.Name+"_"+rt.Name, func(t *testing.T) {
@@ -1814,6 +1832,7 @@ func TestRedisClientSubscribeRecover(t *testing.T) {
 }
 
 func TestRedisHistoryIteration(t *testing.T) {
+	t.Parallel()
 	for _, tt := range historyRedisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
@@ -1828,6 +1847,7 @@ func TestRedisHistoryIteration(t *testing.T) {
 }
 
 func TestRedisHistoryReversedNoMetaYet(t *testing.T) {
+	t.Parallel()
 	for _, tt := range historyRedisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
@@ -1860,6 +1880,7 @@ func TestRedisHistoryReversedNoMetaYet(t *testing.T) {
 }
 
 func TestRedisHistoryIterationReverse(t *testing.T) {
+	t.Parallel()
 	for _, tt := range historyRedisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			if !tt.UseStreams || tt.UseCluster {
@@ -2010,6 +2031,7 @@ type clusterFuncWrapper struct {
 
 // TestPreShardedSlots allows experimenting with Redis slots and its distribution.
 func TestPreShardedSlots(t *testing.T) {
+	t.Parallel()
 	t.Skip()
 	redisNodesChoices := []int{3, 5, 8, 16}
 	numShardsChoices := []int{32}
@@ -2058,6 +2080,7 @@ func TestPreShardedSlots(t *testing.T) {
 }
 
 func TestParseDeltaPush(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		input          string
@@ -2135,6 +2158,7 @@ func TestParseDeltaPush(t *testing.T) {
 // 1000 streams with 200 messages in each stream, each message 500 bytes => 121MB in Redis.
 // 1000 streams with 400 messages in each stream, each message 500 bytes => 242MB in Redis.
 func TestRedisMemoryUsage(t *testing.T) {
+	t.Parallel()
 	t.Skip()
 	numStreams := 1000
 	numMessagesInStream := 400
@@ -2162,6 +2186,7 @@ func TestRedisMemoryUsage(t *testing.T) {
 // See https://github.com/centrifugal/centrifugo/issues/925.
 // If there is a deadlock – test will hang.
 func TestRedisClientSubscribeRecoveryServerSubs(t *testing.T) {
+	t.Parallel()
 	isInTest = true
 	doneCh := make(chan struct{})
 	defer close(doneCh)
@@ -2246,6 +2271,7 @@ func waitGroupWithTimeout(t *testing.T, wg *sync.WaitGroup, timeout time.Duratio
 
 // Similar to TestRedisClientSubscribeRecoveryServerSubs test, but uses client-side subscriptions.
 func TestRedisClientSubscribeRecoveryClientSubs(t *testing.T) {
+	t.Parallel()
 	doneCh := make(chan struct{})
 	defer close(doneCh)
 	node := nodeWithRedisBroker(t, true, false, 6379)
@@ -2330,6 +2356,7 @@ func TestRedisClientSubscribeRecoveryClientSubs(t *testing.T) {
 }
 
 func TestRedisBroker_MessageChannelID_ClusterHashTags(t *testing.T) {
+	t.Parallel()
 	// Create mock shards
 	clusterShard := &RedisShard{isCluster: true}
 	nonClusterShard := &RedisShard{isCluster: false}
@@ -2449,6 +2476,7 @@ func TestRedisBroker_MessageChannelID_ClusterHashTags(t *testing.T) {
 }
 
 func TestRedisBroker_ClusterHashTags_Consistency(t *testing.T) {
+	t.Parallel()
 	// This test verifies that in cluster mode, channel names always use the same
 	// hash tag as their associated keys (history, result cache), ensuring they're
 	// in the same Redis Cluster slot. This is required for Lua scripts in serverless
@@ -2481,6 +2509,7 @@ func TestRedisBroker_ClusterHashTags_Consistency(t *testing.T) {
 }
 
 func TestRedisBroker_PubSubPartitionHashTag(t *testing.T) {
+	t.Parallel()
 	t.Run("default scheme returns bare integer", func(t *testing.T) {
 		broker := &RedisBroker{
 			config: RedisBrokerConfig{NumShardedPubSubPartitions: 16},
@@ -2508,6 +2537,7 @@ func TestRedisBroker_PubSubPartitionHashTag(t *testing.T) {
 // hash tag (not the bare partition index). This locks in that no builder
 // regresses to using strconv.Itoa(idx) directly.
 func TestRedisBroker_PrecomputedTags_KeyConsistency(t *testing.T) {
+	t.Parallel()
 	tags, err := redispartition.FindTags(16)
 	require.NoError(t, err)
 
@@ -2552,6 +2582,7 @@ func TestRedisBroker_PrecomputedTags_KeyConsistency(t *testing.T) {
 // live Redis Cluster. Requires a 3-node cluster on 7001-7003 with sharded
 // PUB/SUB support (Redis 7+); skipped otherwise.
 func TestRedisBroker_UsePrecomputedPartitionTags_ClusterE2E(t *testing.T) {
+	t.Parallel()
 	redisConf := RedisShardConfig{
 		ClusterAddresses: []string{"localhost:7001", "localhost:7002", "localhost:7003"},
 		IOTimeout:        10 * time.Second,
@@ -2637,6 +2668,7 @@ func TestRedisBroker_UsePrecomputedPartitionTags_ClusterE2E(t *testing.T) {
 // subscriber and publisher could end up on different nodes for the same
 // partition. Run for both tag schemes.
 func TestRedisBroker_PartitionSlotInvariant(t *testing.T) {
+	t.Parallel()
 	clusterShard := &RedisShard{isCluster: true}
 	const numPartitions = 16
 	const numPsShards = 2
@@ -2684,6 +2716,7 @@ func TestRedisBroker_PartitionSlotInvariant(t *testing.T) {
 }
 
 func TestRedisBroker_UsePrecomputedPartitionTags_Validation(t *testing.T) {
+	t.Parallel()
 	n, err := New(Config{LogHandler: func(LogEntry) {}})
 	require.NoError(t, err)
 
@@ -2719,6 +2752,7 @@ func TestRedisBroker_UsePrecomputedPartitionTags_Validation(t *testing.T) {
 }
 
 func TestRedisClusterMultipleChannelsTwoNodes(t *testing.T) {
+	t.Parallel()
 	redisConf := RedisShardConfig{
 		ClusterAddresses: []string{"localhost:7001", "localhost:7002", "localhost:7003"},
 		IOTimeout:        10 * time.Second,

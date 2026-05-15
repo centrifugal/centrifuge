@@ -157,6 +157,7 @@ func (t *testTransport) Close(disconnect Disconnect) error {
 }
 
 func TestHub(t *testing.T) {
+	t.Parallel()
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
@@ -187,6 +188,7 @@ func TestHub(t *testing.T) {
 }
 
 func TestHubUnsubscribe(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -219,6 +221,7 @@ LOOP:
 }
 
 func TestHubDisconnect(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -283,6 +286,7 @@ func TestHubDisconnect(t *testing.T) {
 }
 
 func TestHubDisconnect_ClientWhitelist(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -451,6 +455,7 @@ func TestHubOperationsWithSessionID(t *testing.T) {
 }
 
 func TestHubBroadcastPublication(t *testing.T) {
+	t.Parallel()
 	tcs := []struct {
 		name            string
 		protocolType    ProtocolType
@@ -565,6 +570,7 @@ func subscribeClientDelta(t testing.TB, client *Client, ch string, deltaType Del
 }
 
 func TestHubBroadcastPublicationDelta(t *testing.T) {
+	t.Parallel()
 	tcs := []struct {
 		name            string
 		protocolType    ProtocolType
@@ -646,6 +652,7 @@ func TestHubBroadcastPublicationDelta(t *testing.T) {
 }
 
 func TestHubBroadcastPublicationDeltaAtMostOnce(t *testing.T) {
+	t.Parallel()
 	tcs := []struct {
 		name            string
 		protocolType    ProtocolType
@@ -726,6 +733,7 @@ func TestHubBroadcastPublicationDeltaAtMostOnce(t *testing.T) {
 }
 
 func TestHubBroadcastPublicationDeltaAtMostOnceNoOffset(t *testing.T) {
+	t.Parallel()
 	tcs := []struct {
 		name            string
 		protocolType    ProtocolType
@@ -804,6 +812,7 @@ func TestHubBroadcastPublicationDeltaAtMostOnceNoOffset(t *testing.T) {
 }
 
 func TestHubBroadcastJoin(t *testing.T) {
+	t.Parallel()
 	tcs := []struct {
 		name            string
 		protocolType    ProtocolType
@@ -855,6 +864,7 @@ func TestHubBroadcastJoin(t *testing.T) {
 }
 
 func TestHubBroadcastLeave(t *testing.T) {
+	t.Parallel()
 	tcs := []struct {
 		name            string
 		protocolType    ProtocolType
@@ -906,6 +916,7 @@ func TestHubBroadcastLeave(t *testing.T) {
 }
 
 func TestHubShutdown(t *testing.T) {
+	t.Parallel()
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
@@ -928,6 +939,7 @@ func TestHubShutdown(t *testing.T) {
 }
 
 func TestHubSubscriptions(t *testing.T) {
+	t.Parallel()
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
@@ -973,6 +985,7 @@ func TestHubSubscriptions(t *testing.T) {
 }
 
 func TestUserConnections(t *testing.T) {
+	t.Parallel()
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
@@ -987,6 +1000,7 @@ func TestUserConnections(t *testing.T) {
 }
 
 func TestHubSharding(t *testing.T) {
+	t.Parallel()
 	numUsers := numHubShards * 10
 	numChannels := numHubShards * 10
 
@@ -1128,6 +1142,7 @@ func BenchmarkHub_MassiveBroadcast(b *testing.B) {
 }
 
 func TestHubBroadcastInappropriateProtocol_Publication(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1157,6 +1172,7 @@ func TestHubBroadcastInappropriateProtocol_Publication(t *testing.T) {
 }
 
 func TestHubBroadcastInappropriateProtocol_Join(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1186,6 +1202,7 @@ func TestHubBroadcastInappropriateProtocol_Join(t *testing.T) {
 }
 
 func TestHubBroadcastInappropriateProtocol_Leave(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1300,6 +1317,7 @@ var testNewJsonData = []byte(`{
 }`)
 
 func TestJsonStringEncode(t *testing.T) {
+	t.Parallel()
 	testBenchmarkDeltaFossilPatch = fdelta.Create(testJsonData, testNewJsonData)
 	if len(testBenchmarkDeltaFossilPatch) == 0 {
 		t.Fatal("empty fossil patch")
@@ -1336,6 +1354,7 @@ func BenchmarkDeltaFossil(b *testing.B) {
 }
 
 func TestSubIDUniquenessAcrossShards(t *testing.T) {
+	t.Parallel()
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
@@ -1418,6 +1437,7 @@ func TestSubIDUniquenessAcrossShards(t *testing.T) {
 }
 
 func TestSubIDShardDistribution(t *testing.T) {
+	t.Parallel()
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
@@ -1480,6 +1500,7 @@ func TestSubIDShardDistribution(t *testing.T) {
 }
 
 func TestCompressedChannelBroadcast(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1537,6 +1558,7 @@ func TestCompressedChannelBroadcast(t *testing.T) {
 }
 
 func TestUseIDSubscribersSameMessages(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1625,6 +1647,7 @@ OUTER2:
 }
 
 func TestUseIDSubscribersDifferentMessages(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1714,6 +1737,7 @@ OUTER2:
 }
 
 func TestDeltaPublicationsWithCompressedChannels(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1822,6 +1846,7 @@ OUTER2:
 }
 
 func TestGetDeltaPubPreservesMapFields(t *testing.T) {
+	t.Parallel()
 	fullPub := &protocol.Publication{
 		Offset:  10,
 		Data:    []byte(`{"name":"alice"}`),
@@ -1884,6 +1909,7 @@ func TestGetDeltaPubPreservesMapFields(t *testing.T) {
 }
 
 func TestEscapeStateForDelta(t *testing.T) {
+	t.Parallel()
 	pubs := []*protocol.Publication{
 		{Offset: 1, Key: "a", Data: []byte(`{"x":1}`), Score: 10},
 		{Offset: 2, Key: "b", Data: []byte(`{"y":2}`), Score: 20, Removed: true},
@@ -1921,6 +1947,7 @@ func TestEscapeStateForDelta(t *testing.T) {
 }
 
 func TestBroadcastMapPublicationDelta(t *testing.T) {
+	t.Parallel()
 	tcs := []struct {
 		name            string
 		protocolType    ProtocolType
@@ -2066,6 +2093,7 @@ func TestBroadcastMapPublicationDelta(t *testing.T) {
 }
 
 func TestCompressedJoinMessages(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -2180,6 +2208,7 @@ OUTER2:
 }
 
 func TestCompressedLeaveMessages(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 

@@ -52,6 +52,7 @@ func testPublicationData() []byte {
 }
 
 func TestMemoryBrokerPublishHistory(t *testing.T) {
+	t.Parallel()
 	e := testMemoryBroker()
 	defer func() { _ = e.node.Shutdown(context.Background()) }()
 
@@ -136,6 +137,7 @@ func TestMemoryBrokerResultCacheExpires(t *testing.T) {
 }
 
 func TestMemoryBrokerPublishIdempotent(t *testing.T) {
+	t.Parallel()
 	e := testMemoryBroker()
 	defer func() { _ = e.node.Shutdown(context.Background()) }()
 
@@ -164,6 +166,7 @@ func TestMemoryBrokerPublishIdempotent(t *testing.T) {
 }
 
 func TestMemoryBrokerPublishIdempotentWithHistory(t *testing.T) {
+	t.Parallel()
 	e := testMemoryBroker()
 	defer func() { _ = e.node.Shutdown(context.Background()) }()
 
@@ -216,6 +219,7 @@ func TestMemoryBrokerPublishIdempotentWithHistory(t *testing.T) {
 }
 
 func TestMemoryBrokerPublishSkipOldVersion(t *testing.T) {
+	t.Parallel()
 	e := testMemoryBroker()
 	defer func() { _ = e.node.Shutdown(context.Background()) }()
 
@@ -277,6 +281,7 @@ func TestMemoryBrokerPublishSkipOldVersion(t *testing.T) {
 }
 
 func TestMemoryBrokerSubscribeUnsubscribe(t *testing.T) {
+	t.Parallel()
 	e := testMemoryBroker()
 	defer func() { _ = e.node.Shutdown(context.Background()) }()
 	require.NoError(t, e.Subscribe("channel"))
@@ -447,6 +452,7 @@ func TestMemoryHistoryHubMetaTTLPerChannel(t *testing.T) {
 }
 
 func TestMemoryBrokerRecover(t *testing.T) {
+	t.Parallel()
 	e := testMemoryBroker()
 	defer func() { _ = e.node.Shutdown(context.Background()) }()
 
@@ -813,6 +819,7 @@ outer:
 }
 
 func TestMemoryBrokerHistoryIteration(t *testing.T) {
+	t.Parallel()
 	e := testMemoryBroker()
 	defer func() { _ = e.node.Shutdown(context.Background()) }()
 
@@ -822,6 +829,7 @@ func TestMemoryBrokerHistoryIteration(t *testing.T) {
 }
 
 func TestMemoryBrokerHistoryIterationReverse(t *testing.T) {
+	t.Parallel()
 	e := testMemoryBroker()
 	defer func() { _ = e.node.Shutdown(context.Background()) }()
 

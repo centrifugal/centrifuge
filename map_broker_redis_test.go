@@ -17,6 +17,7 @@ import (
 
 // TestParseMessage tests parseMessage which parses PUB/SUB messages.
 func TestParseMessage(t *testing.T) {
+	t.Parallel()
 	t.Run("empty data", func(t *testing.T) {
 		_, _, _, _, _, err := parseMessage([]byte{})
 		require.Error(t, err)
@@ -88,6 +89,7 @@ func TestParseMessage(t *testing.T) {
 
 // TestParseDeltaMessage tests parseDeltaMessage directly.
 func TestParseDeltaMessage(t *testing.T) {
+	t.Parallel()
 	t.Run("valid delta", func(t *testing.T) {
 		prevData := []byte("abc")
 		currData := []byte("xyz12")
@@ -306,6 +308,7 @@ func stateToMap(pubs []*Publication) map[string][]byte {
 
 // TestRedisMapBroker_StatefulChannel tests stateful channel with keyed state and revisions.
 func TestRedisMapBroker_StatefulChannel(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -358,6 +361,7 @@ func TestRedisMapBroker_StatefulChannel(t *testing.T) {
 
 // TestRedisMapBroker_StatefulChannelOrdered tests ordered stateful channel.
 func TestRedisMapBroker_StatefulChannelOrdered(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -407,6 +411,7 @@ func TestRedisMapBroker_StatefulChannelOrdered(t *testing.T) {
 
 // TestRedisMapBroker_StateRevision tests that state values include revisions.
 func TestRedisMapBroker_StateRevision(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -454,6 +459,7 @@ func TestRedisMapBroker_StateRevision(t *testing.T) {
 
 // TestRedisMapBroker_StatePagination tests cursor-based state pagination.
 func TestRedisMapBroker_StatePagination(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -512,6 +518,7 @@ func TestRedisMapBroker_StatePagination(t *testing.T) {
 
 // TestRedisMapBroker_EpochHandling tests epoch changes and state invalidation.
 func TestRedisMapBroker_EpochHandling(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -545,6 +552,7 @@ func TestRedisMapBroker_EpochHandling(t *testing.T) {
 
 // TestRedisMapBroker_Idempotency tests idempotent publishing.
 func TestRedisMapBroker_Idempotency(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -589,6 +597,7 @@ func TestRedisMapBroker_Idempotency(t *testing.T) {
 
 // TestRedisMapBroker_VersionedPublishing tests version-based idempotency.
 func TestRedisMapBroker_VersionedPublishing(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -638,6 +647,7 @@ func TestRedisMapBroker_VersionedPublishing(t *testing.T) {
 
 // TestRedisMapBroker_PerKeyVersion tests that version tracking is per-key independent.
 func TestRedisMapBroker_PerKeyVersion(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -695,6 +705,7 @@ func TestRedisMapBroker_PerKeyVersion(t *testing.T) {
 
 // TestRedisMapBroker_MultipleChannels tests multiple channels independently.
 func TestRedisMapBroker_MultipleChannels(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -741,6 +752,7 @@ func TestRedisMapBroker_MultipleChannels(t *testing.T) {
 
 // TestParseStateValue tests the state value parsing helper.
 func TestParseStateValue(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		input       []byte
@@ -804,6 +816,7 @@ func TestParseStateValue(t *testing.T) {
 
 // TestRedisMapBroker_ReadStream2 tests the 2-call version of ReadStream.
 func TestRedisMapBroker_ReadStream2(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -1024,6 +1037,7 @@ func TestRedisMapBroker_ReadStream2(t *testing.T) {
 // TestRedisMapBroker_CleanupGeneratesRemovalEvents verifies that the Lua cleanup script
 // correctly generates removal events (key + removed + timestamp) when entries expire by TTL.
 func TestRedisMapBroker_CleanupGeneratesRemovalEvents(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -1126,6 +1140,7 @@ func TestRedisMapBroker_CleanupGeneratesRemovalEvents(t *testing.T) {
 }
 
 func TestRedisMapBroker_CleanupPreservesTags(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -1188,6 +1203,7 @@ func TestRedisMapBroker_CleanupPreservesTags(t *testing.T) {
 }
 
 func TestRedisMapBroker_RemovePreservesTags(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -1241,6 +1257,7 @@ func TestRedisMapBroker_RemovePreservesTags(t *testing.T) {
 // and publishes removal events to the stream. Uses two channels with different
 // TTLs to verify that only expired channel entries are cleaned up.
 func TestRedisMapBroker_CleanupExpiry(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		shortChannel := randomChannel("test_cleanup_short")
 		longChannel := randomChannel("test_cleanup_long")
@@ -1323,6 +1340,7 @@ func TestRedisMapBroker_CleanupExpiry(t *testing.T) {
 // TestRedisMapBroker_CleanupRefreshedTTL verifies that refreshing a key's TTL
 // (by re-publishing with a longer TTL) prevents it from being cleaned up.
 func TestRedisMapBroker_CleanupRefreshedTTL(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -1391,6 +1409,7 @@ func TestRedisMapBroker_CleanupRefreshedTTL(t *testing.T) {
 // TestRedisMapBroker_CleanupRegistration verifies that the cleanup registration ZSET
 // is properly maintained (entries added on publish, removed when channel is fully cleaned).
 func TestRedisMapBroker_CleanupRegistration(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -1455,6 +1474,7 @@ func TestRedisMapBroker_CleanupRegistration(t *testing.T) {
 // TestRedisMapBroker_OrderedStateOrdering tests that ordered  state return entries
 // in correct score order (ascending by score).
 func TestRedisMapBroker_OrderedStateOrdering(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -1518,6 +1538,7 @@ func TestRedisMapBroker_OrderedStateOrdering(t *testing.T) {
 // TestRedisMapBroker_OrderedStatePagination tests that pagination over ordered state
 // maintains correct ordering across pages.
 func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -1639,6 +1660,7 @@ func TestRedisMapBroker_OrderedStatePagination(t *testing.T) {
 
 // TestRedisMapBroker_OrderedStateWithNegativeScores tests ordering with negative scores.
 func TestRedisMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -1700,6 +1722,7 @@ func TestRedisMapBroker_OrderedStateWithNegativeScores(t *testing.T) {
 
 // TestRedisMapBroker_OrderedStateWithSameScores tests ordering stability when scores are equal.
 func TestRedisMapBroker_OrderedStateWithSameScores(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -1753,6 +1776,7 @@ func TestRedisMapBroker_OrderedStateWithSameScores(t *testing.T) {
 
 // TestRedisMapBroker_OrderedStatePaginationBoundaries tests edge cases in cursor-based pagination.
 func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -1858,6 +1882,7 @@ func TestRedisMapBroker_OrderedStatePaginationBoundaries(t *testing.T) {
 
 // TestRedisMapBroker_OrderedStateFullPagination tests complete cursor-based pagination loop.
 func TestRedisMapBroker_OrderedStateFullPagination(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -1937,6 +1962,7 @@ func TestRedisMapBroker_OrderedStateFullPagination(t *testing.T) {
 // TestRedisMapBroker_OrderedStateUpdatePreservesOrder tests that updating an entry's score
 // changes its position in the ordered state.
 func TestRedisMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -2004,6 +2030,7 @@ func TestRedisMapBroker_OrderedStateUpdatePreservesOrder(t *testing.T) {
 
 // TestRedisMapBroker_KeyModeIfNew tests KeyModeIfNew - only write if key doesn't exist.
 func TestRedisMapBroker_KeyModeIfNew(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -2051,6 +2078,7 @@ func TestRedisMapBroker_KeyModeIfNew(t *testing.T) {
 
 // TestRedisMapBroker_KeyModeIfExists tests KeyModeIfExists - only write if key exists.
 func TestRedisMapBroker_KeyModeIfExists(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -2097,6 +2125,7 @@ func TestRedisMapBroker_KeyModeIfExists(t *testing.T) {
 
 // TestRedisMapBroker_KeyModeReplace tests default KeyModeReplace behavior.
 func TestRedisMapBroker_KeyModeReplace(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -2133,6 +2162,7 @@ func TestRedisMapBroker_KeyModeReplace(t *testing.T) {
 }
 
 func TestRedisMapBroker_Remove(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -2212,6 +2242,7 @@ func TestRedisMapBroker_Remove(t *testing.T) {
 // Note: HSCAN COUNT is only a hint — Redis may return more entries than requested
 // (especially for small hashes stored as listpack), so we don't assert exact page sizes.
 func TestRedisMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -2248,6 +2279,7 @@ func TestRedisMapBroker_UnorderedContinuity_EntryRemoved(t *testing.T) {
 // Note: HSCAN COUNT is only a hint — Redis may return more entries than requested
 // (especially for small hashes stored as listpack), so we don't assert exact page sizes.
 func TestRedisMapBroker_UnorderedContinuity_EntryAdded(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -2283,6 +2315,7 @@ func TestRedisMapBroker_UnorderedContinuity_EntryAdded(t *testing.T) {
 // TestRedisMapBroker_OrderedContinuity_HigherScoreAdded tests that adding
 // an entry with higher score during ordered pagination doesn't cause data loss.
 func TestRedisMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -2352,6 +2385,7 @@ func TestRedisMapBroker_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 // TestRedisMapBroker_OrderedContinuity_LowerScoreAdded tests that adding
 // an entry with lower score during ordered pagination works correctly.
 func TestRedisMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -2418,6 +2452,7 @@ func TestRedisMapBroker_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 // TestRedisMapBroker_OrderedContinuity_ScoreChanged tests that changing
 // an entry's score during pagination (causing reordering) doesn't lose data.
 func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -2513,6 +2548,7 @@ func TestRedisMapBroker_OrderedContinuity_ScoreChanged(t *testing.T) {
 // TestRedisMapBroker_OrderedContinuity_EntryRemoved tests that removing
 // an entry during ordered pagination doesn't cause data loss.
 func TestRedisMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -2608,6 +2644,7 @@ func TestRedisMapBroker_OrderedContinuity_EntryRemoved(t *testing.T) {
 // TestRedisMapBroker_OrderedContinuity_MultipleChanges tests recovery
 // with multiple concurrent changes during pagination.
 func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -2711,6 +2748,7 @@ func TestRedisMapBroker_OrderedContinuity_MultipleChanges(t *testing.T) {
 
 // TestRedisMapBroker_Delta tests key-based delta delivery via PUB/SUB and HandlePublication.
 func TestRedisMapBroker_Delta(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 
@@ -2803,6 +2841,7 @@ func TestRedisMapBroker_Delta(t *testing.T) {
 }
 
 func TestRedisMapBroker_Clear(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -2857,6 +2896,7 @@ func TestRedisMapBroker_Clear(t *testing.T) {
 }
 
 func TestRedisMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -2894,6 +2934,7 @@ func TestRedisMapBroker_ClearDoesNotAffectOtherChannels(t *testing.T) {
 }
 
 func TestRedisMapBroker_ReadStream_Table(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		testMapBrokerReadStream(t, func(t *testing.T) MapBroker {
 			node, _ := New(Config{})
@@ -2911,6 +2952,7 @@ func TestRedisMapBroker_ReadStream_Table(t *testing.T) {
 }
 
 func TestRedisMapBroker_EpochOnEmptyChannel(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		testMapBrokerEpochOnEmptyChannel(t, func(t *testing.T) MapBroker {
 			node, _ := New(Config{})
@@ -2920,6 +2962,7 @@ func TestRedisMapBroker_EpochOnEmptyChannel(t *testing.T) {
 }
 
 func TestRedisMapBroker_ReadStateAllEntries(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		testMapBrokerReadStateAllEntries(t, func(t *testing.T) MapBroker {
 			node, _ := New(Config{})
@@ -2929,6 +2972,7 @@ func TestRedisMapBroker_ReadStateAllEntries(t *testing.T) {
 }
 
 func TestRedisMapBroker_RemoveEmptyKey(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		testMapBrokerRemoveEmptyKey(t, func(t *testing.T) MapBroker {
 			node, _ := New(Config{})
@@ -2938,6 +2982,7 @@ func TestRedisMapBroker_RemoveEmptyKey(t *testing.T) {
 }
 
 func TestRedisMapBroker_ClientInfoInState(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		testMapBrokerClientInfoInState(t, func(t *testing.T) MapBroker {
 			node, _ := New(Config{})
@@ -2947,6 +2992,7 @@ func TestRedisMapBroker_ClientInfoInState(t *testing.T) {
 }
 
 func TestRedisMapBroker_ClientInfoInStream(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		testMapBrokerClientInfoInStream(t, func(t *testing.T) MapBroker {
 			node, _ := New(Config{})
@@ -2956,6 +3002,7 @@ func TestRedisMapBroker_ClientInfoInStream(t *testing.T) {
 }
 
 func TestRedisMapBroker_CheckOrder(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		testMapBrokerCheckOrder(t, func(t *testing.T) MapBroker {
 			node, _ := New(Config{})
@@ -2965,6 +3012,7 @@ func TestRedisMapBroker_CheckOrder(t *testing.T) {
 }
 
 func TestRedisMapBroker_VersionPreserved(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		testMapBrokerVersionPreserved(t, func(t *testing.T) MapBroker {
 			node, _ := New(Config{})
@@ -2976,6 +3024,7 @@ func TestRedisMapBroker_VersionPreserved(t *testing.T) {
 // TestRedisMapBroker_ClientInfoDelivery tests that ClientInfo is delivered
 // via PUB/SUB when publishing with ClientInfo.
 func TestRedisMapBroker_ClientInfoDelivery(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 
@@ -3031,6 +3080,7 @@ func TestRedisMapBroker_ClientInfoDelivery(t *testing.T) {
 // TestRedisMapBroker_OrderedStateAsc tests that ASC ordering returns entries
 // in ascending score order (lowest score first).
 func TestRedisMapBroker_OrderedStateAsc(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -3101,6 +3151,7 @@ func TestRedisMapBroker_OrderedStateAsc(t *testing.T) {
 // TestRedisMapBroker_OrderedStatePaginationAsc tests cursor-based pagination
 // with ASC ordering across multiple pages.
 func TestRedisMapBroker_OrderedStatePaginationAsc(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -3177,6 +3228,7 @@ func TestRedisMapBroker_OrderedStatePaginationAsc(t *testing.T) {
 // TestRedisMapBroker_OrderedStateAscSameScores tests ASC ordering with
 // same-score entries — secondary sort by key ascending.
 func TestRedisMapBroker_OrderedStateAscSameScores(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -3250,6 +3302,7 @@ func TestRedisMapBroker_OrderedStateAscSameScores(t *testing.T) {
 }
 
 func TestRedisMapBroker_CleanupMetrics(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		registry := prometheus.NewRegistry()
 		node, _ := New(Config{
@@ -3311,6 +3364,7 @@ func TestRedisMapBroker_CleanupMetrics(t *testing.T) {
 
 // TestRedisMapBroker_Unsubscribe tests Unsubscribe after Subscribe.
 func TestRedisMapBroker_Unsubscribe(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		handler := &testBrokerEventHandler{
@@ -3340,6 +3394,7 @@ func TestRedisMapBroker_Unsubscribe(t *testing.T) {
 
 // TestRedisMapBroker_UnsubscribeWithoutSubscribe tests Unsubscribe on a channel not subscribed.
 func TestRedisMapBroker_UnsubscribeWithoutSubscribe(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		handler := &testBrokerEventHandler{
@@ -3365,6 +3420,7 @@ func TestRedisMapBroker_UnsubscribeWithoutSubscribe(t *testing.T) {
 
 // TestRedisMapBroker_CAS_Publish tests CAS semantics for Publish in Redis.
 func TestRedisMapBroker_CAS_Publish(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -3418,6 +3474,7 @@ func TestRedisMapBroker_CAS_Publish(t *testing.T) {
 
 // TestRedisMapBroker_CAS_Remove tests CAS semantics for Remove in Redis.
 func TestRedisMapBroker_CAS_Remove(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -3455,6 +3512,7 @@ func TestRedisMapBroker_CAS_Remove(t *testing.T) {
 
 // TestRedisMapBroker_RemoveIdempotency tests idempotency key for Remove in Redis.
 func TestRedisMapBroker_RemoveIdempotency(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -3493,6 +3551,7 @@ func TestRedisMapBroker_RemoveIdempotency(t *testing.T) {
 
 // TestRedisMapBroker_VersionEpoch tests version epoch scoping in Redis.
 func TestRedisMapBroker_VersionEpoch(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
 		broker := mb.make(t, node)
@@ -3576,6 +3635,7 @@ func TestNewRedisMapBrokerErrors(t *testing.T) {
 // against a live Redis Cluster. Requires a 3-node cluster on 7001-7003 with
 // sharded PUB/SUB support (Redis 7+); skipped otherwise.
 func TestRedisMapBroker_UsePrecomputedPartitionTags_ClusterE2E(t *testing.T) {
+	t.Parallel()
 	node, _ := New(Config{
 		Map: MapConfig{
 			GetMapChannelOptions: func(string) MapChannelOptions {
@@ -3642,6 +3702,7 @@ func TestRedisMapBroker_UsePrecomputedPartitionTags_ClusterE2E(t *testing.T) {
 // subscriber and publisher could end up on different nodes for the same
 // partition. Run for both tag schemes.
 func TestRedisMapBroker_PartitionSlotInvariant(t *testing.T) {
+	t.Parallel()
 	clusterShard := &RedisShard{isCluster: true}
 	const numPartitions = 16
 	const numPsShards = 2
@@ -3689,6 +3750,7 @@ func TestRedisMapBroker_PartitionSlotInvariant(t *testing.T) {
 }
 
 func TestRedisMapBroker_PubSubPartitionHashTag(t *testing.T) {
+	t.Parallel()
 	t.Run("default scheme returns bare integer", func(t *testing.T) {
 		broker := &RedisMapBroker{
 			conf: RedisMapBrokerConfig{NumShardedPubSubPartitions: 16},
@@ -3715,6 +3777,7 @@ func TestRedisMapBroker_PubSubPartitionHashTag(t *testing.T) {
 // builders that thread partition tags through and verifies they all use the
 // precomputed tag rather than the bare partition index.
 func TestRedisMapBroker_PrecomputedTags_KeyConsistency(t *testing.T) {
+	t.Parallel()
 	tags, err := redispartition.FindTags(16)
 	require.NoError(t, err)
 
@@ -3757,6 +3820,7 @@ func TestRedisMapBroker_PrecomputedTags_KeyConsistency(t *testing.T) {
 // returns publications and a stream position consistent with ReadState.
 // ReadPresenceState is a thin wrapper over ReadState.
 func TestRedisMapBrokerReadPresenceState(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		t.Parallel()
 		node := testNode(t)
@@ -3782,6 +3846,7 @@ func TestRedisMapBrokerReadPresenceState(t *testing.T) {
 // TestRedisMapBrokerReadPresenceStream verifies the presence-stream read wrapper
 // returns the underlying stream entries.
 func TestRedisMapBrokerReadPresenceStream(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		t.Parallel()
 		node := testNode(t)
@@ -3807,6 +3872,7 @@ func TestRedisMapBrokerReadPresenceStream(t *testing.T) {
 // TestRedisMapBrokerCloseIdempotent exercises Close, including the closeOnce
 // guard on a second invocation.
 func TestRedisMapBrokerCloseIdempotent(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		t.Parallel()
 		node := testNode(t)
@@ -3895,6 +3961,7 @@ func TestRedisMapBrokerPublishEphemeralRejectsCASAndVersion(t *testing.T) {
 // whose keys are being kept alive can still lose meta + stream to native Redis
 // TTL, forcing an epoch reset on the next publish.
 func TestRedisMapBroker_RefreshTTLOnSuppress_RefreshesMetaAndStream(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -3965,6 +4032,7 @@ func TestRedisMapBroker_RefreshTTLOnSuppress_RefreshesMetaAndStream(t *testing.T
 // TestRedisMapBroker_NoRefreshTTL_LeavesMetaAlone is the negative case:
 // without RefreshTTLOnSuppress, suppressed publishes do not bump meta_key.
 func TestRedisMapBroker_NoRefreshTTL_LeavesMetaAlone(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -4023,6 +4091,7 @@ func TestRedisMapBroker_NoRefreshTTL_LeavesMetaAlone(t *testing.T) {
 // runs. Without this, a zombie key under the dead epoch would suppress a
 // legitimate fresh-epoch publish via KeyModeIfNew.
 func TestRedisMapBroker_PublishWipesStateOnEpochReset(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -4092,6 +4161,7 @@ func TestRedisMapBroker_PublishWipesStateOnEpochReset(t *testing.T) {
 // the wipe firing when meta_key is intact — every subsequent publish must
 // preserve the state hash, only the explicit-eviction path triggers the wipe.
 func TestRedisMapBroker_PublishDoesNotWipeStateOnNormalPublish(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -4130,6 +4200,7 @@ func TestRedisMapBroker_PublishDoesNotWipeStateOnNormalPublish(t *testing.T) {
 // before the KeyMode=if_new check, otherwise a fresh-epoch publish would be
 // suppressed by zombie keys with no live metadata.
 func TestRedisMapBroker_PublishWipesZombieStateWhenStateMetaEvicted(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{
@@ -4204,6 +4275,7 @@ func TestRedisMapBroker_PublishWipesZombieStateWhenStateMetaEvicted(t *testing.T
 // xrange would return dead-epoch entries under the fresh meta wrapper.
 // Mirrors the publish-path safety net (`if top_offset == 1 then del stream_key`).
 func TestRedisMapBroker_StreamReadWipesStreamOnFreshMeta(t *testing.T) {
+	t.Parallel()
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{
 			Map: MapConfig{

@@ -57,6 +57,7 @@ func newTestSubscribedClientWithTransport(t *testing.T, ctx context.Context, n *
 }
 
 func TestConnectRequestToProto(t *testing.T) {
+	t.Parallel()
 	r := ConnectRequest{
 		Token: "token",
 		Subs: map[string]SubscribeRequest{
@@ -74,6 +75,7 @@ func TestConnectRequestToProto(t *testing.T) {
 }
 
 func TestSetCredentials(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{})
 	val := newCtx.Value(credentialsContextKey).(*Credentials)
@@ -81,6 +83,7 @@ func TestSetCredentials(t *testing.T) {
 }
 
 func TestNewClient(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	transport := newTestTransport(func() {})
 	client, err := newClient(context.Background(), node, transport)
@@ -89,6 +92,7 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestClientInitialState(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport(func() {})
@@ -103,6 +107,7 @@ func TestClientInitialState(t *testing.T) {
 }
 
 func TestClientClosedState(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport(func() {})
@@ -113,6 +118,7 @@ func TestClientClosedState(t *testing.T) {
 }
 
 func TestClientTimer(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	node.config.ClientStaleCloseDelay = 25 * time.Second
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -125,6 +131,7 @@ func TestClientTimer(t *testing.T) {
 }
 
 func TestClientOnTimerOpClosedClient(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
@@ -135,6 +142,7 @@ func TestClientOnTimerOpClosedClient(t *testing.T) {
 }
 
 func TestClientUnsubscribeClosedClient(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
@@ -146,6 +154,7 @@ func TestClientUnsubscribeClosedClient(t *testing.T) {
 }
 
 func TestClientTimerSchedule(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport(func() {})
@@ -164,6 +173,7 @@ func TestClientTimerSchedule(t *testing.T) {
 }
 
 func TestClientGetPingData(t *testing.T) {
+	t.Parallel()
 	data := getPingData(true, ProtocolTypeJSON)
 	require.Equal(t, jsonPingPush, data)
 	data = getPingData(false, ProtocolTypeJSON)
@@ -175,6 +185,7 @@ func TestClientGetPingData(t *testing.T) {
 }
 
 func TestClientV2TimerSchedule(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClientV2(t, node, "42")
@@ -212,15 +223,17 @@ func TestClientV2DisconnectNoPong(t *testing.T) {
 			close(done)
 		})
 	})
+	pingInterval := 1 * time.Second
+	pongTimeout := 500 * time.Millisecond
 	ctx, cancelFn := context.WithCancel(context.Background())
 	transport := newTestTransport(cancelFn)
 	transport.setProtocolVersion(ProtocolVersion2)
-	transport.setPing(2*time.Second, time.Second)
+	transport.setPing(pingInterval, pongTimeout)
 	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
 	connectClientV2(t, client)
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(pingInterval + pongTimeout + time.Second):
 		t.Fatal("no disconnect in timeout")
 	}
 }
@@ -235,10 +248,12 @@ func TestClientV2PingPong(t *testing.T) {
 			close(done)
 		})
 	})
+	pingInterval := 1 * time.Second
+	pongTimeout := 500 * time.Millisecond
 	ctx, cancelFn := context.WithCancel(context.Background())
 	transport := newTestTransport(cancelFn)
 	transport.setProtocolVersion(ProtocolVersion2)
-	transport.setPing(2*time.Second, time.Second)
+	transport.setPing(pingInterval, pongTimeout)
 	messages := make(chan []byte)
 	transport.setSink(messages)
 	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
@@ -251,10 +266,12 @@ func TestClientV2PingPong(t *testing.T) {
 		}
 	}()
 	connectClientV2(t, client)
+	// Wait at least one full ping-pong cycle so LatestPingPongLatency is set,
+	// then assert that no disconnect happened during that window.
 	select {
 	case <-done:
 		t.Fatal("unexpected disconnect, client must receive pong")
-	case <-time.After(4 * time.Second):
+	case <-time.After(pingInterval + pongTimeout + time.Second):
 	}
 	lat, ok := client.LatestPingPongLatency()
 	require.True(t, ok)
@@ -262,6 +279,7 @@ func TestClientV2PingPong(t *testing.T) {
 }
 
 func TestClientConnectNoCredentialsNoToken(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport(func() {})
@@ -272,6 +290,7 @@ func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 }
 
 func TestClientConnectContextCredentials(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	node.config.ClientConnectIncludeServerTime = true
@@ -296,6 +315,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 }
 
 func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -324,6 +344,7 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 }
 
 func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -354,6 +375,7 @@ func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 }
 
 func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -395,6 +417,7 @@ func subscribeClientV2(t testing.TB, client *Client, ch string) *protocol.Subscr
 }
 
 func TestClientSubscribe(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -524,6 +547,7 @@ func TestClientSubscribeBrokerErrorOnStreamTop(t *testing.T) {
 }
 
 func TestClientSubscribeUnrecoverablePosition(t *testing.T) {
+	t.Parallel()
 	broker := NewTestBroker()
 	node := nodeWithBroker(broker)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -556,6 +580,7 @@ func TestClientSubscribeUnrecoverablePosition(t *testing.T) {
 }
 
 func TestClientSubscribeRejectUnrecovered(t *testing.T) {
+	t.Parallel()
 	// When the client sets subscriptionFlagRejectUnrecovered, the server
 	// should return ErrorUnrecoverablePosition instead of subscribing
 	// with recovered=false.
@@ -602,6 +627,7 @@ func TestClientSubscribeRejectUnrecovered(t *testing.T) {
 }
 
 func TestClientSubscribeRejectUnrecovered_SuccessfulRecovery(t *testing.T) {
+	t.Parallel()
 	// When recovery succeeds, the flag should not interfere — normal result.
 	node := nodeWithTestBroker()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -682,6 +708,7 @@ func TestClientSubscribePositionedError(t *testing.T) {
 }
 
 func TestClientSubscribePositioned(t *testing.T) {
+	t.Parallel()
 	node := nodeWithTestBroker()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -745,6 +772,7 @@ func TestClientSubscribeBrokerErrorOnRecoverHistory(t *testing.T) {
 }
 
 func TestClientSubscribeDeltaNotAllowed(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -767,6 +795,7 @@ func TestClientSubscribeDeltaNotAllowed(t *testing.T) {
 }
 
 func TestClientSubscribeUnknownDelta(t *testing.T) {
+	t.Parallel()
 	n := deltaTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -826,6 +855,7 @@ func testUnexpectedOffsetEpochProtocolV2(t *testing.T, offset uint64, epoch stri
 }
 
 func TestClientUnexpectedOffsetEpochClientV2(t *testing.T) {
+	// Helper testUnexpectedOffsetEpochProtocolV2 calls t.Parallel() itself.
 	// Only wrong_offset triggers insufficient state. The "wrong_epoch" case
 	// (channel epoch="" + pub epoch="xyz") now adopts the epoch instead of
 	// disconnecting — this supports subscribing via a lagging read replica
@@ -835,6 +865,7 @@ func TestClientUnexpectedOffsetEpochClientV2(t *testing.T) {
 }
 
 func TestClientSubscribeValidateErrors(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	node.config.ClientChannelLimit = 1
 	node.config.ChannelMaxLength = 10
@@ -1002,6 +1033,7 @@ func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
 }
 
 func TestUserConnectionLimit(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	node.config.UserConnectionLimit = 1
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1362,6 +1394,7 @@ func TestClientRefreshExpireAtInThePast(t *testing.T) {
 }
 
 func TestClient_IsSubscribed(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1378,6 +1411,7 @@ func TestClient_IsSubscribed(t *testing.T) {
 }
 
 func TestClientSubscribeLast(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1699,6 +1733,7 @@ func testReplyWriterWrapper() *sliceReplyWriter {
 }
 
 func TestClientRefreshNotAvailable(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
@@ -1711,6 +1746,7 @@ func TestClientRefreshNotAvailable(t *testing.T) {
 }
 
 func TestClientRefreshEmptyToken(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1736,6 +1772,7 @@ func TestClientRefreshEmptyToken(t *testing.T) {
 }
 
 func TestClientRefreshUnexpected(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1761,6 +1798,7 @@ func TestClientRefreshUnexpected(t *testing.T) {
 }
 
 func TestClientPublishNotAvailable(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
@@ -1912,6 +1950,7 @@ func TestClientPublishHandler(t *testing.T) {
 }
 
 func TestClientPublishError(t *testing.T) {
+	t.Parallel()
 	broker := NewTestBroker()
 	broker.errorOnPublish = true
 	node := nodeWithBroker(broker)
@@ -1938,6 +1977,7 @@ func TestClientPublishError(t *testing.T) {
 }
 
 func TestClientPing(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
@@ -1950,6 +1990,7 @@ func TestClientPing(t *testing.T) {
 }
 
 func TestClientPresence(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2002,6 +2043,7 @@ func TestClientPresence(t *testing.T) {
 }
 
 func TestClientPresenceTakeover(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2049,6 +2091,7 @@ func TestClientPresenceTakeover(t *testing.T) {
 }
 
 func TestClientPresenceError(t *testing.T) {
+	t.Parallel()
 	presenceManager := NewTestPresenceManager()
 	presenceManager.errorOnPresence = true
 	node := nodeWithPresenceManager(presenceManager)
@@ -2073,6 +2116,7 @@ func TestClientPresenceError(t *testing.T) {
 }
 
 func TestClientPresenceNotAvailable(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2089,6 +2133,7 @@ func TestClientPresenceNotAvailable(t *testing.T) {
 }
 
 func TestClientSubscribeNotAvailable(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2104,6 +2149,7 @@ func TestClientSubscribeNotAvailable(t *testing.T) {
 }
 
 func TestClientPresenceStatsNotAvailable(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2120,6 +2166,7 @@ func TestClientPresenceStatsNotAvailable(t *testing.T) {
 }
 
 func TestClientPresenceStatsError(t *testing.T) {
+	t.Parallel()
 	presenceManager := NewTestPresenceManager()
 	presenceManager.errorOnPresenceStats = true
 	node := nodeWithPresenceManager(presenceManager)
@@ -2144,6 +2191,7 @@ func TestClientPresenceStatsError(t *testing.T) {
 }
 
 func TestClientHistoryNoFilter(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2182,6 +2230,7 @@ func TestClientHistoryNoFilter(t *testing.T) {
 }
 
 func TestClientHistoryWithLimit(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2215,6 +2264,7 @@ func TestClientHistoryWithLimit(t *testing.T) {
 }
 
 func TestClientHistoryWithSinceAndLimit(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2254,6 +2304,7 @@ func TestClientHistoryWithSinceAndLimit(t *testing.T) {
 }
 
 func TestClientHistoryTakeover(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	node.config.HistoryMaxPublicationLimit = 2
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -2293,6 +2344,7 @@ func TestClientHistoryTakeover(t *testing.T) {
 }
 
 func TestClientHistoryUnrecoverablePositionEpoch(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2330,6 +2382,7 @@ func TestClientHistoryUnrecoverablePositionEpoch(t *testing.T) {
 }
 
 func TestClientHistoryBrokerError(t *testing.T) {
+	t.Parallel()
 	broker := NewTestBroker()
 	broker.errorOnHistory = true
 	node := nodeWithBroker(broker)
@@ -2354,6 +2407,7 @@ func TestClientHistoryBrokerError(t *testing.T) {
 }
 
 func TestClientHistoryNotAvailable(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2468,6 +2522,7 @@ func TestClientHandleCommandNotAuthenticated(t *testing.T) {
 }
 
 func TestClientHandleUnknownMethod(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2525,6 +2580,7 @@ func TestClientHandleCommandWithoutID(t *testing.T) {
 }
 
 func TestErrorDisconnectContext(t *testing.T) {
+	t.Parallel()
 	ctx := errorDisconnectContext(nil, &DisconnectForceReconnect)
 	require.Nil(t, ctx.err)
 	require.Equal(t, DisconnectForceReconnect.Code, ctx.disconnect.Code)
@@ -2534,6 +2590,7 @@ func TestErrorDisconnectContext(t *testing.T) {
 }
 
 func TestToClientError(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, ErrorInternal, toClientErr(errors.New("boom")))
 	require.Equal(t, ErrorLimitExceeded, toClientErr(ErrorLimitExceeded))
 }
@@ -2583,6 +2640,7 @@ func TestClientCloseExpired(t *testing.T) {
 }
 
 func TestClientInfo(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2598,6 +2656,7 @@ func TestClientInfo(t *testing.T) {
 }
 
 func TestClientConnectExpiredError(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2613,6 +2672,7 @@ func TestClientConnectExpiredError(t *testing.T) {
 }
 
 func TestClientPresenceUpdate(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2677,6 +2737,7 @@ func TestClientSubExpired(t *testing.T) {
 }
 
 func TestClientSend(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2696,6 +2757,7 @@ func TestClientSend(t *testing.T) {
 }
 
 func TestClientClose(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2709,6 +2771,7 @@ func TestClientClose(t *testing.T) {
 }
 
 func TestClientHandleRPCNotAvailable(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2724,6 +2787,7 @@ func TestClientHandleRPCNotAvailable(t *testing.T) {
 }
 
 func TestClientHandleRPC(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2753,6 +2817,7 @@ func TestClientHandleRPC(t *testing.T) {
 }
 
 func TestClientHandleSendNoHandlerSet(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
@@ -2764,6 +2829,7 @@ func TestClientHandleSendNoHandlerSet(t *testing.T) {
 }
 
 func TestClientHandleSend(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2786,6 +2852,7 @@ func TestClientHandleSend(t *testing.T) {
 }
 
 func TestClientHandlePublishNotAllowed(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2810,6 +2877,7 @@ func TestClientHandlePublishNotAllowed(t *testing.T) {
 }
 
 func TestClientHandlePublish(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2843,6 +2911,7 @@ func TestClientHandlePublish(t *testing.T) {
 }
 
 func TestClientSideRefresh(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -3036,6 +3105,7 @@ func TestServerSideRefreshCustomError(t *testing.T) {
 }
 
 func TestClientSideSubRefresh(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -3114,6 +3184,7 @@ func TestClientSideSubRefresh(t *testing.T) {
 }
 
 func TestClientSideSubRefreshUnexpected(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -3185,6 +3256,7 @@ func TestCloseNoRace(t *testing.T) {
 }
 
 func TestClientCheckSubscriptionExpiration(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -3273,6 +3345,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 }
 
 func TestClientCheckPosition(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -3309,6 +3382,7 @@ func TestClientCheckPosition(t *testing.T) {
 }
 
 func TestErrLogLevel(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, LogLevelInfo, errLogLevel(ErrorNotAvailable))
 	require.Equal(t, LogLevelError, errLogLevel(errors.New("boom")))
 }
@@ -3392,16 +3466,19 @@ func TestClientTransportWriteError(t *testing.T) {
 }
 
 func TestFlagExists(t *testing.T) {
+	t.Parallel()
 	flags := PushFlagDisconnect
 	require.True(t, hasFlag(flags, PushFlagDisconnect))
 }
 
 func TestFlagNotExists(t *testing.T) {
+	t.Parallel()
 	var flags uint64
 	require.False(t, hasFlag(flags, PushFlagDisconnect))
 }
 
 func TestConcurrentSameChannelSubscribe(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -3484,6 +3561,7 @@ func (b *slowHistoryBroker) History(ch string, opts HistoryOptions) ([]*Publicat
 }
 
 func TestSubscribeWithBufferedPublications(t *testing.T) {
+	t.Parallel()
 	node, err := New(Config{
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
@@ -3538,6 +3616,7 @@ func TestSubscribeWithBufferedPublications(t *testing.T) {
 }
 
 func TestClientChannelsWhileSubscribing(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -3572,6 +3651,7 @@ func TestClientChannelsWhileSubscribing(t *testing.T) {
 }
 
 func TestClientChannelsCleanupOnSubscribeError(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -3593,6 +3673,7 @@ func TestClientChannelsCleanupOnSubscribeError(t *testing.T) {
 }
 
 func TestClientChannelsCleanupOnSubscribeDisconnect(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -3614,6 +3695,7 @@ func TestClientChannelsCleanupOnSubscribeDisconnect(t *testing.T) {
 }
 
 func TestClientSubscribingChannelsCleanupOnClientClose(t *testing.T) {
+	t.Parallel()
 	node, err := New(Config{
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
@@ -3664,6 +3746,7 @@ func TestClientSubscribingChannelsCleanupOnClientClose(t *testing.T) {
 }
 
 func TestClientSubscribingChannelsCleanupOnHistoryError(t *testing.T) {
+	t.Parallel()
 	node, err := New(Config{
 		LogLevel:   LogLevelTrace,
 		LogHandler: func(entry LogEntry) {},
@@ -3706,6 +3789,7 @@ func TestClientSubscribingChannelsCleanupOnHistoryError(t *testing.T) {
 }
 
 func TestClientOnStateSnapshot(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -3750,6 +3834,7 @@ func decodeReply(t *testing.T, protoType protocol.Type, data []byte) *protocol.R
 }
 
 func TestClientV2ReplyConstruction(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	clientV2 := newTestClientV2(t, node, "42")
@@ -3820,6 +3905,7 @@ func TestClientV2ReplyConstruction(t *testing.T) {
 }
 
 func TestClient_HandleCommandV2_UnnecessaryPong(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	clientV2 := newTestClientV2(t, node, "42")
@@ -3832,6 +3918,7 @@ func TestClient_HandleCommandV2_UnnecessaryPong(t *testing.T) {
 }
 
 func TestClient_HandleCommandV2_Pong(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	clientV2 := newTestClientV2(t, node, "42")
@@ -3847,6 +3934,7 @@ func TestClient_HandleCommandV2_Pong(t *testing.T) {
 }
 
 func TestClient_HandleCommandV2_NonAuthenticated(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	clientV2 := newTestClientV2(t, node, "42")
@@ -3863,11 +3951,17 @@ func TestClientLevelPing(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	done := make(chan struct{})
+	// Short ping/pong durations so the test finishes quickly. First ping fires
+	// in [PingInterval/2, PingInterval], then PongTimeout starts before
+	// DisconnectNoPong. The test purpose (disconnect after ping+pong window
+	// when no pong arrives) is duration-agnostic.
+	pingInterval := 1 * time.Second
+	pongTimeout := 500 * time.Millisecond
 	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
 		return ConnectReply{
 			PingPongConfig: &PingPongConfig{
-				PingInterval: 5 * time.Second,
-				PongTimeout:  3 * time.Second,
+				PingInterval: pingInterval,
+				PongTimeout:  pongTimeout,
 			},
 		}, nil
 	})
@@ -3885,7 +3979,7 @@ func TestClientLevelPing(t *testing.T) {
 	connectClientV2(t, client)
 	select {
 	case <-done:
-	case <-time.After(9 * time.Second):
+	case <-time.After(pingInterval + pongTimeout + time.Second):
 		t.Fatal("no disconnect in timeout")
 	}
 }
@@ -3919,6 +4013,7 @@ func TestNoClientLevelPing(t *testing.T) {
 }
 
 func TestClient_HandleCommandV2(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -4266,6 +4361,7 @@ func TestClientConnect(t *testing.T) {
 }
 
 func TestRedactCommand(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    *protocol.Command
@@ -4340,6 +4436,7 @@ func TestRedactCommand(t *testing.T) {
 }
 
 func TestWrappedDisconnect(t *testing.T) {
+	t.Parallel()
 	t.Run("Pointer to Disconnect no wrap", func(t *testing.T) {
 		originalDisconnect := &Disconnect{
 			Code:   1001,
@@ -4444,12 +4541,14 @@ func BenchmarkClientRPC(b *testing.B) {
 }
 
 func TestMaxTTLSeconds(t *testing.T) {
+	t.Parallel()
 	// Test that maxTTLSeconds is correctly set to 1 year
 	expectedMaxTTL := 365 * 24 * 3600
 	require.Equal(t, expectedMaxTTL, maxTTLSeconds)
 }
 
 func TestClientExpireTTLCapping(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -4484,6 +4583,7 @@ func TestClientExpireTTLCapping(t *testing.T) {
 }
 
 func TestConnectTTLCapping(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -4517,6 +4617,7 @@ func TestConnectTTLCapping(t *testing.T) {
 }
 
 func TestTagsFilter_SubscribeValidation(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -4624,6 +4725,7 @@ func TestTagsFilter_SubscribeValidation(t *testing.T) {
 }
 
 func TestTagsFilter_EndToEndFiltering(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -4698,6 +4800,7 @@ func TestTagsFilter_EndToEndFiltering(t *testing.T) {
 }
 
 func TestTagsFilter_RecoverCache(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -4767,6 +4870,7 @@ func TestTagsFilter_RecoverCache(t *testing.T) {
 }
 
 func TestTagsFilter_RecoverStream(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -4846,6 +4950,7 @@ func TestTagsFilter_RecoverStream(t *testing.T) {
 }
 
 func TestClient_RecoverCache(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 

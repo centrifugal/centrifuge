@@ -8,6 +8,7 @@ import (
 )
 
 func TestKeyedHub_AddRemoveSubscriber(t *testing.T) {
+	t.Parallel()
 	hub := newKeyedHub()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -25,6 +26,7 @@ func TestKeyedHub_AddRemoveSubscriber(t *testing.T) {
 }
 
 func TestKeyedHub_MultipleKeys(t *testing.T) {
+	t.Parallel()
 	hub := newKeyedHub()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -45,6 +47,7 @@ func TestKeyedHub_MultipleKeys(t *testing.T) {
 }
 
 func TestKeyedHub_MultipleSubscribers(t *testing.T) {
+	t.Parallel()
 	hub := newKeyedHub()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -69,6 +72,7 @@ func TestKeyedHub_MultipleSubscribers(t *testing.T) {
 }
 
 func TestKeyedHub_SubscriberCount(t *testing.T) {
+	t.Parallel()
 	hub := newKeyedHub()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -81,6 +85,7 @@ func TestKeyedHub_SubscriberCount(t *testing.T) {
 }
 
 func TestKeyedHub_AllKeys(t *testing.T) {
+	t.Parallel()
 	hub := newKeyedHub()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -98,6 +103,7 @@ func TestKeyedHub_AllKeys(t *testing.T) {
 }
 
 func TestKeyedHub_RemoveAllSubscribers(t *testing.T) {
+	t.Parallel()
 	hub := newKeyedHub()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -115,6 +121,7 @@ func TestKeyedHub_RemoveAllSubscribers(t *testing.T) {
 }
 
 func TestKeyedHub_Subscribers(t *testing.T) {
+	t.Parallel()
 	hub := newKeyedHub()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -132,6 +139,7 @@ func TestKeyedHub_Subscribers(t *testing.T) {
 }
 
 func TestKeyedHub_NumKeys(t *testing.T) {
+	t.Parallel()
 	hub := newKeyedHub()
 	require.Equal(t, 0, hub.numKeys())
 
@@ -148,6 +156,7 @@ func TestKeyedHub_NumKeys(t *testing.T) {
 }
 
 func TestKeyedHub_BroadcastRemovalToUsers(t *testing.T) {
+	t.Parallel()
 	hub := newKeyedHub()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -176,6 +185,7 @@ func TestKeyedHub_BroadcastRemovalToUsers(t *testing.T) {
 }
 
 func TestKeyedHub_RemoveSubscribersForUsers_Exclude(t *testing.T) {
+	t.Parallel()
 	hub := newKeyedHub()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -206,6 +216,7 @@ func TestKeyedHub_RemoveSubscribersForUsers_Exclude(t *testing.T) {
 // TestKeyedHub_RemoveSubscribersForUsers_MissingKey covers the early-return
 // branch when the requested key has no subscribers in the hub.
 func TestKeyedHub_RemoveSubscribersForUsers_MissingKey(t *testing.T) {
+	t.Parallel()
 	hub := newKeyedHub()
 	// No-op against a hub that has no entry for "missing-key".
 	require.NotPanics(t, func() {
@@ -216,6 +227,7 @@ func TestKeyedHub_RemoveSubscribersForUsers_MissingKey(t *testing.T) {
 // TestKeyedHub_RemoveSubscribersForUsers_DeletesEmptyKey covers the branch
 // where every subscriber is removed and the key entry itself is deleted.
 func TestKeyedHub_RemoveSubscribersForUsers_DeletesEmptyKey(t *testing.T) {
+	t.Parallel()
 	hub := newKeyedHub()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -237,6 +249,7 @@ func TestKeyedHub_RemoveSubscribersForUsers_DeletesEmptyKey(t *testing.T) {
 // TestKeyedHub_BroadcastRemovalToUsers_NoTargets covers the early-return when
 // the key has no subscribers at all.
 func TestKeyedHub_BroadcastRemovalToUsers_NoTargets(t *testing.T) {
+	t.Parallel()
 	hub := newKeyedHub()
 	require.NotPanics(t, func() {
 		hub.broadcastRemovalToUsers("ch", "k", []string{"user1"}, nil)
@@ -247,6 +260,7 @@ func TestKeyedHub_BroadcastRemovalToUsers_NoTargets(t *testing.T) {
 // allKeys when the same client is registered under multiple keys — each unique
 // client-id should appear once in the returned set.
 func TestKeyedHub_AllKeys_DedupsAcrossKeys(t *testing.T) {
+	t.Parallel()
 	hub := newKeyedHub()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
