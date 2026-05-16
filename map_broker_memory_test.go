@@ -3300,6 +3300,45 @@ func TestMemoryMapBroker_IdempotencyCacheExpiration(t *testing.T) {
 	}, 5*time.Second, 200*time.Millisecond, "idempotency cache should expire")
 }
 
+// TestMemoryMapBroker_ResultCacheHeapCompaction verifies that publishing many times
+// with the same idempotency key does not cause the expire heap to grow without bound.
+func TestMemoryMapBroker_ResultCacheHeapCompaction(t *testing.T) {
+	t.Parallel()
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeRecoverable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_heap_compact"
+
+	const repeats = 300 // well above the 2*mapSize+100 compaction threshold
+	for i := 0; i < repeats; i++ {
+		_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{
+			Data:                []byte("v"),
+			IdempotencyKey:      "ik",
+			IdempotentResultTTL: 10 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Wait for the cleanup goroutine to compact the heap.
+	require.Eventually(t, func() bool {
+		broker.resultCacheMu.Lock()
+		defer broker.resultCacheMu.Unlock()
+		var total int
+		for _, chCache := range broker.resultCache {
+			total += len(chCache)
+		}
+		return broker.resultExpireQueue.Len() <= total
+	}, 10*time.Second, 50*time.Millisecond, "heap should be compacted to map size")
+}
+
 // TestMemoryMapBroker_ReadStreamEpochMismatch tests epoch mismatch in ReadStream.
 func TestMemoryMapBroker_ReadStreamEpochMismatch(t *testing.T) {
 	t.Parallel()

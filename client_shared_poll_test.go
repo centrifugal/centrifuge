@@ -4437,3 +4437,191 @@ func TestSharedPollSubscribe_PresenceFlags(t *testing.T) {
 	require.True(t, channelHasFlag(ctx.flags, flagMapClientPresence))
 	require.True(t, channelHasFlag(ctx.flags, flagMapUserPresence))
 }
+
+// TestSharedPollTrack_InlineUntrack verifies that when a sub_refresh type=1
+// (track) frame includes non-empty Untrack keys, the server validates the
+// full HMAC batch and immediately removes those keys in the same handler —
+// no separate untrack round-trip is needed.
+func TestSharedPollTrack_InlineUntrack(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+
+	var mu sync.Mutex
+	var capturedUntrack *UntrackEvent
+
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					ExpireAt: time.Now().Unix() + 3600,
+				},
+				ClientSideRefresh: true,
+			}, nil)
+		})
+		client.OnTrack(func(e TrackEvent, cb TrackCallback) {
+			cb(TrackReply{}, nil)
+		})
+		client.OnUntrack(func(e UntrackEvent) {
+			mu.Lock()
+			evt := e
+			capturedUntrack = &evt
+			mu.Unlock()
+		})
+		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+			cb(SubRefreshReply{}, nil)
+		})
+	})
+
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+
+	// Combined track+untrack frame: track keyA, keyB, keyC but inline-untrack keyB.
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
+		Channel: "test:channel",
+		Type:    typeTrack,
+		Track: []*protocol.TrackBatch{{
+			Items: []*protocol.KeyedItem{
+				{Key: "keyA"},
+				{Key: "keyB"},
+				{Key: "keyC"},
+			},
+		}},
+		Untrack: []string{"keyB"},
+	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return len(rwWrapper.replies) > 0
+	}, time.Second, time.Millisecond)
+	require.Nil(t, rwWrapper.replies[0].Error)
+
+	// keyA and keyC must be tracked; keyB must have been removed inline.
+	client.mu.RLock()
+	_, hasA := client.keyed.trackedKeys["test:channel"]["keyA"]
+	_, hasB := client.keyed.trackedKeys["test:channel"]["keyB"]
+	_, hasC := client.keyed.trackedKeys["test:channel"]["keyC"]
+	client.mu.RUnlock()
+	require.True(t, hasA, "keyA should be tracked")
+	require.True(t, hasC, "keyC should be tracked")
+	require.False(t, hasB, "keyB should have been removed by inline untrack")
+
+	// untrackHandler must have fired with keyB.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return capturedUntrack != nil
+	}, time.Second, time.Millisecond)
+	mu.Lock()
+	evt := *capturedUntrack
+	mu.Unlock()
+	require.Equal(t, "test:channel", evt.Channel)
+	require.Equal(t, []string{"keyB"}, evt.Keys)
+}
+
+// TestSharedPollTrack_InlineUntrack_RandomKeysIgnored verifies that random keys
+// sent in the Untrack field of a track frame (not covered by HMAC) are silently
+// dropped: untrackHandler must not fire, and hub/sharedPoll state is unchanged.
+func TestSharedPollTrack_InlineUntrack_RandomKeysIgnored(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+
+	untrackFired := atomic.Bool{}
+
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{ExpireAt: time.Now().Unix() + 3600}, ClientSideRefresh: true}, nil)
+		})
+		client.OnTrack(func(e TrackEvent, cb TrackCallback) {
+			cb(TrackReply{}, nil)
+		})
+		client.OnUntrack(func(e UntrackEvent) {
+			untrackFired.Store(true)
+		})
+	})
+
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+
+	// Track only keyA, then inline-untrack a completely random key never tracked.
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
+		Channel: "test:channel",
+		Type:    typeTrack,
+		Track: []*protocol.TrackBatch{{
+			Items: []*protocol.KeyedItem{{Key: "keyA"}},
+		}},
+		Untrack: []string{"never-tracked-key"},
+	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return len(rwWrapper.replies) > 0
+	}, time.Second, time.Millisecond)
+	require.Nil(t, rwWrapper.replies[0].Error)
+
+	// keyA must be tracked; random key must not appear in trackedKeys.
+	client.mu.RLock()
+	_, hasA := client.keyed.trackedKeys["test:channel"]["keyA"]
+	_, hasRandom := client.keyed.trackedKeys["test:channel"]["never-tracked-key"]
+	client.mu.RUnlock()
+	require.True(t, hasA)
+	require.False(t, hasRandom)
+
+	// untrackHandler must not have fired.
+	require.False(t, untrackFired.Load(), "untrackHandler must not fire for keys that were never tracked")
+}
+
+// TestSharedPollUntrack_RandomKeysIgnored verifies that a standalone untrack
+// frame (type=2) with keys the client never tracked is a server-side no-op:
+// untrackHandler must not fire.
+func TestSharedPollUntrack_RandomKeysIgnored(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+
+	untrackFired := atomic.Bool{}
+
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{ExpireAt: time.Now().Unix() + 3600}, ClientSideRefresh: true}, nil)
+		})
+		client.OnTrack(func(e TrackEvent, cb TrackCallback) {
+			cb(TrackReply{}, nil)
+		})
+		client.OnUntrack(func(e UntrackEvent) {
+			untrackFired.Store(true)
+		})
+	})
+
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+
+	// Send standalone untrack for a key that was never tracked.
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
+		Channel: "test:channel",
+		Type:    typeUntrack,
+		Untrack: []string{"never-tracked-key"},
+	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return len(rwWrapper.replies) > 0
+	}, time.Second, time.Millisecond)
+	require.Nil(t, rwWrapper.replies[0].Error)
+
+	// untrackHandler must not have fired.
+	require.False(t, untrackFired.Load(), "untrackHandler must not fire for keys that were never tracked")
+}

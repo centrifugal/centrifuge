@@ -99,8 +99,16 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		return ErrorBadRequest
 	}
 
-	// Optimistic limit check — counts DISTINCT keys not already tracked.
-	// Re-checked under the write lock inside the callback.
+	// Build a set of keys that will be immediately removed by Step 8 (inline
+	// untrack). Both limit checks below net these out so a replay that tracks
+	// N keys but untracks M of them only consumes N-M slots — not N.
+	inlineUntrackSet := make(map[string]struct{}, len(req.Untrack))
+	for _, k := range req.Untrack {
+		inlineUntrackSet[k] = struct{}{}
+	}
+
+	// Optimistic limit check — counts DISTINCT new keys minus those that will
+	// be immediately removed via inline untrack. Re-checked under write lock.
 	c.mu.RLock()
 	var currentCount, newKeyCountOpt int
 	if c.keyed != nil {
@@ -108,11 +116,17 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		currentCount = len(chanKeys)
 		for _, f := range flat {
 			if _, exists := chanKeys[f.key]; !exists {
-				newKeyCountOpt++
+				if _, willUntrack := inlineUntrackSet[f.key]; !willUntrack {
+					newKeyCountOpt++
+				}
 			}
 		}
 	} else {
-		newKeyCountOpt = len(flat)
+		for _, f := range flat {
+			if _, willUntrack := inlineUntrackSet[f.key]; !willUntrack {
+				newKeyCountOpt++
+			}
+		}
 	}
 	c.mu.RUnlock()
 
@@ -218,11 +232,13 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		chanKeys := c.keyed.trackedKeys[channel]
 
 		// Re-tracking an existing key is a version update, not a new slot —
-		// only count keys not already present.
+		// only count new keys, and exclude those being inline-untracked.
 		var newKeyCount int
 		for _, f := range flat {
 			if _, exists := chanKeys[f.key]; !exists {
-				newKeyCount++
+				if _, willUntrack := inlineUntrackSet[f.key]; !willUntrack {
+					newKeyCount++
+				}
 			}
 		}
 		if len(chanKeys)+newKeyCount > maxTracked {
@@ -384,6 +400,51 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		if c.node.sharedPollManager != nil && len(deferredWarmKeys) > 0 {
 			c.node.sharedPollManager.markNeedsBroadcast(channel, deferredWarmKeys)
 		}
+
+		// Step 8: Process inline untrack — keys that were part of the signed
+		// batch but have been locally untracked by the client since the
+		// signature was obtained. HMAC validation above covers the full batch;
+		// we remove these keys now so the client receives no broadcasts for them.
+		// Placed after addSubscriber (step 5) so hub state is coherent: we add
+		// then immediately remove, never leaving a gap where a key is absent.
+		// Only keys that were actually tracked are acted on — random keys sent
+		// by the client are silently ignored.
+		if len(req.Untrack) > 0 {
+			var actualUntrack []string
+			c.mu.Lock()
+			if c.keyed != nil {
+				chanKeys := c.keyed.trackedKeys[channel]
+				if chanKeys != nil {
+					for _, key := range req.Untrack {
+						if _, exists := chanKeys[key]; exists {
+							delete(chanKeys, key)
+							actualUntrack = append(actualUntrack, key)
+						}
+					}
+					if len(chanKeys) == 0 {
+						delete(c.keyed.trackedKeys, channel)
+						if c.keyed.minTrackExpireAt != nil {
+							delete(c.keyed.minTrackExpireAt, channel)
+						}
+					}
+				}
+			}
+			c.mu.Unlock()
+
+			for _, key := range actualUntrack {
+				keyEmpty := hub.removeSubscriber(key, c)
+				if c.node.sharedPollManager != nil && keyEmpty {
+					c.node.sharedPollManager.untrack(channel, key)
+				}
+			}
+
+			if len(actualUntrack) > 0 && c.eventHub.untrackHandler != nil {
+				c.eventHub.untrackHandler(UntrackEvent{
+					Channel: channel,
+					Keys:    actualUntrack,
+				})
+			}
+		}
 	})
 	return nil
 }
@@ -396,12 +457,16 @@ func (c *Client) handleUntrack(req *protocol.SubRefreshRequest, cmd *protocol.Co
 		return ErrorBadRequest
 	}
 
+	var actualUntrack []string
 	c.mu.Lock()
 	if c.keyed != nil {
 		chanKeys := c.keyed.trackedKeys[channel]
 		if chanKeys != nil {
 			for _, key := range req.Untrack {
-				delete(chanKeys, key)
+				if _, exists := chanKeys[key]; exists {
+					delete(chanKeys, key)
+					actualUntrack = append(actualUntrack, key)
+				}
 			}
 			if len(chanKeys) == 0 {
 				delete(c.keyed.trackedKeys, channel)
@@ -415,7 +480,7 @@ func (c *Client) handleUntrack(req *protocol.SubRefreshRequest, cmd *protocol.Co
 
 	hub := c.node.keyedManager.getHub(channel)
 	if hub != nil {
-		for _, key := range req.Untrack {
+		for _, key := range actualUntrack {
 			keyEmpty := hub.removeSubscriber(key, c)
 			if c.node.sharedPollManager != nil && keyEmpty {
 				c.node.sharedPollManager.untrack(channel, key)
@@ -423,10 +488,10 @@ func (c *Client) handleUntrack(req *protocol.SubRefreshRequest, cmd *protocol.Co
 		}
 	}
 
-	if c.eventHub.untrackHandler != nil {
+	if len(actualUntrack) > 0 && c.eventHub.untrackHandler != nil {
 		c.eventHub.untrackHandler(UntrackEvent{
 			Channel: channel,
-			Keys:    req.Untrack,
+			Keys:    actualUntrack,
 		})
 	}
 

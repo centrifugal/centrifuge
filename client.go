@@ -17,6 +17,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/queue"
 	"github.com/centrifugal/centrifuge/internal/recovery"
 	"github.com/centrifugal/centrifuge/internal/saferand"
+	"github.com/centrifugal/centrifuge/internal/timers"
 
 	"github.com/centrifugal/protocol"
 	"github.com/google/uuid"
@@ -4104,15 +4105,18 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		// of server malfunction since long subscribes should not happen. In this case,
 		// we disconnect client to let it re-init the state from scratch.
 		maxWaitTimeout := 5 * time.Second
+		tm := timers.AcquireTimer(maxWaitTimeout)
 		select {
 		case <-subscribingCh:
+			timers.ReleaseTimer(tm)
 			c.mu.RLock()
 			chCtx, ok = c.channels[channel]
 			c.mu.RUnlock()
 			if !ok {
 				return nil
 			}
-		case <-time.After(maxWaitTimeout):
+		case <-tm.C:
+			timers.ReleaseTimer(tm)
 			c.mu.Lock()
 			currentChCtx, ok := c.channels[channel]
 			if ok && currentChCtx.subscribingCh != nil {
@@ -4132,15 +4136,18 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	// Wait for map subscription in progress.
 	if hasKeyedState && mapSubscribingCh != nil {
 		maxWaitTimeout := 5 * time.Second
+		tm := timers.AcquireTimer(maxWaitTimeout)
 		select {
 		case <-mapSubscribingCh:
+			timers.ReleaseTimer(tm)
 			c.mu.RLock()
 			chCtx, ok = c.channels[channel]
 			c.mu.RUnlock()
 			if !ok {
 				return nil
 			}
-		case <-time.After(maxWaitTimeout):
+		case <-tm.C:
+			timers.ReleaseTimer(tm)
 			// Identity-match: only close/delete if the entry still corresponds to
 			// the *mapSubscribeState we were waiting on. A fresh resubscribe may
 			// have replaced it between the RUnlock and this Lock — clobbering

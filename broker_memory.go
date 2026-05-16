@@ -37,7 +37,7 @@ type MemoryBroker struct {
 
 	nextExpireCheck   int64
 	resultExpireQueue priority.Queue
-	resultCache       map[string]StreamPosition
+	resultCache       map[string]resultCacheEntry
 	resultCacheMu     sync.RWMutex
 }
 
@@ -62,7 +62,7 @@ func NewMemoryBroker(n *Node, _ MemoryBrokerConfig) (*MemoryBroker, error) {
 		historyHub:  newHistoryHub(n.config.HistoryMetaTTL, closeCh),
 		pubLocks:    pubLocks,
 		closeCh:     closeCh,
-		resultCache: map[string]StreamPosition{},
+		resultCache: make(map[string]resultCacheEntry),
 	}
 	return b, nil
 }
@@ -148,15 +148,18 @@ func (b *MemoryBroker) getResultFromCache(ch string, key string) (StreamPosition
 	b.resultCacheMu.RLock()
 	defer b.resultCacheMu.RUnlock()
 	res, ok := b.resultCache[ch+"_"+key]
-	return res, ok
+	if !ok || res.ExpireAt <= time.Now().UnixMilli() {
+		return StreamPosition{}, false
+	}
+	return res.Position, true
 }
 
 func (b *MemoryBroker) saveResultToCache(ch string, key string, sp StreamPosition, resultExpireSeconds int64) {
 	b.resultCacheMu.Lock()
 	defer b.resultCacheMu.Unlock()
 	cacheKey := ch + "_" + key
-	b.resultCache[cacheKey] = sp
-	expireAt := time.Now().Unix() + resultExpireSeconds
+	expireAt := time.Now().UnixMilli() + resultExpireSeconds*1000
+	b.resultCache[cacheKey] = resultCacheEntry{Position: sp, ExpireAt: expireAt}
 	heap.Push(&b.resultExpireQueue, &priority.Item{Value: cacheKey, Priority: expireAt})
 	if b.nextExpireCheck == 0 || b.nextExpireCheck > expireAt {
 		b.nextExpireCheck = expireAt
@@ -164,32 +167,51 @@ func (b *MemoryBroker) saveResultToCache(ch string, key string, sp StreamPositio
 }
 
 func (b *MemoryBroker) expireResultCache() {
+	tm := time.NewTimer(time.Second)
+	defer tm.Stop()
 	var nextExpireCheck int64
 	for {
 		select {
-		case <-time.After(time.Second):
+		case <-tm.C:
 		case <-b.closeCh:
 			return
 		}
 		b.resultCacheMu.Lock()
-		if b.nextExpireCheck == 0 || b.nextExpireCheck > time.Now().Unix() {
+		now := time.Now().UnixMilli()
+		if b.nextExpireCheck == 0 || b.nextExpireCheck > now {
 			b.resultCacheMu.Unlock()
+			tm.Reset(time.Second)
 			continue
 		}
 		nextExpireCheck = 0
 		for b.resultExpireQueue.Len() > 0 {
 			item := heap.Pop(&b.resultExpireQueue).(*priority.Item)
 			expireAt := item.Priority
-			if expireAt > time.Now().Unix() {
+			if expireAt > now {
 				heap.Push(&b.resultExpireQueue, item)
 				nextExpireCheck = expireAt
 				break
 			}
-			key := item.Value
-			delete(b.resultCache, key)
+			cacheKey := item.Value
+			if entry, ok := b.resultCache[cacheKey]; ok && entry.ExpireAt <= now {
+				delete(b.resultCache, cacheKey)
+			}
+		}
+		// Compact heap when stale entries accumulate from repeated publishes
+		// with the same idempotency key — each call pushes a new heap item
+		// without removing the old one.
+		if b.resultExpireQueue.Len() > 2*len(b.resultCache)+100 {
+			b.resultExpireQueue = priority.MakeQueue()
+			for k, entry := range b.resultCache {
+				heap.Push(&b.resultExpireQueue, &priority.Item{Value: k, Priority: entry.ExpireAt})
+			}
+			if b.resultExpireQueue.Len() > 0 {
+				nextExpireCheck = b.resultExpireQueue[0].Priority
+			}
 		}
 		b.nextExpireCheck = nextExpireCheck
 		b.resultCacheMu.Unlock()
+		tm.Reset(time.Second)
 	}
 }
 

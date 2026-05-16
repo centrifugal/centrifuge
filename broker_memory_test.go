@@ -139,6 +139,31 @@ func TestMemoryBrokerResultCacheExpires(t *testing.T) {
 	}, 10*time.Second, 50*time.Millisecond, "result cache should expire after TTL")
 }
 
+// TestMemoryBrokerResultCacheHeapCompaction verifies that publishing many times
+// with the same idempotency key does not cause the expire heap to grow without
+// bound. After expiry the heap must be no larger than the cache itself.
+func TestMemoryBrokerResultCacheHeapCompaction(t *testing.T) {
+	t.Parallel()
+	e := testMemoryBroker()
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
+
+	const repeats = 300 // well above the 2*mapSize+100 compaction threshold
+	for i := 0; i < repeats; i++ {
+		_, err := e.Publish("channel", testPublicationData(), PublishOptions{
+			IdempotencyKey:      "key",
+			IdempotentResultTTL: 10 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Wait for the cleanup goroutine to run at least once and compact.
+	require.Eventually(t, func() bool {
+		e.resultCacheMu.Lock()
+		defer e.resultCacheMu.Unlock()
+		return e.resultExpireQueue.Len() <= len(e.resultCache)
+	}, 10*time.Second, 50*time.Millisecond, "heap should be compacted to map size")
+}
+
 func TestMemoryBrokerPublishIdempotent(t *testing.T) {
 	t.Parallel()
 	e := testMemoryBroker()

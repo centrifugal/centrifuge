@@ -255,7 +255,10 @@ func (e *MemoryMapBroker) getResultFromCache(ch string, key string) (StreamPosit
 		return StreamPosition{}, false
 	}
 	entry, ok := chCache[key]
-	return entry.Position, ok
+	if !ok || entry.ExpireAt <= time.Now().UnixMilli() {
+		return StreamPosition{}, false
+	}
+	return entry.Position, true
 }
 
 func (e *MemoryMapBroker) saveResultToCache(ch string, key string, sp StreamPosition, resultExpireMs int64) {
@@ -292,7 +295,8 @@ func (e *MemoryMapBroker) expireResultCache() {
 			return
 		}
 		e.resultCacheMu.Lock()
-		if e.nextExpireCheck == 0 || e.nextExpireCheck > time.Now().UnixMilli() {
+		now := time.Now().UnixMilli()
+		if e.nextExpireCheck == 0 || e.nextExpireCheck > now {
 			e.resultCacheMu.Unlock()
 			timer.Reset(time.Second)
 			continue
@@ -301,7 +305,7 @@ func (e *MemoryMapBroker) expireResultCache() {
 		for e.resultExpireQueue.Len() > 0 {
 			item := heap.Pop(&e.resultExpireQueue).(*priority.Item)
 			expireAt := item.Priority
-			if expireAt > time.Now().UnixMilli() {
+			if expireAt > now {
 				heap.Push(&e.resultExpireQueue, item)
 				nextExpireCheck = expireAt
 				break
@@ -311,9 +315,11 @@ func (e *MemoryMapBroker) expireResultCache() {
 				ch := combined[:idx]
 				key := combined[idx+1:]
 				if chCache, ok := e.resultCache[ch]; ok {
-					delete(chCache, key)
-					if len(chCache) == 0 {
-						delete(e.resultCache, ch)
+					if entry, keyOk := chCache[key]; keyOk && entry.ExpireAt <= now {
+						delete(chCache, key)
+						if len(chCache) == 0 {
+							delete(e.resultCache, ch)
+						}
 					}
 				}
 			}
