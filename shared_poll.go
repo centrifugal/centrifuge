@@ -904,6 +904,7 @@ func (m *SharedPollManager) handlePublishedData(channel string, key string, vers
 		m.node.metrics.getSharedPollPublishCached(channel).skipped.Inc()
 		return
 	}
+	prevVersion := entry.version
 	entry.version = version
 	entry.freshFromPublish = true
 	var prevData []byte
@@ -916,7 +917,7 @@ func (m *SharedPollManager) handlePublishedData(channel string, key string, vers
 	m.node.metrics.getSharedPollPublishCached(channel).applied.Inc()
 
 	pub := &protocol.Publication{Key: key, Data: data, Version: version, Epoch: epoch}
-	prep := buildPreparedPollData(pub, prevData)
+	prep := buildPreparedPollData(pub, prevData, prevVersion)
 	hub.broadcastToKey(channel, key, version, pub, prep)
 }
 
@@ -1022,12 +1023,19 @@ func (s *sharedPollChannelState) doShutdownLocked(m *SharedPollManager, channel 
 // keys. Must be called with s.mu released (acquires m.mu and may call back into
 // keyedManager / dissolver). Safe to call when m.channels[channel] no longer
 // points to s — that branch is a no-op.
+//
+// The keyedManager call is removeChannelIfEmpty (not removeChannel) to avoid
+// a race: a new client whose handleTrack ran concurrently with our shutdown
+// may have already added itself as a subscriber via
+// keyedManager.addSubscribers, populating the channel's hub. An
+// unconditional removeChannel would delete that state and orphan the new
+// subscriber from future broadcasts (which look up via getHub).
 func (s *sharedPollChannelState) finalizeShutdown(m *SharedPollManager, channel string) {
 	m.mu.Lock()
 	if m.channels[channel] == s {
 		delete(m.channels, channel)
 		m.mu.Unlock()
-		m.node.keyedManager.removeChannel(channel)
+		m.node.keyedManager.removeChannelIfEmpty(channel)
 	} else {
 		m.mu.Unlock()
 	}
@@ -1403,9 +1411,14 @@ type pendingBroadcast struct {
 
 // buildPreparedPollData computes delta data for a shared poll publication.
 // If prevData is available, computes a fossil delta patch; otherwise returns
-// an empty preparedData (no delta). The actual per-client encoding (JSON escaping,
-// protocol framing) is done lazily in keyedWritePublication.
-func buildPreparedPollData(pub *protocol.Publication, prevData []byte) preparedData {
+// an empty preparedData (no delta). prevVersion is the version of the bytes
+// in prevData (entry.version BEFORE this publish); keyedWritePublication
+// uses it to verify the delta's base matches the client's current data,
+// falling back to FULL when concurrent broadcasts mean the client never
+// received the version this patch is built against. The actual per-client
+// encoding (JSON escaping, protocol framing) is done lazily in
+// keyedWritePublication.
+func buildPreparedPollData(pub *protocol.Publication, prevData []byte, prevVersion uint64) preparedData {
 	if len(prevData) == 0 {
 		return preparedData{}
 	}
@@ -1416,9 +1429,10 @@ func buildPreparedPollData(pub *protocol.Publication, prevData []byte) preparedD
 		deltaData = pub.Data
 	}
 	return preparedData{
-		deltaSub:         true,
-		keyedDeltaPatch:  deltaData,
-		keyedDeltaIsReal: isReal,
+		deltaSub:              true,
+		keyedDeltaPatch:       deltaData,
+		keyedDeltaIsReal:      isReal,
+		keyedDeltaPrevVersion: prevVersion,
 	}
 }
 
@@ -1453,10 +1467,11 @@ func (s *sharedPollChannelState) applyRefreshResponse(channel string, respEpoch 
 	}
 
 	type pendingUpdate struct {
-		key      string
-		version  uint64
-		data     []byte
-		prevData []byte
+		key         string
+		version     uint64
+		data        []byte
+		prevData    []byte
+		prevVersion uint64
 	}
 
 	updates := make([]pendingUpdate, 0, len(items))
@@ -1510,6 +1525,7 @@ func (s *sharedPollChannelState) applyRefreshResponse(channel string, respEpoch 
 			changedCount++
 			s.versionCounter++
 			syntheticVersion := s.versionCounter
+			prevVersion := entry.version
 			var prevData []byte
 			if s.opts.KeepLatestData {
 				prevData = entry.data
@@ -1517,7 +1533,7 @@ func (s *sharedPollChannelState) applyRefreshResponse(channel string, respEpoch 
 			}
 			entry.version = syntheticVersion
 			updates = append(updates, pendingUpdate{
-				key: e.Key, version: syntheticVersion, data: e.Data, prevData: prevData,
+				key: e.Key, version: syntheticVersion, data: e.Data, prevData: prevData, prevVersion: prevVersion,
 			})
 			continue
 		}
@@ -1535,6 +1551,7 @@ func (s *sharedPollChannelState) applyRefreshResponse(channel string, respEpoch 
 
 		entry.needsBroadcast = false
 		changedCount++
+		prevVersion := entry.version
 		// Capture prevData before updating — this is the delta base.
 		var prevData []byte
 		if s.opts.KeepLatestData {
@@ -1547,7 +1564,7 @@ func (s *sharedPollChannelState) applyRefreshResponse(channel string, respEpoch 
 		entry.version = e.Version
 
 		updates = append(updates, pendingUpdate{
-			key: e.Key, version: e.Version, data: e.Data, prevData: prevData,
+			key: e.Key, version: e.Version, data: e.Data, prevData: prevData, prevVersion: prevVersion,
 		})
 	}
 
@@ -1564,7 +1581,7 @@ func (s *sharedPollChannelState) applyRefreshResponse(channel string, respEpoch 
 	pubs := make([]protocol.Publication, len(updates))
 	for i, u := range updates {
 		pubs[i] = protocol.Publication{Key: u.key, Data: u.data, Version: u.version}
-		prep := buildPreparedPollData(&pubs[i], u.prevData)
+		prep := buildPreparedPollData(&pubs[i], u.prevData, u.prevVersion)
 		broadcasts = append(broadcasts, pendingBroadcast{key: u.key, version: u.version, pub: &pubs[i], prep: prep})
 	}
 	for _, key := range removals {

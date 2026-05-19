@@ -282,6 +282,15 @@ func (c *channelMedium) checkPositionOnce(historyMetaTTL time.Duration, clientPo
 
 func (c *channelMedium) close() {
 	close(c.closeCh)
+	// Unblock the writer goroutine. publicationQueue.Wait sleeps on a
+	// sync.Cond and is woken only by an Add (cnt > 0) or Close (broadcast).
+	// closeCh is checked only inside the broadcastDelay timer branch, which
+	// is unreachable until Wait returns — so without closing the queue the
+	// writer goroutine sits forever on an empty channel and leaks for every
+	// channelMedium that ever existed.
+	if c.messages != nil {
+		c.messages.Close()
+	}
 }
 
 type queuedPublication struct {

@@ -1930,7 +1930,12 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 
 		if ctx.clientInfo != nil {
 			if channelHasFlag(ctx.channelContext.flags, flagEmitJoinLeave) || ctx.channelContext.mapClientPresenceChannel != "" || ctx.channelContext.mapUserPresenceChannel != "" {
-				go c.publishJoinAndPresence(req.Channel, ctx.channelContext, ctx.clientInfo)
+				// Synchronous (NOT `go`) so publishJoin reaches the broker before
+				// this subscribe callback returns. If we spawned a goroutine, a
+				// quick client disconnect could fire the synchronous publishLeave
+				// (from close → unsubscribe loop) ahead of our Join, leaving
+				// observers with [leave, join] on the wire.
+				c.publishJoinAndPresence(req.Channel, ctx.channelContext, ctx.clientInfo)
 			}
 		}
 	}
@@ -2903,7 +2908,10 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 
 	for channel, subCtx := range subCtxMap {
 		if subCtx.clientInfo != nil {
-			go c.publishJoinAndPresence(channel, subCtx.channelContext, subCtx.clientInfo)
+			// Synchronous: see comment on the same call in handleSubscribe.
+			// A spawned goroutine racing a disconnect's publishLeave can land
+			// Join after Leave on the wire.
+			c.publishJoinAndPresence(channel, subCtx.channelContext, subCtx.clientInfo)
 		}
 	}
 

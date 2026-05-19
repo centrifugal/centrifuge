@@ -1255,7 +1255,11 @@ func (c *Client) setupMapPresenceAndJoin(channel string, opts SubscribeOptions) 
 		}
 	}
 
-	// Emit join event if enabled.
+	// Emit join event if enabled. Synchronous (NOT `go`) so publishJoin
+	// reaches the broker before this function returns. If we spawned a
+	// goroutine, a quick disconnect's synchronous publishLeave could win
+	// the race to the broker — observers would see [leave, join] on the
+	// wire, corrupting any membership state derived from join/leave events.
 	if opts.EmitJoinLeave {
 		info := &ClientInfo{
 			ClientID: c.uid,
@@ -1263,7 +1267,7 @@ func (c *Client) setupMapPresenceAndJoin(channel string, opts SubscribeOptions) 
 			ConnInfo: c.info,
 			ChanInfo: opts.ChannelInfo,
 		}
-		go func() { _ = c.node.publishJoin(channel, info) }()
+		_ = c.node.publishJoin(channel, info)
 	}
 }
 

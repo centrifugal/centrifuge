@@ -778,7 +778,7 @@ func TestSharedPollRefresh_PublicationFields(t *testing.T) {
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
 		return SharedPollResult{
 			Items: []SharedPollRefreshItem{
-				{Key: "key1", Data: []byte(`test_data`), Version: 42},
+				{Key: "key1", Data: []byte(`"test_data"`), Version: 42},
 			},
 		}, nil
 	})
@@ -821,7 +821,7 @@ func TestSharedPollRefresh_ExplicitRemoval(t *testing.T) {
 		if count == 1 {
 			return SharedPollResult{
 				Items: []SharedPollRefreshItem{
-					{Key: "key1", Data: []byte(`data`), Version: 1},
+					{Key: "key1", Data: []byte(`"data"`), Version: 1},
 				},
 			}, nil
 		}
@@ -869,7 +869,7 @@ func TestSharedPollRevokeKeys_Basic(t *testing.T) {
 		// Return data so items stay alive.
 		items := make([]SharedPollRefreshItem, len(event.Items))
 		for i, it := range event.Items {
-			items[i] = SharedPollRefreshItem{Key: it.Key, Data: []byte(`data`), Version: 1}
+			items[i] = SharedPollRefreshItem{Key: it.Key, Data: []byte(`"data"`), Version: 1}
 		}
 		return SharedPollResult{Items: items}, nil
 	})
@@ -901,7 +901,7 @@ func TestSharedPollRevokeKeys_UserFilter(t *testing.T) {
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
 		items := make([]SharedPollRefreshItem, len(event.Items))
 		for i, it := range event.Items {
-			items[i] = SharedPollRefreshItem{Key: it.Key, Data: []byte(`data`), Version: 1}
+			items[i] = SharedPollRefreshItem{Key: it.Key, Data: []byte(`"data"`), Version: 1}
 		}
 		return SharedPollResult{Items: items}, nil
 	})
@@ -953,7 +953,7 @@ func TestSharedPollVersionedMode_VersionsInRequest(t *testing.T) {
 			// First call: return version 5.
 			return SharedPollResult{
 				Items: []SharedPollRefreshItem{
-					{Key: "key1", Data: []byte(`data`), Version: 5},
+					{Key: "key1", Data: []byte(`"data"`), Version: 5},
 				},
 			}, nil
 		}
@@ -964,7 +964,7 @@ func TestSharedPollVersionedMode_VersionsInRequest(t *testing.T) {
 		pollMu.Unlock()
 		return SharedPollResult{
 			Items: []SharedPollRefreshItem{
-				{Key: "key1", Data: []byte(`data`), Version: 5},
+				{Key: "key1", Data: []byte(`"data"`), Version: 5},
 			},
 		}, nil
 	})
@@ -1007,7 +1007,7 @@ func TestSharedPollVersionedMode_AlwaysSendsVersions(t *testing.T) {
 		if count == 1 {
 			return SharedPollResult{
 				Items: []SharedPollRefreshItem{
-					{Key: "key1", Data: []byte(`data`), Version: 5},
+					{Key: "key1", Data: []byte(`"data"`), Version: 5},
 				},
 			}, nil
 		}
@@ -1017,7 +1017,7 @@ func TestSharedPollVersionedMode_AlwaysSendsVersions(t *testing.T) {
 		pollMu.Unlock()
 		return SharedPollResult{
 			Items: []SharedPollRefreshItem{
-				{Key: "key1", Data: []byte(`data`), Version: 5},
+				{Key: "key1", Data: []byte(`"data"`), Version: 5},
 			},
 		}, nil
 	})
@@ -1049,7 +1049,7 @@ func TestSharedPollDisconnect_Cleanup(t *testing.T) {
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
 		items := make([]SharedPollRefreshItem, len(event.Items))
 		for i, it := range event.Items {
-			items[i] = SharedPollRefreshItem{Key: it.Key, Data: []byte(`data`), Version: 1}
+			items[i] = SharedPollRefreshItem{Key: it.Key, Data: []byte(`"data"`), Version: 1}
 		}
 		return SharedPollResult{Items: items}, nil
 	})
@@ -1079,7 +1079,7 @@ func TestSharedPollUnsubscribe_Cleanup(t *testing.T) {
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
 		items := make([]SharedPollRefreshItem, len(event.Items))
 		for i, it := range event.Items {
-			items[i] = SharedPollRefreshItem{Key: it.Key, Data: []byte(`data`), Version: 1}
+			items[i] = SharedPollRefreshItem{Key: it.Key, Data: []byte(`"data"`), Version: 1}
 		}
 		return SharedPollResult{Items: items}, nil
 	})
@@ -1413,7 +1413,7 @@ func TestSharedPollRefresh_PerConnectionFilter(t *testing.T) {
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
 		return SharedPollResult{
 			Items: []SharedPollRefreshItem{
-				{Key: "key1", Data: []byte(`data`), Version: 5},
+				{Key: "key1", Data: []byte(`"data"`), Version: 5},
 			},
 		}, nil
 	})
@@ -1445,7 +1445,7 @@ func TestSharedPollRefresh_PerConnectionDelivery(t *testing.T) {
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
 		return SharedPollResult{
 			Items: []SharedPollRefreshItem{
-				{Key: "key1", Data: []byte(`new`), Version: 5},
+				{Key: "key1", Data: []byte(`"new"`), Version: 5},
 			},
 		}, nil
 	})
@@ -1480,7 +1480,7 @@ func TestSharedPollRefresh_TwoClientsOverlap(t *testing.T) {
 		v := version.Add(1)
 		return SharedPollResult{
 			Items: []SharedPollRefreshItem{
-				{Key: "key1", Data: []byte(`data`), Version: v},
+				{Key: "key1", Data: []byte(`"data"`), Version: v},
 			},
 		}, nil
 	})
@@ -1583,7 +1583,7 @@ func TestSharedPollRevokeKeys_ExcludeUsers(t *testing.T) {
 	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
 		items := make([]SharedPollRefreshItem, len(event.Items))
 		for i, it := range event.Items {
-			items[i] = SharedPollRefreshItem{Key: it.Key, Data: []byte(`data`), Version: 1}
+			items[i] = SharedPollRefreshItem{Key: it.Key, Data: []byte(`"data"`), Version: 1}
 		}
 		return SharedPollResult{Items: items}, nil
 	})
@@ -2260,8 +2260,8 @@ gotFirst:
 
 func TestBuildPreparedPollData_NoPrevData(t *testing.T) {
 	t.Parallel()
-	pub := &protocol.Publication{Data: []byte(`test`)}
-	prep := buildPreparedPollData(pub, nil)
+	pub := &protocol.Publication{Data: []byte(`"test"`)}
+	prep := buildPreparedPollData(pub, nil, 0)
 	require.False(t, prep.deltaSub)
 	require.Nil(t, prep.keyedDeltaPatch)
 }
@@ -2272,9 +2272,10 @@ func TestBuildPreparedPollData_WithPrevData(t *testing.T) {
 	prevData := []byte(`{"value":"this is a longer string so delta overhead is worth it","count":1}`)
 	newData := []byte(`{"value":"this is a longer string so delta overhead is worth it","count":2}`)
 	pub := &protocol.Publication{Data: newData}
-	prep := buildPreparedPollData(pub, prevData)
+	prep := buildPreparedPollData(pub, prevData, 5)
 	require.True(t, prep.deltaSub)
 	require.NotNil(t, prep.keyedDeltaPatch)
+	require.Equal(t, uint64(5), prep.keyedDeltaPrevVersion)
 	// The patch should be a real delta (smaller than full).
 	require.True(t, prep.keyedDeltaIsReal)
 	// Verify the patch is applicable.
@@ -2289,7 +2290,7 @@ func TestBuildPreparedPollData_LargePatch(t *testing.T) {
 	prevData := []byte(`a`)
 	newData := []byte(`completely different data here`)
 	pub := &protocol.Publication{Data: newData}
-	prep := buildPreparedPollData(pub, prevData)
+	prep := buildPreparedPollData(pub, prevData, 1)
 	require.True(t, prep.deltaSub)
 	// keyedDeltaIsReal may be false if patch >= full data.
 	if !prep.keyedDeltaIsReal {
@@ -2906,7 +2907,7 @@ func TestSharedPollAutoNotify_ColdKey(t *testing.T) {
 		pollMu.Unlock()
 		return SharedPollResult{
 			Items: []SharedPollRefreshItem{
-				{Key: "cold_key", Data: []byte(`data`), Version: 1},
+				{Key: "cold_key", Data: []byte(`"data"`), Version: 1},
 			},
 		}, nil
 	})
@@ -2946,7 +2947,7 @@ func TestSharedPollAutoNotify_ExistingKeyNoNotify(t *testing.T) {
 		callCount.Add(1)
 		return SharedPollResult{
 			Items: []SharedPollRefreshItem{
-				{Key: "key1", Data: []byte(`data`), Version: 1},
+				{Key: "key1", Data: []byte(`"data"`), Version: 1},
 			},
 		}, nil
 	})
@@ -3008,7 +3009,7 @@ func TestSharedPollAutoNotify_MultipleClientsSameColdKey(t *testing.T) {
 		pollCalled.Add(1)
 		return SharedPollResult{
 			Items: []SharedPollRefreshItem{
-				{Key: "key1", Data: []byte(`data`), Version: 1},
+				{Key: "key1", Data: []byte(`"data"`), Version: 1},
 			},
 		}, nil
 	})
@@ -3078,7 +3079,7 @@ func TestSharedPollAutoNotify_ColdKeyNonZeroVersionNoNotify(t *testing.T) {
 		pollCalled.Add(1)
 		return SharedPollResult{
 			Items: []SharedPollRefreshItem{
-				{Key: "key1", Data: []byte(`data`), Version: 5},
+				{Key: "key1", Data: []byte(`"data"`), Version: 5},
 			},
 		}, nil
 	})
@@ -3115,7 +3116,7 @@ func TestSharedPollAutoNotify_ColdKeyVersionZeroTriggersNotify(t *testing.T) {
 		pollCalled.Add(1)
 		return SharedPollResult{
 			Items: []SharedPollRefreshItem{
-				{Key: "key1", Data: []byte(`data`), Version: 1},
+				{Key: "key1", Data: []byte(`"data"`), Version: 1},
 			},
 		}, nil
 	})
@@ -4624,4 +4625,331 @@ func TestSharedPollUntrack_RandomKeysIgnored(t *testing.T) {
 
 	// untrackHandler must not have fired.
 	require.False(t, untrackFired.Load(), "untrackHandler must not fire for keys that were never tracked")
+}
+
+// TestSharedPollTrack_InlineUntrack_FreesExistingSlots asserts that when a
+// track frame inline-untracks keys that the client ALREADY has tracked from
+// a prior request, the limit check accounts for the slots being freed. A
+// signature-library replay typically re-tracks every known key, so if the
+// user has untracked some keys since the signatures were obtained, those
+// keys appear in both the chanKeys map (from the previous track) AND in
+// req.Untrack — Step 8 of handleTrack removes them, so the final tracked
+// count is (current + new - inline_untracked_existing).
+//
+// Concrete repro: MaxKeysPerConnection=3, chanKeys={A,B} already tracked,
+// then re-track [A,B,C,D,E] with Untrack=[A,B]. Final state is {C,D,E},
+// size 3, fits the limit. A correct limit check must allow this.
+func TestSharedPollTrack_InlineUntrack_FreesExistingSlots(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:      100 * time.Millisecond,
+		MaxKeysPerConnection: 3,
+	})
+	setupSharedPollHandlers(node)
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+
+	// First track: bring chanKeys to {A, B}.
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
+		{Key: "A"},
+		{Key: "B"},
+	})
+
+	client.mu.RLock()
+	preCount := len(client.keyed.trackedKeys["test:channel"])
+	client.mu.RUnlock()
+	require.Equal(t, 2, preCount)
+
+	// Re-track {A,B,C,D,E} with inline-untrack of A,B. Final state must be
+	// {C,D,E} = 3 keys, which fits MaxKeysPerConnection=3. The buggy limit
+	// check rejects this because it doesn't subtract |existing ∩ inline-untrack|.
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
+		Channel: "test:channel",
+		Type:    typeTrack,
+		Track: []*protocol.TrackBatch{{Items: []*protocol.KeyedItem{
+			{Key: "A"}, {Key: "B"}, {Key: "C"}, {Key: "D"}, {Key: "E"},
+		}}},
+		Untrack: []string{"A", "B"},
+	}, &protocol.Command{Id: 3}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err, "track with inline-untrack of existing keys must not return a top-level error")
+
+	require.Eventually(t, func() bool {
+		return len(rwWrapper.replies) > 0
+	}, time.Second, time.Millisecond)
+	require.Nil(t, rwWrapper.replies[0].Error,
+		"limit check must account for inline-untracked existing keys: got error %v", rwWrapper.replies[0].Error)
+
+	// Final state assertion: {C, D, E}.
+	client.mu.RLock()
+	defer client.mu.RUnlock()
+	chanKeys := client.keyed.trackedKeys["test:channel"]
+	require.Equal(t, 3, len(chanKeys), "final tracked count should be 3, got %d", len(chanKeys))
+	_, hasA := chanKeys["A"]
+	_, hasB := chanKeys["B"]
+	_, hasC := chanKeys["C"]
+	_, hasD := chanKeys["D"]
+	_, hasE := chanKeys["E"]
+	require.False(t, hasA, "A should be untracked")
+	require.False(t, hasB, "B should be untracked")
+	require.True(t, hasC, "C should be tracked")
+	require.True(t, hasD, "D should be tracked")
+	require.True(t, hasE, "E should be tracked")
+}
+
+// TestSharedPollTrack_WarmKey_DeliversLatestSnapshot is a sanity check for
+// the warm-key snapshot ordering fix: handleTrack now captures the warm-key
+// snapshot AFTER hub.addSubscriber so that a publish landing between the
+// snapshot and subscriber registration is delivered via the broadcast path
+// rather than missed.
+//
+// This test cannot deterministically reproduce the lost-update race (it
+// would need a sync hook between Step 5 addSubscriber and Step 5b
+// getWarmKeyData). Instead it asserts the happy path: a warm key with
+// cached data is delivered at the latest version available on the server.
+func TestSharedPollTrack_WarmKey_DeliversLatestSnapshot(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:      100 * time.Millisecond,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		KeepLatestData:       true,
+		Mode:                 SharedPollModeVersioned,
+	})
+
+	currentVersion := atomic.Uint64{}
+	currentVersion.Store(7)
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		v := currentVersion.Load()
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "key1", Data: []byte(`{"v":7}`), Version: v},
+			},
+		}, nil
+	})
+
+	setupSharedPollHandlers(node)
+
+	// First client tracks the key so the server has the entry registered
+	// and the refresh worker populates entry.data with v=7.
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// Wait for client1 to receive v=7 so the server entry is stable.
+	require.Eventually(t, func() bool {
+		client1.mu.RLock()
+		defer client1.mu.RUnlock()
+		ks := client1.keyed.trackedKeys["test:channel"]["key1"]
+		return ks != nil && ks.version == 7
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Now a second client tracks the same key with version 0. The key is
+	// warm on the server (entry.version=7, data cached), so handleTrack
+	// takes the warm-key direct-delivery path. After the fix, the snapshot
+	// is captured after addSubscriber, so client2 must end up at v=7.
+	client2 := newTestClientV2(t, node, "user2")
+	connectClientV2(t, client2)
+	subscribeSharedPollClient(t, client2, "test:channel")
+	trackSharedPollClient(t, client2, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	require.Eventually(t, func() bool {
+		client2.mu.RLock()
+		defer client2.mu.RUnlock()
+		ks := client2.keyed.trackedKeys["test:channel"]["key1"]
+		return ks != nil && ks.version == 7
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+// TestSharedPollTrack_RaceWithChannelShutdownStress stress-tests the race
+// between sharedPollChannelState's finalizeShutdown (which removes the
+// keyedManager state) and a new client's handleTrack (which calls
+// keyedManager.getOrCreateChannel followed later by getHub).
+//
+// Scenario:
+//   client A tracks → untracks (immediate shutdown removes both
+//   sharedPollManager state and keyedManager state)
+//   client B handleTrack runs concurrently — getOrCreateChannel may create
+//   the keyedManager state just before A's finalizeShutdown calls
+//   removeChannel, leaving B's later getHub returning nil → panic at
+//   addSubscriber.
+//
+// The test runs many iterations and expects no panic / no missed
+// broadcasts. With ChannelShutdownDelay=-1 (immediate), the race window
+// is the small time between sharedPollManager's deleting m.channels[ch]
+// and keyedManager.removeChannel(ch).
+func TestSharedPollTrack_RaceWithChannelShutdownStress(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:      time.Hour,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		ChannelShutdownDelay: -1, // immediate shutdown on last untrack
+	})
+	setupSharedPollHandlers(node)
+
+	const iterations = 200
+	for i := 0; i < iterations; i++ {
+		clientA := newTestClientV2(t, node, "userA")
+		connectClientV2(t, clientA)
+		subscribeSharedPollClient(t, clientA, "test:channel")
+		trackSharedPollClient(t, clientA, "test:channel", []*protocol.KeyedItem{
+			{Key: "k", Version: 0},
+		})
+
+		clientB := newTestClientV2(t, node, "userB")
+		connectClientV2(t, clientB)
+		subscribeSharedPollClient(t, clientB, "test:channel")
+
+		// Race A's untrack (triggers immediate shutdown of keyedManager state)
+		// against B's track (calls getOrCreateChannel then later getHub).
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			untrackSharedPollClient(t, clientA, "test:channel", []string{"k"})
+		}()
+		go func() {
+			defer wg.Done()
+			trackSharedPollClient(t, clientB, "test:channel", []*protocol.KeyedItem{
+				{Key: "k", Version: 0},
+			})
+		}()
+		wg.Wait()
+
+		// After the race, B must be in the keyedHub for k. If
+		// removeChannel deleted B's hub between getOrCreateChannel and
+		// getHub, addSubscriber would have hit a nil hub and we'd never
+		// reach this assertion (panic).
+		hub := node.keyedManager.getHub("test:channel")
+		require.NotNil(t, hub,
+			"iteration %d: keyedManager hub missing for test:channel — A's finalizeShutdown likely removed it after B's getOrCreateChannel",
+			i)
+		require.Equal(t, 1, hub.subscriberCount("k"),
+			"iteration %d: expected B in the hub for k but subscriberCount=%d",
+			i, hub.subscriberCount("k"))
+
+		// Tear down.
+		_ = clientA.close(DisconnectForceNoReconnect)
+		_ = clientB.close(DisconnectForceNoReconnect)
+	}
+}
+
+
+// TestKeyedBroadcast_OrderedDeliveryUnderConcurrentBroadcasts asserts that
+// concurrent broadcasts for the same key to the same client are delivered to
+// the wire in non-decreasing version order — i.e. no inversion where a lower
+// version arrives after a higher one.
+//
+// Bug: keyedWritePublication releases c.mu before encoding, then enters
+// writePublication (which calls into messageWriter.enqueue) without re-
+// acquiring c.mu. Two concurrent broadcasts for the same key can therefore
+// race past the version check, encode in parallel, and enqueue in arbitrary
+// order. If the higher-version broadcast finishes encoding first and
+// enqueues first, the lower-version broadcast still goes into the queue
+// behind it — the client SDK then receives newer-then-older bytes on the
+// wire. Per-connection state ends up correct (the re-check at update time
+// only bumps to the higher version) but the wire order does not.
+//
+// The fix serializes encode→enqueue→state-update for a single client via
+// c.mu (encoding stays outside; the lock wraps re-check + enqueue + bump),
+// guaranteeing that anything that lands in the queue is the freshest version
+// observed under the lock, and any later same-or-older broadcast is filtered
+// out under the same lock.
+func TestKeyedBroadcast_OrderedDeliveryUnderConcurrentBroadcasts(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+	setupSharedPollHandlers(node)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := newTestTransport(cancel)
+	transport.setProtocolVersion(ProtocolVersion2)
+	transport.setProtocolType(ProtocolTypeProtobuf)
+	sink := make(chan []byte, 4096)
+	transport.sink = sink
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "user1"})
+	client, _ := newClient(newCtx, node, transport)
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
+		{Key: "K", Version: 0},
+	})
+
+	// Drain any startup frames so we only observe broadcast publications.
+	drainStart := time.Now()
+	for time.Since(drainStart) < 50*time.Millisecond {
+		select {
+		case <-sink:
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	hub := node.keyedManager.getHub("test:channel")
+	require.NotNil(t, hub)
+
+	const numBroadcasts = 200
+	var wg sync.WaitGroup
+	wg.Add(numBroadcasts)
+	startBarrier := make(chan struct{})
+	for i := 1; i <= numBroadcasts; i++ {
+		go func(v uint64) {
+			defer wg.Done()
+			<-startBarrier
+			pub := &protocol.Publication{
+				Key:     "K",
+				Data:    []byte(`{"v":1}`),
+				Version: v,
+			}
+			hub.broadcastToKey("test:channel", "K", v, pub, preparedData{})
+		}(uint64(i))
+	}
+	close(startBarrier)
+	wg.Wait()
+
+	// Drain the sink (with a short idle timeout) and collect publication
+	// versions in arrival order.
+	var versions []uint64
+	idle := time.NewTimer(200 * time.Millisecond)
+	defer idle.Stop()
+drain:
+	for {
+		select {
+		case data := <-sink:
+			reply := &protocol.Reply{}
+			if err := reply.UnmarshalVT(data); err != nil {
+				continue
+			}
+			if reply.Push == nil || reply.Push.Pub == nil {
+				continue
+			}
+			if reply.Push.Pub.Key != "K" {
+				continue
+			}
+			versions = append(versions, reply.Push.Pub.Version)
+			if !idle.Stop() {
+				select {
+				case <-idle.C:
+				default:
+				}
+			}
+			idle.Reset(200 * time.Millisecond)
+		case <-idle.C:
+			break drain
+		}
+	}
+
+	require.NotEmpty(t, versions, "expected at least one publication delivered to the wire")
+
+	for i := 1; i < len(versions); i++ {
+		require.GreaterOrEqual(t, versions[i], versions[i-1],
+			"wire delivery out of order: index %d got v=%d after v=%d (full sequence: %v)",
+			i, versions[i], versions[i-1], versions)
+	}
 }

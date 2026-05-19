@@ -108,9 +108,11 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 	}
 
 	// Optimistic limit check — counts DISTINCT new keys minus those that will
-	// be immediately removed via inline untrack. Re-checked under write lock.
+	// be immediately removed via inline untrack. Also subtracts already-tracked
+	// keys appearing in inlineUntrackSet, since Step 8 removes them and frees
+	// slots. Re-checked under write lock.
 	c.mu.RLock()
-	var currentCount, newKeyCountOpt int
+	var currentCount, newKeyCountOpt, inlineRemovedExistingOpt int
 	if c.keyed != nil {
 		chanKeys := c.keyed.trackedKeys[channel]
 		currentCount = len(chanKeys)
@@ -119,6 +121,11 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 				if _, willUntrack := inlineUntrackSet[f.key]; !willUntrack {
 					newKeyCountOpt++
 				}
+			}
+		}
+		for k := range inlineUntrackSet {
+			if _, exists := chanKeys[k]; exists {
+				inlineRemovedExistingOpt++
 			}
 		}
 	} else {
@@ -131,7 +138,7 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 	c.mu.RUnlock()
 
 	maxTracked := c.node.keyedManager.maxTrackedPerConnection(channel)
-	if currentCount+newKeyCountOpt > maxTracked {
+	if currentCount-inlineRemovedExistingOpt+newKeyCountOpt > maxTracked {
 		return ErrorLimitExceeded
 	}
 
@@ -232,8 +239,10 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		chanKeys := c.keyed.trackedKeys[channel]
 
 		// Re-tracking an existing key is a version update, not a new slot —
-		// only count new keys, and exclude those being inline-untracked.
-		var newKeyCount int
+		// only count new keys, and exclude those being inline-untracked. Also
+		// subtract already-tracked keys that will be removed by Step 8, since
+		// they free up slots.
+		var newKeyCount, inlineRemovedExisting int
 		for _, f := range flat {
 			if _, exists := chanKeys[f.key]; !exists {
 				if _, willUntrack := inlineUntrackSet[f.key]; !willUntrack {
@@ -241,7 +250,12 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 				}
 			}
 		}
-		if len(chanKeys)+newKeyCount > maxTracked {
+		for k := range inlineUntrackSet {
+			if _, exists := chanKeys[k]; exists {
+				inlineRemovedExisting++
+			}
+		}
+		if len(chanKeys)-inlineRemovedExisting+newKeyCount > maxTracked {
 			c.mu.Unlock()
 			// Roll back the server-side track from Step 1 so we don't leak
 			// per-channel itemIndex entries for keys the client doesn't hold.
@@ -274,27 +288,6 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 			}
 		}
 		c.mu.Unlock()
-
-		// Compute warm key delivery plan. KeepLatestData → direct delivery
-		// from cache (zero backend calls). Otherwise → deferred via notify
-		// + needsBroadcast (one backend call per key per reconnect wave).
-		// Actual delivery happens after addSubscriber (steps 5.5 and 7).
-		var warmCachedData []warmKeyData
-		var deferredWarmKeys []string
-		if c.node.sharedPollManager != nil && len(warmKeys) > 0 {
-			warmCachedData = c.node.sharedPollManager.getWarmKeyData(channel, warmKeys)
-			if len(warmCachedData) < len(warmKeys) {
-				directKeys := make(map[string]struct{}, len(warmCachedData))
-				for _, wd := range warmCachedData {
-					directKeys[wd.key] = struct{}{}
-				}
-				for _, key := range warmKeys {
-					if _, ok := directKeys[key]; !ok {
-						deferredWarmKeys = append(deferredWarmKeys, key)
-					}
-				}
-			}
-		}
 
 		// Step 2: Collect cached data for items where server has newer version.
 		var cachedItems []*protocol.Publication
@@ -372,9 +365,47 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		// Response is already enqueued, so broadcasts are ordered after it.
 		// keyedWritePublication checks pubVersion <= keyState.version, so cached
 		// items won't be re-delivered.
+		//
+		// keyedManager.addSubscribers performs "ensure-state-then-add"
+		// atomically under the manager's lock. This is required because a
+		// concurrent finalizeShutdown of an older sharedPollChannelState may
+		// race here: a non-atomic getOrCreateChannel + addSubscriber
+		// sequence could end up with the client subscribed to a hub that
+		// the finalizeShutdown then deletes from the manager, leaving the
+		// client orphaned from future broadcasts (which look up via
+		// getHub).
+		c.node.keyedManager.addSubscribers(channel, allKeys, c, keyedOpts)
 		hub := c.node.keyedManager.getHub(channel)
-		for _, key := range allKeys {
-			hub.addSubscriber(key, c)
+
+		// Compute warm key delivery plan AFTER addSubscriber. KeepLatestData →
+		// direct delivery from cache (zero backend calls). Otherwise → deferred
+		// via notify + needsBroadcast (one backend call per key per reconnect
+		// wave).
+		//
+		// Snapshotting after addSubscriber closes a race: if a publish lands
+		// between the snapshot and addSubscriber, the broadcast goes only to
+		// existing subscribers (not us yet), so we would deliver a stale
+		// snapshot and the version filter would suppress later same-version
+		// broadcasts — silently pinning the client to a stale value until the
+		// next entry update. With the snapshot taken after addSubscriber, any
+		// concurrent broadcast reaches us via the hub and advances the per-
+		// connection version; our direct-delivery call then no-ops, leaving
+		// client and server in sync.
+		var warmCachedData []warmKeyData
+		var deferredWarmKeys []string
+		if c.node.sharedPollManager != nil && len(warmKeys) > 0 {
+			warmCachedData = c.node.sharedPollManager.getWarmKeyData(channel, warmKeys)
+			if len(warmCachedData) < len(warmKeys) {
+				directKeys := make(map[string]struct{}, len(warmCachedData))
+				for _, wd := range warmCachedData {
+					directKeys[wd.key] = struct{}{}
+				}
+				for _, key := range warmKeys {
+					if _, ok := directKeys[key]; !ok {
+						deferredWarmKeys = append(deferredWarmKeys, key)
+					}
+				}
+			}
 		}
 
 		// Step 5.5: Direct delivery for warm keys with cached data.
@@ -621,6 +652,24 @@ func (c *Client) checkTrackExpiration(channel string, delay time.Duration) {
 // version is newer. Updates per-connection version on delivery.
 // Handles per-key delta readiness: first publication per key is always full,
 // subsequent publications may use delta if available.
+//
+// Encoding runs outside c.mu so a slow encode does not block other client
+// operations. The version re-check, the enqueue, and the per-connection
+// state update all run under c.mu in a single critical section: this
+// serializes concurrent broadcasts to the same client at the queue
+// boundary, so anything that lands in the wire queue is the freshest
+// version observed under the lock and any concurrent broadcast carrying an
+// older-or-equal version is filtered out — preventing wire-order inversion
+// where a slower-encoding older version would otherwise enqueue behind a
+// faster-encoding newer one.
+//
+// State (keyState.version / keyState.deltaReady) is updated only after the
+// publication is successfully enqueued. If encode fails, no-write conditions
+// trigger, or enqueue returns an error, state stays unchanged — otherwise
+// the client would silently miss the publication and subsequent broadcasts
+// at lower/equal versions would be filtered out, leaving server and client
+// out of sync (and, for delta channels, the next broadcast would send a
+// delta against a base the client never received).
 func (c *Client) keyedWritePublication(channel string, key string, pubVersion uint64, pub *protocol.Publication, prep preparedData) {
 	c.mu.Lock()
 	if c.keyed == nil {
@@ -638,20 +687,43 @@ func (c *Client) keyedWritePublication(channel string, key string, pubVersion ui
 		return
 	}
 
-	// Determine delta behavior for this client+key.
+	// Compute tentative delta decision against current state — do NOT mutate
+	// state yet. The final decision is re-checked under the lock in Phase 3
+	// because keyState.version can advance between phases.
 	chState := c.keyed.channels[channel]
 	channelDelta := chState != nil && chState.deltaType != deltaTypeNone
-	sendDelta := channelDelta && prep.deltaSub && keyState.deltaReady
-	if channelDelta && !keyState.deltaReady {
-		keyState.deltaReady = true
-	}
-	keyState.version = pubVersion
+	deltaPossible := channelDelta && prep.deltaSub && keyState.deltaReady
 	c.mu.Unlock()
 
 	isJSON := c.transport.Protocol().toProto() == protocol.TypeJSON
 
-	if sendDelta {
-		// Delta path: lazily encode delta publication per-client protocol.
+	// Encode outside the lock. Encoding can JSON-escape large payloads or
+	// build a delta frame — keeping it outside c.mu avoids stalling other
+	// operations on this client. Two concurrent broadcasts for the same key
+	// can therefore encode in parallel; the lock-protected enqueue below
+	// resolves their ordering.
+	//
+	// We always encode the FULL form so Phase 3 can fall back to it without
+	// re-encoding under the lock. The fallback is needed when the delta's
+	// base version (prep.keyedDeltaPrevVersion) doesn't match the client's
+	// current keyState.version — a sign that an intermediate broadcast was
+	// missed, so applying this patch would produce garbage.
+	pubFullToEncode := pub
+	if channelDelta && isJSON {
+		// JSON+delta: must JSON-escape data so client stores bytes for delta base.
+		pubFullToEncode = &protocol.Publication{
+			Data:    json.Escape(convert.BytesToString(pub.Data)),
+			Key:     pub.Key,
+			Version: pub.Version,
+		}
+	}
+	encodedFull, err := c.encodeKeyedPush(channel, pubFullToEncode)
+	if err != nil {
+		return
+	}
+
+	var encodedDelta []byte
+	if deltaPossible {
 		deltaData := prep.keyedDeltaPatch
 		if isJSON {
 			deltaData = json.Escape(convert.BytesToString(deltaData))
@@ -662,36 +734,90 @@ func (c *Client) keyedWritePublication(channel string, key string, pubVersion ui
 			Key:     pub.Key,
 			Version: pub.Version,
 		}
-		var err error
-		prep.localDeltaData, err = c.encodeKeyedPush(channel, deltaPub)
-		if err != nil {
+		data, encErr := c.encodeKeyedPush(channel, deltaPub)
+		if encErr != nil {
 			return
 		}
-		// prep.deltaSub already true from buildPreparedPollData.
-	} else {
-		// Full path.
-		prep.deltaSub = false
-		pubToEncode := pub
-		if channelDelta && isJSON {
-			// JSON+delta: must JSON-escape data so client stores bytes for delta base.
-			pubToEncode = &protocol.Publication{
-				Data:    json.Escape(convert.BytesToString(pub.Data)),
-				Key:     pub.Key,
-				Version: pub.Version,
-			}
-		}
-		var err error
-		prep.fullData, err = c.encodeKeyedPush(channel, pubToEncode)
-		if err != nil {
-			return
-		}
+		encodedDelta = data
 	}
 
+	// Mirror writePublication's no-write conditions so we don't enqueue or
+	// advance state when the publication would be dropped (these return nil
+	// from writePublication, indistinguishable from a real write).
+	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
+		return
+	}
+	if prep.wasFiltered && !deltaPossible {
+		return
+	}
+
+	// Resolve batch config — user-supplied callback, must run outside c.mu.
 	var batchConfig ChannelBatchConfig
 	if c.node.config.GetChannelBatchConfig != nil {
 		batchConfig = c.node.config.GetChannelBatchConfig(channel)
 	}
-	_ = c.writePublication(channel, pub, prep, StreamPosition{}, false, batchConfig)
+
+	// Trace before the critical section to avoid a c.mu.RLock acquisition
+	// inside traceOutPush while we're holding c.mu.Lock below. Tracing
+	// before enqueue is consistent with writePublication's existing pattern.
+	if c.node.logEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: channel, Pub: pub})
+	}
+
+	// Critical section: re-check version, decide delta-vs-full, enqueue,
+	// and update state under c.mu. Holding the lock through enqueue is what
+	// serializes concurrent broadcasts to this client and preserves causal
+	// version order on the wire. writeEncodedPushData uses messageWriter /
+	// perChannelWriter, each of which has its own internal mutex that does
+	// NOT touch c.mu — safe to call while holding it. (Going through
+	// writePublication here would deadlock on its c.mu.RLock for the
+	// deltaSub branch.)
+	c.mu.Lock()
+	if c.keyed == nil {
+		c.mu.Unlock()
+		return
+	}
+	chanKeys, ok = c.keyed.trackedKeys[channel]
+	if !ok {
+		c.mu.Unlock()
+		return
+	}
+	keyState, tracked = chanKeys[key]
+	if !tracked || pubVersion <= keyState.version {
+		// A concurrent broadcast already delivered this or a newer version.
+		c.mu.Unlock()
+		return
+	}
+
+	// Decide delta vs full under the lock. The delta is only safe to send
+	// when the client's current keyState.version equals the version of the
+	// bytes the patch was computed against — otherwise the client doesn't
+	// hold the right base and applying the patch yields garbage. This
+	// condition is broken by concurrent broadcasts that update the server's
+	// entry between when this broadcast's prep was built and when we
+	// observe keyState here.
+	useDelta := deltaPossible && encodedDelta != nil && keyState.deltaReady && keyState.version == prep.keyedDeltaPrevVersion
+	var dataToSend []byte
+	if useDelta {
+		dataToSend = encodedDelta
+	} else {
+		dataToSend = encodedFull
+	}
+
+	if err := c.writeEncodedPushData(dataToSend, channel, pub.Key, protocol.FrameTypePushPublication, batchConfig); err != nil {
+		// Enqueue failed (queue closed/overflow); client is being torn down.
+		// Don't advance state — cleanupKeyed on close will drop it anyway.
+		c.mu.Unlock()
+		return
+	}
+
+	// Advance state. For delta channels, a successful FULL delivery also
+	// flips deltaReady so subsequent broadcasts can use delta.
+	if channelDelta && !keyState.deltaReady {
+		keyState.deltaReady = true
+	}
+	keyState.version = pubVersion
+	c.mu.Unlock()
 }
 
 // keyedWriteRemoval writes a removal publication and removes the key from

@@ -984,15 +984,44 @@ func (h *mapHub) remove(ch string, key string, chOpts MapChannelOptions, opts Ma
 
 	channel, ok := h.channels[ch]
 	if !ok {
-		// Channel doesn't exist — no position to report. All implementations
-		// (Redis, Postgres) return empty position here since no meta exists.
+		// Channel doesn't exist. When CAS is requested, the caller's
+		// ExpectedPosition cannot match (no meta yet) — mirror the Redis
+		// Lua which auto-creates meta with a fresh epoch and then returns
+		// position_mismatch against the caller's stale epoch. Without
+		// ExpectedPosition, surface KeyNotFound as before.
+		if opts.ExpectedPosition != nil {
+			return StreamPosition{}, nil, SuppressReasonPositionMismatch, nil
+		}
 		return StreamPosition{}, nil, SuppressReasonKeyNotFound, nil
 	}
 
 	var removeTags map[string]string
 	entry, keyExists := channel.state[key]
+
+	// CAS check runs BEFORE the missing-key short-circuit so we mirror the
+	// Redis broker's Lua behavior (map_broker_add.lua: is_leave=1 with
+	// expected_offset set and the key missing returns "position_mismatch").
+	// Optimistic-concurrency clients use SuppressReasonPositionMismatch as
+	// the signal to refetch state and retry; returning KeyNotFound here
+	// would break that flow across brokers.
+	if opts.ExpectedPosition != nil {
+		var pos StreamPosition
+		if channel.stream != nil {
+			pos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
+		}
+		if !keyExists {
+			return pos, nil, SuppressReasonPositionMismatch, nil
+		}
+		if entry.Publication.Offset != opts.ExpectedPosition.Offset ||
+			pos.Epoch != opts.ExpectedPosition.Epoch {
+			return pos, entry.Publication, SuppressReasonPositionMismatch, nil
+		}
+	}
+
 	if !keyExists {
-		// Key doesn't exist, nothing to remove
+		// Key doesn't exist, nothing to remove. No CAS was requested, so
+		// surface KeyNotFound — same as Redis's path when expected_offset
+		// is unset and the key is missing.
 		var streamPosition StreamPosition
 		if channel.stream != nil {
 			streamPosition = StreamPosition{
@@ -1001,18 +1030,6 @@ func (h *mapHub) remove(ch string, key string, chOpts MapChannelOptions, opts Ma
 			}
 		}
 		return streamPosition, nil, SuppressReasonKeyNotFound, nil
-	}
-
-	// CAS check: verify expected position (offset + epoch) before removal
-	if opts.ExpectedPosition != nil {
-		var pos StreamPosition
-		if channel.stream != nil {
-			pos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
-		}
-		if entry.Publication.Offset != opts.ExpectedPosition.Offset ||
-			pos.Epoch != opts.ExpectedPosition.Epoch {
-			return pos, entry.Publication, SuppressReasonPositionMismatch, nil
-		}
 	}
 
 	// Capture tags before deletion for the removal publication.
