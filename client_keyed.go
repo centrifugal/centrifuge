@@ -364,6 +364,12 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 				}
 				c.mu.Unlock()
 			}
+			// addSubscribers has not run on this path, so drop the trackKeys
+			// reservation here — otherwise pendingHubJoin stays >0 and the
+			// itemIndex entries leak forever (untrack refuses to delete while
+			// pending>0). Encode failure is not reachable in current code,
+			// but the release is a one-line guard against future regressions.
+			releaseTrackReservation()
 			c.logWriteInternalErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, err, "error encoding sub refresh", started, rw)
 			return
 		}
@@ -455,6 +461,13 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		// Only keys that were actually tracked are acted on — random keys sent
 		// by the client are silently ignored.
 		if len(req.Untrack) > 0 {
+			// c.mu is held across the hub.removeSubscriber loop so a
+			// concurrent handleTrack callback (with async TrackHandler this
+			// CAN run in parallel for the same client) cannot land its
+			// chanKeys insert + addSubscribers between our chanKeys delete
+			// and our hub remove. See cleanupKeyed for the wider rationale.
+			// Released before the untrackHandler callback so user code does
+			// not run under c.mu.
 			var actualUntrack []string
 			c.mu.Lock()
 			if c.keyed != nil {
@@ -474,7 +487,10 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 					}
 				}
 			}
-			c.mu.Unlock()
+
+			if testHookKeyedHubRemoveStart != nil {
+				testHookKeyedHubRemoveStart()
+			}
 
 			for _, key := range actualUntrack {
 				keyEmpty := hub.removeSubscriber(key, c)
@@ -482,6 +498,7 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 					c.node.sharedPollManager.untrack(channel, key)
 				}
 			}
+			c.mu.Unlock()
 
 			if len(actualUntrack) > 0 && c.eventHub.untrackHandler != nil {
 				c.eventHub.untrackHandler(UntrackEvent{
@@ -495,6 +512,13 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 }
 
 // handleUntrack processes SubRefreshRequest with type=2 (untrack).
+//
+// c.mu is held across the hub.removeSubscriber loop so a concurrent
+// handleTrack callback completion cannot land its chanKeys insert +
+// addSubscribers between our chanKeys delete and our hub remove. See
+// cleanupKeyed for the orphan-in-hub race the wider lock guards against.
+// Released before the untrackHandler callback so user code does not run
+// under c.mu.
 func (c *Client) handleUntrack(req *protocol.SubRefreshRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
 	channel := req.Channel
 
@@ -521,7 +545,10 @@ func (c *Client) handleUntrack(req *protocol.SubRefreshRequest, cmd *protocol.Co
 			}
 		}
 	}
-	c.mu.Unlock()
+
+	if testHookKeyedHubRemoveStart != nil {
+		testHookKeyedHubRemoveStart()
+	}
 
 	hub := c.node.keyedManager.getHub(channel)
 	if hub != nil {
@@ -532,6 +559,7 @@ func (c *Client) handleUntrack(req *protocol.SubRefreshRequest, cmd *protocol.Co
 			}
 		}
 	}
+	c.mu.Unlock()
 
 	if len(actualUntrack) > 0 && c.eventHub.untrackHandler != nil {
 		c.eventHub.untrackHandler(UntrackEvent{
@@ -552,16 +580,31 @@ func (c *Client) handleUntrack(req *protocol.SubRefreshRequest, cmd *protocol.Co
 	return nil
 }
 
+// testHookKeyedHubRemoveStart, if non-nil, is invoked from cleanupKeyed /
+// handleUntrack / checkTrackExpiration / handleTrack Step 8 AFTER
+// per-connection state has been mutated but BEFORE the hub.removeSubscriber
+// loop runs. Used by tests to deterministically inject a concurrent re-track
+// and reproduce the orphan-in-hub race. Production sets nil; overhead is one
+// nil check per cleanup call.
+var testHookKeyedHubRemoveStart func()
+
 // cleanupKeyed removes all keyed tracking for a channel when a client
 // unsubscribes or disconnects.
+//
+// c.mu is held across the hub.removeSubscriber loop so a concurrent
+// handleTrack callback completion (which takes c.mu before chanKeys insert
+// and then calls addSubscribers) cannot race between our chanKeys delete and
+// our hub remove — that race would leave chanKeys claiming the key tracked
+// while the hub no longer has this client, silently dropping all future
+// broadcasts. Lock order c.mu → sharedPollManager.mu → s.mu → hub.mu is
+// consistent with broadcast paths, which release hub.mu before taking c.mu.
 func (c *Client) cleanupKeyed(channel string) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.keyed == nil {
-		c.mu.Unlock()
 		return
 	}
 	chanKeys := c.keyed.trackedKeys[channel]
-	// Copy keys to avoid holding lock during cleanup.
 	keys := make([]string, 0, len(chanKeys))
 	for k := range chanKeys {
 		keys = append(keys, k)
@@ -571,7 +614,10 @@ func (c *Client) cleanupKeyed(channel string) {
 	if c.keyed.minTrackExpireAt != nil {
 		delete(c.keyed.minTrackExpireAt, channel)
 	}
-	c.mu.Unlock()
+
+	if testHookKeyedHubRemoveStart != nil {
+		testHookKeyedHubRemoveStart()
+	}
 
 	hub := c.node.keyedManager.getHub(channel)
 	if hub == nil {
@@ -638,13 +684,20 @@ func (c *Client) checkTrackExpiration(channel string, delay time.Duration) {
 			delete(c.keyed.minTrackExpireAt, channel)
 		}
 	}
-	c.mu.Unlock()
 
 	if len(expiredKeys) == 0 {
+		c.mu.Unlock()
 		return
 	}
 
+	if testHookKeyedHubRemoveStart != nil {
+		testHookKeyedHubRemoveStart()
+	}
+
 	// Clean up hub and SharedPollManager (no removal publications sent).
+	// c.mu is held across the loop — see cleanupKeyed for the orphan-in-hub
+	// race rationale. Released before the log call so user logger code does
+	// not run under c.mu.
 	hub := c.node.keyedManager.getHub(channel)
 	if hub != nil {
 		for _, key := range expiredKeys {
@@ -654,6 +707,7 @@ func (c *Client) checkTrackExpiration(channel string, delay time.Duration) {
 			}
 		}
 	}
+	c.mu.Unlock()
 
 	if c.node.logger.enabled(LogLevelInfo) {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "track keys expired",

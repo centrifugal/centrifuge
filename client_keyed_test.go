@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -346,4 +347,176 @@ func TestCheckTrackExpiration_EarlyReturns(t *testing.T) {
 
 	// minTrackExpireAt[channel] is unset (TrackReply{} had no ExpireAt) → fast path returns.
 	client.checkTrackExpiration("test:channel", time.Second)
+}
+
+// keyedOrphanInHubScenario is the shared body for the cleanup-vs-retrack race
+// tests covering cleanupKeyed, handleUntrack, and checkTrackExpiration.
+//
+// All three paths (cleanupKeyed, handleUntrack, checkTrackExpiration) follow
+// the same shape: under c.mu they delete the per-connection tracking entries,
+// release c.mu, then call hub.removeSubscriber outside the lock. A concurrent
+// handleTrack completion can land between unlock and hub-remove, re-inserting
+// chanKeys[K] and calling addSubscribers(K). The trailing hub.removeSubscriber
+// then strips the freshly-rejoined client — leaving chanKeys claiming the key
+// tracked while the hub no longer has this client, and all future broadcasts
+// silently skip it until disconnect or another re-track.
+//
+// The test wires testHookKeyedHubRemoveStart to spawn a re-track goroutine at
+// the race point and waits briefly so it can land. After the cleanup path
+// returns, it joins the re-track goroutine and asserts that chanKeys[K]
+// presence agrees with hub subscription. Pre-fix the assertion fails:
+// chanKeys[K] is set, hub.hasSubscriber returns false.
+func keyedOrphanInHubScenario(t *testing.T, trigger func(client *Client, channel, key string)) {
+	const channel = "test:orphan"
+	const key = "k1"
+
+	node := newTestNodeWithSharedPoll(t)
+	// OnTrack returns immediately with a short-but-valid ExpireAt so
+	// checkTrackExpiration triggers expiry on the first call.
+	setupSharedPollHandlersWithExpiry(node, time.Now().Unix()-3600)
+
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, channel)
+	trackSharedPollClient(t, client, channel, []*protocol.KeyedItem{
+		{Key: key, Version: 0},
+	})
+
+	// Sanity: client is in chanKeys and in the hub for `key`.
+	client.mu.RLock()
+	_, before := client.keyed.trackedKeys[channel][key]
+	client.mu.RUnlock()
+	require.True(t, before, "setup: client should be in chanKeys for key")
+	hub := node.keyedManager.getHub(channel)
+	require.NotNil(t, hub)
+	require.True(t, hub.hasSubscriber(key, client), "setup: client should be in hub for key")
+
+	// Install hook fired at the race point. We spawn a re-track in a goroutine.
+	// Pre-fix: the goroutine acquires c.mu (cleanupKeyed has already released
+	// it), runs the full handleTrack including addSubscribers, then signals
+	// done — and the cleanup path's still-pending hub.removeSubscriber then
+	// strips the freshly added client. Post-fix: c.mu is held across the hub
+	// loop, so the goroutine parks on c.mu until cleanup completes.
+	var retrackWG sync.WaitGroup
+	retrackWG.Add(1)
+	var retrackErr error
+	var hookOnce sync.Once
+	testHookKeyedHubRemoveStart = func() {
+		hookOnce.Do(func() {
+			retrackStarted := make(chan struct{})
+			go func() {
+				defer retrackWG.Done()
+				close(retrackStarted)
+				// Re-track the same key — this exercises the full handleTrack
+				// flow including chanKeys insertion and addSubscribers.
+				rwWrapper := testReplyWriterWrapper()
+				if err := client.handleSubRefresh(&protocol.SubRefreshRequest{
+					Channel: channel,
+					Type:    typeTrack,
+					Track:   []*protocol.TrackBatch{{Items: []*protocol.KeyedItem{{Key: key, Version: 0}}}},
+				}, &protocol.Command{Id: 99}, time.Now(), rwWrapper.rw); err != nil {
+					retrackErr = err
+					return
+				}
+				// Wait for the track callback's reply so handleTrack has fully
+				// finished (chanKeys committed, hub.addSubscribers fired).
+				deadline := time.Now().Add(2 * time.Second)
+				for time.Now().Before(deadline) {
+					if len(rwWrapper.replies) > 0 {
+						return
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}()
+			// Park briefly so the goroutine has a chance to acquire c.mu and
+			// land its re-track. Pre-fix: 100ms is more than enough for it to
+			// complete fully. Post-fix: 100ms passes with the goroutine
+			// blocked on c.mu (which is still held by cleanup), then the hook
+			// returns and cleanup proceeds.
+			<-retrackStarted
+			time.Sleep(100 * time.Millisecond)
+		})
+	}
+	t.Cleanup(func() { testHookKeyedHubRemoveStart = nil })
+
+	// Drive the cleanup path under test.
+	trigger(client, channel, key)
+
+	// Wait for the spawned re-track goroutine to finish.
+	retrackWG.Wait()
+	require.NoError(t, retrackErr)
+
+	// Invariant: chanKeys[K] present iff hub has c for K.
+	client.mu.RLock()
+	_, inChanKeys := client.keyed.trackedKeys[channel][key]
+	client.mu.RUnlock()
+	inHub := hub.hasSubscriber(key, client)
+
+	require.Equal(t, inChanKeys, inHub,
+		"orphan-in-hub race: chanKeys[K]=%v, hub.hasSubscriber=%v. "+
+			"A concurrent re-track was undone by the cleanup path's "+
+			"after-unlock hub.removeSubscriber — future broadcasts will "+
+			"silently miss this client even though it thinks K is tracked.",
+		inChanKeys, inHub)
+}
+
+// TestKeyed_CleanupKeyedVsRetrack_NoOrphanInHub covers cleanupKeyed (the
+// path invoked on client unsubscribe/disconnect).
+//
+// All three NoOrphanInHub tests share the package-level
+// testHookKeyedHubRemoveStart hook, so they cannot run with t.Parallel —
+// otherwise one test's hook would fire from another test's cleanup path.
+func TestKeyed_CleanupKeyedVsRetrack_NoOrphanInHub(t *testing.T) {
+	keyedOrphanInHubScenario(t, func(c *Client, channel, _ string) {
+		c.cleanupKeyed(channel)
+	})
+}
+
+// TestKeyed_HandleUntrackVsRetrack_NoOrphanInHub covers handleUntrack (the
+// SDK-initiated untrack path).
+func TestKeyed_HandleUntrackVsRetrack_NoOrphanInHub(t *testing.T) {
+	keyedOrphanInHubScenario(t, func(c *Client, channel, key string) {
+		untrackSharedPollClient(t, c, channel, []string{key})
+	})
+}
+
+// TestKeyed_CheckTrackExpirationVsRetrack_NoOrphanInHub covers
+// checkTrackExpiration (the server-side timer-driven expiry path). Setup uses
+// setupSharedPollHandlersWithExpiry with ExpireAt in the past so the very
+// first checkTrackExpiration call sweeps the key.
+func TestKeyed_CheckTrackExpirationVsRetrack_NoOrphanInHub(t *testing.T) {
+	keyedOrphanInHubScenario(t, func(c *Client, channel, _ string) {
+		// delay=0 makes the comparison nowUnix > expireAt+0 true immediately
+		// (expireAt is in the past).
+		c.checkTrackExpiration(channel, 0)
+	})
+}
+
+// TestKeyed_InlineUntrackVsRetrack_NoOrphanInHub covers handleTrack Step 8
+// (the inline-untrack path). The SDK can replay a signed batch that
+// includes a key in both req.Track and req.Untrack (or include any key in
+// req.Untrack alongside other tracked keys), and the server removes those
+// keys after Step 5's addSubscribers. Trackhandlers that invoke the
+// callback asynchronously allow two handleTrack callbacks for the same
+// client to interleave: A's Step 8 (delete chanKeys[K] then
+// hub.removeSubscriber(K)) can race a concurrent B's Step 2 + Step 5
+// (insert chanKeys[K] then addSubscribers([K])) — A's hub remove then
+// strips B's freshly-added subscription, orphaning B in hub state.
+//
+// Trigger fires a SubRefresh with Track:[K] and Untrack:[K]: re-tracking
+// K (no state change) then immediately untracking it through Step 8.
+func TestKeyed_InlineUntrackVsRetrack_NoOrphanInHub(t *testing.T) {
+	keyedOrphanInHubScenario(t, func(c *Client, channel, key string) {
+		rwWrapper := testReplyWriterWrapper()
+		err := c.handleSubRefresh(&protocol.SubRefreshRequest{
+			Channel: channel,
+			Type:    typeTrack,
+			Track:   []*protocol.TrackBatch{{Items: []*protocol.KeyedItem{{Key: key, Version: 0}}}},
+			Untrack: []string{key},
+		}, &protocol.Command{Id: 4}, time.Now(), rwWrapper.rw)
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			return len(rwWrapper.replies) > 0
+		}, 2*time.Second, time.Millisecond)
+	})
 }

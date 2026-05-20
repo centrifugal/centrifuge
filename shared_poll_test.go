@@ -1884,9 +1884,15 @@ func TestSharedPollManager_BrokerSubscribeFailureCleanup(t *testing.T) {
 func TestSharedPollManager_BrokerSubscribeFailureNoOrphanConcurrent(t *testing.T) {
 	t.Parallel()
 	// Scenario: goroutine A creates channel, starts broker.Subscribe (which blocks).
-	// Goroutine B arrives, sees existing channel, adds its own key.
-	// A's broker.Subscribe fails. A should NOT tear down the channel because B's
-	// key is still there.
+	// Goroutine B arrives concurrently and tracks a different key on the same
+	// channel. A's broker.Subscribe fails. A should NOT tear down the channel
+	// because B's key is still there.
+	//
+	// Note: broker.Subscribe and broker.Unsubscribe for the same base channel are
+	// serialized via the per-channel sharded sub-lock (matches the normal
+	// subscription pattern). B's track therefore waits until A's broker.Subscribe
+	// returns; both goroutines are launched before unblocking A so the
+	// concurrent-track race condition is still exercised.
 	blockCh := make(chan struct{})
 	var callCount atomic.Int32
 	broker := &controllableBroker{
@@ -1921,16 +1927,25 @@ func TestSharedPollManager_BrokerSubscribeFailureNoOrphanConcurrent(t *testing.T
 		return broker.subscribeCount.Load() >= 1
 	}, time.Second, time.Millisecond)
 
-	// Goroutine B: track key2 on same channel (won't call broker.Subscribe because
-	// isNewChannel is false for B).
-	isNew2, _, _, err2 := m.track("test:channel", opts, "key2")
-	require.NoError(t, err2)
-	require.True(t, isNew2)
+	// Goroutine B: track key2 on the same channel. With the per-channel
+	// sharded lock, B parks on subLock until A's subscribe returns. Run B in
+	// its own goroutine so we can close(blockCh) below.
+	var isNew2 bool
+	var err2 error
+	var bDone sync.WaitGroup
+	bDone.Add(1)
+	go func() {
+		defer bDone.Done()
+		isNew2, _, _, err2 = m.track("test:channel", opts, "key2")
+	}()
 
-	// Unblock A (will fail).
+	// Unblock A (will fail) — B then proceeds and succeeds.
 	close(blockCh)
 	aDone.Wait()
 	require.Error(t, aErr)
+	bDone.Wait()
+	require.NoError(t, err2)
+	require.True(t, isNew2)
 
 	// Channel should still exist because key2 is there.
 	m.mu.RLock()
@@ -2817,6 +2832,132 @@ func TestSharedPollManager_ShutdownRetrackChaos(t *testing.T) {
 	// m.channels, close() can't reach it and m.wg.Wait blocks forever.
 	// The t.Cleanup-driven Shutdown thus serves as the leak detector;
 	// the test framework's overall timeout will catch the regression.
+}
+
+// TestSharedPollManager_DeferredUnsubRaceWithRetrack reproduces the race
+// where a deferred broker.Unsubscribe (queued when the last tracker for a key
+// went away) clobbers a concurrent broker.Subscribe issued by a fresh retrack
+// of the same key.
+//
+// The deferred unsubscribe runs inside subDissolver. Without serialization,
+// the body
+//
+//	(1) filters keys under s.mu (finds key absent, marks it for unsub),
+//	(2) releases s.mu,
+//	(3) calls broker.Unsubscribe(kc),
+//	(4) deletes brokerSubChans[kc].
+//
+// A concurrent track of the same key can land between (2) and (3): it
+// installs a fresh entry in s.itemIndex, calls broker.Subscribe(kc), and
+// writes brokerSubChans[kc] = broker. Then step (3) reaches the broker —
+// unsubscribing the freshly subscribed client — and step (4) wipes the local
+// tracking. Result: itemIndex has the key and the client is in the hub, but
+// the broker no longer pushes cross-node publications for it. Silent miss.
+//
+// Test setup: broker.Unsubscribe is blocked via a hook. We track + release a
+// key (which enqueues the deferred unsub), wait for the dissolver worker to
+// enter Unsubscribe, then retrack the same key from another goroutine. After
+// unblocking the unsubscribe, the broker must still be subscribed for the
+// key — otherwise cross-node delivery is broken.
+//
+// Expected: after the fix, brokerSubChans[kc] is populated when activity
+// settles. Pre-fix, the deferred Unsubscribe's brokerSubChans delete wins
+// and the entry is missing.
+func TestSharedPollManager_DeferredUnsubRaceWithRetrack(t *testing.T) {
+	t.Parallel()
+
+	unsubBlock := make(chan struct{})
+	unsubStarted := make(chan struct{})
+	var startedOnce sync.Once
+
+	broker := &controllableBroker{
+		unsubscribeFunc: func(ch string) error {
+			startedOnce.Do(func() { close(unsubStarted) })
+			<-unsubBlock
+			return nil
+		},
+	}
+
+	opts := SharedPollChannelOptions{
+		RefreshInterval:      time.Hour,
+		MaxKeysPerConnection: 100,
+		PublishEnabled:       true,
+		// Push channel shutdown well outside the test window so the
+		// finalize-shutdown path doesn't queue extra broker work.
+		ChannelShutdownDelay: 30 * time.Second,
+	}
+	node := newTestNodeWithControllableBroker(t, broker, opts)
+	m := node.sharedPollManager
+
+	channel := "test:b1race"
+	key := "k1"
+	keyCh := sharedPollKeyChannel(channel, key)
+
+	// Initial track. release() drops the pendingHubJoin reservation; since
+	// no hub-join happens in this test, release also tears down the entry
+	// and enqueues the deferred broker.Unsubscribe.
+	_, _, release1, err := m.track(channel, opts, key)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), broker.subscribeCount.Load())
+	m.untrack(channel, key) // no-op while pending>0
+	release1()
+
+	// Wait until the dissolver worker has entered broker.Unsubscribe and
+	// is blocked on unsubBlock — the race window we want to exercise.
+	select {
+	case <-unsubStarted:
+	case <-time.After(2 * time.Second):
+		close(unsubBlock) // avoid hanging the worker
+		t.Fatal("dissolver never entered broker.Unsubscribe")
+	}
+
+	// Retrack the same key from another goroutine. With the fix, this
+	// blocks on the per-channel sub-lock until the deferred unsubscribe
+	// completes. Without the fix, it races ahead and registers the broker
+	// subscription that the pending unsubscribe will then clobber.
+	retrackDone := make(chan struct{})
+	var retrackErr error
+	var release2 func()
+	go func() {
+		defer close(retrackDone)
+		_, _, rel, e := m.track(channel, opts, key)
+		retrackErr = e
+		release2 = rel
+	}()
+
+	// Give the retrack a moment to run (no fix path) or to park on the
+	// sub-lock (fix path). Either way, we then unblock the deferred unsub
+	// so all in-flight broker calls drain.
+	time.Sleep(50 * time.Millisecond)
+	close(unsubBlock)
+
+	select {
+	case <-retrackDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("retrack did not complete after unblocking broker.Unsubscribe")
+	}
+	require.NoError(t, retrackErr)
+
+	// After all activity settles, the broker MUST be subscribed for kc:
+	// the most recent operation on this key was a successful track, and no
+	// untrack has occurred since. With the bug, the deferred Unsubscribe's
+	// brokerSubChans delete wins and the entry is missing — cross-node
+	// publications silently bypass this node's subscribers.
+	require.Eventually(t, func() bool {
+		m.brokerSubMu.RLock()
+		_, has := m.brokerSubChans[keyCh]
+		m.brokerSubMu.RUnlock()
+		return has
+	}, 1*time.Second, 5*time.Millisecond,
+		"deferred broker.Unsubscribe clobbered the re-tracked client's "+
+			"broker subscription; brokerSubChans has no entry for the "+
+			"re-tracked key, breaking cross-node publication delivery")
+
+	// Cleanup: drop the retrack reservation.
+	if release2 != nil {
+		m.untrack(channel, key)
+		release2()
+	}
 }
 
 // TestSharedPoll_Stats covers the stats() helper.

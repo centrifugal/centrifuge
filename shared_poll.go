@@ -1037,6 +1037,18 @@ func (m *SharedPollManager) subscribeToBrokerKeys(channel string, keys []string)
 		keyChannels[i] = sharedPollKeyChannel(channel, key)
 	}
 	m.node.metrics.incActionCount("broker_subscribe", channel)
+	// Per-channel sharded lock — mirrors Node.addSubscription so that a
+	// concurrent shared-poll unsubscribe (queued via subDissolver) cannot
+	// race between our broker.Subscribe and brokerSubChans update and
+	// silently unsubscribe the key at the broker after we've recorded it
+	// as subscribed. Without this, the queued unsub's filter check sees
+	// the key absent (because we hadn't installed our entry yet when it
+	// ran), proceeds to broker.Unsubscribe(kc) after we have already
+	// re-subscribed, and then deletes brokerSubChans[kc] — leaving the
+	// new tracker in the hub with no broker subscription.
+	mu := m.node.subLock(channel)
+	mu.Lock()
+	defer mu.Unlock()
 	if err := broker.Subscribe(keyChannels...); err != nil {
 		return err
 	}
@@ -1062,6 +1074,15 @@ func (m *SharedPollManager) unsubscribeFromBrokerKeys(channel string, keys []str
 	}
 	_ = m.node.subDissolver.Submit(func() error {
 		m.node.metrics.incActionCount("broker_unsubscribe", channel)
+		// Hold the per-channel sharded lock across the filter recheck, the
+		// broker.Unsubscribe call, and the brokerSubChans update — so a
+		// concurrent retrack (which also takes the lock in
+		// subscribeToBrokerKeys) cannot squeeze a fresh broker.Subscribe
+		// between our filter check and our Unsubscribe. Mirrors the
+		// Node.removeSubscription pattern.
+		mu := m.node.subLock(channel)
+		mu.Lock()
+		defer mu.Unlock()
 		// Filter out keys that were re-tracked between queueing and execution.
 		m.mu.RLock()
 		s, chExists := m.channels[channel]
@@ -1113,6 +1134,13 @@ func (m *SharedPollManager) unsubscribeFromBrokerKeys(channel string, keys []str
 func (m *SharedPollManager) unsubscribeAllBrokerKeys(channel string) {
 	_ = m.node.subDissolver.Submit(func() error {
 		m.node.metrics.incActionCount("broker_unsubscribe", channel)
+		// Per-channel sharded lock — same rationale as unsubscribeFromBrokerKeys.
+		// A concurrent track() that re-creates the channel state and issues a
+		// fresh broker.Subscribe could otherwise race the shutdown-time
+		// Unsubscribe and end up with a tracked key but no broker subscription.
+		mu := m.node.subLock(channel)
+		mu.Lock()
+		defer mu.Unlock()
 		// Check if channel was re-created while shutting down.
 		m.mu.RLock()
 		_, stillActive := m.channels[channel]
