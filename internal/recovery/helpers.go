@@ -42,31 +42,29 @@ func MergePublications(recoveredPubs []*protocol.Publication, bufferedPubs []*pr
 		return recoveredPubs[i].Offset < recoveredPubs[j].Offset
 	})
 	if len(bufferedPubs) > 0 {
-		var (
-			skippedOffsets []uint64
-		)
+		var skippedOffsets []uint64
+		recoveredPubs, maxSeenOffset, skippedOffsets = uniqueNonFilteredPublications(recoveredPubs)
 		if len(recoveredPubs) > 1 {
-			recoveredPubs, maxSeenOffset, skippedOffsets = uniqueNonFilteredPublications(recoveredPubs)
-		}
-		prevOffset := recoveredPubs[0].Offset
-		for _, p := range recoveredPubs[1:] {
-			pubOffset := p.Offset
-			expectedOffset := prevOffset + 1
-			isWrongOffset := pubOffset != expectedOffset
-			if isWrongOffset {
-				if len(skippedOffsets) == 0 {
-					return nil, 0, false
-				}
-				// All offsets from expectedOffset till pubOffset-1 must be in skippedOffsets.
-				// Otherwise, we have a gap in recovered publications.
-				for o := expectedOffset; o < pubOffset; o++ {
-					if !slices.Contains(skippedOffsets, o) {
+			prevOffset := recoveredPubs[0].Offset
+			for _, p := range recoveredPubs[1:] {
+				pubOffset := p.Offset
+				expectedOffset := prevOffset + 1
+				isWrongOffset := pubOffset != expectedOffset
+				if isWrongOffset {
+					if len(skippedOffsets) == 0 {
 						return nil, 0, false
 					}
+					// All offsets from expectedOffset till pubOffset-1 must be in skippedOffsets.
+					// Otherwise, we have a gap in recovered publications.
+					for o := expectedOffset; o < pubOffset; o++ {
+						if !slices.Contains(skippedOffsets, o) {
+							return nil, 0, false
+						}
+					}
+					// All offsets are present in skippedOffsets, can continue.
 				}
-				// All offsets are present in skippedOffsets, can continue.
+				prevOffset = pubOffset
 			}
-			prevOffset = pubOffset
 		}
 	}
 	return recoveredPubs, maxSeenOffset, true

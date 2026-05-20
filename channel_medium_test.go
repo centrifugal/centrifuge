@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"errors"
 	"math"
+	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -347,6 +348,59 @@ func TestChannelMediumClose(t *testing.T) {
 	default:
 		t.Fatal("close did not signal closeCh")
 	}
+}
+
+// TestChannelMediumCloseStopsWriterGoroutine asserts that when a queue-enabled
+// channelMedium is closed, its writer goroutine actually exits — not just that
+// closeCh is signalled.
+//
+// Bug: medium.close() closes c.closeCh but never closes c.messages. The
+// writer goroutine sits in c.messages.Wait() (sync.Cond) on an empty queue,
+// and Wait only returns when the queue itself is closed (which broadcasts the
+// cond). closeCh is checked only INSIDE the broadcastDelay timer branch,
+// which is unreachable until Wait returns. Result: every channelMedium that
+// is closed with an empty queue leaks one writer goroutine — and each
+// channelMedium is created per channel (addSubscription) and closed when the
+// last subscriber leaves (removeSubscription), so this leaks one goroutine
+// per channel lifecycle on any server using queue/delay channel-medium
+// options.
+//
+// The test detects the leak by creating many mediums, closing them, and
+// checking the goroutine count returns to baseline (with a small allowance
+// for noise from runtime). Not t.Parallel because runtime.NumGoroutine is
+// process-global.
+func TestChannelMediumCloseStopsWriterGoroutine(t *testing.T) {
+	const numMediums = 50
+
+	// Settle to a stable baseline.
+	time.Sleep(20 * time.Millisecond)
+	before := runtime.NumGoroutine()
+
+	mediums := make([]*channelMedium, 0, numMediums)
+	for i := 0; i < numMediums; i++ {
+		m, err := newChannelMedium("test-close-writer-"+strconv.Itoa(i), &mockNode{}, ChannelMediumOptions{
+			enableQueue: true,
+		})
+		require.NoError(t, err)
+		mediums = append(mediums, m)
+	}
+
+	// Writer goroutines are scheduled; goroutine count should be well above baseline.
+	require.Eventually(t, func() bool {
+		return runtime.NumGoroutine() >= before+numMediums
+	}, time.Second, 10*time.Millisecond, "writer goroutines never started (got %d, expected ≥ %d)", runtime.NumGoroutine(), before+numMediums)
+
+	for _, m := range mediums {
+		m.close()
+	}
+
+	// All writer goroutines must exit. With the bug they sit in
+	// publicationQueue.Wait() on empty queues. Allow some slack (5) for
+	// unrelated runtime goroutines that may come and go.
+	require.Eventually(t, func() bool {
+		return runtime.NumGoroutine() <= before+5
+	}, 2*time.Second, 20*time.Millisecond,
+		"writer goroutines did not exit after close (got %d, baseline %d) — medium.close() does not close the queue, so writers are stuck in messages.Wait()", runtime.NumGoroutine(), before)
 }
 
 // TestNewChannelMediumBroadcastDelayWithoutQueueRejected ensures the constructor

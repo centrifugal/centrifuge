@@ -2859,6 +2859,185 @@ func TestRedisClusterMultipleChannelsTwoNodes(t *testing.T) {
 	}
 }
 
+// TestSharedPollPublish_CrossNodeDelivery_TwoNodes proves end-to-end
+// that SharedPollPublish on one node reaches subscribers tracking the
+// key on a different node. This is the contract the publish() refactor
+// guarantees: routing is a function of PublishEnabled, not local
+// subscriber state, so a publisher node that has never tracked the key
+// still delivers via the broker.
+//
+// Setup: two Nodes (node1, node2) share a Redis broker. node1's client
+// subscribes + tracks key1 — its broker.Subscribe registers node1's
+// callback for the key-scoped channel. node2 has no tracks, no broker
+// subscription for that key. node2 calls SharedPollPublish; the broker
+// fans it out to subscribed nodes, node1 receives via its callback,
+// and node1's client gets the publication on its transport sink.
+//
+// Pre-fix: node2's publish() would read its own brokerSubChans (empty
+// for key1, since node2 never tracked it), fall back to
+// handlePublishedData locally, and silently no-op. node1's client
+// would never see the publication.
+func TestSharedPollPublish_CrossNodeDelivery_TwoNodes(t *testing.T) {
+	t.Parallel()
+	for _, tt := range excludeNoHistoryClusterTests(noHistoryRedisTests) {
+		t.Run(tt.Name, func(t *testing.T) {
+			redisConf := testSingleRedisConf(tt.Port)
+			prefix := getUniquePrefix()
+
+			pollOpts := SharedPollChannelOptions{
+				Mode:                 SharedPollModeVersioned,
+				RefreshInterval:      30 * time.Second,
+				RefreshBatchSize:     100,
+				MaxKeysPerConnection: 100,
+				PublishEnabled:       true,
+			}
+			pollHandler := func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+				return SharedPollResult{}, nil
+			}
+			cfg := Config{
+				LogLevel:   LogLevelTrace,
+				LogHandler: func(entry LogEntry) {},
+				SharedPoll: SharedPollConfig{
+					GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+						return pollOpts, true
+					},
+				},
+			}
+
+			// Subscriber node: hosts the client tracking key1.
+			node1, err := New(cfg)
+			require.NoError(t, err)
+			node1.OnSharedPoll(pollHandler)
+			setupSharedPollHandlers(node1)
+			shard1, err := NewRedisShard(node1, redisConf)
+			require.NoError(t, err)
+			b1, err := NewRedisBroker(node1, RedisBrokerConfig{
+				Prefix: prefix,
+				Shards: []*RedisShard{shard1},
+			})
+			require.NoError(t, err)
+			node1.SetBroker(b1)
+			require.NoError(t, node1.Run())
+			t.Cleanup(func() { _ = node1.Shutdown(context.Background()) })
+			t.Cleanup(func() { stopRedisBroker(b1) })
+
+			// Publisher node: never tracks the key, only calls SharedPollPublish.
+			node2, err := New(cfg)
+			require.NoError(t, err)
+			node2.OnSharedPoll(pollHandler)
+			setupSharedPollHandlers(node2)
+			shard2, err := NewRedisShard(node2, redisConf)
+			require.NoError(t, err)
+			b2, err := NewRedisBroker(node2, RedisBrokerConfig{
+				Prefix: prefix,
+				Shards: []*RedisShard{shard2},
+			})
+			require.NoError(t, err)
+			node2.SetBroker(b2)
+			require.NoError(t, node2.Run())
+			t.Cleanup(func() { _ = node2.Shutdown(context.Background()) })
+			t.Cleanup(func() { stopRedisBroker(b2) })
+
+			// Connect a client to node1 with a sink-backed transport so we
+			// can observe publications.
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			transport := newTestTransport(cancel)
+			transport.setProtocolVersion(ProtocolVersion2)
+			transport.setProtocolType(ProtocolTypeProtobuf)
+			sink := make(chan []byte, 100)
+			transport.sink = sink
+			credCtx := SetCredentials(ctx, &Credentials{UserID: "user1"})
+			client, err := newClient(credCtx, node1, transport)
+			require.NoError(t, err)
+			connectClientV2(t, client)
+
+			channel := "test:xnode_" + prefix
+			subscribeSharedPollClient(t, client, channel)
+			trackSharedPollClient(t, client, channel, []*protocol.KeyedItem{
+				{Key: "key1", Version: 0},
+			})
+
+			// Wait until node1 has the broker subscription for key1 — this
+			// is what makes node1's broker callback actually fire for
+			// publications on the key-scoped channel.
+			require.Eventually(t, func() bool {
+				keyCh := sharedPollKeyChannel(channel, "key1")
+				node1.sharedPollManager.brokerSubMu.RLock()
+				defer node1.sharedPollManager.brokerSubMu.RUnlock()
+				_, ok := node1.sharedPollManager.brokerSubChans[keyCh]
+				return ok
+			}, 5*time.Second, 25*time.Millisecond,
+				"node1 must have registered a broker subscription for key1 before the cross-node publish")
+
+			// Confirm node2 has no local state / broker subscription for
+			// key1 — the property we're testing depends on the publisher
+			// node NOT having tracked the key.
+			node2.sharedPollManager.mu.RLock()
+			_, n2HasChannel := node2.sharedPollManager.channels[channel]
+			node2.sharedPollManager.mu.RUnlock()
+			require.False(t, n2HasChannel,
+				"node2 must not have shared-poll channel state for this channel")
+			node2.sharedPollManager.brokerSubMu.RLock()
+			_, n2HasKey := node2.sharedPollManager.brokerSubChans[sharedPollKeyChannel(channel, "key1")]
+			node2.sharedPollManager.brokerSubMu.RUnlock()
+			require.False(t, n2HasKey,
+				"node2 must not have a broker subscription for key1")
+
+			// Drain any earlier messages (connect reply, subscribe reply,
+			// initial cold-key auto-poll, etc.) so we read only the
+			// cross-node publication below.
+		drainPre:
+			for {
+				select {
+				case <-sink:
+				case <-time.After(50 * time.Millisecond):
+					break drainPre
+				}
+			}
+
+			// Cross-node publish from node2.
+			payload := []byte(`"hello-from-node2"`)
+			require.NoError(t, node2.SharedPollPublish(
+				context.Background(), channel, "key1", 100, "", payload,
+			))
+
+			// node1's client must receive the publication on its transport.
+			deadline := time.After(5 * time.Second)
+			received := false
+		recv:
+			for !received {
+				select {
+				case msg := <-sink:
+					reply := &protocol.Reply{}
+					if err := reply.UnmarshalVT(msg); err != nil {
+						continue
+					}
+					if reply.Push == nil || reply.Push.Pub == nil {
+						continue
+					}
+					pub := reply.Push.Pub
+					if pub.Key != "key1" {
+						continue
+					}
+					if !strings.Contains(string(pub.Data), "hello-from-node2") {
+						continue
+					}
+					require.EqualValues(t, 100, pub.Version)
+					received = true
+				case <-deadline:
+					break recv
+				}
+			}
+			require.True(t, received,
+				"BUG: node1's subscriber did not receive the publication that "+
+					"node2 published cross-node. publish() must route through "+
+					"the broker on PublishEnabled channels regardless of whether "+
+					"node2 has locally tracked the key.")
+		})
+	}
+}
+
 // TestNewRedisBrokerErrors covers input-validation branches in NewRedisBroker.
 // These tests don't actually connect to Redis since the failures occur before any
 // connection attempt, but they live with the rest of the integration-tagged tests

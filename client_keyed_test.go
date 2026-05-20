@@ -2,10 +2,12 @@ package centrifuge
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/centrifugal/protocol"
+	fdelta "github.com/shadowspore/fossil-delta"
 	"github.com/stretchr/testify/require"
 )
 
@@ -159,6 +161,171 @@ func TestCleanupKeyed_NoKeyedState(t *testing.T) {
 	client.cleanupKeyed("anything")
 }
 
+// TestKeyedWritePublication_DeltaFallsBackToFullWhenBaseMismatches asserts
+// that when the prep's delta base-version doesn't match the client's
+// keyState.version, keyedWritePublication sends the FULL publication instead
+// of a delta — otherwise the client would apply the delta against the wrong
+// base and produce garbage.
+//
+// Background: a shared-poll delta patch is computed from entry.data BEFORE
+// the publish (prevData), versioned at entry.version BEFORE the bump
+// (prevVersion). The client can only apply the delta correctly if it
+// currently holds the bytes corresponding to prevVersion. Concurrent
+// broadcasts for the same key can race past the per-client version check
+// such that the client receives a delta whose prevVersion ≠ keyState.version
+// — its previous data doesn't match the patch's base. The fix tags prep
+// with prevVersion and falls back to FULL when the base wouldn't apply.
+//
+// The test simulates the race by directly building a prep with a fabricated
+// "stale" base version, then asserting the wire bytes are a FULL publication
+// (Delta=false) carrying the full payload, not a delta patch.
+func TestKeyedWritePublication_DeltaFallsBackToFullWhenBaseMismatches(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:      time.Hour,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		KeepLatestData:       true,
+		Mode:                 SharedPollModeVersioned,
+	})
+	setupSharedPollDeltaHandlers(node)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := newTestTransport(cancel)
+	transport.setProtocolVersion(ProtocolVersion2)
+	transport.setProtocolType(ProtocolTypeProtobuf)
+	sink := make(chan []byte, 32)
+	transport.sink = sink
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "user1"})
+	client, _ := newClient(newCtx, node, transport)
+	connectClientV2(t, client)
+	subscribeSharedPollClientDelta(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{
+		{Key: "k", Version: 0},
+	})
+
+	// Force the client into a known steady state: keyState.version=10,
+	// deltaReady=true — as if a prior FULL publication at v=10 was already
+	// delivered. We bypass the broadcast plumbing to set this up directly.
+	client.mu.Lock()
+	client.keyed.trackedKeys["test:channel"]["k"] = &keyedKeyState{
+		version:    10,
+		deltaReady: true,
+	}
+	client.mu.Unlock()
+
+	// Drain any startup frames.
+	drainStart := time.Now()
+	for time.Since(drainStart) < 50*time.Millisecond {
+		select {
+		case <-sink:
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	// Build a prep that simulates a concurrent broadcast that won the race:
+	// the patch is computed from a previous-version snapshot (v=15) that
+	// this client never received — the client still holds v=10's data.
+	// Without the fix, keyedWritePublication would forward the delta as-is
+	// and the client would apply garbage. With the fix, it must fall back
+	// to FULL.
+	clientHas := []byte(`{"value":"data at v=10"}`)
+	staleBase := []byte(`{"value":"data at v=15 (client never saw)"}`)
+	newData := []byte(`{"value":"data at v=20"}`)
+	patch := fdelta.Create(staleBase, newData)
+	prep := preparedData{
+		deltaSub:         true,
+		keyedDeltaPatch:  patch,
+		keyedDeltaIsReal: len(patch) < len(newData),
+	}
+	pub := &protocol.Publication{Key: "k", Data: newData, Version: 20}
+
+	client.keyedWritePublication("test:channel", "k", 20, pub, prep)
+
+	// Read the wire publication for v=20.
+	var got *protocol.Publication
+	timeout := time.After(2 * time.Second)
+	for got == nil {
+		select {
+		case data := <-sink:
+			reply := &protocol.Reply{}
+			if err := reply.UnmarshalVT(data); err != nil {
+				continue
+			}
+			if reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 20 {
+				got = reply.Push.Pub
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for publication v=20")
+		}
+	}
+
+	require.False(t, got.Delta,
+		"server must NOT send a delta whose base doesn't match client's keyState.version — "+
+			"client has v=10 but prep delta is from v=15. Got Delta=true with data %q", got.Data)
+	require.Equal(t, string(newData), string(got.Data),
+		"server must send the FULL payload when delta base wouldn't apply")
+	_ = clientHas
+}
+
+// TestKeyedWritePublication_StateNotAdvancedWhenWriteSkipped asserts that
+// keyedWritePublication does NOT update keyState.version or keyState.deltaReady
+// when the publication ultimately wasn't delivered.
+//
+// Repro: pass prep.wasFiltered=true. keyedWritePublication takes the full path
+// (deltaReady starts false → sendDelta=false), sets prep.deltaSub=false, and
+// then calls writePublication. writePublication early-returns at
+// `if prep.wasFiltered && !prep.deltaSub { return nil }` without enqueuing
+// anything. The client never sees the publication, but the buggy code has
+// already bumped keyState.version to pubVersion AND flipped
+// keyState.deltaReady to true. Subsequent broadcasts at lower or equal
+// versions are filtered out, and (when delta is enabled) the next broadcast
+// picks the delta path against a base the SDK never received.
+//
+// The test is synthetic — shared-poll publications don't currently set
+// wasFiltered — but the contract violation is real: any future code path
+// that legitimately filters a publication after the eager state update will
+// silently corrupt per-connection state. The same ordering bug also triggers
+// today on writePublication's other no-write paths (DisabledPushFlags,
+// encode failure) and on enqueue overflow before the async close races.
+func TestKeyedWritePublication_StateNotAdvancedWhenWriteSkipped(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClientV2(t, node, "u1")
+	connectClientV2(t, client)
+
+	// Manually set up keyed state: channel with delta enabled, one key tracked
+	// at version 0 with deltaReady=false.
+	client.mu.Lock()
+	client.keyed = &keyedState{
+		channels: map[string]*keyedChannelDeltaState{
+			"ch": {deltaType: DeltaTypeFossil},
+		},
+		trackedKeys: map[string]map[string]*keyedKeyState{
+			"ch": {"K": {version: 0, deltaReady: false}},
+		},
+	}
+	client.mu.Unlock()
+
+	// Call with prep.wasFiltered=true → writePublication will skip the write.
+	pub := &protocol.Publication{
+		Key: "K", Data: []byte(`{"v":1}`), Version: 1,
+	}
+	client.keyedWritePublication("ch", "K", 1, pub, preparedData{wasFiltered: true})
+
+	client.mu.RLock()
+	finalState := client.keyed.trackedKeys["ch"]["K"]
+	client.mu.RUnlock()
+	require.NotNil(t, finalState)
+	require.Equal(t, uint64(0), finalState.version,
+		"version must not advance when the publication was not actually delivered")
+	require.False(t, finalState.deltaReady,
+		"deltaReady must remain false when the first full publication was not delivered")
+}
+
 // TestCheckTrackExpiration_EarlyReturns covers the three early-return branches
 // in checkTrackExpiration: no keyed state, no minExpire entry, and re-check
 // after acquiring write lock.
@@ -180,4 +347,176 @@ func TestCheckTrackExpiration_EarlyReturns(t *testing.T) {
 
 	// minTrackExpireAt[channel] is unset (TrackReply{} had no ExpireAt) → fast path returns.
 	client.checkTrackExpiration("test:channel", time.Second)
+}
+
+// keyedOrphanInHubScenario is the shared body for the cleanup-vs-retrack race
+// tests covering cleanupKeyed, handleUntrack, and checkTrackExpiration.
+//
+// All three paths (cleanupKeyed, handleUntrack, checkTrackExpiration) follow
+// the same shape: under c.mu they delete the per-connection tracking entries,
+// release c.mu, then call hub.removeSubscriber outside the lock. A concurrent
+// handleTrack completion can land between unlock and hub-remove, re-inserting
+// chanKeys[K] and calling addSubscribers(K). The trailing hub.removeSubscriber
+// then strips the freshly-rejoined client — leaving chanKeys claiming the key
+// tracked while the hub no longer has this client, and all future broadcasts
+// silently skip it until disconnect or another re-track.
+//
+// The test wires testHookKeyedHubRemoveStart to spawn a re-track goroutine at
+// the race point and waits briefly so it can land. After the cleanup path
+// returns, it joins the re-track goroutine and asserts that chanKeys[K]
+// presence agrees with hub subscription. Pre-fix the assertion fails:
+// chanKeys[K] is set, hub.hasSubscriber returns false.
+func keyedOrphanInHubScenario(t *testing.T, trigger func(client *Client, channel, key string)) {
+	const channel = "test:orphan"
+	const key = "k1"
+
+	node := newTestNodeWithSharedPoll(t)
+	// OnTrack returns immediately with a short-but-valid ExpireAt so
+	// checkTrackExpiration triggers expiry on the first call.
+	setupSharedPollHandlersWithExpiry(node, time.Now().Unix()-3600)
+
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, channel)
+	trackSharedPollClient(t, client, channel, []*protocol.KeyedItem{
+		{Key: key, Version: 0},
+	})
+
+	// Sanity: client is in chanKeys and in the hub for `key`.
+	client.mu.RLock()
+	_, before := client.keyed.trackedKeys[channel][key]
+	client.mu.RUnlock()
+	require.True(t, before, "setup: client should be in chanKeys for key")
+	hub := node.keyedManager.getHub(channel)
+	require.NotNil(t, hub)
+	require.True(t, hub.hasSubscriber(key, client), "setup: client should be in hub for key")
+
+	// Install hook fired at the race point. We spawn a re-track in a goroutine.
+	// Pre-fix: the goroutine acquires c.mu (cleanupKeyed has already released
+	// it), runs the full handleTrack including addSubscribers, then signals
+	// done — and the cleanup path's still-pending hub.removeSubscriber then
+	// strips the freshly added client. Post-fix: c.mu is held across the hub
+	// loop, so the goroutine parks on c.mu until cleanup completes.
+	var retrackWG sync.WaitGroup
+	retrackWG.Add(1)
+	var retrackErr error
+	var hookOnce sync.Once
+	testHookKeyedHubRemoveStart = func() {
+		hookOnce.Do(func() {
+			retrackStarted := make(chan struct{})
+			go func() {
+				defer retrackWG.Done()
+				close(retrackStarted)
+				// Re-track the same key — this exercises the full handleTrack
+				// flow including chanKeys insertion and addSubscribers.
+				rwWrapper := testReplyWriterWrapper()
+				if err := client.handleSubRefresh(&protocol.SubRefreshRequest{
+					Channel: channel,
+					Type:    typeTrack,
+					Track:   []*protocol.TrackBatch{{Items: []*protocol.KeyedItem{{Key: key, Version: 0}}}},
+				}, &protocol.Command{Id: 99}, time.Now(), rwWrapper.rw); err != nil {
+					retrackErr = err
+					return
+				}
+				// Wait for the track callback's reply so handleTrack has fully
+				// finished (chanKeys committed, hub.addSubscribers fired).
+				deadline := time.Now().Add(2 * time.Second)
+				for time.Now().Before(deadline) {
+					if len(rwWrapper.replies) > 0 {
+						return
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}()
+			// Park briefly so the goroutine has a chance to acquire c.mu and
+			// land its re-track. Pre-fix: 100ms is more than enough for it to
+			// complete fully. Post-fix: 100ms passes with the goroutine
+			// blocked on c.mu (which is still held by cleanup), then the hook
+			// returns and cleanup proceeds.
+			<-retrackStarted
+			time.Sleep(100 * time.Millisecond)
+		})
+	}
+	t.Cleanup(func() { testHookKeyedHubRemoveStart = nil })
+
+	// Drive the cleanup path under test.
+	trigger(client, channel, key)
+
+	// Wait for the spawned re-track goroutine to finish.
+	retrackWG.Wait()
+	require.NoError(t, retrackErr)
+
+	// Invariant: chanKeys[K] present iff hub has c for K.
+	client.mu.RLock()
+	_, inChanKeys := client.keyed.trackedKeys[channel][key]
+	client.mu.RUnlock()
+	inHub := hub.hasSubscriber(key, client)
+
+	require.Equal(t, inChanKeys, inHub,
+		"orphan-in-hub race: chanKeys[K]=%v, hub.hasSubscriber=%v. "+
+			"A concurrent re-track was undone by the cleanup path's "+
+			"after-unlock hub.removeSubscriber — future broadcasts will "+
+			"silently miss this client even though it thinks K is tracked.",
+		inChanKeys, inHub)
+}
+
+// TestKeyed_CleanupKeyedVsRetrack_NoOrphanInHub covers cleanupKeyed (the
+// path invoked on client unsubscribe/disconnect).
+//
+// All three NoOrphanInHub tests share the package-level
+// testHookKeyedHubRemoveStart hook, so they cannot run with t.Parallel —
+// otherwise one test's hook would fire from another test's cleanup path.
+func TestKeyed_CleanupKeyedVsRetrack_NoOrphanInHub(t *testing.T) {
+	keyedOrphanInHubScenario(t, func(c *Client, channel, _ string) {
+		c.cleanupKeyed(channel)
+	})
+}
+
+// TestKeyed_HandleUntrackVsRetrack_NoOrphanInHub covers handleUntrack (the
+// SDK-initiated untrack path).
+func TestKeyed_HandleUntrackVsRetrack_NoOrphanInHub(t *testing.T) {
+	keyedOrphanInHubScenario(t, func(c *Client, channel, key string) {
+		untrackSharedPollClient(t, c, channel, []string{key})
+	})
+}
+
+// TestKeyed_CheckTrackExpirationVsRetrack_NoOrphanInHub covers
+// checkTrackExpiration (the server-side timer-driven expiry path). Setup uses
+// setupSharedPollHandlersWithExpiry with ExpireAt in the past so the very
+// first checkTrackExpiration call sweeps the key.
+func TestKeyed_CheckTrackExpirationVsRetrack_NoOrphanInHub(t *testing.T) {
+	keyedOrphanInHubScenario(t, func(c *Client, channel, _ string) {
+		// delay=0 makes the comparison nowUnix > expireAt+0 true immediately
+		// (expireAt is in the past).
+		c.checkTrackExpiration(channel, 0)
+	})
+}
+
+// TestKeyed_InlineUntrackVsRetrack_NoOrphanInHub covers handleTrack Step 8
+// (the inline-untrack path). The SDK can replay a signed batch that
+// includes a key in both req.Track and req.Untrack (or include any key in
+// req.Untrack alongside other tracked keys), and the server removes those
+// keys after Step 5's addSubscribers. Trackhandlers that invoke the
+// callback asynchronously allow two handleTrack callbacks for the same
+// client to interleave: A's Step 8 (delete chanKeys[K] then
+// hub.removeSubscriber(K)) can race a concurrent B's Step 2 + Step 5
+// (insert chanKeys[K] then addSubscribers([K])) — A's hub remove then
+// strips B's freshly-added subscription, orphaning B in hub state.
+//
+// Trigger fires a SubRefresh with Track:[K] and Untrack:[K]: re-tracking
+// K (no state change) then immediately untracking it through Step 8.
+func TestKeyed_InlineUntrackVsRetrack_NoOrphanInHub(t *testing.T) {
+	keyedOrphanInHubScenario(t, func(c *Client, channel, key string) {
+		rwWrapper := testReplyWriterWrapper()
+		err := c.handleSubRefresh(&protocol.SubRefreshRequest{
+			Channel: channel,
+			Type:    typeTrack,
+			Track:   []*protocol.TrackBatch{{Items: []*protocol.KeyedItem{{Key: key, Version: 0}}}},
+			Untrack: []string{key},
+		}, &protocol.Command{Id: 4}, time.Now(), rwWrapper.rw)
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			return len(rwWrapper.replies) > 0
+		}, 2*time.Second, time.Millisecond)
+	})
 }

@@ -2864,6 +2864,92 @@ func TestMemoryMapBroker_CAS_Publish(t *testing.T) {
 	require.Equal(t, []byte("v2"), stateRes.Publications[0].Data)
 }
 
+// TestMemoryMapBroker_CAS_RemoveMissingKey verifies the documented contract
+// from MapRemoveOptions.ExpectedPosition: when CAS is requested and the key
+// does not exist, the suppress reason must be PositionMismatch — matching
+// the behavior of the Redis broker (map_broker_add.lua line 280 returns
+// "position_mismatch" for is_leave=1 with expected_offset set and the key
+// missing).
+//
+// Bug: the memory broker checks key existence BEFORE the CAS branch and
+// short-circuits to KeyNotFound regardless of ExpectedPosition. That makes
+// the SuppressReason differ between Redis and Memory for the same client
+// request, breaking any SDK code that branches on PositionMismatch to
+// trigger optimistic-concurrency retry (which is exactly what
+// ExpectedPosition is for).
+func TestMemoryMapBroker_CAS_RemoveMissingKey(t *testing.T) {
+	t.Parallel()
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeRecoverable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_cas_remove_missing"
+
+	// Establish a channel + epoch by publishing then removing a different key,
+	// so the channel state exists with a known epoch when we attempt CAS-remove
+	// of the missing key.
+	res1, err := broker.Publish(ctx, ch, "other", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+	epoch := res1.Position.Epoch
+
+	// CAS remove on a non-existent key — caller supplies an offset they
+	// believed was current. The contract says this should report
+	// PositionMismatch (mirroring "key gone since I observed it"), not
+	// KeyNotFound.
+	res, err := broker.Remove(ctx, ch, "never_existed", MapRemoveOptions{
+		ExpectedPosition: &StreamPosition{Offset: 1, Epoch: epoch},
+	})
+	require.NoError(t, err)
+	require.True(t, res.Suppressed)
+	require.Equal(t, SuppressReasonPositionMismatch, res.SuppressReason,
+		"Remove with ExpectedPosition on a missing key must return PositionMismatch "+
+			"(matching the Redis broker's Lua behavior), not KeyNotFound — otherwise "+
+			"applications doing optimistic-concurrency retry behave differently across brokers.")
+}
+
+// TestMemoryMapBroker_CAS_RemoveMissingChannel asserts that CAS-Remove
+// on a never-published channel returns PositionMismatch, matching the
+// Redis broker. Redis Lua (map_broker_add.lua) auto-creates the meta_key
+// with a fresh epoch on first touch, then the CAS-epoch comparison
+// against the caller's stale epoch fails — yielding position_mismatch.
+// The memory broker's remove path used to short-circuit to KeyNotFound
+// when the channel didn't exist, never inspecting ExpectedPosition.
+func TestMemoryMapBroker_CAS_RemoveMissingChannel(t *testing.T) {
+	t.Parallel()
+	node, _ := New(Config{})
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:       MapModeRecoverable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		}
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+
+	// CAS-remove on a channel that has never been created. ExpectedPosition
+	// carries a fabricated offset/epoch — both fail. Contract is
+	// PositionMismatch (signal to the client to refetch + retry), not
+	// KeyNotFound.
+	res, err := broker.Remove(ctx, "test_cas_remove_missing_chan", "k", MapRemoveOptions{
+		ExpectedPosition: &StreamPosition{Offset: 5, Epoch: "stale-epoch"},
+	})
+	require.NoError(t, err)
+	require.True(t, res.Suppressed)
+	require.Equal(t, SuppressReasonPositionMismatch, res.SuppressReason,
+		"Remove with ExpectedPosition on a missing channel must return PositionMismatch "+
+			"(Redis Lua auto-creates the meta and reports position_mismatch on the epoch diff). "+
+			"Returning KeyNotFound here makes CAS-retry logic behave differently per broker.")
+}
+
 // TestMemoryMapBroker_CAS_Remove tests Compare-And-Swap semantics for Remove.
 func TestMemoryMapBroker_CAS_Remove(t *testing.T) {
 	t.Parallel()

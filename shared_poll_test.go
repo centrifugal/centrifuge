@@ -831,7 +831,16 @@ func TestSharedPollPublish_FreshFromPublish_NotSkippedByNotify(t *testing.T) {
 
 func TestSharedPollPublish_UnknownChannel(t *testing.T) {
 	t.Parallel()
-	node := newTestNodeWithSharedPoll(t)
+	// Versioned + !PublishEnabled means publish() goes through the local
+	// path, which no-ops without channel state. This exercises the "no
+	// track yet" case while staying on a non-versionless mode (publish in
+	// versionless mode is explicitly rejected).
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		Mode:                 SharedPollModeVersioned,
+		RefreshInterval:      30 * time.Second,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+	})
 	setupSharedPollHandlers(node)
 
 	// Publish to untracked channel — should be a no-op.
@@ -1823,7 +1832,7 @@ func TestSharedPollManager_ConcurrentTrackSingleBrokerSubscribe(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func(i int) {
 			defer wg.Done()
-			_, _, _ = m.track("test:channel", opts, "key"+string(rune('A'+i)))
+			_, _, _, _ = m.track("test:channel", opts, "key"+string(rune('A'+i)))
 		}(i)
 	}
 	wg.Wait()
@@ -1855,7 +1864,7 @@ func TestSharedPollManager_BrokerSubscribeFailureCleanup(t *testing.T) {
 	node := newTestNodeWithControllableBroker(t, broker, opts)
 	m := node.sharedPollManager
 
-	isNew, _, err := m.track("test:channel", opts, "key1")
+	isNew, _, _, err := m.track("test:channel", opts, "key1")
 	require.Error(t, err)
 	require.False(t, isNew)
 
@@ -1875,9 +1884,15 @@ func TestSharedPollManager_BrokerSubscribeFailureCleanup(t *testing.T) {
 func TestSharedPollManager_BrokerSubscribeFailureNoOrphanConcurrent(t *testing.T) {
 	t.Parallel()
 	// Scenario: goroutine A creates channel, starts broker.Subscribe (which blocks).
-	// Goroutine B arrives, sees existing channel, adds its own key.
-	// A's broker.Subscribe fails. A should NOT tear down the channel because B's
-	// key is still there.
+	// Goroutine B arrives concurrently and tracks a different key on the same
+	// channel. A's broker.Subscribe fails. A should NOT tear down the channel
+	// because B's key is still there.
+	//
+	// Note: broker.Subscribe and broker.Unsubscribe for the same base channel are
+	// serialized via the per-channel sharded sub-lock (matches the normal
+	// subscription pattern). B's track therefore waits until A's broker.Subscribe
+	// returns; both goroutines are launched before unblocking A so the
+	// concurrent-track race condition is still exercised.
 	blockCh := make(chan struct{})
 	var callCount atomic.Int32
 	broker := &controllableBroker{
@@ -1904,7 +1919,7 @@ func TestSharedPollManager_BrokerSubscribeFailureNoOrphanConcurrent(t *testing.T
 	aDone.Add(1)
 	go func() {
 		defer aDone.Done()
-		_, _, aErr = m.track("test:channel", opts, "key1")
+		_, _, _, aErr = m.track("test:channel", opts, "key1")
 	}()
 
 	// Wait for A to reach broker.Subscribe.
@@ -1912,16 +1927,25 @@ func TestSharedPollManager_BrokerSubscribeFailureNoOrphanConcurrent(t *testing.T
 		return broker.subscribeCount.Load() >= 1
 	}, time.Second, time.Millisecond)
 
-	// Goroutine B: track key2 on same channel (won't call broker.Subscribe because
-	// isNewChannel is false for B).
-	isNew2, _, err2 := m.track("test:channel", opts, "key2")
-	require.NoError(t, err2)
-	require.True(t, isNew2)
+	// Goroutine B: track key2 on the same channel. With the per-channel
+	// sharded lock, B parks on subLock until A's subscribe returns. Run B in
+	// its own goroutine so we can close(blockCh) below.
+	var isNew2 bool
+	var err2 error
+	var bDone sync.WaitGroup
+	bDone.Add(1)
+	go func() {
+		defer bDone.Done()
+		isNew2, _, _, err2 = m.track("test:channel", opts, "key2")
+	}()
 
-	// Unblock A (will fail).
+	// Unblock A (will fail) — B then proceeds and succeeds.
 	close(blockCh)
 	aDone.Wait()
 	require.Error(t, aErr)
+	bDone.Wait()
+	require.NoError(t, err2)
+	require.True(t, isNew2)
 
 	// Channel should still exist because key2 is there.
 	m.mu.RLock()
@@ -1949,7 +1973,7 @@ func TestSharedPollManager_BrokerUnsubscribeViaDissolver(t *testing.T) {
 	node := newTestNodeWithControllableBroker(t, broker, opts)
 	m := node.sharedPollManager
 
-	isNew, _, err := m.track("test:channel", opts, "key1")
+	isNew, _, release, err := m.track("test:channel", opts, "key1")
 	require.NoError(t, err)
 	require.True(t, isNew)
 
@@ -1960,8 +1984,11 @@ func TestSharedPollManager_BrokerUnsubscribeViaDissolver(t *testing.T) {
 	m.brokerSubMu.Unlock()
 	require.True(t, hasSub)
 
-	// Remove the key directly (simulating untrack with no hub).
+	// Remove the key directly. The test does not simulate a hub join, so
+	// untrack is a no-op while the pendingHubJoin reservation is held —
+	// release drops it and triggers cleanup (delete + broker unsubscribe).
 	m.untrack("test:channel", "key1")
+	release()
 
 	// Wait for dissolver to process the unsubscribe.
 	require.Eventually(t, func() bool {
@@ -1995,12 +2022,15 @@ func TestSharedPollManager_BrokerUnsubscribeRetryOnFailure(t *testing.T) {
 	node := newTestNodeWithControllableBroker(t, broker, opts)
 	m := node.sharedPollManager
 
-	isNew, _, err := m.track("test:channel", opts, "key1")
+	isNew, _, release, err := m.track("test:channel", opts, "key1")
 	require.NoError(t, err)
 	require.True(t, isNew)
 
-	// Remove key to trigger unsubscribe.
+	// Remove key to trigger unsubscribe. Test does not simulate hub join,
+	// so untrack is a no-op while the pendingHubJoin reservation is held
+	// — release drops it and triggers the actual cleanup.
 	m.untrack("test:channel", "key1")
+	release()
 
 	// Wait for dissolver to eventually succeed (after 2 failures).
 	keyCh := sharedPollKeyChannel("test:channel", "key1")
@@ -2037,14 +2067,14 @@ func TestSharedPollManager_BrokerUnsubscribeSkipsIfResubscribed(t *testing.T) {
 	m := node.sharedPollManager
 
 	// Track key1 → broker.Subscribe called.
-	_, _, err := m.track("test:channel", opts, "key1")
+	_, _, _, err := m.track("test:channel", opts, "key1")
 	require.NoError(t, err)
 
 	// Untrack key1 → triggers dissolver unsubscribe job.
 	m.untrack("test:channel", "key1")
 
 	// Immediately re-track with key2 → new channel state, new broker.Subscribe.
-	_, _, err = m.track("test:channel", opts, "key2")
+	_, _, _, err = m.track("test:channel", opts, "key2")
 	require.NoError(t, err)
 
 	// Wait for dissolver to finish any pending work.
@@ -2091,7 +2121,7 @@ func TestSharedPollManager_ConcurrentTrackNoPanic(t *testing.T) {
 			defer wg.Done()
 			ch := "test:channel"
 			key := "key" + string(rune('A'+i))
-			_, _, _ = m.track(ch, opts, key)
+			_, _, _, _ = m.track(ch, opts, key)
 		}(i)
 	}
 	wg.Wait()
@@ -2122,14 +2152,17 @@ func TestSharedPollManager_ScheduleShutdownImmediate(t *testing.T) {
 	m := node.sharedPollManager
 
 	// Track a key so channel gets created.
-	_, _, _ = m.track("test:shutdown_imm", opts, "k1")
+	_, _, release, _ := m.track("test:shutdown_imm", opts, "k1")
 	m.mu.RLock()
 	_, exists := m.channels["test:shutdown_imm"]
 	m.mu.RUnlock()
 	require.True(t, exists)
 
-	// Untrack the key — should trigger immediate shutdown.
+	// Untrack the key, then drop the pendingHubJoin reservation so the
+	// entry is actually deleted (test does not simulate hub join). The
+	// release closure triggers immediate shutdown via the negative delay.
 	m.untrack("test:shutdown_imm", "k1")
+	release()
 
 	// Channel should be removed.
 	require.Eventually(t, func() bool {
@@ -2153,9 +2186,12 @@ func TestSharedPollManager_ScheduleShutdownDelayed(t *testing.T) {
 	node := newTestNodeWithControllableBroker(t, broker, opts)
 	m := node.sharedPollManager
 
-	// Track and untrack.
-	_, _, _ = m.track("test:shutdown_delay", opts, "k1")
+	// Track and untrack. Drop the pendingHubJoin reservation via release
+	// so the deferred shutdown fires (untrack alone is a no-op while
+	// pending>0).
+	_, _, release, _ := m.track("test:shutdown_delay", opts, "k1")
 	m.untrack("test:shutdown_delay", "k1")
+	release()
 
 	// Channel should still exist immediately after untrack (delay pending).
 	m.mu.RLock()
@@ -2184,11 +2220,11 @@ func TestSharedPollManager_ShutdownCancelledByRetrack(t *testing.T) {
 	node := newTestNodeWithControllableBroker(t, broker, opts)
 	m := node.sharedPollManager
 
-	_, _, _ = m.track("test:retrack", opts, "k1")
+	_, _, _, _ = m.track("test:retrack", opts, "k1")
 	m.untrack("test:retrack", "k1")
 
 	// Re-track before delay fires.
-	_, _, _ = m.track("test:retrack", opts, "k2")
+	_, _, _, _ = m.track("test:retrack", opts, "k2")
 
 	// Channel should still exist after the shutdown delay would have fired.
 	// Use Eventually with inverted check: keep asserting existence over a window
@@ -2262,7 +2298,7 @@ func TestSharedPollManager_TrackKeys_Basic(t *testing.T) {
 	node := newTestNodeWithControllableBroker(t, broker, opts)
 	m := node.sharedPollManager
 
-	results, err := m.trackKeys("test:channel", opts, []string{"key1", "key2", "key3"})
+	results, _, err := m.trackKeys("test:channel", opts, []string{"key1", "key2", "key3"})
 	require.NoError(t, err)
 	require.Len(t, results, 3)
 
@@ -2307,12 +2343,12 @@ func TestSharedPollManager_TrackKeys_MixedNewAndExisting(t *testing.T) {
 	m := node.sharedPollManager
 
 	// Pre-track key1.
-	_, _, err := m.track("test:channel", opts, "key1")
+	_, _, _, err := m.track("test:channel", opts, "key1")
 	require.NoError(t, err)
 	require.Equal(t, int32(1), broker.subscribeCount.Load())
 
 	// Batch track: key1 (existing) + key2, key3 (new).
-	results, err := m.trackKeys("test:channel", opts, []string{"key1", "key2", "key3"})
+	results, _, err := m.trackKeys("test:channel", opts, []string{"key1", "key2", "key3"})
 	require.NoError(t, err)
 	require.Len(t, results, 3)
 
@@ -2336,7 +2372,7 @@ func TestSharedPollManager_TrackKeys_NoPublishEnabled(t *testing.T) {
 	node := newTestNodeWithControllableBroker(t, broker, opts)
 	m := node.sharedPollManager
 
-	results, err := m.trackKeys("test:channel", opts, []string{"key1", "key2"})
+	results, _, err := m.trackKeys("test:channel", opts, []string{"key1", "key2"})
 	require.NoError(t, err)
 	require.Len(t, results, 2)
 	require.True(t, results[0].isNew)
@@ -2357,7 +2393,7 @@ func TestSharedPollManager_TrackKeys_SubscribeFailureCleanup(t *testing.T) {
 	node := newTestNodeWithControllableBroker(t, broker, opts)
 	m := node.sharedPollManager
 
-	results, err := m.trackKeys("test:channel", opts, []string{"key1", "key2"})
+	results, _, err := m.trackKeys("test:channel", opts, []string{"key1", "key2"})
 	require.Error(t, err)
 	require.Nil(t, results)
 
@@ -2392,11 +2428,11 @@ func TestSharedPollManager_TrackKeys_SubscribeFailurePartialCleanup(t *testing.T
 	m := node.sharedPollManager
 
 	// Pre-track key0 — succeeds.
-	_, _, err := m.track("test:channel", opts, "key0")
+	_, _, _, err := m.track("test:channel", opts, "key0")
 	require.NoError(t, err)
 
 	// Batch track key1+key2 — broker fails.
-	results, err := m.trackKeys("test:channel", opts, []string{"key1", "key2"})
+	results, _, err := m.trackKeys("test:channel", opts, []string{"key1", "key2"})
 	require.Error(t, err)
 	require.Nil(t, results)
 
@@ -2428,7 +2464,7 @@ func TestSharedPollManager_TrackKeys_DuplicateKeys(t *testing.T) {
 	m := node.sharedPollManager
 
 	// Track with duplicates.
-	results, err := m.trackKeys("test:channel", opts, []string{"key1", "key1", "key2"})
+	results, _, err := m.trackKeys("test:channel", opts, []string{"key1", "key1", "key2"})
 	require.NoError(t, err)
 	require.Len(t, results, 3)
 
@@ -2459,11 +2495,11 @@ func TestSharedPollManager_TrackKeys_Empty(t *testing.T) {
 	node := newTestNodeWithControllableBroker(t, broker, opts)
 	m := node.sharedPollManager
 
-	results, err := m.trackKeys("test:channel", opts, nil)
+	results, _, err := m.trackKeys("test:channel", opts, nil)
 	require.NoError(t, err)
 	require.Nil(t, results)
 
-	results, err = m.trackKeys("test:channel", opts, []string{})
+	results, _, err = m.trackKeys("test:channel", opts, []string{})
 	require.NoError(t, err)
 	require.Nil(t, results)
 
@@ -2492,11 +2528,11 @@ func TestSharedPollManager_TrackKeys_ConcurrentBatch(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, _ = m.trackKeys("test:channel", opts, []string{"a1", "a2", "a3"})
+		_, _, _ = m.trackKeys("test:channel", opts, []string{"a1", "a2", "a3"})
 	}()
 	go func() {
 		defer wg.Done()
-		_, _ = m.trackKeys("test:channel", opts, []string{"b1", "b2", "b3"})
+		_, _, _ = m.trackKeys("test:channel", opts, []string{"b1", "b2", "b3"})
 	}()
 	wg.Wait()
 
@@ -2620,12 +2656,18 @@ func TestSharedPoll_Publish_VersionlessRejected(t *testing.T) {
 	require.Contains(t, err.Error(), "versionless")
 }
 
-// TestSharedPoll_Publish_LocalOnly covers the "channel not active, no broker"
-// path of publish — falls through to handlePublishedData (which then early-returns
-// since the channel isn't tracked).
+// TestSharedPoll_Publish_LocalOnly covers the "channel configured for local
+// delivery, no track yet" path of publish — versioned + !PublishEnabled
+// routes to handlePublishedData, which early-returns when no channel state
+// exists.
 func TestSharedPoll_Publish_LocalOnly(t *testing.T) {
 	t.Parallel()
-	node := newTestNodeWithSharedPoll(t)
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		Mode:                 SharedPollModeVersioned,
+		RefreshInterval:      30 * time.Second,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+	})
 	require.NoError(t, node.sharedPollManager.publish(
 		context.Background(), "never-seen", "k", 1, "ep", []byte(`{}`),
 	))
@@ -2697,12 +2739,12 @@ func TestSharedPoll_Track_AfterShutdown(t *testing.T) {
 	node.sharedPollManager.close()
 
 	// Subsequent track / trackKeys calls must hit the shutdown-guard early return.
-	isNew, ver, err := node.sharedPollManager.track("test:channel", opts, "k")
+	isNew, ver, _, err := node.sharedPollManager.track("test:channel", opts, "k")
 	require.NoError(t, err)
 	require.False(t, isNew)
 	require.Equal(t, uint64(0), ver)
 
-	results, err := node.sharedPollManager.trackKeys("test:channel", opts, []string{"k1", "k2"})
+	results, _, err := node.sharedPollManager.trackKeys("test:channel", opts, []string{"k1", "k2"})
 	require.NoError(t, err)
 	require.Len(t, results, 2)
 	for _, r := range results {
@@ -2756,11 +2798,14 @@ func TestSharedPollManager_ShutdownRetrackChaos(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			key := "k" + string(rune('0'+i%8)) // small key set => high reuse rate
-			_, _, _ = m.track(channel, opts, key)
+			_, _, release, _ := m.track(channel, opts, key)
 			// Notify can race with shutdown; the lock ordering in notify()
 			// must prevent sending on a dead notifCh.
 			m.notify(channel, key)
 			m.untrack(channel, key)
+			release() // drop pendingHubJoin reservation; untrack above is
+			// a no-op while pending>0, so release is what actually
+			// triggers entry cleanup in this test (no hub join).
 		}(i)
 	}
 	wg.Wait()
@@ -2787,6 +2832,132 @@ func TestSharedPollManager_ShutdownRetrackChaos(t *testing.T) {
 	// m.channels, close() can't reach it and m.wg.Wait blocks forever.
 	// The t.Cleanup-driven Shutdown thus serves as the leak detector;
 	// the test framework's overall timeout will catch the regression.
+}
+
+// TestSharedPollManager_DeferredUnsubRaceWithRetrack reproduces the race
+// where a deferred broker.Unsubscribe (queued when the last tracker for a key
+// went away) clobbers a concurrent broker.Subscribe issued by a fresh retrack
+// of the same key.
+//
+// The deferred unsubscribe runs inside subDissolver. Without serialization,
+// the body
+//
+//	(1) filters keys under s.mu (finds key absent, marks it for unsub),
+//	(2) releases s.mu,
+//	(3) calls broker.Unsubscribe(kc),
+//	(4) deletes brokerSubChans[kc].
+//
+// A concurrent track of the same key can land between (2) and (3): it
+// installs a fresh entry in s.itemIndex, calls broker.Subscribe(kc), and
+// writes brokerSubChans[kc] = broker. Then step (3) reaches the broker —
+// unsubscribing the freshly subscribed client — and step (4) wipes the local
+// tracking. Result: itemIndex has the key and the client is in the hub, but
+// the broker no longer pushes cross-node publications for it. Silent miss.
+//
+// Test setup: broker.Unsubscribe is blocked via a hook. We track + release a
+// key (which enqueues the deferred unsub), wait for the dissolver worker to
+// enter Unsubscribe, then retrack the same key from another goroutine. After
+// unblocking the unsubscribe, the broker must still be subscribed for the
+// key — otherwise cross-node delivery is broken.
+//
+// Expected: after the fix, brokerSubChans[kc] is populated when activity
+// settles. Pre-fix, the deferred Unsubscribe's brokerSubChans delete wins
+// and the entry is missing.
+func TestSharedPollManager_DeferredUnsubRaceWithRetrack(t *testing.T) {
+	t.Parallel()
+
+	unsubBlock := make(chan struct{})
+	unsubStarted := make(chan struct{})
+	var startedOnce sync.Once
+
+	broker := &controllableBroker{
+		unsubscribeFunc: func(ch string) error {
+			startedOnce.Do(func() { close(unsubStarted) })
+			<-unsubBlock
+			return nil
+		},
+	}
+
+	opts := SharedPollChannelOptions{
+		RefreshInterval:      time.Hour,
+		MaxKeysPerConnection: 100,
+		PublishEnabled:       true,
+		// Push channel shutdown well outside the test window so the
+		// finalize-shutdown path doesn't queue extra broker work.
+		ChannelShutdownDelay: 30 * time.Second,
+	}
+	node := newTestNodeWithControllableBroker(t, broker, opts)
+	m := node.sharedPollManager
+
+	channel := "test:b1race"
+	key := "k1"
+	keyCh := sharedPollKeyChannel(channel, key)
+
+	// Initial track. release() drops the pendingHubJoin reservation; since
+	// no hub-join happens in this test, release also tears down the entry
+	// and enqueues the deferred broker.Unsubscribe.
+	_, _, release1, err := m.track(channel, opts, key)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), broker.subscribeCount.Load())
+	m.untrack(channel, key) // no-op while pending>0
+	release1()
+
+	// Wait until the dissolver worker has entered broker.Unsubscribe and
+	// is blocked on unsubBlock — the race window we want to exercise.
+	select {
+	case <-unsubStarted:
+	case <-time.After(2 * time.Second):
+		close(unsubBlock) // avoid hanging the worker
+		t.Fatal("dissolver never entered broker.Unsubscribe")
+	}
+
+	// Retrack the same key from another goroutine. With the fix, this
+	// blocks on the per-channel sub-lock until the deferred unsubscribe
+	// completes. Without the fix, it races ahead and registers the broker
+	// subscription that the pending unsubscribe will then clobber.
+	retrackDone := make(chan struct{})
+	var retrackErr error
+	var release2 func()
+	go func() {
+		defer close(retrackDone)
+		_, _, rel, e := m.track(channel, opts, key)
+		retrackErr = e
+		release2 = rel
+	}()
+
+	// Give the retrack a moment to run (no fix path) or to park on the
+	// sub-lock (fix path). Either way, we then unblock the deferred unsub
+	// so all in-flight broker calls drain.
+	time.Sleep(50 * time.Millisecond)
+	close(unsubBlock)
+
+	select {
+	case <-retrackDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("retrack did not complete after unblocking broker.Unsubscribe")
+	}
+	require.NoError(t, retrackErr)
+
+	// After all activity settles, the broker MUST be subscribed for kc:
+	// the most recent operation on this key was a successful track, and no
+	// untrack has occurred since. With the bug, the deferred Unsubscribe's
+	// brokerSubChans delete wins and the entry is missing — cross-node
+	// publications silently bypass this node's subscribers.
+	require.Eventually(t, func() bool {
+		m.brokerSubMu.RLock()
+		_, has := m.brokerSubChans[keyCh]
+		m.brokerSubMu.RUnlock()
+		return has
+	}, 1*time.Second, 5*time.Millisecond,
+		"deferred broker.Unsubscribe clobbered the re-tracked client's "+
+			"broker subscription; brokerSubChans has no entry for the "+
+			"re-tracked key, breaking cross-node publication delivery")
+
+	// Cleanup: drop the retrack reservation.
+	if release2 != nil {
+		m.untrack(channel, key)
+		release2()
+	}
 }
 
 // TestSharedPoll_Stats covers the stats() helper.

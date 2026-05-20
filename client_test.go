@@ -5092,3 +5092,255 @@ func TestClientOnMapPublishOnMapRemoveOnUntrackSetters(t *testing.T) {
 	client.OnUntrack(func(UntrackEvent) {})
 	require.NotNil(t, client.eventHub.untrackHandler)
 }
+
+// slowJoinBroker delays Broker.PublishJoin while passing PublishLeave
+// through unmodified — used to deterministically expose join-vs-leave
+// wire-order races.
+type slowJoinBroker struct {
+	*MemoryBroker
+	joinDelay time.Duration
+}
+
+func (b *slowJoinBroker) PublishJoin(ch string, info *ClientInfo) error {
+	time.Sleep(b.joinDelay)
+	return b.MemoryBroker.PublishJoin(ch, info)
+}
+
+// TestSubscribe_JoinLeaveWireOrderOnQuickDisconnect asserts that an observer
+// client sees join-then-leave (not the reverse) when a subscribing client
+// disconnects immediately after a successful subscribe.
+//
+// Bug: the regular subscribe path fires publishJoinAndPresence in a goroutine
+// (client.go around line 1933), while the synchronous unsubscribe-on-close
+// path calls publishLeave directly. The two race in the broker. If
+// PublishJoin is even slightly slow (network broker, busy host), the
+// synchronous Leave reaches the wire ahead of Join — observers see
+// [leave, join], which corrupts any member-state tracking that derives
+// from join/leave events. The same architectural issue exists in
+// setupMapPresenceAndJoin (used by map subscribe AND shared poll
+// subscribe), so map subscribers are exposed to the same wire-order bug.
+//
+// The test uses a custom broker that delays PublishJoin by 30ms while
+// leaving PublishLeave untouched — turning the race into a deterministic
+// failure on master.
+func TestSubscribe_JoinLeaveWireOrderOnQuickDisconnect(t *testing.T) {
+	t.Parallel()
+
+	node, err := New(Config{
+		LogLevel:   LogLevelError,
+		LogHandler: func(entry LogEntry) {},
+	})
+	require.NoError(t, err)
+
+	memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	node.SetBroker(&slowJoinBroker{
+		MemoryBroker: memBroker,
+		joinDelay:    30 * time.Millisecond,
+	})
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					EmitJoinLeave: true,
+					PushJoinLeave: true,
+				},
+			}, nil)
+		})
+	})
+
+	// Observer B — receives join/leave for A.
+	ctxB, cancelB := context.WithCancel(context.Background())
+	defer cancelB()
+	transportB := newTestTransport(cancelB)
+	transportB.setProtocolVersion(ProtocolVersion2)
+	transportB.setProtocolType(ProtocolTypeProtobuf)
+	sinkB := make(chan []byte, 64)
+	transportB.sink = sinkB
+	ctxBWithCreds := SetCredentials(ctxB, &Credentials{UserID: "observer"})
+	clientB, err := newClient(ctxBWithCreds, node, transportB)
+	require.NoError(t, err)
+	connectClientV2(t, clientB)
+	subscribeClientV2(t, clientB, "shared:channel")
+
+	// Drain B's startup frames.
+	drainDeadline := time.Now().Add(50 * time.Millisecond)
+	for time.Now().Before(drainDeadline) {
+		select {
+		case <-sinkB:
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	// Subscriber A — joins then disconnects immediately.
+	ctxA, cancelA := context.WithCancel(context.Background())
+	defer cancelA()
+	transportA := newTestTransport(cancelA)
+	transportA.setProtocolVersion(ProtocolVersion2)
+	transportA.setProtocolType(ProtocolTypeProtobuf)
+	ctxAWithCreds := SetCredentials(ctxA, &Credentials{UserID: "joiner"})
+	clientA, err := newClient(ctxAWithCreds, node, transportA)
+	require.NoError(t, err)
+	connectClientV2(t, clientA)
+	subscribeClientV2(t, clientA, "shared:channel")
+
+	// Disconnect A immediately. The async publishJoin goroutine spawned in
+	// subscribe is delayed by the slow broker, but the synchronous
+	// publishLeave in close → unsubscribe runs at full speed — so on the
+	// buggy code path Leave reaches B before Join.
+	_ = clientA.close(DisconnectForceNoReconnect)
+
+	// Collect frames from B until both Join and Leave for A have arrived.
+	var sawJoinAt, sawLeaveAt int
+	idx := 0
+	deadline := time.After(2 * time.Second)
+	for sawJoinAt == 0 || sawLeaveAt == 0 {
+		select {
+		case data := <-sinkB:
+			reply := &protocol.Reply{}
+			if err := reply.UnmarshalVT(data); err != nil {
+				continue
+			}
+			if reply.Push == nil {
+				continue
+			}
+			idx++
+			if reply.Push.Join != nil && reply.Push.Join.Info != nil && reply.Push.Join.Info.User == "joiner" {
+				if sawJoinAt == 0 {
+					sawJoinAt = idx
+				}
+			}
+			if reply.Push.Leave != nil && reply.Push.Leave.Info != nil && reply.Push.Leave.Info.User == "joiner" {
+				if sawLeaveAt == 0 {
+					sawLeaveAt = idx
+				}
+			}
+		case <-deadline:
+			t.Fatalf("timeout waiting for join/leave (sawJoinAt=%d sawLeaveAt=%d)", sawJoinAt, sawLeaveAt)
+		}
+	}
+
+	require.Less(t, sawJoinAt, sawLeaveAt,
+		"wire order violation: observer saw Leave (idx=%d) before Join (idx=%d) for the same client — "+
+			"publishJoinAndPresence runs in a goroutine while publishLeave on disconnect "+
+			"runs synchronously, so a slow PublishJoin lets Leave reach the wire first.",
+		sawLeaveAt, sawJoinAt)
+}
+
+// TestSubscribe_ReplyPrecedesSelfJoinOnJoinerWire is a sanity check for the
+// synchronous-publishJoin fix: the joining client's subscribe reply must
+// reach the wire BEFORE the self-join push.
+//
+// With the fix, publishJoinAndPresence runs synchronously in the subscribe
+// callback's goroutine AFTER subscribeCmd has enqueued the reply. The two
+// enqueues hit the same per-client messageWriter FIFO queue in that order,
+// so the writer goroutine drains them in that order. This test asserts
+// that contract holds even when PublishJoin is slow (here: a 30ms delay
+// in the broker, exercising the worst case where the sync call actually
+// blocks the cb goroutine for a noticeable amount of time).
+//
+// A regression — for example reintroducing `go` on the publishJoin call,
+// or moving the publishJoin call to BEFORE the reply is enqueued — would
+// invert this on at least some runs.
+func TestSubscribe_ReplyPrecedesSelfJoinOnJoinerWire(t *testing.T) {
+	t.Parallel()
+
+	node, err := New(Config{
+		LogLevel:   LogLevelError,
+		LogHandler: func(entry LogEntry) {},
+	})
+	require.NoError(t, err)
+
+	memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	node.SetBroker(&slowJoinBroker{
+		MemoryBroker: memBroker,
+		joinDelay:    30 * time.Millisecond,
+	})
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					EmitJoinLeave: true,
+					PushJoinLeave: true, // The joiner itself also receives the join push.
+				},
+			}, nil)
+		})
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := newTestTransport(cancel)
+	transport.setProtocolVersion(ProtocolVersion2)
+	transport.setProtocolType(ProtocolTypeProtobuf)
+	sink := make(chan []byte, 64)
+	transport.sink = sink
+	ctxWithCreds := SetCredentials(ctx, &Credentials{UserID: "joiner"})
+	client, err := newClient(ctxWithCreds, node, transport)
+	require.NoError(t, err)
+	connectClientV2(t, client)
+
+	// Drain connect-time frames so the test only observes subscribe-related ones.
+	drainDeadline := time.Now().Add(50 * time.Millisecond)
+	for time.Now().Before(drainDeadline) {
+		select {
+		case <-sink:
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	subCmdID := uint32(42)
+	rwWrapper := testReplyWriterWrapper()
+	err = client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "ch",
+	}, &protocol.Command{Id: subCmdID}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	// Read frames from the joiner's wire until both the subscribe reply
+	// (matching cmd.Id) and the self-join push have been observed.
+	var sawReplyAt, sawSelfJoinAt int
+	idx := 0
+	deadline := time.After(2 * time.Second)
+	for sawReplyAt == 0 || sawSelfJoinAt == 0 {
+		select {
+		case data := <-sink:
+			reply := &protocol.Reply{}
+			if err := reply.UnmarshalVT(data); err != nil {
+				continue
+			}
+			idx++
+			// Subscribe command reply: Id matches the command's Id and is
+			// not a Push frame. (The subscribe success reply has no Error
+			// and carries the subscribe result.)
+			if reply.Push == nil && reply.Id == subCmdID && sawReplyAt == 0 {
+				sawReplyAt = idx
+			}
+			if reply.Push != nil && reply.Push.Join != nil &&
+				reply.Push.Join.Info != nil &&
+				reply.Push.Join.Info.User == "joiner" &&
+				sawSelfJoinAt == 0 {
+				sawSelfJoinAt = idx
+			}
+		case <-deadline:
+			t.Fatalf("timeout waiting for reply/self-join (sawReplyAt=%d sawSelfJoinAt=%d)", sawReplyAt, sawSelfJoinAt)
+		}
+	}
+
+	require.Less(t, sawReplyAt, sawSelfJoinAt,
+		"wire order violation: joiner saw self-Join push (idx=%d) before its own subscribe reply (idx=%d). "+
+			"The synchronous publishJoinAndPresence must run AFTER subscribeCmd has enqueued the reply, "+
+			"so FIFO ordering of the messageWriter queue keeps reply-then-join on the wire.",
+		sawSelfJoinAt, sawReplyAt)
+}

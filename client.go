@@ -1930,7 +1930,12 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 
 		if ctx.clientInfo != nil {
 			if channelHasFlag(ctx.channelContext.flags, flagEmitJoinLeave) || ctx.channelContext.mapClientPresenceChannel != "" || ctx.channelContext.mapUserPresenceChannel != "" {
-				go c.publishJoinAndPresence(req.Channel, ctx.channelContext, ctx.clientInfo)
+				// Synchronous (NOT `go`) so publishJoin reaches the broker before
+				// this subscribe callback returns. If we spawned a goroutine, a
+				// quick client disconnect could fire the synchronous publishLeave
+				// (from close → unsubscribe loop) ahead of our Join, leaving
+				// observers with [leave, join] on the wire.
+				c.publishJoinAndPresence(req.Channel, ctx.channelContext, ctx.clientInfo)
 			}
 		}
 	}
@@ -2903,7 +2908,10 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 
 	for channel, subCtx := range subCtxMap {
 		if subCtx.clientInfo != nil {
-			go c.publishJoinAndPresence(channel, subCtx.channelContext, subCtx.clientInfo)
+			// Synchronous: see comment on the same call in handleSubscribe.
+			// A spawned goroutine racing a disconnect's publishLeave can land
+			// Join after Leave on the wire.
+			c.publishJoinAndPresence(channel, subCtx.channelContext, subCtx.clientInfo)
 		}
 	}
 
@@ -4170,11 +4178,13 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 
 	c.mu.Lock()
 	// Clean up normal subscription.
+	removedNow := false
 	if currentChCtx, exists := c.channels[channel]; exists {
 		if currentChCtx.subscribingCh != nil {
 			close(currentChCtx.subscribingCh)
 		}
 		delete(c.channels, channel)
+		removedNow = true
 	}
 	// Clean up map subscribing state. Identity-match against the snapshot so we
 	// don't close a fresh entry installed by a concurrent resubscribe.
@@ -4184,12 +4194,26 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 				close(state.subscribingCh)
 			}
 			delete(c.mapSubscribing, channel)
+			removedNow = true
 		}
 	}
-	if disconnect == nil && c.perChannelWriter != nil {
+	if removedNow && disconnect == nil && c.perChannelWriter != nil {
 		c.perChannelWriter.delWriter(channel, false)
 	}
 	c.mu.Unlock()
+
+	// Multiple goroutines can reach this point for the same channel — e.g. the
+	// presence ticker spawns a fresh handleAsyncUnsubscribe goroutine on every
+	// tick until the channel is actually removed, and ticks can overlap if the
+	// first goroutine is still blocked on a network call or the write lock.
+	// Each goroutine captured its own chCtx snapshot under RLock and would
+	// otherwise re-run presence/leave/removeSubscription/unsubscribeHandler
+	// (which double-fires user callbacks and panics on patterns like a single
+	// `close(doneCh)` in OnUnsubscribe). Only the goroutine that won the delete
+	// race owns the cleanup; the rest exit here.
+	if !removedNow {
+		return nil
+	}
 
 	// Remove presence and/or run map cleanup on unsubscribe.
 	hasMapPresenceOrCleanup := channelHasFlag(chCtx.flags, flagMapClientPresence) ||

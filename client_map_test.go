@@ -81,6 +81,44 @@ func drainSink(sink chan []byte) [][]byte {
 	}
 }
 
+// waitMapSinkContains waits until wantSub appears in a sink message (or waitFor elapses),
+// then continues reading for graceExtra to detect whether negativeSub also appears.
+// Returns (wantSeen, negativeSeen).
+func waitMapSinkContains(t testing.TB, sink chan []byte, wantSub, negativeSub string, waitFor, graceExtra time.Duration) (bool, bool) {
+	t.Helper()
+	deadline := time.NewTimer(waitFor)
+	defer deadline.Stop()
+	wantSeen := false
+	negativeSeen := false
+	for !wantSeen {
+		select {
+		case msg := <-sink:
+			s := string(msg)
+			if strings.Contains(s, wantSub) {
+				wantSeen = true
+			}
+			if negativeSub != "" && strings.Contains(s, negativeSub) {
+				negativeSeen = true
+			}
+		case <-deadline.C:
+			return wantSeen, negativeSeen
+		}
+	}
+	grace := time.NewTimer(graceExtra)
+	defer grace.Stop()
+	for {
+		select {
+		case msg := <-sink:
+			s := string(msg)
+			if negativeSub != "" && strings.Contains(s, negativeSub) {
+				negativeSeen = true
+			}
+		case <-grace.C:
+			return wantSeen, negativeSeen
+		}
+	}
+}
+
 // subscribeMapClientExpectError performs a keyed subscribe request expecting an error.
 func subscribeMapClientExpectError(t testing.TB, client *Client, req *protocol.SubscribeRequest) *protocol.Error {
 	rwWrapper := testReplyWriterWrapper()
@@ -4283,22 +4321,8 @@ func TestMapSubscribe_ServerTagsFilter_LiveDelivery(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Wait for delivery.
-	time.Sleep(50 * time.Millisecond)
-
-	// Check what was delivered — only eng_item should arrive.
-	messages := drainSink(transport.sink)
-	engFound := false
-	salesFound := false
-	for _, msg := range messages {
-		s := string(msg)
-		if strings.Contains(s, "eng_item") {
-			engFound = true
-		}
-		if strings.Contains(s, "sales_item") {
-			salesFound = true
-		}
-	}
+	// Wait until eng_item is delivered, then ensure sales_item never arrives.
+	engFound, salesFound := waitMapSinkContains(t, transport.sink, "eng_item", "sales_item", 2*time.Second, 100*time.Millisecond)
 	require.True(t, engFound, "eng_item should be delivered")
 	require.False(t, salesFound, "sales_item should be filtered out")
 }
@@ -4424,21 +4448,8 @@ func TestMapSubscribe_ServerTagsFilter_RemovalFiltering(t *testing.T) {
 	_, err = broker.Remove(ctx, channel, "sales_item", MapRemoveOptions{})
 	require.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
-
 	// Subscriber should receive removal for eng_item but NOT for sales_item.
-	messages := drainSink(transport.sink)
-	engRemoval := false
-	salesRemoval := false
-	for _, msg := range messages {
-		s := string(msg)
-		if strings.Contains(s, "eng_item") {
-			engRemoval = true
-		}
-		if strings.Contains(s, "sales_item") {
-			salesRemoval = true
-		}
-	}
+	engRemoval, salesRemoval := waitMapSinkContains(t, transport.sink, "eng_item", "sales_item", 2*time.Second, 100*time.Millisecond)
 	require.True(t, engRemoval, "eng_item removal should be delivered")
 	require.False(t, salesRemoval, "sales_item removal should be filtered out")
 }
