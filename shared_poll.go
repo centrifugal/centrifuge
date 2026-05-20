@@ -101,6 +101,18 @@ type sharedPollTrackedEntry struct {
 	// to waiters.
 	subscribeReady chan struct{}
 	subscribeErr   error
+
+	// pendingHubJoin counts trackKeys callers that have successfully
+	// reserved this entry but have NOT yet finalized — either by joining
+	// the hub via keyedManager.addSubscribers or by rolling back. While
+	// pendingHubJoin > 0, untrack must NOT delete the entry: a concurrent
+	// trackKeys caller may have returned success and be about to join the
+	// hub, and deleting now would silently orphan that caller (in hub,
+	// no itemIndex, no broker subscription). Each trackKeys call
+	// increments under s.mu and returns a release closure that decrements
+	// under s.mu and runs untrack-style cleanup if the counter and hub
+	// subscriber count are both zero.
+	pendingHubJoin int
 }
 
 func xxHash64(data []byte) uint64 {
@@ -144,14 +156,27 @@ func newSharedPollManager(node *Node) *SharedPollManager {
 	}
 }
 
+// noopReleaseTrack is returned from track/trackKeys on early-exit paths
+// (shutdown, etc.) where no reservation was acquired. Lets callers
+// unconditionally invoke release() without nil-checking.
+func noopReleaseTrack() {}
+
 // track registers an item in the shared poll channel state and ensures
 // a refresh worker is running. Hub registration (addSubscriber) is handled
 // by the generic keyed layer in handleTrack — NOT here.
-func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions, key string) (bool, uint64, error) {
+//
+// On success returns a release closure that the caller MUST invoke after
+// either joining the hub via keyedManager.addSubscribers or definitively
+// abandoning the track (rollback path). The closure decrements the
+// pendingHubJoin reservation and cleans up the entry if it has no
+// remaining holders. Without this contract a concurrent rollback in
+// another goroutine could orphan an in-flight hub join — see
+// pendingHubJoin doc.
+func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions, key string) (bool, uint64, func(), error) {
 	// Check global shutdown.
 	select {
 	case <-m.shutdownCh:
-		return false, 0, nil
+		return false, 0, noopReleaseTrack, nil
 	default:
 	}
 
@@ -174,7 +199,7 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 	select {
 	case <-m.shutdownCh:
 		s.mu.Unlock()
-		return false, 0, nil
+		return false, 0, noopReleaseTrack, nil
 	default:
 	}
 
@@ -212,7 +237,7 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 		select {
 		case <-m.shutdownCh:
 			s.mu.Unlock()
-			return false, 0, nil
+			return false, 0, noopReleaseTrack, nil
 		default:
 		}
 	}
@@ -226,7 +251,11 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 	if isNewKey {
 		s.itemIndex[key] = &sharedPollTrackedEntry{}
 	}
-	entryVersion := s.itemIndex[key].version
+	entry := s.itemIndex[key]
+	entryVersion := entry.version
+	// Reserve a hub-join slot. Decremented by the returned release closure
+	// or by the internal failure paths below.
+	entry.pendingHubJoin++
 
 	// Ensure refresh worker is running.
 	startWorker := false
@@ -256,22 +285,30 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 	// here and the broker.Subscribe result a concurrent untrack+retrack
 	// can replace s.itemIndex[key] with a different entry, and we must
 	// only close/delete the entry WE created.
+	//
+	// Use s.opts.PublishEnabled (frozen at channel-state creation) rather
+	// than the caller's opts.PublishEnabled. If the caller-passed opts
+	// drift from the channel's first-tracker opts, gating on the caller's
+	// flag would skip broker.Subscribe for a key on a PublishEnabled
+	// channel — publish() then routes through the broker per s.opts but
+	// this node is not subscribed for the key, so cross-node publications
+	// silently miss local subscribers.
+	publishEnabled := s.opts.PublishEnabled
 	var ownEntry *sharedPollTrackedEntry
 	var waitEntry *sharedPollTrackedEntry
 	var waitCh chan struct{}
 	if isNewKey {
-		if opts.PublishEnabled {
-			ownEntry = s.itemIndex[key]
+		if publishEnabled {
+			ownEntry = entry
 			ownEntry.subscribeReady = make(chan struct{})
 		}
-	} else {
-		e := s.itemIndex[key]
-		if e != nil && e.subscribeReady != nil {
-			waitEntry = e
-			waitCh = e.subscribeReady
-		}
+	} else if entry.subscribeReady != nil {
+		waitEntry = entry
+		waitCh = entry.subscribeReady
 	}
 	s.mu.Unlock()
+
+	reservations := []reservation{{key: key, entry: entry}}
 
 	// Wait for the concurrent in-flight subscribe (if any). The chan close
 	// is a memory barrier for waitEntry.subscribeErr.
@@ -281,7 +318,11 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 			// The owner of the in-flight subscribe failed and rolled back
 			// its entry. We must fail too — surfacing success would orphan
 			// our caller in the keyed hub with no broker subscription.
-			return false, 0, waitEntry.subscribeErr
+			// Decrement our reservation (the wait entry; ownEntry is nil
+			// in the wait branch). No synchronous channel cleanup needed
+			// — the owner's failure path already handled that.
+			m.releasePendingHubJoin(s, reservations)
+			return false, 0, noopReleaseTrack, waitEntry.subscribeErr
 		}
 	}
 
@@ -296,10 +337,10 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 		close(ownEntry.subscribeReady)
 		ownEntry.subscribeReady = nil
 		if err != nil {
-			// Only delete from itemIndex if it still points to OUR entry —
-			// otherwise we'd erase a different goroutine's freshly
-			// installed entry. This is the same "pointer identity"
-			// invariant we use to avoid double-closing the chan.
+			// Synchronous cleanup of our owned entry (broker.Subscribe
+			// failed so brokerSubChans has no record). Pointer identity
+			// check protects against a concurrent untrack+retrack that
+			// replaced s.itemIndex[key] with a different entry.
 			cleanedUp := false
 			if s.itemIndex[key] == ownEntry {
 				delete(s.itemIndex, key)
@@ -318,12 +359,18 @@ func (m *SharedPollManager) track(channel string, opts SharedPollChannelOptions,
 				}
 				m.mu.Unlock()
 			}
-			return false, 0, err
+			// Decrement reservations. ownEntry's counter is moot (entry
+			// deleted) but the call is symmetric and harmless.
+			m.releasePendingHubJoin(s, reservations)
+			return false, 0, noopReleaseTrack, err
 		}
 		s.mu.Unlock()
 	}
 
-	return isNewKey, entryVersion, nil
+	release := func() {
+		m.releaseTrackReservations(channel, s, reservations)
+	}
+	return isNewKey, entryVersion, release, nil
 }
 
 // trackKeyResult holds the outcome for a single key tracked via trackKeys.
@@ -343,17 +390,105 @@ type ownedKey struct {
 	entry *sharedPollTrackedEntry
 }
 
-// trackKeys registers multiple items in the shared poll channel state in one batch.
-// It subscribes to all new keys with a single broker.Subscribe call.
-func (m *SharedPollManager) trackKeys(channel string, opts SharedPollChannelOptions, keys []string) ([]trackKeyResult, error) {
+// reservation pairs a key with the entry pointer whose pendingHubJoin
+// this trackKeys call incremented. Used to undo the increment (and
+// possibly clean up the entry) on rollback or release. Pointer identity
+// matters: a concurrent untrack+retrack may have installed a different
+// entry by the time we run cleanup, and decrementing the wrong entry
+// would underflow it or interfere with another caller's bookkeeping.
+type reservation struct {
+	key   string
+	entry *sharedPollTrackedEntry
+}
+
+// releaseTrackReservations decrements pendingHubJoin on each reserved
+// entry and performs untrack-style cleanup for any entry whose counter
+// reaches zero AND has no remaining hub subscribers. The hub-count check
+// closes the inter-client orphan race: another in-flight trackKeys
+// caller (waiter who returned success and is about to call
+// addSubscribers) keeps the entry alive via its own reservation until
+// it has joined the hub.
+//
+// Pointer identity (s.itemIndex[key] == r.entry) is required before
+// deleting — a concurrent untrack+retrack may have installed a different
+// entry, and deleting now would erase that caller's freshly installed
+// entry.
+//
+// Used by the release closure returned to successful trackKeys callers,
+// invoked after either addSubscribers (entry stays via hub.count>0) or
+// rollback (entry deletes if no other holders).
+func (m *SharedPollManager) releaseTrackReservations(channel string, s *sharedPollChannelState, reservations []reservation) {
+	if len(reservations) == 0 {
+		return
+	}
+	hub := m.node.keyedManager.getHub(channel)
+
+	var cleanupKeys []string
+	s.mu.Lock()
+	for _, r := range reservations {
+		if r.entry.pendingHubJoin > 0 {
+			r.entry.pendingHubJoin--
+		}
+		if r.entry.pendingHubJoin > 0 {
+			continue
+		}
+		if s.itemIndex[r.key] != r.entry {
+			continue
+		}
+		if hub != nil && hub.subscriberCount(r.key) > 0 {
+			continue
+		}
+		delete(s.itemIndex, r.key)
+		cleanupKeys = append(cleanupKeys, r.key)
+	}
+	empty := len(s.itemIndex) == 0
+	publishEnabled := s.opts.PublishEnabled
+	s.mu.Unlock()
+
+	if publishEnabled && len(cleanupKeys) > 0 {
+		m.unsubscribeFromBrokerKeys(channel, cleanupKeys)
+	}
+	if empty {
+		s.scheduleShutdown(m, channel, s.opts.ChannelShutdownDelay)
+	}
+}
+
+// releasePendingHubJoin decrements pendingHubJoin on each reservation
+// without performing any entry or channel-state cleanup. Used by
+// trackKeys / track internal failure paths (broker.Subscribe failure or
+// wait-failure) where the failing path already runs its own synchronous
+// cleanup — we just need to drop the reservations we held on wait
+// entries so other concurrent trackKeys callers see a correct count.
+// Owned entries are deleted synchronously by the failing path; their
+// counter goes away with the entry, so the decrement is harmless.
+func (m *SharedPollManager) releasePendingHubJoin(s *sharedPollChannelState, reservations []reservation) {
+	if len(reservations) == 0 {
+		return
+	}
+	s.mu.Lock()
+	for _, r := range reservations {
+		if r.entry.pendingHubJoin > 0 {
+			r.entry.pendingHubJoin--
+		}
+	}
+	s.mu.Unlock()
+}
+
+// trackKeys registers multiple items in the shared poll channel state in
+// one batch. It subscribes to all new keys with a single broker.Subscribe
+// call. On success returns a release closure the caller MUST invoke
+// after either joining the hub via keyedManager.addSubscribers or
+// definitively abandoning the track (rollback path). See track() and
+// pendingHubJoin doc for the orphan race this guards against.
+func (m *SharedPollManager) trackKeys(channel string, opts SharedPollChannelOptions, keys []string) ([]trackKeyResult, func(), error) {
 	if len(keys) == 0 {
-		return nil, nil
+		return nil, noopReleaseTrack, nil
 	}
 
 	// Check global shutdown.
 	select {
 	case <-m.shutdownCh:
-		return make([]trackKeyResult, len(keys)), nil
+		return make([]trackKeyResult, len(keys)), noopReleaseTrack, nil
 	default:
 	}
 
@@ -376,7 +511,7 @@ func (m *SharedPollManager) trackKeys(channel string, opts SharedPollChannelOpti
 	select {
 	case <-m.shutdownCh:
 		s.mu.Unlock()
-		return make([]trackKeyResult, len(keys)), nil
+		return make([]trackKeyResult, len(keys)), noopReleaseTrack, nil
 	default:
 	}
 
@@ -404,7 +539,7 @@ func (m *SharedPollManager) trackKeys(channel string, opts SharedPollChannelOpti
 		select {
 		case <-m.shutdownCh:
 			s.mu.Unlock()
-			return make([]trackKeyResult, len(keys)), nil
+			return make([]trackKeyResult, len(keys)), noopReleaseTrack, nil
 		default:
 		}
 	}
@@ -412,14 +547,29 @@ func (m *SharedPollManager) trackKeys(channel string, opts SharedPollChannelOpti
 	// Cancel any pending shutdown timer.
 	s.cancelShutdown()
 
-	// Register all keys and collect results, owned-new-entry pointers, and
-	// any in-flight subscribe chans we must wait on. We capture entry
-	// pointers (not key strings) because a concurrent untrack+retrack can
-	// replace s.itemIndex[key] with a different entry between here and
-	// when our broker.Subscribe completes — close/delete must only touch
-	// the entries WE installed.
+	// Register all keys and collect results, owned-new-entry pointers,
+	// reservation list (for pendingHubJoin bookkeeping), and any in-flight
+	// subscribe chans we must wait on. We capture entry pointers (not key
+	// strings) because a concurrent untrack+retrack can replace
+	// s.itemIndex[key] with a different entry between here and when our
+	// broker.Subscribe completes — close/delete must only touch the
+	// entries WE installed, and pending-counter decrement must only touch
+	// the entry we incremented.
+	//
+	// Use s.opts.PublishEnabled (frozen at channel-state creation) rather
+	// than the caller's opts.PublishEnabled. See track() for the drift
+	// rationale — gating broker.Subscribe on the caller's flag would
+	// silently skip subscriptions on a PublishEnabled channel and miss
+	// cross-node publications for that key.
+	publishEnabled := s.opts.PublishEnabled
 	results := make([]trackKeyResult, len(keys))
 	var owned []ownedKey
+	reservations := make([]reservation, 0, len(keys))
+	// reservedSet dedups: if the same key appears multiple times in the
+	// keys slice, we reserve once per unique entry. Otherwise duplicate
+	// keys would over-increment pendingHubJoin and the matching release
+	// would underflow (or worse, decrement another caller's count).
+	reservedSet := make(map[*sharedPollTrackedEntry]struct{}, len(keys))
 	// ownedSet identifies entries this call installed so a duplicate key
 	// later in the same `keys` slice does not get classified as someone
 	// else's in-flight subscribe — which would have us wait on our own
@@ -435,7 +585,7 @@ func (m *SharedPollManager) trackKeys(channel string, opts SharedPollChannelOpti
 		isNewKey := entry == nil
 		if isNewKey {
 			entry = &sharedPollTrackedEntry{}
-			if opts.PublishEnabled {
+			if publishEnabled {
 				entry.subscribeReady = make(chan struct{})
 			}
 			s.itemIndex[key] = entry
@@ -448,6 +598,11 @@ func (m *SharedPollManager) trackKeys(channel string, opts SharedPollChannelOpti
 			if _, mine := ownedSet[entry]; !mine {
 				waits = append(waits, waitInfo{entry: entry, ch: entry.subscribeReady})
 			}
+		}
+		if _, dup := reservedSet[entry]; !dup {
+			entry.pendingHubJoin++
+			reservations = append(reservations, reservation{key: key, entry: entry})
+			reservedSet[entry] = struct{}{}
 		}
 		results[i] = trackKeyResult{
 			isNew:        isNewKey,
@@ -488,13 +643,15 @@ func (m *SharedPollManager) trackKeys(channel string, opts SharedPollChannelOpti
 		<-w.ch
 		if w.entry.subscribeErr != nil {
 			// Roll back the entries WE created so subsequent callers can
-			// retry from scratch.
+			// retry from scratch (synchronous channel-state cleanup), and
+			// decrement our pending counter on wait entries.
 			m.rollbackOwnedKeys(channel, s, owned, w.entry.subscribeErr)
-			return nil, w.entry.subscribeErr
+			m.releasePendingHubJoin(s, reservations)
+			return nil, noopReleaseTrack, w.entry.subscribeErr
 		}
 	}
 
-	if len(owned) > 0 && opts.PublishEnabled {
+	if len(owned) > 0 && publishEnabled {
 		ownedKeyStrs := make([]string, len(owned))
 		for i, o := range owned {
 			ownedKeyStrs[i] = o.key
@@ -511,8 +668,9 @@ func (m *SharedPollManager) trackKeys(channel string, opts SharedPollChannelOpti
 			o.entry.subscribeReady = nil
 		}
 		if err != nil {
-			// Only delete entries we still own — itemIndex[key] must
-			// point to OUR entry for the delete to be safe.
+			// Synchronous cleanup of our owned entries (broker.Subscribe
+			// failed; brokerSubChans has no record). Pointer identity
+			// check guards against concurrent untrack+retrack.
 			for _, o := range owned {
 				if s.itemIndex[o.key] == o.entry {
 					delete(s.itemIndex, o.key)
@@ -531,12 +689,16 @@ func (m *SharedPollManager) trackKeys(channel string, opts SharedPollChannelOpti
 				}
 				m.mu.Unlock()
 			}
-			return nil, err
+			m.releasePendingHubJoin(s, reservations)
+			return nil, noopReleaseTrack, err
 		}
 		s.mu.Unlock()
 	}
 
-	return results, nil
+	release := func() {
+		m.releaseTrackReservations(channel, s, reservations)
+	}
+	return results, release, nil
 }
 
 // rollbackOwnedKeys signals failure on each owned entry's subscribeReady
@@ -574,7 +736,15 @@ func (m *SharedPollManager) rollbackOwnedKeys(channel string, s *sharedPollChann
 	}
 }
 
-// untrack removes an item from shared poll tracking when no connections remain.
+// untrack removes an item from shared poll tracking when no connections
+// remain. Called after the client has been removed from the hub via
+// keyedHub.removeSubscriber.
+//
+// The pendingHubJoin guard prevents deleting an entry while a concurrent
+// trackKeys caller still holds a reservation — that caller may have
+// returned success and be about to join the hub, and deleting now would
+// silently orphan it (in hub, no itemIndex, no broker subscription). See
+// pendingHubJoin doc on sharedPollTrackedEntry.
 func (m *SharedPollManager) untrack(channel string, key string) {
 	m.mu.RLock()
 	s, ok := m.channels[channel]
@@ -586,8 +756,11 @@ func (m *SharedPollManager) untrack(channel string, key string) {
 	hub := m.node.keyedManager.getHub(channel)
 
 	s.mu.Lock()
-	// Check if any connections remain for this key.
 	if hub != nil && hub.subscriberCount(key) > 0 {
+		s.mu.Unlock()
+		return
+	}
+	if entry := s.itemIndex[key]; entry != nil && entry.pendingHubJoin > 0 {
 		s.mu.Unlock()
 		return
 	}
@@ -990,33 +1163,46 @@ func (m *SharedPollManager) unsubscribeAllBrokerKeys(channel string) {
 }
 
 func (m *SharedPollManager) publish(ctx context.Context, channel string, key string, version uint64, epoch string, data []byte) error {
+	// Resolve channel options. Prefer the running channel state's opts
+	// (immutable for its lifetime). Fall back to the config callback so a
+	// publisher node that has never tracked the channel still gets the
+	// correct routing decision.
+	var opts SharedPollChannelOptions
+	var hasOpts bool
+
 	m.mu.RLock()
 	s, ok := m.channels[channel]
 	m.mu.RUnlock()
 	if ok {
 		s.mu.Lock()
-		versionless := s.opts.isVersionless()
+		opts = s.opts
 		s.mu.Unlock()
-		if versionless {
-			return errors.New("SharedPollPublish not supported in versionless refresh mode")
-		}
+		hasOpts = true
+	} else if m.node.config.SharedPoll.GetSharedPollChannelOptions != nil {
+		opts, hasOpts = m.node.config.SharedPoll.GetSharedPollChannelOptions(channel)
+	}
+	if !hasOpts {
+		return errors.New("SharedPollPublish: channel not configured for shared poll")
+	}
+	if opts.isVersionless() {
+		return errors.New("SharedPollPublish not supported in versionless refresh mode")
 	}
 
-	// Check if publish is enabled for this channel (broker subscribed).
-	keyCh := sharedPollKeyChannel(channel, key)
-	m.brokerSubMu.RLock()
-	broker := m.brokerSubChans[keyCh]
-	m.brokerSubMu.RUnlock()
-
-	if broker != nil {
-		// For shared-poll keyed channels, the broker's Publication.Epoch
-		// carries the publisher's per-channel epoch (the wire field is
-		// shared with stream channels' stream-position epoch — semantics
-		// differ per channel type, but the wire is the same).
+	// Routing is purely a function of PublishEnabled — not of local
+	// subscriber state. When PublishEnabled is true we always go through
+	// the broker so cross-node subscribers receive the publication,
+	// regardless of whether this node has tracked the key (and regardless
+	// of any in-flight broker.Subscribe). For shared-poll keyed channels
+	// the broker's Publication.Epoch carries the publisher's per-channel
+	// epoch (the wire field is shared with stream channels' stream-position
+	// epoch — semantics differ per channel type, but the wire is the same).
+	if opts.PublishEnabled {
+		broker := m.node.getBroker(channel)
+		keyCh := sharedPollKeyChannel(channel, key)
 		_, err := broker.Publish(keyCh, data, PublishOptions{Key: key, Version: version, Epoch: epoch})
 		return err
 	}
-	// Local-only (PublishEnabled=false or channel not active): apply directly.
+	// Local-only mode: apply directly. Only this node's subscribers see it.
 	m.handlePublishedData(channel, key, version, epoch, data)
 	return nil
 }
@@ -1116,22 +1302,39 @@ func (m *SharedPollManager) SharedPollRevokeKeys(channel string, keys []string, 
 		}
 	}
 
-	// Clean up hub and itemIndex.
+	// Clean up hub and itemIndex. Track keys we actually delete from
+	// itemIndex so we can drop their broker subscriptions too — otherwise
+	// the broker keeps pushing cross-node publications that handlePublishedData
+	// silently no-ops (entry == nil), wasting traffic until full channel
+	// shutdown.
+	var brokerCleanupKeys []string
 	s.mu.Lock()
+	publishEnabled := s.opts.PublishEnabled
 	for _, key := range keys {
 		if len(users) == 0 && len(excludeUsers) == 0 {
 			hub.removeAllSubscribers(key)
 		} else {
 			hub.removeSubscribersForUsers(key, users, excludeUsers)
 		}
-		// Remove from itemIndex if no subscribers remain.
+		// Remove from itemIndex if no subscribers remain AND no in-flight
+		// trackKeys reservation is holding the key alive. Mirrors the
+		// untrack guard so a concurrent track caller about to addSubscribers
+		// is not orphaned.
 		if hub.subscriberCount(key) == 0 {
-			delete(s.itemIndex, key)
+			if entry := s.itemIndex[key]; entry != nil && entry.pendingHubJoin == 0 {
+				delete(s.itemIndex, key)
+				if publishEnabled {
+					brokerCleanupKeys = append(brokerCleanupKeys, key)
+				}
+			}
 		}
 	}
 	empty := len(s.itemIndex) == 0
 	s.mu.Unlock()
 
+	if len(brokerCleanupKeys) > 0 {
+		m.unsubscribeFromBrokerKeys(channel, brokerCleanupKeys)
+	}
 	if empty {
 		s.scheduleShutdown(m, channel, s.opts.ChannelShutdownDelay)
 	}

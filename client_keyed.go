@@ -201,14 +201,22 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		//         direct delivery from cache if KeepLatestData, else notify +
 		//         needsBroadcast for near-immediate backend poll.
 		//   (none): existing key, client up to date → no action.
+		//
+		// trackKeys takes a pendingHubJoin reservation for each tracked key
+		// that the returned releaseTrackReservation closure MUST drop — either
+		// after addSubscribers (Step 5) on success, or in the rollback path
+		// below. Without that release, a concurrent client's rollback would
+		// orphan our caller in the hub.
 		var coldKeys []string
 		var warmKeys []string
+		releaseTrackReservation := func() {}
 		if c.node.sharedPollManager != nil {
-			trackResults, err := c.node.sharedPollManager.trackKeys(channel, opts, allKeys)
+			trackResults, release, err := c.node.sharedPollManager.trackKeys(channel, opts, allKeys)
 			if err != nil {
 				c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, ErrorInternal, started, rw)
 				return
 			}
+			releaseTrackReservation = release
 			for i, f := range flat {
 				tr := trackResults[i]
 				if tr.isNew && f.version == 0 {
@@ -257,13 +265,15 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		}
 		if len(chanKeys)-inlineRemovedExisting+newKeyCount > maxTracked {
 			c.mu.Unlock()
-			// Roll back the server-side track from Step 1 so we don't leak
-			// per-channel itemIndex entries for keys the client doesn't hold.
-			if c.node.sharedPollManager != nil {
-				for _, key := range allKeys {
-					c.node.sharedPollManager.untrack(channel, key)
-				}
-			}
+			// Roll back the server-side track from Step 1. Release the
+			// reservation BEFORE calling untrack: release decrements
+			// pendingHubJoin and, if no concurrent caller still holds it
+			// and the hub has no subscribers, deletes the entry itself.
+			// The subsequent untrack covers the case where another caller
+			// joined the hub between trackKeys and now — release leaves
+			// the entry alive (pending or hub.count > 0) and untrack is a
+			// no-op for keys the caller didn't own.
+			releaseTrackReservation()
 			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, ErrorLimitExceeded, started, rw)
 			return
 		}
@@ -375,6 +385,10 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		// client orphaned from future broadcasts (which look up via
 		// getHub).
 		c.node.keyedManager.addSubscribers(channel, allKeys, c, keyedOpts)
+		// Release the pendingHubJoin reservation now that we're in the hub.
+		// hub.subscriberCount(key) is now >= 1 for each key we tracked, so
+		// release just decrements the counter — no entries are deleted.
+		releaseTrackReservation()
 		hub := c.node.keyedManager.getHub(channel)
 
 		// Compute warm key delivery plan AFTER addSubscriber. KeepLatestData →

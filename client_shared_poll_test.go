@@ -5146,11 +5146,12 @@ drain:
 // TestSharedPollTrackKeys_RollbackDoesNotOrphanConcurrentTrack.
 type controllableSubscribeBroker struct {
 	*MemoryBroker
-	mu         sync.Mutex
-	callCount  int
-	startedCh  chan int   // signals when call N begins (N is sent on the chan)
-	blockUntil map[int]chan struct{}
-	errOnCall  map[int]error
+	mu           sync.Mutex
+	callCount    int
+	startedCh    chan int // signals when call N begins (N is sent on the chan)
+	blockUntil   map[int]chan struct{}
+	errOnCall    map[int]error
+	publishCount atomic.Int32
 }
 
 func (b *controllableSubscribeBroker) Subscribe(channels ...string) error {
@@ -5174,6 +5175,11 @@ func (b *controllableSubscribeBroker) Subscribe(channels ...string) error {
 		return err
 	}
 	return b.MemoryBroker.Subscribe(channels...)
+}
+
+func (b *controllableSubscribeBroker) Publish(ch string, data []byte, opts PublishOptions) (PublishResult, error) {
+	b.publishCount.Add(1)
+	return b.MemoryBroker.Publish(ch, data, opts)
 }
 
 // TestSharedPollTrackKeys_RollbackDoesNotOrphanConcurrentTrack exercises the
@@ -5246,14 +5252,15 @@ func TestSharedPollTrackKeys_RollbackDoesNotOrphanConcurrentTrack(t *testing.T) 
 
 	type res struct {
 		keyResults []trackKeyResult
+		release    func()
 		err        error
 	}
 	resA := make(chan res, 1)
 	resB := make(chan res, 1)
 
 	go func() {
-		r, err := node.sharedPollManager.trackKeys("test:channel", opts, []string{"key1"})
-		resA <- res{r, err}
+		r, release, err := node.sharedPollManager.trackKeys("test:channel", opts, []string{"key1"})
+		resA <- res{r, release, err}
 	}()
 
 	// Wait for A to enter broker.Subscribe call #1.
@@ -5271,8 +5278,8 @@ func TestSharedPollTrackKeys_RollbackDoesNotOrphanConcurrentTrack(t *testing.T) 
 	// With the fix (hold s.mu across broker.Subscribe): A is blocked in
 	// broker.Subscribe with s.mu still held; B blocks on s.mu instead.
 	go func() {
-		r, err := node.sharedPollManager.trackKeys("test:channel", opts, []string{"key1"})
-		resB <- res{r, err}
+		r, release, err := node.sharedPollManager.trackKeys("test:channel", opts, []string{"key1"})
+		resB <- res{r, release, err}
 	}()
 
 	// Give B a window to enter trackKeys and (with buggy code) finish.
@@ -5295,6 +5302,10 @@ func TestSharedPollTrackKeys_RollbackDoesNotOrphanConcurrentTrack(t *testing.T) 
 	}
 
 	require.Error(t, aResult.err, "A's trackKeys must surface the broker subscribe failure")
+	// On error trackKeys self-releases reservations; the returned release
+	// is a no-op closure. Calling it keeps the contract symmetric.
+	aResult.release()
+	defer bResult.release()
 
 	// Core invariant: if B's trackKeys returned success, the manager must
 	// still be tracking key1 — both in itemIndex (so notify/poll cover it)
@@ -5321,4 +5332,676 @@ func TestSharedPollTrackKeys_RollbackDoesNotOrphanConcurrentTrack(t *testing.T) 
 			"BUG: B's trackKeys succeeded but no broker subscription exists for key1 — "+
 				"A's failed subscribe + entry rollback left the key unsubscribed at the broker")
 	}
+}
+
+// TestSharedPollTrackKeys_LimitRollback_DoesNotOrphanConcurrentHubJoin
+// exercises the race between Client A's handleTrack limit-rollback (which
+// calls untrack BEFORE addSubscribers) and a concurrent Client B that
+// rode on the back of A's trackKeys (saw the entry already present,
+// returned success without doing its own broker.Subscribe) and is about
+// to call addSubscribers.
+//
+// Sequence (deterministic via the controllable broker):
+//
+//  1. A.trackKeys(K) — A creates the itemIndex entry and begins
+//     broker.Subscribe (blocks).
+//  2. B.trackKeys(K) — B sees the entry already present and waits on
+//     A's subscribeReady chan.
+//  3. A's broker.Subscribe is released and succeeds.
+//  4. Both A and B return from trackKeys with success.
+//  5. A's handleTrack hits the limit-rollback branch and calls
+//     untrack(K). hub.subscriberCount(K) == 0 here (neither A nor B has
+//     reached addSubscribers yet), so untrack deletes the itemIndex
+//     entry and queues broker unsubscribe.
+//  6. B's handleTrack calls addSubscribers(K, B). B is now in the hub
+//     for K — but itemIndex has no K and broker.Unsubscribe is queued.
+//
+// Bug symptom: B is silently orphaned. Cross-node publishes never reach
+// this node for K (broker unsubscribed). Local SharedPollPublish for K
+// no-ops because entry is gone.
+//
+// Invariant asserted below: after B's addSubscribers, the itemIndex
+// entry and the broker subscription must still exist.
+func TestSharedPollTrackKeys_LimitRollback_DoesNotOrphanConcurrentHubJoin(t *testing.T) {
+	t.Parallel()
+
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		SharedPoll: SharedPollConfig{
+			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+				return SharedPollChannelOptions{
+					Mode:                 SharedPollModeVersioned,
+					RefreshInterval:      30 * time.Second,
+					RefreshBatchSize:     100,
+					MaxKeysPerConnection: 100,
+					PublishEnabled:       true,
+				}, true
+			},
+		},
+	})
+	require.NoError(t, err)
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{}, nil
+	})
+
+	memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	ctrlBroker := &controllableSubscribeBroker{
+		MemoryBroker: memBroker,
+		startedCh:    make(chan int, 8),
+		blockUntil:   map[int]chan struct{}{},
+		errOnCall:    map[int]error{},
+	}
+	// Call 1 (goroutine A): block until released, then succeed.
+	call1Block := make(chan struct{})
+	ctrlBroker.blockUntil[1] = call1Block
+
+	node.SetBroker(ctrlBroker)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	opts := SharedPollChannelOptions{
+		Mode:                 SharedPollModeVersioned,
+		RefreshInterval:      30 * time.Second,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		PublishEnabled:       true,
+	}
+
+	channel := "test:channel"
+	key := "key1"
+
+	type trackRes struct {
+		results []trackKeyResult
+		release func()
+		err     error
+	}
+	resA := make(chan trackRes, 1)
+	resB := make(chan trackRes, 1)
+
+	// Goroutine A: first to call trackKeys; broker.Subscribe blocks.
+	go func() {
+		r, release, err := node.sharedPollManager.trackKeys(channel, opts, []string{key})
+		resA <- trackRes{r, release, err}
+	}()
+
+	// Wait for A's broker.Subscribe to be in flight.
+	select {
+	case n := <-ctrlBroker.startedCh:
+		require.Equal(t, 1, n)
+	case <-time.After(2 * time.Second):
+		t.Fatal("A's broker.Subscribe never started")
+	}
+
+	// Goroutine B: second trackKeys. The entry already exists with
+	// subscribeReady; B waits on it.
+	go func() {
+		r, release, err := node.sharedPollManager.trackKeys(channel, opts, []string{key})
+		resB <- trackRes{r, release, err}
+	}()
+
+	// Give B time to enter trackKeys and reach the wait.
+	time.Sleep(50 * time.Millisecond)
+
+	// Release A's broker.Subscribe. Both A and B should now return success.
+	close(call1Block)
+
+	var aResult, bResult trackRes
+	select {
+	case aResult = <-resA:
+	case <-time.After(2 * time.Second):
+		t.Fatal("A's trackKeys never returned")
+	}
+	require.NoError(t, aResult.err)
+	select {
+	case bResult = <-resB:
+	case <-time.After(2 * time.Second):
+		t.Fatal("B's trackKeys never returned")
+	}
+	require.NoError(t, bResult.err)
+
+	// Simulate A's handleTrack limit-rollback: release A's reservation
+	// BEFORE B has joined the hub. With the fix, A's release decrements
+	// pendingHubJoin (B still holds one) and the entry stays. Without the
+	// fix (untrack called blindly), the entry is deleted here.
+	aResult.release()
+
+	// Belt-and-braces: even if some unrelated path called untrack now
+	// (e.g., another connection's cleanupKeyed run from a different
+	// channel that shares the key string), it must respect B's reservation.
+	// Pre-fix untrack would delete unconditionally because hub.count==0.
+	node.sharedPollManager.untrack(channel, key)
+
+	// Now simulate B's addSubscribers (Step 5 in handleTrack).
+	clientB := newTestClient(t, node, "userB")
+	node.keyedManager.addSubscribers(channel, []string{key}, clientB, opts.toKeyedChannelOptions())
+
+	// Invariant: B is in the hub, so the manager MUST still be tracking
+	// the key — both itemIndex (so notify/poll cover it) and broker
+	// subscription (so cross-node publishes reach this node).
+	node.sharedPollManager.mu.RLock()
+	s := node.sharedPollManager.channels[channel]
+	node.sharedPollManager.mu.RUnlock()
+	require.NotNil(t, s, "channel state must exist when B is in the hub")
+	s.mu.Lock()
+	entry := s.itemIndex[key]
+	s.mu.Unlock()
+	require.NotNil(t, entry,
+		"BUG: B is in the hub but itemIndex no longer has the key — A's "+
+			"limit-rollback released its reservation while B's hub join was "+
+			"still in flight, and untrack deleted the entry. B is silently "+
+			"orphaned: cross-node publishes won't reach this node, and local "+
+			"SharedPollPublish will no-op (entry==nil).")
+
+	keyCh := sharedPollKeyChannel(channel, key)
+	node.sharedPollManager.brokerSubMu.RLock()
+	_, brokerSubbed := node.sharedPollManager.brokerSubChans[keyCh]
+	node.sharedPollManager.brokerSubMu.RUnlock()
+	require.True(t, brokerSubbed,
+		"BUG: B is in the hub but broker subscription was queued for "+
+			"unsubscribe by A's rollback — cross-node publishes for the key "+
+			"will be lost for B.")
+
+	// Finally release B's reservation (B has joined the hub; release is a
+	// no-op cleanup since hub.subscriberCount>0).
+	bResult.release()
+}
+
+// TestSharedPollRevokeKeys_UnsubscribesBroker demonstrates that
+// SharedPollRevokeKeys must also drop the broker subscription for any
+// key it removes from itemIndex. Before the fix, revoke deleted the
+// itemIndex entry but left brokerSubChans populated — the broker kept
+// pushing cross-node publications for the key, all of which were
+// silently no-op'd by handlePublishedData (entry == nil). On heavy
+// revoke workloads the wasted cross-node traffic accumulates and the
+// broker subscription persists until the entire channel state is shut
+// down.
+//
+// Invariant under test: after revoking a key, the per-key broker
+// subscription is gone (queued via the dissolver).
+func TestSharedPollRevokeKeys_UnsubscribesBroker(t *testing.T) {
+	t.Parallel()
+
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		SharedPoll: SharedPollConfig{
+			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+				return SharedPollChannelOptions{
+					Mode:                 SharedPollModeVersioned,
+					RefreshInterval:      30 * time.Second,
+					RefreshBatchSize:     100,
+					MaxKeysPerConnection: 100,
+					PublishEnabled:       true,
+				}, true
+			},
+		},
+	})
+	require.NoError(t, err)
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		items := make([]SharedPollRefreshItem, len(event.Items))
+		for i, it := range event.Items {
+			items[i] = SharedPollRefreshItem{Key: it.Key, Data: []byte(`"data"`), Version: 1}
+		}
+		return SharedPollResult{Items: items}, nil
+	})
+	setupSharedPollHandlers(node)
+	memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	node.SetBroker(memBroker)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	channel := "test:revoke_broker"
+	key := "key1"
+	otherKey := "key2"
+
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, channel)
+	trackSharedPollClient(t, client, channel, []*protocol.KeyedItem{
+		{Key: key, Version: 0},
+		{Key: otherKey, Version: 0},
+	})
+
+	// Confirm broker subscriptions exist for both keys before revoke.
+	keyCh := sharedPollKeyChannel(channel, key)
+	otherKeyCh := sharedPollKeyChannel(channel, otherKey)
+	node.sharedPollManager.brokerSubMu.RLock()
+	_, hasKey := node.sharedPollManager.brokerSubChans[keyCh]
+	_, hasOther := node.sharedPollManager.brokerSubChans[otherKeyCh]
+	node.sharedPollManager.brokerSubMu.RUnlock()
+	require.True(t, hasKey, "broker must be subscribed for key1 before revoke")
+	require.True(t, hasOther, "broker must be subscribed for key2 before revoke")
+
+	// Revoke key1 from all users (so itemIndex entry is removed).
+	node.sharedPollManager.SharedPollRevokeKeys(channel, []string{key}, nil, nil)
+
+	// Invariant: broker subscription for the revoked key must be dropped
+	// (queued via the dissolver — wait for it to clear).
+	require.Eventually(t, func() bool {
+		node.sharedPollManager.brokerSubMu.RLock()
+		defer node.sharedPollManager.brokerSubMu.RUnlock()
+		_, exists := node.sharedPollManager.brokerSubChans[keyCh]
+		return !exists
+	}, 2*time.Second, 10*time.Millisecond,
+		"BUG: SharedPollRevokeKeys deleted the itemIndex entry but left "+
+			"the broker subscription in place. Cross-node publications for "+
+			"the revoked key continue arriving and are silently dropped by "+
+			"handlePublishedData — wasted broker traffic until the entire "+
+			"channel state shuts down.")
+
+	// Sanity: untouched keys must remain subscribed at the broker.
+	node.sharedPollManager.brokerSubMu.RLock()
+	_, stillSubscribedOther := node.sharedPollManager.brokerSubChans[otherKeyCh]
+	node.sharedPollManager.brokerSubMu.RUnlock()
+	require.True(t, stillSubscribedOther,
+		"untouched key must keep its broker subscription after revoke")
+}
+
+// TestSharedPollSubscribeToBrokerKeys_PublishDuringWindow exercises a
+// contract violation where established subscribers on OTHER nodes
+// silently miss a publication. Sequence:
+//
+//   - Node B's user calls SharedPollPublish for K1 while Node B's own
+//     cold-key trackKeys for K1 is in the broker.Subscribe window
+//     (broker.Subscribe returned or in flight, brokerSubChans not yet
+//     updated).
+//   - publish() on Node B reads brokerSubChans -> empty -> falls back
+//     to handlePublishedData (local-only). broker.Publish is never
+//     called.
+//   - On other nodes (modelled here by the assertion that broker.Publish
+//     fires), any client already subscribed to K1 never receives the
+//     publication. That breaks the "subscribed clients receive
+//     notifications" contract.
+//
+// The fix holds brokerSubMu across broker.Subscribe so publishes block
+// on the RLock until brokerSubChans is consistent, then route through
+// the broker as intended.
+func TestSharedPollSubscribeToBrokerKeys_PublishDuringWindow(t *testing.T) {
+	t.Parallel()
+
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		SharedPoll: SharedPollConfig{
+			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+				return SharedPollChannelOptions{
+					Mode:                 SharedPollModeVersioned,
+					RefreshInterval:      30 * time.Second,
+					RefreshBatchSize:     100,
+					MaxKeysPerConnection: 100,
+					PublishEnabled:       true,
+				}, true
+			},
+		},
+	})
+	require.NoError(t, err)
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{}, nil
+	})
+
+	memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	ctrlBroker := &controllableSubscribeBroker{
+		MemoryBroker: memBroker,
+		startedCh:    make(chan int, 8),
+		blockUntil:   map[int]chan struct{}{},
+		errOnCall:    map[int]error{},
+	}
+	call1Block := make(chan struct{})
+	ctrlBroker.blockUntil[1] = call1Block
+
+	node.SetBroker(ctrlBroker)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	opts := SharedPollChannelOptions{
+		Mode:                 SharedPollModeVersioned,
+		RefreshInterval:      30 * time.Second,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		PublishEnabled:       true,
+	}
+	channel := "test:subscribe_window"
+	key := "key1"
+
+	type trackRes struct {
+		results []trackKeyResult
+		release func()
+		err     error
+	}
+	resCh := make(chan trackRes, 1)
+
+	go func() {
+		r, release, err := node.sharedPollManager.trackKeys(channel, opts, []string{key})
+		resCh <- trackRes{r, release, err}
+	}()
+
+	select {
+	case n := <-ctrlBroker.startedCh:
+		require.Equal(t, 1, n)
+	case <-time.After(2 * time.Second):
+		t.Fatal("broker.Subscribe was not invoked")
+	}
+
+	publishDone := make(chan error, 1)
+	go func() {
+		publishDone <- node.SharedPollPublish(context.Background(), channel, key, 1, "", []byte(`"x"`))
+	}()
+
+	// Give the publish goroutine time to either complete (bug path) or
+	// block on brokerSubMu (fix path).
+	time.Sleep(100 * time.Millisecond)
+
+	close(call1Block)
+
+	var aResult trackRes
+	select {
+	case aResult = <-resCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("trackKeys never returned")
+	}
+	require.NoError(t, aResult.err)
+	defer aResult.release()
+
+	select {
+	case err := <-publishDone:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("publish goroutine never returned")
+	}
+
+	require.EqualValues(t, 1, ctrlBroker.publishCount.Load(),
+		"BUG: SharedPollPublish landed during the window between "+
+			"broker.Subscribe and the brokerSubChans update. publish() saw "+
+			"empty brokerSubChans and fell back to local-only delivery — "+
+			"established subscribers on other nodes would silently miss the "+
+			"publication.")
+}
+
+// TestSharedPollPublish_RoutesToBrokerWithoutLocalTrack proves the new
+// publish contract: when the channel is configured with PublishEnabled,
+// SharedPollPublish routes through the broker regardless of whether the
+// publishing node has tracked the key locally. Previously, publish()
+// used brokerSubChans (a side-effect of subscribeToBrokerKeys) as the
+// gate — so a node that had never tracked the key silently fell back
+// to handlePublishedData, and subscribers on OTHER nodes never received
+// the publication. The fix decouples routing from local subscriber
+// state.
+//
+// We can't spin up two Nodes sharing a MemoryBroker in this test (memory
+// brokers are per-node), but we can directly verify the contract by
+// asserting broker.Publish was invoked when no local track exists.
+func TestSharedPollPublish_RoutesToBrokerWithoutLocalTrack(t *testing.T) {
+	t.Parallel()
+
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		SharedPoll: SharedPollConfig{
+			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+				return SharedPollChannelOptions{
+					Mode:                 SharedPollModeVersioned,
+					RefreshInterval:      30 * time.Second,
+					RefreshBatchSize:     100,
+					MaxKeysPerConnection: 100,
+					PublishEnabled:       true,
+				}, true
+			},
+		},
+	})
+	require.NoError(t, err)
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{}, nil
+	})
+
+	memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	ctrlBroker := &controllableSubscribeBroker{
+		MemoryBroker: memBroker,
+		startedCh:    make(chan int, 8),
+		blockUntil:   map[int]chan struct{}{},
+		errOnCall:    map[int]error{},
+	}
+	node.SetBroker(ctrlBroker)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	// Sanity: no channel state, no local track, no broker subscription.
+	channel := "test:publish_no_local_track"
+	key := "key1"
+	node.sharedPollManager.mu.RLock()
+	_, exists := node.sharedPollManager.channels[channel]
+	node.sharedPollManager.mu.RUnlock()
+	require.False(t, exists, "no channel state should exist before publish")
+	keyCh := sharedPollKeyChannel(channel, key)
+	node.sharedPollManager.brokerSubMu.RLock()
+	_, brokerSubbed := node.sharedPollManager.brokerSubChans[keyCh]
+	node.sharedPollManager.brokerSubMu.RUnlock()
+	require.False(t, brokerSubbed, "broker must not be subscribed before any track")
+
+	// Publish without any prior track on this node. With the old code,
+	// brokerSubChans is empty → publish() falls back to handlePublishedData
+	// → no-op. broker.Publish would NOT be called, and subscribers on
+	// other nodes would never receive this publication.
+	require.NoError(t, node.SharedPollPublish(
+		context.Background(), channel, key, 1, "", []byte(`"hello"`),
+	))
+
+	require.EqualValues(t, 1, ctrlBroker.publishCount.Load(),
+		"BUG: SharedPollPublish on a PublishEnabled channel must route "+
+			"through the broker even when this node has never tracked "+
+			"the key. Otherwise subscribers on other nodes would never "+
+			"receive the publication.")
+}
+
+// TestSharedPollPublish_LocalOnlyDoesNotUseBroker is the symmetric
+// case: when PublishEnabled is false, publish() must NOT call
+// broker.Publish — it stays local-only.
+func TestSharedPollPublish_LocalOnlyDoesNotUseBroker(t *testing.T) {
+	t.Parallel()
+
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		SharedPoll: SharedPollConfig{
+			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+				return SharedPollChannelOptions{
+					Mode:                 SharedPollModeVersioned,
+					RefreshInterval:      30 * time.Second,
+					RefreshBatchSize:     100,
+					MaxKeysPerConnection: 100,
+					PublishEnabled:       false,
+				}, true
+			},
+		},
+	})
+	require.NoError(t, err)
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{}, nil
+	})
+
+	memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	ctrlBroker := &controllableSubscribeBroker{
+		MemoryBroker: memBroker,
+		startedCh:    make(chan int, 8),
+		blockUntil:   map[int]chan struct{}{},
+		errOnCall:    map[int]error{},
+	}
+	node.SetBroker(ctrlBroker)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	require.NoError(t, node.SharedPollPublish(
+		context.Background(), "test:local_only", "key1", 1, "", []byte(`"x"`),
+	))
+	require.EqualValues(t, 0, ctrlBroker.publishCount.Load(),
+		"PublishEnabled=false must route locally — broker.Publish must not be called")
+}
+
+// TestSharedPollTrackKeys_PublishEnabledDrift demonstrates that track*()
+// must use the channel state's frozen opts.PublishEnabled, not the
+// caller-passed opts.PublishEnabled, when deciding whether to subscribe
+// the key at the broker.
+//
+// Scenario: the channel state is created by an earlier track call with
+// PublishEnabled=true (so publish() routes through the broker). A
+// concurrent caller later tracks a different (new) key on the same
+// channel but with PublishEnabled=false in its caller-passed opts. With
+// the bug, that second track does NOT call broker.Subscribe for its
+// new key — because the decision is gated on the caller's opts. The
+// channel state's publish routing still goes through the broker (per
+// s.opts), so cross-node publications to that key arrive at the broker
+// for delivery — but this node is not subscribed for it, so local
+// subscribers miss the notification.
+//
+// Invariant under test: when s.opts.PublishEnabled is true, every new
+// key gets a broker subscription regardless of the caller's opts.
+func TestSharedPollTrackKeys_PublishEnabledDrift(t *testing.T) {
+	t.Parallel()
+
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		SharedPoll: SharedPollConfig{
+			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+				return SharedPollChannelOptions{
+					Mode:                 SharedPollModeVersioned,
+					RefreshInterval:      30 * time.Second,
+					RefreshBatchSize:     100,
+					MaxKeysPerConnection: 100,
+					PublishEnabled:       true,
+				}, true
+			},
+		},
+	})
+	require.NoError(t, err)
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{}, nil
+	})
+	memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	node.SetBroker(memBroker)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	channel := "test:opts_drift"
+
+	// First track: sets up channel state with PublishEnabled=true.
+	optsTrue := SharedPollChannelOptions{
+		Mode:                 SharedPollModeVersioned,
+		RefreshInterval:      30 * time.Second,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		PublishEnabled:       true,
+	}
+	_, release1, err := node.sharedPollManager.trackKeys(channel, optsTrue, []string{"key1"})
+	require.NoError(t, err)
+	defer release1()
+
+	// Sanity: s.opts.PublishEnabled is true. key1 is subscribed at broker.
+	keyCh1 := sharedPollKeyChannel(channel, "key1")
+	node.sharedPollManager.brokerSubMu.RLock()
+	_, hasKey1 := node.sharedPollManager.brokerSubChans[keyCh1]
+	node.sharedPollManager.brokerSubMu.RUnlock()
+	require.True(t, hasKey1, "key1 must be broker-subscribed by the first track")
+
+	// Second track for a NEW key, but the caller's opts mistakenly has
+	// PublishEnabled=false. The channel state's s.opts already says true.
+	// Track must follow s.opts, not the caller's opts — otherwise key2's
+	// broker subscription would be skipped and cross-node publications
+	// for key2 would silently miss this node's subscribers.
+	optsFalse := SharedPollChannelOptions{
+		Mode:                 SharedPollModeVersioned,
+		RefreshInterval:      30 * time.Second,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		PublishEnabled:       false, // drift
+	}
+	_, release2, err := node.sharedPollManager.trackKeys(channel, optsFalse, []string{"key2"})
+	require.NoError(t, err)
+	defer release2()
+
+	keyCh2 := sharedPollKeyChannel(channel, "key2")
+	node.sharedPollManager.brokerSubMu.RLock()
+	_, hasKey2 := node.sharedPollManager.brokerSubChans[keyCh2]
+	node.sharedPollManager.brokerSubMu.RUnlock()
+	require.True(t, hasKey2,
+		"BUG: key2 was tracked on a channel whose frozen opts have "+
+			"PublishEnabled=true, but the caller-passed opts had "+
+			"PublishEnabled=false. track must use s.opts.PublishEnabled, "+
+			"not the caller's, so cross-node publications via broker reach "+
+			"this node's subscribers for key2.")
+}
+
+// TestSharedPollRevokeKeys_PartialUserFilter_KeepsBrokerSubscribed
+// guards the inverse: when revoke filters by user and other subscribers
+// for the key remain, the key stays in itemIndex AND the broker
+// subscription must stay.
+func TestSharedPollRevokeKeys_PartialUserFilter_KeepsBrokerSubscribed(t *testing.T) {
+	t.Parallel()
+
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		SharedPoll: SharedPollConfig{
+			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+				return SharedPollChannelOptions{
+					Mode:                 SharedPollModeVersioned,
+					RefreshInterval:      30 * time.Second,
+					RefreshBatchSize:     100,
+					MaxKeysPerConnection: 100,
+					PublishEnabled:       true,
+				}, true
+			},
+		},
+	})
+	require.NoError(t, err)
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		items := make([]SharedPollRefreshItem, len(event.Items))
+		for i, it := range event.Items {
+			items[i] = SharedPollRefreshItem{Key: it.Key, Data: []byte(`"data"`), Version: 1}
+		}
+		return SharedPollResult{Items: items}, nil
+	})
+	setupSharedPollHandlers(node)
+	memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	node.SetBroker(memBroker)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	channel := "test:revoke_partial"
+	key := "shared"
+
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, channel)
+	trackSharedPollClient(t, client1, channel, []*protocol.KeyedItem{{Key: key, Version: 0}})
+
+	client2 := newTestClientV2(t, node, "user2")
+	connectClientV2(t, client2)
+	subscribeSharedPollClient(t, client2, channel)
+	trackSharedPollClient(t, client2, channel, []*protocol.KeyedItem{{Key: key, Version: 0}})
+
+	keyCh := sharedPollKeyChannel(channel, key)
+	node.sharedPollManager.brokerSubMu.RLock()
+	_, before := node.sharedPollManager.brokerSubChans[keyCh]
+	node.sharedPollManager.brokerSubMu.RUnlock()
+	require.True(t, before)
+
+	// Revoke only user1 — user2 still subscribed to the key.
+	node.sharedPollManager.SharedPollRevokeKeys(channel, []string{key}, []string{"user1"}, nil)
+
+	// Broker subscription must stay (user2's needs cross-node publications).
+	require.Never(t, func() bool {
+		node.sharedPollManager.brokerSubMu.RLock()
+		defer node.sharedPollManager.brokerSubMu.RUnlock()
+		_, exists := node.sharedPollManager.brokerSubChans[keyCh]
+		return !exists
+	}, 300*time.Millisecond, 30*time.Millisecond,
+		"broker subscription must persist while at least one subscriber remains for the key")
 }
