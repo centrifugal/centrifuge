@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -4951,5 +4952,373 @@ drain:
 		require.GreaterOrEqual(t, versions[i], versions[i-1],
 			"wire delivery out of order: index %d got v=%d after v=%d (full sequence: %v)",
 			i, versions[i], versions[i-1], versions)
+	}
+}
+
+// TestSharedPoll_NeedsBroadcast_StaleBackendAtBumpedVersion exercises the
+// race between SharedPollPublish (which bumps entry.version locally) and a
+// notified refresh whose backend response is stale relative to that publish.
+//
+// Setup: versioned, !KeepLatestData. A first client populates entry at v=1
+// via cold-key auto-poll. SharedPollPublish then bumps entry.version to 2.
+// A second client tracks the same key with version=0; because the key is
+// already known, it is a "warm" key, and !KeepLatestData routes it through
+// the deferred path that calls markNeedsBroadcast + notify.
+//
+// The notified poll handler returns the STALE backend state (v=1, "v1") —
+// simulating backend replication lag where the publish has not yet been
+// ingested. applyRefreshResponse then enters the "unchanged" branch
+// (e.Version=1 <= entry.version=2) with entry.needsBroadcast=true.
+//
+// Bug: the branch builds the broadcast as `(version: entry.version=2,
+// data: e.Data="v1")` — a fresh version with stale data. The second
+// client's per-connection keyState.version advances to 2; any future
+// broadcast at v=2 is then filtered by `pubVersion <= keyState.version`,
+// so the client is silently pinned to wrong data until a publish at v>=3.
+//
+// Correct behavior: in !KeepLatestData mode the entry has no cached data,
+// so the only valid (version, data) pair we can emit is the backend's
+// (e.Version, e.Data); needsBroadcast must remain set so a subsequent
+// fresh poll re-broadcasts at the bumped version. Asserted below by
+// checking that the second client's keyState.version does NOT advance to
+// the bumped version on the stale poll.
+func TestSharedPoll_NeedsBroadcast_StaleBackendAtBumpedVersion(t *testing.T) {
+	t.Parallel()
+
+	// Poll handler returns whatever pollResult is currently set to. Starts
+	// returning v=1 (the stale value). Tests may swap it later.
+	var pollResult atomic.Value // *SharedPollResult
+	pollResult.Store(&SharedPollResult{
+		Items: []SharedPollRefreshItem{
+			{Key: "key1", Data: []byte("v1"), Version: 1},
+		},
+	})
+
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		Mode:                 SharedPollModeVersioned,
+		RefreshInterval:      30 * time.Second, // disable timer; we drive via notify
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		PublishEnabled:       false, // local-only; SharedPollPublish → handlePublishedData
+		// Notification batching intentionally disabled (both fields zero) so
+		// each notify fires the backend handler immediately. With batching
+		// enabled, NotificationBatchMaxDelay defaults to RefreshInterval (30s),
+		// which would stall the test waiting for the batch window.
+		// KeepLatestData intentionally false — exercises the deferred warm-key path.
+	})
+
+	var pollCount atomic.Int32
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		pollCount.Add(1)
+		return *(pollResult.Load().(*SharedPollResult)), nil
+	})
+	setupSharedPollHandlers(node)
+
+	// First client + cold-key auto-poll establishes entry at v=1.
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	require.Eventually(t, func() bool {
+		node.sharedPollManager.mu.RLock()
+		s := node.sharedPollManager.channels["test:channel"]
+		node.sharedPollManager.mu.RUnlock()
+		if s == nil {
+			return false
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		e := s.itemIndex["key1"]
+		return e != nil && e.version == 1
+	}, 2*time.Second, 10*time.Millisecond, "first client's cold-key auto-poll never populated entry at v=1")
+
+	// SharedPollPublish bumps entry.version to 2. PublishEnabled=false means
+	// broker is not consulted — publish() routes directly to
+	// handlePublishedData on this node.
+	require.NoError(t, node.SharedPollPublish(context.Background(), "test:channel", "key1", 2, "", []byte("v2-fresh")))
+
+	require.Eventually(t, func() bool {
+		node.sharedPollManager.mu.RLock()
+		s := node.sharedPollManager.channels["test:channel"]
+		node.sharedPollManager.mu.RUnlock()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.itemIndex["key1"].version == 2
+	}, time.Second, 10*time.Millisecond, "SharedPollPublish did not bump entry.version to 2")
+
+	pollsBeforeClient2 := pollCount.Load()
+
+	// Second client subscribes and tracks the same key at version=0. Because
+	// the key already exists in itemIndex (isNew=false) and the client passes
+	// version=0, this is a warm key. !KeepLatestData → deferredWarmKeys →
+	// markNeedsBroadcast → notified refresh with items[i].Version=0.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := newTestTransport(cancel)
+	transport.setProtocolVersion(ProtocolVersion2)
+	transport.setProtocolType(ProtocolTypeProtobuf)
+	sink := make(chan []byte, 100)
+	transport.sink = sink
+	credCtx := SetCredentials(ctx, &Credentials{UserID: "user2"})
+	client2, err := newClient(credCtx, node, transport)
+	require.NoError(t, err)
+	connectClientV2(t, client2)
+	subscribeSharedPollClient(t, client2, "test:channel")
+	trackSharedPollClient(t, client2, "test:channel", []*protocol.KeyedItem{
+		{Key: "key1", Version: 0},
+	})
+
+	// Wait for the notified poll triggered by markNeedsBroadcast to fire.
+	require.Eventually(t, func() bool {
+		return pollCount.Load() > pollsBeforeClient2
+	}, 2*time.Second, 10*time.Millisecond, "notified poll for warm key never fired (markNeedsBroadcast path not exercised)")
+
+	// Give applyRefreshResponse + broadcast a brief window to land.
+	time.Sleep(50 * time.Millisecond)
+
+	client2.mu.RLock()
+	var got *keyedKeyState
+	if client2.keyed != nil {
+		got = client2.keyed.trackedKeys["test:channel"]["key1"]
+	}
+	client2.mu.RUnlock()
+
+	if got != nil {
+		require.NotEqual(t, uint64(2), got.version,
+			"BUG: client2's keyState.version advanced to the bumped entry.version (2), "+
+				"but the broadcast carried stale backend data v=1 — future legitimate "+
+				"broadcasts at v=2 will be filtered, silently pinning client2 to wrong data")
+	}
+
+	// Stronger wire-level check: scan everything client2 received and verify
+	// no publication arrived with Version=2 in this stale phase. The buggy
+	// code would have enqueued exactly such a publication.
+drain:
+	for {
+		select {
+		case data := <-sink:
+			reply := &protocol.Reply{}
+			if err := reply.UnmarshalVT(data); err != nil {
+				continue
+			}
+			if reply.Push == nil || reply.Push.Pub == nil {
+				continue
+			}
+			pub := reply.Push.Pub
+			if pub.Key != "key1" {
+				continue
+			}
+			require.NotEqual(t, uint64(2), pub.Version,
+				"BUG: stale-backend broadcast delivered a Pub(version=2) to client2 — data is the backend's v=1 bytes, but the version label is the fresh entry.version")
+		case <-time.After(50 * time.Millisecond):
+			break drain
+		}
+	}
+
+	// FIX verification: backend catches up to v=2 with the real bytes. A
+	// fresh notify should now trigger a broadcast that delivers v=2 with
+	// correct data. (With the buggy code, needsBroadcast was already
+	// cleared on the stale response, so this poll would do nothing.)
+	pollResult.Store(&SharedPollResult{
+		Items: []SharedPollRefreshItem{
+			{Key: "key1", Data: []byte("v2-fresh"), Version: 2},
+		},
+	})
+	node.sharedPollManager.notify("test:channel", "key1")
+
+	require.Eventually(t, func() bool {
+		client2.mu.RLock()
+		defer client2.mu.RUnlock()
+		if client2.keyed == nil {
+			return false
+		}
+		ks := client2.keyed.trackedKeys["test:channel"]["key1"]
+		return ks != nil && ks.version == 2
+	}, 2*time.Second, 10*time.Millisecond, "client2 never received v=2 after backend caught up — needsBroadcast was cleared on the stale response, so the fresh poll silently dropped the broadcast")
+}
+
+// controllableSubscribeBroker wraps MemoryBroker and lets a test drive each
+// broker.Subscribe call by hand: call N can be made to block on a chan and/or
+// return a specific error. Used to construct the race in
+// TestSharedPollTrackKeys_RollbackDoesNotOrphanConcurrentTrack.
+type controllableSubscribeBroker struct {
+	*MemoryBroker
+	mu         sync.Mutex
+	callCount  int
+	startedCh  chan int   // signals when call N begins (N is sent on the chan)
+	blockUntil map[int]chan struct{}
+	errOnCall  map[int]error
+}
+
+func (b *controllableSubscribeBroker) Subscribe(channels ...string) error {
+	b.mu.Lock()
+	b.callCount++
+	n := b.callCount
+	block := b.blockUntil[n]
+	err := b.errOnCall[n]
+	startedCh := b.startedCh
+	b.mu.Unlock()
+	if startedCh != nil {
+		select {
+		case startedCh <- n:
+		default:
+		}
+	}
+	if block != nil {
+		<-block
+	}
+	if err != nil {
+		return err
+	}
+	return b.MemoryBroker.Subscribe(channels...)
+}
+
+// TestSharedPollTrackKeys_RollbackDoesNotOrphanConcurrentTrack exercises the
+// race between a failing broker.Subscribe in one trackKeys call and a
+// concurrent trackKeys call for the same key that sees the entry already
+// present.
+//
+// Without the fix, trackKeys creates an itemIndex entry under s.mu, releases
+// s.mu, then calls broker.Subscribe outside the lock. A second goroutine
+// arriving during that window sees the entry, considers itself a no-op
+// (isNewKey=false), and returns success — without ever attempting its own
+// broker.Subscribe. When the first goroutine's broker.Subscribe fails, its
+// rollback deletes the itemIndex entry, leaving the second goroutine's
+// caller with a "tracked" key that has no server-side state and no broker
+// subscription. Future SharedPollPublish on other nodes is silently lost
+// for that caller; future polls won't include the key either.
+//
+// Invariant under test: if trackKeys returned success, the corresponding
+// itemIndex entry MUST still be present after the race resolves.
+func TestSharedPollTrackKeys_RollbackDoesNotOrphanConcurrentTrack(t *testing.T) {
+	t.Parallel()
+
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		SharedPoll: SharedPollConfig{
+			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+				return SharedPollChannelOptions{
+					Mode:                 SharedPollModeVersioned,
+					RefreshInterval:      30 * time.Second,
+					RefreshBatchSize:     100,
+					MaxKeysPerConnection: 100,
+					PublishEnabled:       true, // exercise the broker subscribe path
+				}, true
+			},
+		},
+	})
+	require.NoError(t, err)
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{}, nil
+	})
+
+	memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	ctrlBroker := &controllableSubscribeBroker{
+		MemoryBroker: memBroker,
+		startedCh:    make(chan int, 8),
+		blockUntil:   map[int]chan struct{}{},
+		errOnCall:    map[int]error{},
+	}
+
+	// Call 1 (goroutine A) blocks until we release it, then fails. Subsequent
+	// calls (whichever goroutine arrives) run normally — so a correct fix
+	// that has B retry its own subscribe completes.
+	call1Block := make(chan struct{})
+	ctrlBroker.blockUntil[1] = call1Block
+	ctrlBroker.errOnCall[1] = errors.New("simulated broker subscribe failure")
+
+	node.SetBroker(ctrlBroker)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	opts := SharedPollChannelOptions{
+		Mode:                 SharedPollModeVersioned,
+		RefreshInterval:      30 * time.Second,
+		RefreshBatchSize:     100,
+		MaxKeysPerConnection: 100,
+		PublishEnabled:       true,
+	}
+
+	type res struct {
+		keyResults []trackKeyResult
+		err        error
+	}
+	resA := make(chan res, 1)
+	resB := make(chan res, 1)
+
+	go func() {
+		r, err := node.sharedPollManager.trackKeys("test:channel", opts, []string{"key1"})
+		resA <- res{r, err}
+	}()
+
+	// Wait for A to enter broker.Subscribe call #1.
+	select {
+	case n := <-ctrlBroker.startedCh:
+		require.Equal(t, 1, n, "expected the first broker.Subscribe call to be from A")
+	case <-time.After(2 * time.Second):
+		t.Fatal("A never entered broker.Subscribe")
+	}
+
+	// With the buggy code: A is blocked in broker.Subscribe with s.mu
+	// already released. B enters trackKeys, sees the entry exists, returns
+	// success without calling broker.Subscribe.
+	//
+	// With the fix (hold s.mu across broker.Subscribe): A is blocked in
+	// broker.Subscribe with s.mu still held; B blocks on s.mu instead.
+	go func() {
+		r, err := node.sharedPollManager.trackKeys("test:channel", opts, []string{"key1"})
+		resB <- res{r, err}
+	}()
+
+	// Give B a window to enter trackKeys and (with buggy code) finish.
+	time.Sleep(50 * time.Millisecond)
+
+	// Release A's blocked broker.Subscribe — it will return the simulated
+	// error and trigger the rollback path that deletes the entry.
+	close(call1Block)
+
+	var aResult, bResult res
+	select {
+	case aResult = <-resA:
+	case <-time.After(2 * time.Second):
+		t.Fatal("A's trackKeys never returned")
+	}
+	select {
+	case bResult = <-resB:
+	case <-time.After(2 * time.Second):
+		t.Fatal("B's trackKeys never returned")
+	}
+
+	require.Error(t, aResult.err, "A's trackKeys must surface the broker subscribe failure")
+
+	// Core invariant: if B's trackKeys returned success, the manager must
+	// still be tracking key1 — both in itemIndex (so notify/poll cover it)
+	// and at the broker level (so cross-node publishes reach this node).
+	if bResult.err == nil {
+		node.sharedPollManager.mu.RLock()
+		s := node.sharedPollManager.channels["test:channel"]
+		node.sharedPollManager.mu.RUnlock()
+		require.NotNil(t, s, "channel state must exist when B reported success")
+		s.mu.Lock()
+		entry := s.itemIndex["key1"]
+		s.mu.Unlock()
+		require.NotNil(t, entry,
+			"BUG: B's trackKeys succeeded (no error) but itemIndex no longer has key1 — "+
+				"A's broker-subscribe rollback deleted the entry B was relying on. Future "+
+				"cross-node publishes for key1 will be silently lost for B's caller.")
+
+		// Broker subscription invariant: subscribeToBrokerKeys recorded the key.
+		keyCh := sharedPollKeyChannel("test:channel", "key1")
+		node.sharedPollManager.brokerSubMu.RLock()
+		_, brokerSubbed := node.sharedPollManager.brokerSubChans[keyCh]
+		node.sharedPollManager.brokerSubMu.RUnlock()
+		require.True(t, brokerSubbed,
+			"BUG: B's trackKeys succeeded but no broker subscription exists for key1 — "+
+				"A's failed subscribe + entry rollback left the key unsubscribed at the broker")
 	}
 }
