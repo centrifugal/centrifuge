@@ -7,6 +7,7 @@ import (
 
 	"github.com/centrifugal/protocol"
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,6 +46,27 @@ func BenchmarkTransportMessagesReceived(b *testing.B) {
 func BenchmarkCommandDuration(b *testing.B) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(b, err)
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			started := time.Now()
+			m.observeCommandDuration(protocol.FrameTypePresence, time.Since(started), "channel"+strconv.Itoa(i%1024))
+			i++
+		}
+	})
+}
+
+func BenchmarkCommandDuration_NativeHistogram(b *testing.B) {
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:       "test_native",
+		EnableNativeHistograms: true,
 		GetChannelNamespaceLabel: func(channel string) string {
 			return channel
 		},
@@ -389,4 +411,58 @@ func BenchmarkSharedPollResultCached(b *testing.B) {
 			i++
 		}
 	})
+}
+
+func TestMetrics_EnableNativeHistograms(t *testing.T) {
+	t.Parallel()
+	reg := prometheus.NewRegistry()
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:       "test_nh",
+		RegistererGatherer:     reg,
+		EnableNativeHistograms: true,
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(t, err)
+
+	for i := 0; i < 10; i++ {
+		m.observeCommandDuration(protocol.FrameTypePublish, time.Duration(i+1)*time.Millisecond, "ns1")
+		m.observeSurveyDuration("test_op", time.Duration(i+1)*10*time.Millisecond)
+	}
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	want := map[string]bool{
+		"test_nh_client_command_duration_seconds": false,
+		"test_nh_node_survey_duration_seconds":    false,
+	}
+	for _, mf := range families {
+		name := mf.GetName()
+		if _, ok := want[name]; !ok {
+			continue
+		}
+		require.Equal(t, dto.MetricType_HISTOGRAM, mf.GetType(),
+			"metric %s should be HISTOGRAM, got %s", name, mf.GetType())
+		require.NotEmpty(t, mf.Metric, "metric %s has no series", name)
+
+		var native *dto.Histogram
+		for _, series := range mf.Metric {
+			h := series.Histogram
+			if h == nil || h.GetSampleCount() == 0 {
+				continue
+			}
+			require.NotNil(t, h.Schema, "metric %s observed series missing native Schema", name)
+			native = h
+			break
+		}
+		require.NotNil(t, native, "metric %s has no observed series", name)
+		require.NotEmpty(t, native.PositiveSpan, "metric %s missing PositiveSpan — not in native form", name)
+		require.Empty(t, native.Bucket, "metric %s should not expose classic buckets in native-only mode", name)
+		want[name] = true
+	}
+	for name, found := range want {
+		require.True(t, found, "metric %s not present in registry output", name)
+	}
 }

@@ -21,6 +21,9 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/quic-go/quic-go v0.59.0
 	github.com/stretchr/testify v1.11.1
+	go.opentelemetry.io/contrib/bridges/prometheus v0.68.0
+	go.opentelemetry.io/otel/exporters/stdout/stdoutmetric v1.43.0
+	go.opentelemetry.io/otel/sdk/metric v1.43.0
 	go.uber.org/ratelimit v0.3.1
 	golang.org/x/net v0.54.0
 	golang.org/x/oauth2 v0.36.0
@@ -50,6 +53,8 @@ require (
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/gin-contrib/sse v1.1.1 // indirect
+	github.com/go-logr/logr v1.4.3 // indirect
+	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.30.2 // indirect
@@ -96,6 +101,11 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	go.mongodb.org/mongo-driver/v2 v2.6.0 // indirect
+	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+	go.opentelemetry.io/otel v1.43.0 // indirect
+	go.opentelemetry.io/otel/metric v1.43.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.43.0 // indirect
+	go.opentelemetry.io/otel/trace v1.43.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	golang.org/x/arch v0.27.0 // indirect
 	golang.org/x/crypto v0.51.0 // indirect
