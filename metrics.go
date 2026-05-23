@@ -17,22 +17,22 @@ var defaultMetricsNamespace = "centrifuge"
 var registryMu sync.RWMutex
 
 type metrics struct {
-	messagesSentCount             *prometheus.CounterVec
-	messagesReceivedCount         *prometheus.CounterVec
-	actionCount                   *prometheus.CounterVec
-	buildInfoGauge                *prometheus.GaugeVec
-	numClientsGauge               prometheus.Gauge
-	numUsersGauge                 prometheus.Gauge
-	numSubsGauge                  prometheus.Gauge
-	numChannelsGauge              prometheus.Gauge
-	numNodesGauge                 prometheus.Gauge
-	replyErrorCount               *prometheus.CounterVec
-	connectionsAccepted           *prometheus.CounterVec
-	connectionsInflight           *prometheus.GaugeVec
-	subscriptionsAccepted         *prometheus.CounterVec
-	subscriptionsInflight         *prometheus.GaugeVec
-	serverUnsubscribeCount        *prometheus.CounterVec
-	serverDisconnectCount         *prometheus.CounterVec
+	messagesSentCount      *prometheus.CounterVec
+	messagesReceivedCount  *prometheus.CounterVec
+	actionCount            *prometheus.CounterVec
+	buildInfoGauge         *prometheus.GaugeVec
+	numClientsGauge        prometheus.Gauge
+	numUsersGauge          prometheus.Gauge
+	numSubsGauge           prometheus.Gauge
+	numChannelsGauge       prometheus.Gauge
+	numNodesGauge          prometheus.Gauge
+	replyErrorCount        *prometheus.CounterVec
+	connectionsAccepted    *prometheus.CounterVec
+	connectionsInflight    *prometheus.GaugeVec
+	subscriptionsAccepted  *prometheus.CounterVec
+	subscriptionsInflight  *prometheus.GaugeVec
+	serverUnsubscribeCount *prometheus.CounterVec
+	serverDisconnectCount  *prometheus.CounterVec
 	// commandDurationSummary holds the legacy Summary by default; when
 	// EnableNativeHistograms is true it is a no-op (the Summary is not
 	// exposed). The companion commandDurationHistogram below always carries
@@ -301,7 +301,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			Subsystem:  "node",
 			Name:       "survey_duration_seconds",
 			Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
-			Help:       "Survey duration summary.",
+			Help:       "DEPRECATED — use survey_duration_seconds_histogram. Will be removed in a future releases. Survey duration summary.",
 		}, []string{"op"})
 	}
 	m.surveyDurationHistogram = prometheus.NewHistogramVec(nativeHistogramOpts(prometheus.HistogramOpts{
@@ -323,7 +323,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			Subsystem:  "client",
 			Name:       "command_duration_seconds",
 			Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
-			Help:       "Client command duration summary.",
+			Help:       "DEPRECATED — use command_duration_seconds_histogram. Will be removed in a future releases. Client command duration summary.",
 		}, []string{"method", "channel_namespace"})
 	}
 	m.commandDurationHistogram = prometheus.NewHistogramVec(nativeHistogramOpts(prometheus.HistogramOpts{
