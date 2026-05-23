@@ -11,7 +11,9 @@ Centrifuge metrics (native histograms)
     → stdoutmetric exporter (prints OTel JSON)
 ```
 
-When the bridge sees native histograms it produces OTel
+When the flag is on, Centrifuge's `{command,survey}_duration_seconds`
+Summary instruments are replaced by Histograms with native (sparse,
+exponential) schema. The bridge translates native histograms to OTel
 `ExponentialHistogram` data points — the high-fidelity form most OTel-native
 backends prefer. Replace `stdoutmetric` with `otlpmetricgrpc` (or any other
 OTLP exporter) to push to a real backend.
@@ -41,11 +43,4 @@ calls `node.Survey(...)` in a loop, so the histogram fills up. Look for:
 
 The `Scale` + `PositiveBucket.{Offset,Counts}` shape is OTel
 `ExponentialHistogram` — the form most OTel-native backends ingest with
-full fidelity. (Classic Histograms would show `Bounds` and `BucketCounts`
-instead.)
-
-`centrifuge_client_command_duration_seconds` appears in the output as well,
-also registered as a Histogram, but Count: 0 across all series — this demo
-has no real client connections, so the metric isn't observed. The proof
-that Summaries became Histograms is the metric being present at all with
-`Scale` set rather than Summary's quantile shape.
+full fidelity.

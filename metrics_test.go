@@ -434,6 +434,8 @@ func TestMetrics_EnableNativeHistograms(t *testing.T) {
 	families, err := reg.Gather()
 	require.NoError(t, err)
 
+	// With EnableNativeHistograms on, Summary duration instruments are
+	// replaced by Histograms keeping the same metric name.
 	want := map[string]bool{
 		"test_nh_client_command_duration_seconds": false,
 		"test_nh_node_survey_duration_seconds":    false,
@@ -444,20 +446,18 @@ func TestMetrics_EnableNativeHistograms(t *testing.T) {
 			continue
 		}
 		require.Equal(t, dto.MetricType_HISTOGRAM, mf.GetType(),
-			"metric %s should be HISTOGRAM, got %s", name, mf.GetType())
-		require.NotEmpty(t, mf.Metric, "metric %s has no series", name)
-
+			"metric %s should be HISTOGRAM (not Summary) when flag is on, got %s", name, mf.GetType())
 		var native *dto.Histogram
 		for _, series := range mf.Metric {
 			h := series.Histogram
 			if h == nil || h.GetSampleCount() == 0 {
 				continue
 			}
-			require.NotNil(t, h.Schema, "metric %s observed series missing native Schema", name)
 			native = h
 			break
 		}
 		require.NotNil(t, native, "metric %s has no observed series", name)
+		require.NotNil(t, native.Schema, "metric %s missing native Schema", name)
 		require.NotEmpty(t, native.PositiveSpan, "metric %s missing PositiveSpan — not in native form", name)
 		require.Empty(t, native.Bucket, "metric %s should not expose classic buckets in native-only mode", name)
 		want[name] = true

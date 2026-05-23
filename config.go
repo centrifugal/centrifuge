@@ -399,22 +399,20 @@ type MetricsConfig struct {
 	// If not enabled - empty string will be used as a label value.
 	ExposeTransportAcceptProtocol bool
 	// EnableNativeHistograms replaces the {command,survey}_duration_seconds
-	// Summary instruments with Histograms and switches every Histogram in the
-	// package to Prometheus native (sparse, exponential) schema with no
+	// Summary instruments with Histograms and switches every Histogram in
+	// the package to Prometheus native (sparse, exponential) schema with no
 	// explicit buckets exposed. Designed for OpenTelemetry export via the
 	// client_golang Prometheus bridge — Summary doesn't translate cleanly to
 	// OTel, and native histograms map to OTel ExponentialHistogram.
 	//
-	// Breaking for dashboards relying on {quantile="..."} — use
-	// histogram_quantile() instead. Text-format Prometheus scrapes lose
-	// _bucket series; only _count and _sum remain visible. Use protobuf
-	// scrape format (Prom 2.40+) to get full data.
+	// Default is false: today's behavior is preserved. When set to true:
+	//   - Dashboards relying on {quantile="..."} labels on the two duration
+	//     Summaries break — switch to histogram_quantile() instead.
+	//   - Text-format Prometheus scrapes lose _bucket series on every
+	//     Histogram; only _count and _sum remain visible. Use the protobuf
+	//     scrape format (Prom 2.40+) to receive the native histogram data.
 	//
-	// Note: the flag determines instrument types at registration time. Two
-	// Nodes sharing the same RegistererGatherer with different values for
-	// this flag will conflict on the second New() call.
-	//
-	// Experimental in client_golang.
+	// Native histograms are experimental in client_golang.
 	EnableNativeHistograms bool
 }
 

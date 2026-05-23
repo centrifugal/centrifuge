@@ -1,11 +1,11 @@
 // Example demonstrating Centrifuge metrics exported to OpenTelemetry via the
 // client_golang Prometheus bridge.
 //
-// When centrifuge.MetricsConfig.EnableNativeHistograms is true, Centrifuge
-// constructs all distribution metrics as Prometheus native (sparse,
-// exponential) histograms. The OpenTelemetry contrib Prometheus bridge
-// detects native form and emits OTel ExponentialHistogram data points, which
-// most OTel-native backends (incl. GCP) ingest with full fidelity.
+// When centrifuge.MetricsConfig.EnableNativeHistograms is true, every
+// Histogram instrument uses Prometheus native (sparse, exponential) schema.
+// The OpenTelemetry contrib Prometheus bridge detects native form and emits
+// OTel ExponentialHistogram data points — the form most OTel-native backends
+// (incl. GCP) ingest with full fidelity.
 //
 // Run: go run .  (prints OTel metric JSON to stdout every 5 seconds)
 package main
