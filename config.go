@@ -398,16 +398,34 @@ type MetricsConfig struct {
 	// ExposeTransportAcceptProtocol enables exposing in labels the accept protocol used by client's transport.
 	// If not enabled - empty string will be used as a label value.
 	ExposeTransportAcceptProtocol bool
-	// EnableNativeHistograms replaces the {command,survey}_duration_seconds
-	// Summary instruments with Histograms and switches every Histogram in
-	// the package to Prometheus native (sparse, exponential) schema with no
-	// explicit buckets exposed. Designed for OpenTelemetry export via the
-	// client_golang Prometheus bridge — Summary doesn't translate cleanly to
-	// OTel, and native histograms map to OTel ExponentialHistogram.
+	// EnableNativeHistograms switches every Histogram instrument in the
+	// package to Prometheus native (sparse, exponential) schema with no
+	// explicit buckets exposed, and stops exposing the legacy Summary
+	// counterparts of dual-instrument metrics. Designed for OpenTelemetry
+	// export via the client_golang Prometheus bridge — native histograms
+	// map to OTel ExponentialHistogram, and dropping Summaries keeps OTel
+	// Summary (which most backends treat as second-class) out of the
+	// pipeline.
 	//
-	// Default is false: today's behavior is preserved. When set to true:
-	//   - Dashboards relying on {quantile="..."} labels on the two duration
-	//     Summaries break — switch to histogram_quantile() instead.
+	// Centrifuge exposes both a Summary and a Histogram for the two
+	// distribution metrics that have historically been Summaries:
+	//   - {ns}_client_command_duration_seconds (Summary) +
+	//     {ns}_client_command_duration_seconds_histogram (Histogram)
+	//   - {ns}_node_survey_duration_seconds (Summary) +
+	//     {ns}_node_survey_duration_seconds_histogram (Histogram)
+	// Both are constructed and observed unconditionally.
+	//
+	// Default is false: today's behavior is preserved (Summaries still
+	// exposed; companion Histograms additionally exposed with classic
+	// explicit buckets — see Histograms section in metrics docs for the
+	// exact bucket lists).
+	//
+	// When set to true:
+	//   - Summaries are no longer exposed (the underlying instrument
+	//     becomes a no-op so cached observers continue to satisfy
+	//     prometheus.Observer without nil-checks).
+	//   - All Histograms switch to native (sparse, exponential) schema
+	//     with no explicit buckets.
 	//   - Text-format Prometheus scrapes lose _bucket series on every
 	//     Histogram; only _count and _sum remain visible. Use the protobuf
 	//     scrape format (Prom 2.40+) to receive the native histogram data.

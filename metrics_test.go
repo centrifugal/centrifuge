@@ -434,19 +434,26 @@ func TestMetrics_EnableNativeHistograms(t *testing.T) {
 	families, err := reg.Gather()
 	require.NoError(t, err)
 
-	// With EnableNativeHistograms on, Summary duration instruments are
-	// replaced by Histograms keeping the same metric name.
-	want := map[string]bool{
-		"test_nh_client_command_duration_seconds": false,
-		"test_nh_node_survey_duration_seconds":    false,
+	// With EnableNativeHistograms on, the legacy Summary metrics must not
+	// be exposed; their _histogram companions carry the observations in
+	// native (sparse, exponential) form.
+	mustNotExist := map[string]bool{
+		"test_nh_client_command_duration_seconds": true,
+		"test_nh_node_survey_duration_seconds":    true,
+	}
+	wantHistograms := map[string]bool{
+		"test_nh_client_command_duration_seconds_histogram": false,
+		"test_nh_node_survey_duration_seconds_histogram":    false,
 	}
 	for _, mf := range families {
 		name := mf.GetName()
-		if _, ok := want[name]; !ok {
+		require.False(t, mustNotExist[name],
+			"legacy Summary metric %s should not be exposed when flag is on", name)
+		if _, ok := wantHistograms[name]; !ok {
 			continue
 		}
 		require.Equal(t, dto.MetricType_HISTOGRAM, mf.GetType(),
-			"metric %s should be HISTOGRAM (not Summary) when flag is on, got %s", name, mf.GetType())
+			"metric %s should be HISTOGRAM, got %s", name, mf.GetType())
 		var native *dto.Histogram
 		for _, series := range mf.Metric {
 			h := series.Histogram
@@ -460,9 +467,9 @@ func TestMetrics_EnableNativeHistograms(t *testing.T) {
 		require.NotNil(t, native.Schema, "metric %s missing native Schema", name)
 		require.NotEmpty(t, native.PositiveSpan, "metric %s missing PositiveSpan — not in native form", name)
 		require.Empty(t, native.Bucket, "metric %s should not expose classic buckets in native-only mode", name)
-		want[name] = true
+		wantHistograms[name] = true
 	}
-	for name, found := range want {
-		require.True(t, found, "metric %s not present in registry output", name)
+	for name, found := range wantHistograms {
+		require.True(t, found, "histogram metric %s not present in registry output", name)
 	}
 }

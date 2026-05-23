@@ -11,12 +11,18 @@ Centrifuge metrics (native histograms)
     → stdoutmetric exporter (prints OTel JSON)
 ```
 
-When the flag is on, Centrifuge's `{command,survey}_duration_seconds`
-Summary instruments are replaced by Histograms with native (sparse,
-exponential) schema. The bridge translates native histograms to OTel
-`ExponentialHistogram` data points — the high-fidelity form most OTel-native
-backends prefer. Replace `stdoutmetric` with `otlpmetricgrpc` (or any other
-OTLP exporter) to push to a real backend.
+Centrifuge exposes both a Summary and a Histogram for the two duration
+metrics that have historically been Summaries — `command_duration_seconds`
+and `survey_duration_seconds`. When `EnableNativeHistograms` is on:
+
+- The Summaries are no longer exposed (no-op internally; absent from output).
+- The companion `_histogram` metrics switch to native (sparse, exponential)
+  schema.
+- The bridge translates native histograms to OTel `ExponentialHistogram` —
+  the high-fidelity form most OTel-native backends prefer.
+
+Replace `stdoutmetric` with `otlpmetricgrpc` (or any other OTLP exporter)
+to push to a real backend.
 
 ## Run
 
@@ -24,12 +30,12 @@ OTLP exporter) to push to a real backend.
 go run .
 ```
 
-The active signal is `centrifuge_node_survey_duration_seconds` — the demo
-calls `node.Survey(...)` in a loop, so the histogram fills up. Look for:
+The active signal is `centrifuge_node_survey_duration_seconds_histogram` —
+the demo calls `node.Survey(...)` in a loop. Look for:
 
 ```json
 {
-  "Name": "centrifuge_node_survey_duration_seconds",
+  "Name": "centrifuge_node_survey_duration_seconds_histogram",
   "Data": {
     "DataPoints": [{
       "Count": 100,
