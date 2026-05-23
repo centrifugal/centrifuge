@@ -301,7 +301,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			Subsystem:  "node",
 			Name:       "survey_duration_seconds",
 			Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
-			Help:       "DEPRECATED — use survey_duration_seconds_histogram. Will be removed in a future releases. Survey duration summary.",
+			Help:       "DEPRECATED — use survey_duration_seconds_histogram. Will be removed in future releases. Survey duration summary.",
 		}, []string{"op"})
 	}
 	m.surveyDurationHistogram = prometheus.NewHistogramVec(nativeHistogramOpts(prometheus.HistogramOpts{
@@ -323,7 +323,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			Subsystem:  "client",
 			Name:       "command_duration_seconds",
 			Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
-			Help:       "DEPRECATED — use command_duration_seconds_histogram. Will be removed in a future releases. Client command duration summary.",
+			Help:       "DEPRECATED — use command_duration_seconds_histogram. Will be removed in future releases. Client command duration summary.",
 		}, []string{"method", "channel_namespace"})
 	}
 	m.commandDurationHistogram = prometheus.NewHistogramVec(nativeHistogramOpts(prometheus.HistogramOpts{
