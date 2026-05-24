@@ -68,6 +68,11 @@ type ConnectReply struct {
 	// (1000 / 100) * MaxMessagesInFrame (16 by default), i.e. 160 messages per second. This
 	// should be more than enough for target Centrifuge use cases (frontend apps) though.
 	WriteDelay time.Duration
+	// WriteWithTimer enables using write timer for this client connection. This mode is only
+	// active when WriteDelay is set to a non-zero value. In this mode Centrifuge uses a timer
+	// to schedule batched writes to the connection instead of checking for messages in a
+	// dedicated goroutine loop.
+	WriteWithTimer bool
 	// ReplyWithoutQueue when enabled will force Centrifuge to avoid using Client write
 	// queue for sending replies to commands for this connection. Replies sent directly to
 	// the Client's transport thus avoiding possible delays caused by writer loop, but replies
@@ -76,6 +81,11 @@ type ConnectReply struct {
 	// QueueInitialCap set an initial capacity for client's message queue, the size of queue
 	// can grow further, but won't be reduced below QueueInitialCap. By default, it's 2.
 	QueueInitialCap int
+	// QueueShrinkDelay is a time Centrifuge will wait before shrinking the client's message
+	// queue after it grows. This delay helps to avoid frequent allocations/deallocations when
+	// queue size fluctuates. Zero value means no delay and immediate shrinking. This option
+	// only works when WriteDelay is set to a non-zero value.
+	QueueShrinkDelay time.Duration
 	// PingPongConfig if set, will override Transport's PingPongConfig to enable setting ping/pong interval
 	// for individual client.
 	PingPongConfig *PingPongConfig
@@ -185,6 +195,9 @@ type SubscribeEvent struct {
 	Recoverable bool
 	// JoinLeave is true when Client wants to receive join/leave messages.
 	JoinLeave bool
+	// Type is the subscription type requested by the client (map, presence, etc.).
+	// For regular subscriptions this is SubscriptionTypeStream (zero value).
+	Type SubscriptionType
 }
 
 // SubscribeCallback should be called as soon as handler decides what to do
@@ -200,6 +213,11 @@ type SubscribeReply struct {
 	// SubRefresh commands with new Subscription Token. If not set then server-side
 	// SubRefresh handler will be used.
 	ClientSideRefresh bool
+
+	// Publications to include in the subscribe result. These are delivered to the
+	// client as publication events before live publications begin — same mechanism
+	// as recovery publications. Useful for delivering initial state on subscribe.
+	Publications []*Publication
 
 	// SubscriptionReady channel if provided will be closed as soon as Centrifuge
 	// written subscribe reply to the connection, so it's possible to start writing
@@ -244,6 +262,65 @@ type PublishCallback func(PublishReply, error)
 // PublishHandler called when client publishes into channel.
 type PublishHandler func(PublishEvent, PublishCallback)
 
+// MapPublishEvent contains fields related to map publish event.
+type MapPublishEvent struct {
+	// Channel client wants to publish data to.
+	Channel string
+	// Key sent by the client (may be empty if server assigns keys).
+	Key string
+	// Data client wants to publish.
+	Data []byte
+	// ClientInfo about client connection.
+	ClientInfo *ClientInfo
+}
+
+// MapPublishReply contains fields determining the result on map publish.
+type MapPublishReply struct {
+	// Key overrides the key from the client request. If set, this key is used
+	// instead of the one sent by the client. This allows the server to control
+	// key assignment (e.g., set key to client ID for cursor channels).
+	Key string
+	// Options to control map publication.
+	Options MapPublishOptions
+	// Result if set will tell Centrifuge that message already published to
+	// channel by handler code. In this case Centrifuge won't try to publish
+	// into channel again after handler returned MapPublishReply.
+	Result *MapUpdateResult
+}
+
+// MapPublishCallback should be called with MapPublishReply or error.
+type MapPublishCallback func(MapPublishReply, error)
+
+// MapPublishHandler called when client publishes into map channel.
+type MapPublishHandler func(MapPublishEvent, MapPublishCallback)
+
+// MapRemoveEvent contains fields related to map remove event.
+type MapRemoveEvent struct {
+	// Channel client wants to remove a key from.
+	Channel string
+	// Key sent by the client (may be empty if server assigns keys).
+	Key string
+	// ClientInfo about client connection.
+	ClientInfo *ClientInfo
+}
+
+// MapRemoveReply contains fields determining the result on map remove.
+type MapRemoveReply struct {
+	// Key overrides the key from the client request.
+	Key string
+	// Options to control map removal.
+	Options MapRemoveOptions
+	// Result if set will tell Centrifuge that removal already performed
+	// by handler code. In this case Centrifuge won't try to remove again.
+	Result *MapUpdateResult
+}
+
+// MapRemoveCallback should be called with MapRemoveReply or error.
+type MapRemoveCallback func(MapRemoveReply, error)
+
+// MapRemoveHandler called when client wants to remove a key from map channel.
+type MapRemoveHandler func(MapRemoveEvent, MapRemoveCallback)
+
 // SubRefreshEvent contains fields related to subscription refresh event.
 type SubRefreshEvent struct {
 	// ClientSideRefresh is true for refresh initiated by client-side subscription
@@ -265,6 +342,12 @@ type SubRefreshReply struct {
 	ExpireAt int64
 	// Info is a new channel-scope info. Zero value means do not change previous one.
 	Info []byte
+	// ServerTagsFilter is an optional updated server-side tags filter. When nil,
+	// the existing filter is left unchanged. When set, Centrifuge compares it
+	// with the current filter — if different, the filter is updated in the hub
+	// and for map subscriptions the client is unsubscribed with
+	// UnsubscribeCodeStateInvalidated to force a full state re-sync.
+	ServerTagsFilter *FilterNode
 }
 
 // SubRefreshCallback should be called as soon as handler decides what to do
@@ -438,6 +521,8 @@ type TransportWriteEvent struct {
 	Data []byte
 	// Channel will be set if TransportWriteEvent relates to some channel.
 	Channel string
+	// Key of Publication (optional).
+	Key string
 	// FrameType tells what is being sent inside Data.
 	FrameType protocol.FrameType
 }
@@ -497,3 +582,113 @@ func newCommandProcessedEvent(command *protocol.Command, err error, reply *proto
 // purposes this seems tolerable as commands and replies may be matched by id.
 // Also, carefully read docs for CommandProcessedEvent to avoid possible bugs.
 type CommandProcessedHandler func(*Client, CommandProcessedEvent)
+
+// UntrackEvent contains fields related to an untrack request on a keyed channel.
+type UntrackEvent struct {
+	// Channel client untracked keys from.
+	Channel string
+	// Keys are the keys being untracked.
+	Keys []string
+}
+
+// UntrackHandler called when client untracks keys on a keyed channel.
+type UntrackHandler func(UntrackEvent)
+
+// TrackEvent contains fields related to a track request on a keyed channel.
+// A single request may carry multiple signed batches (e.g. when the SDK
+// replays cached signatures after reconnect) — the handler MUST validate
+// every batch's signature before allowing the track to proceed.
+type TrackEvent struct {
+	Channel string
+	Batches []TrackBatch
+}
+
+// TrackBatch is one signed group of items in a TrackEvent. Each batch
+// carries the FULL set of items its Signature was computed over.
+type TrackBatch struct {
+	Items []TrackItem
+	// Signature is an opaque string sent by the client to prove authorization for
+	// the requested channel and keys in this batch. In Centrifugo this is an HMAC
+	// token generated by the application backend. The handler MUST verify Signature
+	// before allowing the batch to proceed — returning nil error without validation
+	// lets any client subscribe to arbitrary keys, bypassing access control.
+	Signature string
+}
+
+// TrackItem represents a single item being tracked (key + version).
+type TrackItem struct {
+	Key     string
+	Version uint64
+}
+
+// TrackReply contains the reaction to a keyed track event. Batches is parallel
+// to TrackEvent.Batches — len(Batches) MUST equal len(event.Batches).
+type TrackReply struct {
+	Batches []TrackBatchReply
+}
+
+// TrackBatchReply contains the per-batch reaction inside a TrackReply.
+type TrackBatchReply struct {
+	// ExpireAt is the Unix timestamp (seconds) after which the keys in this batch
+	// are considered expired and stop receiving updates. The client must re-track
+	// with a fresh signature to continue.
+	//
+	// Setting a reasonable ExpireAt is important for proper permission control: it
+	// limits how long a client can receive data after a single authorization check.
+	// Without it (ExpireAt=0), a successfully tracked client receives updates
+	// indefinitely — even if the user's access has since been revoked.
+	// A typical value matches the signature/token TTL issued by the backend
+	// (e.g. 5–15 minutes).
+	ExpireAt int64
+}
+
+// TrackCallback should be called with TrackReply or error.
+type TrackCallback func(TrackReply, error)
+
+// TrackHandler is called when a client sends a track request on a shared
+// poll channel. The handler MUST validate every TrackBatch.Signature in
+// TrackEvent.Batches and return an error if any is invalid — this is the
+// sole authorization gate for which keys a client may receive data for.
+// On success, return a TrackReply with one TrackBatchReply per batch
+// (parallel to event.Batches), each with ExpireAt set to bound how long
+// the client may receive updates for that batch without re-authorization.
+type TrackHandler func(TrackEvent, TrackCallback)
+
+// SharedPollEvent contains fields for a shared poll refresh call.
+type SharedPollEvent struct {
+	Channel string
+	Items   []SharedPollItem
+}
+
+// SharedPollItem represents an item being refreshed.
+type SharedPollItem struct {
+	Key     string
+	Version uint64 // 0 when Mode is "versionless"
+}
+
+// SharedPollResult contains the response from a shared poll refresh.
+type SharedPollResult struct {
+	Items []SharedPollRefreshItem
+	// Epoch is the publisher's current epoch for this channel. When set, an
+	// epoch change vs the channel's stored epoch resets all per-key versions
+	// and unsubscribes current subscribers with insufficient-state code,
+	// forcing a fresh subscribe handshake. Empty epoch means no epoch
+	// invalidation logic — pure version comparison.
+	//
+	// Only meaningful for versioned shared-poll channels. Versionless
+	// channels use server-generated channel-level epoch and ignore this.
+	Epoch string
+}
+
+// SharedPollRefreshItem represents a single item in a shared poll refresh response.
+type SharedPollRefreshItem struct {
+	Key      string
+	Data     []byte
+	Version  uint64
+	Removed  bool
+	PrevData []byte
+}
+
+// SharedPollHandler is called by the refresh worker to fetch current item
+// data from the backend. Registered on Node, not per-client.
+type SharedPollHandler func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error)

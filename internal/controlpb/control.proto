@@ -58,11 +58,24 @@ message Subscribe {
     string session = 12;
     bool push_join_leave = 13;
     uint32 source = 14;
+    FilterNode label_filter = 15;
 }
 
 message StreamPosition {
     uint64 offset = 1;
     string epoch = 2;
+}
+
+// FilterNode is the wire-compatible mirror of centrifugal/protocol FilterNode.
+// Kept here to avoid a cross-module proto import; converted at the pub/dispatch
+// boundary. Field numbers and types must match protocol.FilterNode exactly.
+message FilterNode {
+    string op = 1;
+    string key = 2;
+    string cmp = 3;
+    string val = 4;
+    repeated string vals = 5;
+    repeated FilterNode nodes = 6;
 }
 
 message Unsubscribe {
@@ -72,6 +85,7 @@ message Unsubscribe {
     string session = 4;
     uint32 code = 5;
     string reason = 6;
+    FilterNode label_filter = 7;
 }
 
 message Disconnect {
@@ -82,6 +96,7 @@ message Disconnect {
     bool reconnect = 5;
     string client = 6;
     string session = 7;
+    FilterNode label_filter = 8;
 }
 
 message SurveyRequest {
@@ -108,4 +123,5 @@ message Refresh {
     int64 expire_at = 4;
     bytes info = 5;
     string session = 6;
+    FilterNode label_filter = 7;
 }

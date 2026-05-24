@@ -15,7 +15,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/websocket"
 
 	"github.com/centrifugal/protocol"
-	"github.com/maypok86/otter"
+	"github.com/maypok86/otter/v2"
 )
 
 // WebsocketConfig represents config for WebsocketHandler.
@@ -111,13 +111,13 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 
 	var cache *otter.Cache[string, *websocket.PreparedMessage]
 	if config.CompressionPreparedMessageCacheSize > 0 {
-		c, _ := otter.MustBuilder[string, *websocket.PreparedMessage](int(config.CompressionPreparedMessageCacheSize)).
-			Cost(func(key string, value *websocket.PreparedMessage) uint32 {
+		cache = otter.Must(&otter.Options[string, *websocket.PreparedMessage]{
+			MaximumWeight: uint64(config.CompressionPreparedMessageCacheSize),
+			Weigher: func(key string, value *websocket.PreparedMessage) uint32 {
 				return 2 * uint32(len(key))
-			}).
-			WithTTL(time.Second).
-			Build()
-		cache = &c
+			},
+			ExpiryCalculator: otter.ExpiryWriting[string, *websocket.PreparedMessage](time.Second),
+		})
 	}
 
 	warnAboutIncorrectPingPongConfig(node, config.PingPongConfig, transportWebsocket)
@@ -413,10 +413,13 @@ func (t *websocketTransport) writeData(data []byte) error {
 
 	if t.opts.preparedCache != nil && usePreparedMessage {
 		key := convert.BytesToString(data)
-		preparedMessage, ok := t.opts.preparedCache.Get(key)
+		preparedMessage, ok := t.opts.preparedCache.GetIfPresent(key)
 		if !ok {
+			dataCopy := make([]byte, len(data))
+			copy(dataCopy, data)
+			key = convert.BytesToString(dataCopy)
 			var err error
-			preparedMessage, err = websocket.NewPreparedMessage(messageType, data)
+			preparedMessage, err = websocket.NewPreparedMessage(messageType, dataCopy)
 			if err != nil {
 				return err
 			}
@@ -461,7 +464,7 @@ func (t *websocketTransport) Write(message []byte) error {
 		encoder := protocol.GetDataEncoder(protoType)
 		defer protocol.PutDataEncoder(protoType, encoder)
 		_ = encoder.Encode(message)
-		return t.writeData(encoder.Finish())
+		return t.writeData(encoder.FinishNoCopy())
 	}
 }
 
@@ -477,7 +480,7 @@ func (t *websocketTransport) WriteMany(messages ...[]byte) error {
 		for i := range messages {
 			_ = encoder.Encode(messages[i])
 		}
-		return t.writeData(encoder.Finish())
+		return t.writeData(encoder.FinishNoCopy())
 	}
 }
 

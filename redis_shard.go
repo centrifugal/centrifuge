@@ -227,6 +227,16 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		},
 	}
 
+	if conf.AuthCredentialsFn != nil {
+		options.AuthCredentialsFn = func(ctx rueidis.AuthCredentialsContext) (rueidis.AuthCredentials, error) {
+			creds, err := conf.AuthCredentialsFn(RedisAuthCredentialsContext{Address: ctx.Address})
+			if err != nil {
+				return rueidis.AuthCredentials{}, err
+			}
+			return rueidis.AuthCredentials{Username: creds.Username, Password: creds.Password}, nil
+		}
+	}
+
 	var isCluster bool
 	var isSentinel bool
 	replicaClientEnabled := conf.ReplicaClientEnabled
@@ -362,6 +372,23 @@ type RedisShardConfig struct {
 	// be initialized with the same options as the main client but with ReplicaOnly option
 	// set to true.
 	ReplicaClientEnabled bool
+
+	// AuthCredentialsFn is an optional function to dynamically provide auth credentials.
+	// When set, it is called by the Redis client to obtain credentials for each new connection,
+	// enabling short-lived token-based authentication (e.g. GCP IAM, AWS IAM).
+	AuthCredentialsFn func(RedisAuthCredentialsContext) (RedisAuthCredentials, error)
+}
+
+// RedisAuthCredentialsContext is passed to AuthCredentialsFn.
+type RedisAuthCredentialsContext struct {
+	// Address is the address of the Redis server being connected to.
+	Address net.Addr
+}
+
+// RedisAuthCredentials contains the credentials returned by AuthCredentialsFn.
+type RedisAuthCredentials struct {
+	Username string
+	Password string
 }
 
 type RedisShardMode string
@@ -394,8 +421,15 @@ func (s *RedisShard) string() string {
 }
 
 // consistentIndex is an adapted function from https://github.com/dgryski/go-jump
-// package by Damian Gryski. It consistently chooses a hash bucket number in the
-// range [0, numBuckets) for the given string. numBuckets must be >= 1.
+// package by Damian Gryski. It implements the Jump Consistent Hash algorithm
+// from the Google paper "A Fast, Minimal Memory, Consistent Hash Algorithm"
+// (Lamping & Veach, 2014).
+//
+// It consistently chooses a hash bucket number in the range [0, numBuckets)
+// for the given string. numBuckets must be >= 1.
+//
+// Key property: When adding a shard, only ~1/(n+1) keys are redistributed.
+// This is critical for minimizing data movement when scaling.
 func consistentIndex(s string, numBuckets int) int {
 	hash := fnv.New64a()
 	_, _ = hash.Write([]byte(s))

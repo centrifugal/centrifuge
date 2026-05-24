@@ -8,6 +8,7 @@ import (
 )
 
 func TestWithHistory(t *testing.T) {
+	t.Parallel()
 	opt := WithHistory(10, time.Second)
 	opts := &PublishOptions{}
 	opt(opts)
@@ -16,6 +17,7 @@ func TestWithHistory(t *testing.T) {
 }
 
 func TestWithIdempotencyKey(t *testing.T) {
+	t.Parallel()
 	opt := WithIdempotencyKey("ik")
 	opts := &PublishOptions{}
 	opt(opts)
@@ -23,6 +25,7 @@ func TestWithIdempotencyKey(t *testing.T) {
 }
 
 func TestWithDelta(t *testing.T) {
+	t.Parallel()
 	opt := WithDelta(true)
 	opts := &PublishOptions{}
 	opt(opts)
@@ -30,6 +33,7 @@ func TestWithDelta(t *testing.T) {
 }
 
 func TestWithIdempotentResultTTL(t *testing.T) {
+	t.Parallel()
 	opt := WithIdempotentResultTTL(time.Minute)
 	opts := &PublishOptions{}
 	opt(opts)
@@ -37,6 +41,7 @@ func TestWithIdempotentResultTTL(t *testing.T) {
 }
 
 func TestWithMeta(t *testing.T) {
+	t.Parallel()
 	opt := WithTags(map[string]string{"test": "value"})
 	opts := &PublishOptions{}
 	opt(opts)
@@ -44,6 +49,7 @@ func TestWithMeta(t *testing.T) {
 }
 
 func TestWithVersion(t *testing.T) {
+	t.Parallel()
 	opt := WithVersion(2, "xxx")
 	opts := &PublishOptions{}
 	opt(opts)
@@ -52,6 +58,7 @@ func TestWithVersion(t *testing.T) {
 }
 
 func TestSubscribeOptions(t *testing.T) {
+	t.Parallel()
 	subscribeOpts := []SubscribeOption{
 		WithExpireAt(1),
 		WithEmitPresence(true),
@@ -85,6 +92,7 @@ func TestSubscribeOptions(t *testing.T) {
 }
 
 func TestWithDisconnect(t *testing.T) {
+	t.Parallel()
 	opt := WithCustomDisconnect(DisconnectConnectionLimit)
 	opts := &DisconnectOptions{}
 	opt(opts)
@@ -92,6 +100,7 @@ func TestWithDisconnect(t *testing.T) {
 }
 
 func TestWithClientWhitelist(t *testing.T) {
+	t.Parallel()
 	opt := WithDisconnectClientWhitelist([]string{"client"})
 	opts := &DisconnectOptions{}
 	opt(opts)
@@ -99,6 +108,7 @@ func TestWithClientWhitelist(t *testing.T) {
 }
 
 func TestWithLimit(t *testing.T) {
+	t.Parallel()
 	opt := WithLimit(NoLimit)
 	opts := &HistoryOptions{}
 	opt(opts)
@@ -106,6 +116,7 @@ func TestWithLimit(t *testing.T) {
 }
 
 func TestWithSubscribeClient(t *testing.T) {
+	t.Parallel()
 	opt := WithSubscribeClient("client")
 	opts := &SubscribeOptions{}
 	opt(opts)
@@ -113,6 +124,7 @@ func TestWithSubscribeClient(t *testing.T) {
 }
 
 func TestWithSubscribeData(t *testing.T) {
+	t.Parallel()
 	opt := WithSubscribeData([]byte("test"))
 	opts := &SubscribeOptions{}
 	opt(opts)
@@ -120,6 +132,7 @@ func TestWithSubscribeData(t *testing.T) {
 }
 
 func TestWithUnsubscribeClient(t *testing.T) {
+	t.Parallel()
 	opt := WithUnsubscribeClient("client")
 	opts := &UnsubscribeOptions{}
 	opt(opts)
@@ -127,6 +140,7 @@ func TestWithUnsubscribeClient(t *testing.T) {
 }
 
 func TestWithUnsubscribeSession(t *testing.T) {
+	t.Parallel()
 	opt := WithUnsubscribeSession("session")
 	opts := &UnsubscribeOptions{}
 	opt(opts)
@@ -134,6 +148,7 @@ func TestWithUnsubscribeSession(t *testing.T) {
 }
 
 func TestWithCustomUnsubscribe(t *testing.T) {
+	t.Parallel()
 	opt := WithCustomUnsubscribe(Unsubscribe{
 		Code:   2200,
 		Reason: "x",
@@ -145,6 +160,7 @@ func TestWithCustomUnsubscribe(t *testing.T) {
 }
 
 func TestWithDisconnectClient(t *testing.T) {
+	t.Parallel()
 	opt := WithDisconnectClient("client")
 	opts := &DisconnectOptions{}
 	opt(opts)
@@ -152,13 +168,94 @@ func TestWithDisconnectClient(t *testing.T) {
 }
 
 func TestWithDisconnectSession(t *testing.T) {
+	t.Parallel()
 	opt := WithDisconnectSession("session")
 	opts := &DisconnectOptions{}
 	opt(opts)
 	require.Equal(t, "session", opts.sessionID)
 }
 
+func TestWithKey(t *testing.T) {
+	t.Parallel()
+	opt := WithKey("mykey")
+	opts := &PublishOptions{}
+	opt(opts)
+	require.Equal(t, "mykey", opts.Key)
+}
+
+func TestWithClientInfo(t *testing.T) {
+	t.Parallel()
+	info := &ClientInfo{UserID: "user1"}
+	opt := WithClientInfo(info)
+	opts := &PublishOptions{}
+	opt(opts)
+	require.Equal(t, "user1", opts.ClientInfo.UserID)
+}
+
+func TestSubscriptionType_String(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, "stream", SubscriptionTypeStream.String())
+	require.Equal(t, "map", SubscriptionTypeMap.String())
+	require.Equal(t, "map_clients", SubscriptionTypeMapClients.String())
+	require.Equal(t, "map_users", SubscriptionTypeMapUsers.String())
+	require.Equal(t, "shared_poll", SubscriptionTypeSharedPoll.String())
+	require.Equal(t, "unknown", SubscriptionType(99).String())
+}
+
+func TestSubscriptionType_IsMapPresence(t *testing.T) {
+	t.Parallel()
+	require.False(t, SubscriptionTypeStream.IsMapPresence())
+	require.False(t, SubscriptionTypeMap.IsMapPresence())
+	require.True(t, SubscriptionTypeMapClients.IsMapPresence())
+	require.True(t, SubscriptionTypeMapUsers.IsMapPresence())
+	require.False(t, SubscriptionTypeSharedPoll.IsMapPresence())
+}
+
+func TestWithRecoverSince(t *testing.T) {
+	t.Parallel()
+	opt := WithRecoverSince(&StreamPosition{Offset: 10, Epoch: "abc"})
+	opts := &SubscribeOptions{}
+	opt(opts)
+	require.Equal(t, uint64(10), opts.RecoverSince.Offset)
+	require.Equal(t, "abc", opts.RecoverSince.Epoch)
+}
+
+func TestWithHistoryFilter(t *testing.T) {
+	t.Parallel()
+	opt := WithHistoryFilter(HistoryFilter{Limit: 5, Reverse: true})
+	opts := &HistoryOptions{}
+	opt(opts)
+	require.Equal(t, 5, opts.Filter.Limit)
+	require.True(t, opts.Filter.Reverse)
+}
+
+func TestWithSince(t *testing.T) {
+	t.Parallel()
+	opt := WithSince(&StreamPosition{Offset: 7, Epoch: "xyz"})
+	opts := &HistoryOptions{}
+	opt(opts)
+	require.Equal(t, uint64(7), opts.Filter.Since.Offset)
+	require.Equal(t, "xyz", opts.Filter.Since.Epoch)
+}
+
+func TestWithReverse(t *testing.T) {
+	t.Parallel()
+	opt := WithReverse(true)
+	opts := &HistoryOptions{}
+	opt(opts)
+	require.True(t, opts.Filter.Reverse)
+}
+
+func TestWithHistoryMetaTTL(t *testing.T) {
+	t.Parallel()
+	opt := WithHistoryMetaTTL(time.Hour)
+	opts := &HistoryOptions{}
+	opt(opts)
+	require.Equal(t, time.Hour, opts.MetaTTL)
+}
+
 func TestRefreshOptions(t *testing.T) {
+	t.Parallel()
 	refreshOpts := []RefreshOption{
 		WithRefreshClient("client"),
 		WithRefreshExpireAt(12),

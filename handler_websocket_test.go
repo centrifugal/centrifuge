@@ -23,6 +23,7 @@ import (
 )
 
 func TestWebsocketHandler(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -48,6 +49,7 @@ func TestWebsocketHandler(t *testing.T) {
 }
 
 func TestWebsocketHandlerProtocolV2(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -73,6 +75,7 @@ func TestWebsocketHandlerProtocolV2(t *testing.T) {
 }
 
 func TestWebsocketHandlerSubprotocol(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -104,6 +107,7 @@ func TestWebsocketHandlerSubprotocol(t *testing.T) {
 }
 
 func TestWebsocketHandlerURLParams(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -136,6 +140,7 @@ func TestWebsocketHandlerURLParams(t *testing.T) {
 }
 
 func TestWebsocketTransportWrite(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -175,6 +180,7 @@ func TestWebsocketTransportWrite(t *testing.T) {
 }
 
 func TestWebsocketTransportWriteMany(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -235,6 +241,7 @@ func waitWithTimeout(t *testing.T, ch chan struct{}) {
 }
 
 func TestWebsocketHandlerProtobuf(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -259,6 +266,7 @@ func TestWebsocketHandlerProtobuf(t *testing.T) {
 }
 
 func TestWebsocketHandlerPing(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -373,6 +381,7 @@ func TestWebsocketHandler_FramePingPong(t *testing.T) {
 }
 
 func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -431,8 +440,18 @@ func testAuthMiddleware(h http.Handler) http.Handler {
 // TestWebsocketHandlerConcurrentConnections allows catching errors related
 // to invalid buffer pool usages.
 func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
+	// This test stresses the buffer pool with 100 concurrent connections; the
+	// default test-init pong timeout (500ms) is too tight when -race + parallel
+	// suite contention stretches read scheduling. Disable pings/pongs entirely
+	// — they are unrelated to the buffer-pool invariant under test.
+	n.OnConnecting(func(_ context.Context, _ ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			PingPongConfig: &PingPongConfig{PingInterval: -1},
+		}, nil
+	})
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
@@ -506,8 +525,18 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 }
 
 func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
+	// Same rationale as TestWebsocketHandlerConcurrentConnections: 100
+	// concurrent connections under -race stretch read scheduling past
+	// the test-init 500 ms pong timeout. The test asserts buffer-pool
+	// invariants, not ping/pong behavior, so disable pings for this run.
+	n.OnConnecting(func(_ context.Context, _ ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			PingPongConfig: &PingPongConfig{PingInterval: -1},
+		}, nil
+	})
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
@@ -802,6 +831,7 @@ func BenchmarkWsPubSub(b *testing.B) {
 }
 
 func TestWsBroadcastCompressionCache(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -833,13 +863,13 @@ func TestWsBroadcastCompressionCache(t *testing.T) {
 
 			url := "ws" + server.URL[4:]
 
-			conns := make([]*websocket.Conn, 0, numConns)
+			connections := make([]*websocket.Conn, 0, numConns)
 			for i := 0; i < numConns; i++ {
 				conn := bm.getConn(t, "test", url, bm.compression)
-				conns = append(conns, conn)
+				connections = append(connections, conn)
 			}
 			defer func() {
-				for _, conn := range conns {
+				for _, conn := range connections {
 					_ = conn.Close()
 				}
 			}()
@@ -847,7 +877,7 @@ func TestWsBroadcastCompressionCache(t *testing.T) {
 			if err != nil {
 				require.NoError(t, err)
 			}
-			for _, conn := range conns {
+			for _, conn := range connections {
 				_, _, err = conn.ReadMessage()
 				require.NoError(t, err)
 			}
@@ -859,24 +889,29 @@ func BenchmarkWsBroadcastCompressionCache(b *testing.B) {
 	n := defaultTestNodeBenchmark(b)
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
-	payload := []byte(`{"input": "test"}`)
+	// Pre-generate payloads for unique message scenarios.
+	numUniqueMessages := 100
+	payloads := make([][]byte, numUniqueMessages)
+	for i := 0; i < numUniqueMessages; i++ {
+		payloads[i] = []byte(fmt.Sprintf(`{"input": "test", "id": %d}`, i))
+	}
 
 	benchmarks := []struct {
-		getConn     func(b testing.TB, channel string, url string, compression bool) *websocket.Conn
-		compression bool
-		cacheSizeMB int64
+		name           string
+		compression    bool
+		cacheSizeMB    int64
+		uniqueMessages int // number of unique messages to cycle through
 	}{
-		{newRealConnJSON, false, 0},
-		{newRealConnJSON, true, 0},
-		{newRealConnJSON, true, 50},
+		{"no_compress", false, 0, 1},
+		{"compress_no_cache", true, 0, 1},
+		{"compress_cache_same_msg", true, 50, 1},
+		{"compress_cache_100_msgs", true, 50, 100},
 	}
 
 	numConns := 100
 
 	for _, bm := range benchmarks {
-		benchName := "compress_" + fmt.Sprintf("%v", bm.compression) + "_" +
-			"cache_" + strconv.FormatInt(bm.cacheSizeMB, 10) + "MB"
-		b.Run(benchName, func(b *testing.B) {
+		b.Run(bm.name, func(b *testing.B) {
 			b.ReportAllocs()
 
 			mux := http.NewServeMux()
@@ -891,7 +926,7 @@ func BenchmarkWsBroadcastCompressionCache(b *testing.B) {
 
 			conns := make([]*websocket.Conn, 0, numConns)
 			for i := 0; i < numConns; i++ {
-				conn := bm.getConn(b, "test", url, bm.compression)
+				conn := newRealConnJSON(b, "test", url, bm.compression)
 				conns = append(conns, conn)
 			}
 			defer func() {
@@ -901,6 +936,7 @@ func BenchmarkWsBroadcastCompressionCache(b *testing.B) {
 			}()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
+				payload := payloads[i%bm.uniqueMessages]
 				_, err := n.Publish("test", payload)
 				if err != nil {
 					panic(err)
@@ -1232,4 +1268,17 @@ func BenchmarkWsCommandReplyV2MultipleParallel(b *testing.B) {
 			})
 		})
 	}
+}
+
+// TestWebsocketTransportAcceptProtocol verifies AcceptProtocol gets propagated from
+// the original HTTP request's protocol version.
+func TestWebsocketTransportAcceptProtocol(t *testing.T) {
+	t.Parallel()
+	transport := &websocketTransport{
+		opts: websocketTransportOptions{
+			protoMajor: 1,
+			protoType:  ProtocolTypeJSON,
+		},
+	}
+	require.Equal(t, "h1", transport.AcceptProtocol())
 }

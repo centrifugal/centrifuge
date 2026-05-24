@@ -45,6 +45,8 @@ type Node struct {
 	controller Controller
 	// broker is responsible for PUB/SUB and history streaming mechanics.
 	broker Broker
+	// mapBroker is responsible for map subscriptions.
+	mapBroker MapBroker
 	// presenceManager is responsible for presence information management.
 	presenceManager PresenceManager
 	// nodes contains registry of known nodes.
@@ -91,6 +93,11 @@ type Node struct {
 	mediumLocks map[int]*sync.Mutex // Sharded locks for mediums map.
 
 	timerScheduler TimerScheduler
+
+	// keyedManager manages keyed channel state (track/untrack, reverse index).
+	keyedManager *keyedManager
+	// sharedPollManager manages shared poll refresh workers.
+	sharedPollManager *SharedPollManager
 }
 
 const (
@@ -190,6 +197,7 @@ func New(c Config) (*Node, error) {
 		timerScheduler: c.ClientTimerScheduler,
 	}
 	n.emulationSurveyHandler = newEmulationSurveyHandler(n)
+	n.keyedManager = newKeyedManager(n)
 
 	m, err := newMetricsRegistry(c.Metrics)
 	if err != nil {
@@ -204,6 +212,12 @@ func New(c Config) (*Node, error) {
 		return nil, err
 	}
 	n.SetBroker(b)
+
+	mb, err := NewMemoryMapBroker(n, MemoryMapBrokerConfig{})
+	if err != nil {
+		return nil, err
+	}
+	n.SetMapBroker(mb)
 
 	pm, err := NewMemoryPresenceManager(n, MemoryPresenceManagerConfig{})
 	if err != nil {
@@ -264,6 +278,18 @@ func (n *Node) SetPresenceManager(m PresenceManager) {
 	n.presenceManager = m
 }
 
+// SetMapBroker allows setting MapBroker to use.
+func (n *Node) SetMapBroker(e MapBroker) {
+	n.mapBroker = e
+}
+
+// resolveMapChannelOptions returns validated channel options for a map channel.
+// Returns an error if GetMapChannelOptions is not configured or the channel
+// options are invalid.
+func (n *Node) resolveMapChannelOptions(channel string) (MapChannelOptions, error) {
+	return ResolveAndValidateMapChannelOptions(n.config.Map.GetMapChannelOptions, channel)
+}
+
 // Hub returns node's Hub.
 func (n *Node) Hub() *Hub {
 	return n.hub
@@ -280,6 +306,11 @@ func (n *Node) Run() error {
 	if err := n.broker.RegisterBrokerEventHandler(n); err != nil {
 		return err
 	}
+	if n.mapBroker != nil {
+		if err := n.mapBroker.RegisterEventHandler(n); err != nil {
+			return err
+		}
+	}
 	err := n.initMetrics()
 	if err != nil {
 		n.logger.log(newErrorLogEntry(err, "error on init metrics", map[string]any{"error": err.Error()}))
@@ -290,6 +321,14 @@ func (n *Node) Run() error {
 		n.logger.log(newErrorLogEntry(err, "error publishing node control command", map[string]any{"error": err.Error()}))
 		return err
 	}
+	// Initialize shared poll manager if configured.
+	if n.config.SharedPoll.GetSharedPollChannelOptions != nil {
+		if n.clientEvents.sharedPollHandler == nil {
+			return errors.New("GetSharedPollChannelOptions is set but OnSharedPoll handler is not registered")
+		}
+		n.sharedPollManager = newSharedPollManager(n)
+	}
+
 	go n.sendNodePing()
 	go n.cleanNodeInfo()
 	go n.updateMetrics()
@@ -299,6 +338,27 @@ func (n *Node) Run() error {
 // logEnabled allows check whether a LogLevel enabled or not.
 func (n *Node) logEnabled(level LogLevel) bool {
 	return n.logger.enabled(level)
+}
+
+// IncMapBrokerCleanupErrors increments the map broker cleanup error counter for observability.
+func (n *Node) IncMapBrokerCleanupErrors(name string) {
+	if n.metrics != nil {
+		n.metrics.incMapBrokerCleanupErrors(name)
+	}
+}
+
+// AddMapBrokerCleanupKeysRemoved adds to the map broker cleanup keys removed counter for observability.
+func (n *Node) AddMapBrokerCleanupKeysRemoved(name string, count int64) {
+	if n.metrics != nil {
+		n.metrics.addMapBrokerCleanupKeysRemoved(name, count)
+	}
+}
+
+// SetMapBrokerCleanupLag sets the map broker cleanup lag gauge for observability.
+func (n *Node) SetMapBrokerCleanupLag(name string, seconds float64) {
+	if n.metrics != nil {
+		n.metrics.setMapBrokerCleanupLag(name, seconds)
+	}
 }
 
 // Shutdown sets shutdown flag to Node so handlers could stop accepting
@@ -325,6 +385,16 @@ func (n *Node) Shutdown(ctx context.Context) error {
 			defer func() { _ = closer.Close(ctx) }()
 		}
 	}
+	if n.mapBroker != nil {
+		if closer, ok := n.mapBroker.(Closer); ok {
+			defer func() { _ = closer.Close(ctx) }()
+		}
+	}
+	// Stop shared poll workers before hub shutdown.
+	if n.sharedPollManager != nil {
+		n.sharedPollManager.close()
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -350,6 +420,11 @@ func (n *Node) updateGauges() {
 	n.metrics.setNumSubscriptions(float64(n.hub.NumSubscriptions()))
 	n.metrics.setNumChannels(float64(n.hub.NumChannels()))
 	n.metrics.setNumNodes(float64(n.nodes.size()))
+	if n.sharedPollManager != nil {
+		numCh, numKeys := n.sharedPollManager.stats()
+		n.metrics.setSharedPollNumChannels(float64(numCh))
+		n.metrics.setSharedPollNumKeys(float64(numKeys))
+	}
 	version := n.config.Version
 	if version == "" {
 		version = "_"
@@ -705,17 +780,17 @@ func (n *Node) handleControl(data []byte) error {
 		return n.shutdownCmd(uid)
 	} else if cmd.Unsubscribe != nil {
 		cmd := cmd.Unsubscribe
-		return n.hub.unsubscribe(cmd.User, cmd.Channel, Unsubscribe{Code: cmd.Code, Reason: cmd.Reason}, cmd.Client, cmd.Session)
+		return n.hub.unsubscribe(cmd.User, cmd.Channel, Unsubscribe{Code: cmd.Code, Reason: cmd.Reason}, cmd.Client, cmd.Session, protoFilterFromControlpb(cmd.LabelFilter))
 	} else if cmd.Subscribe != nil {
 		cmd := cmd.Subscribe
 		var recoverSince *StreamPosition
 		if cmd.RecoverSince != nil {
 			recoverSince = &StreamPosition{Offset: cmd.RecoverSince.Offset, Epoch: cmd.RecoverSince.Epoch}
 		}
-		return n.hub.subscribe(cmd.User, cmd.Channel, cmd.Client, cmd.Session, WithExpireAt(cmd.ExpireAt), WithChannelInfo(cmd.ChannelInfo), WithEmitPresence(cmd.EmitPresence), WithEmitJoinLeave(cmd.EmitJoinLeave), WithPushJoinLeave(cmd.PushJoinLeave), WithPositioning(cmd.Position), WithRecovery(cmd.Recover), WithSubscribeData(cmd.Data), WithRecoverSince(recoverSince), WithSubscribeSource(uint8(cmd.Source)))
+		return n.hub.subscribe(cmd.User, cmd.Channel, cmd.Client, cmd.Session, protoFilterFromControlpb(cmd.LabelFilter), WithExpireAt(cmd.ExpireAt), WithChannelInfo(cmd.ChannelInfo), WithEmitPresence(cmd.EmitPresence), WithEmitJoinLeave(cmd.EmitJoinLeave), WithPushJoinLeave(cmd.PushJoinLeave), WithPositioning(cmd.Position), WithRecovery(cmd.Recover), WithSubscribeData(cmd.Data), WithRecoverSince(recoverSince), WithSubscribeSource(uint8(cmd.Source)))
 	} else if cmd.Disconnect != nil {
 		cmd := cmd.Disconnect
-		return n.hub.disconnect(cmd.User, Disconnect{Code: cmd.Code, Reason: cmd.Reason}, cmd.Client, cmd.Session, cmd.Whitelist)
+		return n.hub.disconnect(cmd.User, Disconnect{Code: cmd.Code, Reason: cmd.Reason}, cmd.Client, cmd.Session, cmd.Whitelist, protoFilterFromControlpb(cmd.LabelFilter))
 	} else if cmd.SurveyRequest != nil {
 		cmd := cmd.SurveyRequest
 		return n.handleSurveyRequest(uid, cmd)
@@ -727,7 +802,7 @@ func (n *Node) handleControl(data []byte) error {
 		return n.handleNotification(uid, cmd)
 	} else if cmd.Refresh != nil {
 		cmd := cmd.Refresh
-		return n.hub.refresh(cmd.User, cmd.Client, cmd.Session, WithRefreshExpired(cmd.Expired), WithRefreshExpireAt(cmd.ExpireAt), WithRefreshInfo(cmd.Info))
+		return n.hub.refresh(cmd.User, cmd.Client, cmd.Session, protoFilterFromControlpb(cmd.LabelFilter), WithRefreshExpired(cmd.Expired), WithRefreshExpireAt(cmd.ExpireAt), WithRefreshInfo(cmd.Info))
 	}
 	n.logger.log(newErrorLogEntry(err, "unknown control command", map[string]any{"command": fmt.Sprintf("%#v", cmd)}))
 	return nil
@@ -783,17 +858,20 @@ func (n *Node) publish(ch string, data []byte, opts ...PublishOption) (PublishRe
 		opt(pubOpts)
 	}
 	n.metrics.incMessagesSent("publication", ch)
-	streamPos, fromCache, err := n.getBroker(ch).Publish(ch, data, *pubOpts)
+	result, err := n.getBroker(ch).Publish(ch, data, *pubOpts)
 	if err != nil {
 		return PublishResult{}, err
 	}
-	return PublishResult{StreamPosition: streamPos, FromCache: fromCache}, nil
+	return result, nil
 }
 
 // PublishResult returned from Publish operation.
 type PublishResult struct {
 	StreamPosition
-	FromCache bool
+	// Suppressed is true when the operation was suppressed (e.g. due to idempotency key deduplication).
+	Suppressed bool
+	// SuppressReason explains why the operation was suppressed (empty when Suppressed is false).
+	SuppressReason SuppressReason
 }
 
 // Publish sends data to all clients subscribed on channel at this moment. All running
@@ -938,6 +1016,52 @@ func (n *Node) pubNode(nodeID string) error {
 	return n.publishControl(cmd, nodeID)
 }
 
+// controlpbFilterFromProto converts a protocol.FilterNode tree into the
+// wire-equivalent controlpb.FilterNode tree used inside control messages.
+// Returns nil for a nil input.
+func controlpbFilterFromProto(f *FilterNode) *controlpb.FilterNode {
+	if f == nil {
+		return nil
+	}
+	out := &controlpb.FilterNode{
+		Op:   f.Op,
+		Key:  f.Key,
+		Cmp:  f.Cmp,
+		Val:  f.Val,
+		Vals: f.Vals,
+	}
+	if len(f.Nodes) > 0 {
+		out.Nodes = make([]*controlpb.FilterNode, len(f.Nodes))
+		for i, c := range f.Nodes {
+			out.Nodes[i] = controlpbFilterFromProto(c)
+		}
+	}
+	return out
+}
+
+// protoFilterFromControlpb is the inverse of controlpbFilterFromProto, used by
+// the control message dispatcher when receiving a label-filtered command.
+// Returns nil for a nil input.
+func protoFilterFromControlpb(f *controlpb.FilterNode) *FilterNode {
+	if f == nil {
+		return nil
+	}
+	out := &FilterNode{
+		Op:   f.Op,
+		Key:  f.Key,
+		Cmp:  f.Cmp,
+		Val:  f.Val,
+		Vals: f.Vals,
+	}
+	if len(f.Nodes) > 0 {
+		out.Nodes = make([]*FilterNode, len(f.Nodes))
+		for i, c := range f.Nodes {
+			out.Nodes[i] = protoFilterFromControlpb(c)
+		}
+	}
+	return out
+}
+
 func (n *Node) pubSubscribe(user string, ch string, opts SubscribeOptions) error {
 	subscribe := &controlpb.Subscribe{
 		User:          user,
@@ -953,6 +1077,7 @@ func (n *Node) pubSubscribe(user string, ch string, opts SubscribeOptions) error
 		Session:       opts.sessionID,
 		Data:          opts.Data,
 		Source:        uint32(opts.Source),
+		LabelFilter:   controlpbFilterFromProto(opts.LabelFilter),
 	}
 	if opts.RecoverSince != nil {
 		subscribe.RecoverSince = &controlpb.StreamPosition{
@@ -969,12 +1094,13 @@ func (n *Node) pubSubscribe(user string, ch string, opts SubscribeOptions) error
 
 func (n *Node) pubRefresh(user string, opts RefreshOptions) error {
 	refresh := &controlpb.Refresh{
-		User:     user,
-		Expired:  opts.Expired,
-		ExpireAt: opts.ExpireAt,
-		Client:   opts.clientID,
-		Session:  opts.sessionID,
-		Info:     opts.Info,
+		User:        user,
+		Expired:     opts.Expired,
+		ExpireAt:    opts.ExpireAt,
+		Client:      opts.clientID,
+		Session:     opts.sessionID,
+		Info:        opts.Info,
+		LabelFilter: controlpbFilterFromProto(opts.LabelFilter),
 	}
 	cmd := &controlpb.Command{
 		Uid:     n.uid,
@@ -985,14 +1111,15 @@ func (n *Node) pubRefresh(user string, opts RefreshOptions) error {
 
 // pubUnsubscribe publishes unsubscribe control message to all nodes – so all
 // nodes could unsubscribe user from channel.
-func (n *Node) pubUnsubscribe(user string, ch string, unsubscribe Unsubscribe, clientID, sessionID string) error {
+func (n *Node) pubUnsubscribe(user string, ch string, unsubscribe Unsubscribe, clientID, sessionID string, labelFilter *FilterNode) error {
 	unsub := &controlpb.Unsubscribe{
-		User:    user,
-		Channel: ch,
-		Code:    unsubscribe.Code,
-		Reason:  unsubscribe.Reason,
-		Client:  clientID,
-		Session: sessionID,
+		User:        user,
+		Channel:     ch,
+		Code:        unsubscribe.Code,
+		Reason:      unsubscribe.Reason,
+		Client:      clientID,
+		Session:     sessionID,
+		LabelFilter: controlpbFilterFromProto(labelFilter),
 	}
 	cmd := &controlpb.Command{
 		Uid:         n.uid,
@@ -1003,14 +1130,15 @@ func (n *Node) pubUnsubscribe(user string, ch string, unsubscribe Unsubscribe, c
 
 // pubDisconnect publishes disconnect control message to all nodes – so all
 // nodes could disconnect user from server.
-func (n *Node) pubDisconnect(user string, disconnect Disconnect, clientID string, sessionID string, whitelist []string) error {
+func (n *Node) pubDisconnect(user string, disconnect Disconnect, clientID string, sessionID string, whitelist []string, labelFilter *FilterNode) error {
 	protoDisconnect := &controlpb.Disconnect{
-		User:      user,
-		Whitelist: whitelist,
-		Code:      disconnect.Code,
-		Reason:    disconnect.Reason,
-		Client:    clientID,
-		Session:   sessionID,
+		User:        user,
+		Whitelist:   whitelist,
+		Code:        disconnect.Code,
+		Reason:      disconnect.Reason,
+		Client:      clientID,
+		Session:     sessionID,
+		LabelFilter: controlpbFilterFromProto(labelFilter),
 	}
 	cmd := &controlpb.Command{
 		Uid:        n.uid,
@@ -1067,9 +1195,10 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 			if mediumOptions.isMediumEnabled() {
 				medium, err := newChannelMedium(ch, n, mediumOptions)
 				if err != nil {
-					_, _ = n.hub.removeSub(ch, sub.client)
+					_, _, _ = n.hub.removeSub(ch, sub.client)
 					return 0, err
 				}
+				medium.isMap = sub.isMap
 				mediumMu := n.mediumLock(ch)
 				mediumMu.Lock()
 				n.mediums[ch] = medium
@@ -1077,34 +1206,56 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 			}
 		}
 
-		n.metrics.incActionCount("broker_subscribe", ch)
-		err := n.getBroker(ch).Subscribe(ch)
-		if err != nil {
-			_, _ = n.hub.removeSub(ch, sub.client)
-			if n.config.GetChannelMediumOptions != nil {
-				mediumMu := n.mediumLock(ch)
-				mediumMu.Lock()
-				medium, ok := n.mediums[ch]
-				if ok {
-					medium.close()
-					delete(n.mediums, ch)
+		// Subscribe to appropriate broker based on subscription type.
+		if sub.isMap {
+			if mapBroker := n.getMapBroker(ch); mapBroker != nil {
+				n.metrics.incActionCount("map_broker_subscribe", ch)
+				err := mapBroker.Subscribe(ch)
+				if err != nil {
+					_, _, _ = n.hub.removeSub(ch, sub.client)
+					if n.config.GetChannelMediumOptions != nil {
+						mediumMu := n.mediumLock(ch)
+						mediumMu.Lock()
+						medium, ok := n.mediums[ch]
+						if ok {
+							medium.close()
+							delete(n.mediums, ch)
+						}
+						mediumMu.Unlock()
+					}
+					return 0, err
 				}
-				mediumMu.Unlock()
 			}
-			return 0, err
+		} else {
+			n.metrics.incActionCount("broker_subscribe", ch)
+			err := n.getBroker(ch).Subscribe(ch)
+			if err != nil {
+				_, _, _ = n.hub.removeSub(ch, sub.client)
+				if n.config.GetChannelMediumOptions != nil {
+					mediumMu := n.mediumLock(ch)
+					mediumMu.Lock()
+					medium, ok := n.mediums[ch]
+					if ok {
+						medium.close()
+						delete(n.mediums, ch)
+					}
+					mediumMu.Unlock()
+				}
+				return 0, err
+			}
 		}
 	}
 	return chanID, nil
 }
 
 // removeSubscription removes subscription of connection on channel
-// from Hub and Broker.
+// from Hub and Broker (or MapBroker for map channels).
 func (n *Node) removeSubscription(ch string, c *Client) error {
 	n.metrics.incActionCount("remove_subscription", ch)
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
-	empty, wasRemoved := n.hub.removeSub(ch, c)
+	empty, wasRemoved, wasMap := n.hub.removeSub(ch, c)
 	if wasRemoved {
 		baseLabels := []string{c.metricName, n.metrics.getChannelNamespaceLabel(ch)}
 		n.metrics.subscriptionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Dec()
@@ -1121,12 +1272,24 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 			defer subMu.Unlock()
 			noSubscribers := n.hub.NumSubscribers(ch) == 0
 			if noSubscribers {
-				n.metrics.incActionCount("broker_unsubscribe", ch)
-				err := n.getBroker(ch).Unsubscribe(ch)
-				if err != nil {
-					// Cool down a bit since broker is not ready to process unsubscription.
-					time.Sleep(500 * time.Millisecond)
-					return err
+				// Unsubscribe from appropriate broker based on channel type.
+				if wasMap {
+					if mapBroker := n.getMapBroker(ch); mapBroker != nil {
+						n.metrics.incActionCount("map_broker_unsubscribe", ch)
+						err := mapBroker.Unsubscribe(ch)
+						if err != nil {
+							time.Sleep(500 * time.Millisecond)
+							return err
+						}
+					}
+				} else {
+					n.metrics.incActionCount("broker_unsubscribe", ch)
+					err := n.getBroker(ch).Unsubscribe(ch)
+					if err != nil {
+						// Cool down a bit since broker is not ready to process unsubscription.
+						time.Sleep(500 * time.Millisecond)
+						return err
+					}
 				}
 				n.hub.removeSubID(ch)
 				if n.config.GetChannelMediumOptions != nil {
@@ -1172,13 +1335,18 @@ func (n *Node) Subscribe(userID string, channel string, opts ...SubscribeOption)
 	for _, opt := range opts {
 		opt(subscribeOpts)
 	}
+	if subscribeOpts.LabelFilter != nil {
+		if err := filter.Validate(subscribeOpts.LabelFilter); err != nil {
+			return fmt.Errorf("invalid label filter: %w", err)
+		}
+	}
 	// Send subscribe control message to other nodes.
 	err := n.pubSubscribe(userID, channel, *subscribeOpts)
 	if err != nil {
 		return err
 	}
 	// Subscribe on this node.
-	return n.hub.subscribe(userID, channel, subscribeOpts.clientID, subscribeOpts.sessionID, opts...)
+	return n.hub.subscribe(userID, channel, subscribeOpts.clientID, subscribeOpts.sessionID, subscribeOpts.LabelFilter, opts...)
 }
 
 // Unsubscribe unsubscribes user from a channel.
@@ -1188,17 +1356,22 @@ func (n *Node) Unsubscribe(userID string, channel string, opts ...UnsubscribeOpt
 	for _, opt := range opts {
 		opt(unsubscribeOpts)
 	}
+	if unsubscribeOpts.LabelFilter != nil {
+		if err := filter.Validate(unsubscribeOpts.LabelFilter); err != nil {
+			return fmt.Errorf("invalid label filter: %w", err)
+		}
+	}
 	customUnsubscribe := unsubscribeServer
 	if unsubscribeOpts.unsubscribe != nil {
 		customUnsubscribe = *unsubscribeOpts.unsubscribe
 	}
 	// Send unsubscribe control message to other nodes.
-	err := n.pubUnsubscribe(userID, channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID)
+	err := n.pubUnsubscribe(userID, channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID, unsubscribeOpts.LabelFilter)
 	if err != nil {
 		return err
 	}
 	// Unsubscribe on this node.
-	return n.hub.unsubscribe(userID, channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID)
+	return n.hub.unsubscribe(userID, channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID, unsubscribeOpts.LabelFilter)
 }
 
 // Disconnect allows closing all user connections on all nodes.
@@ -1207,18 +1380,23 @@ func (n *Node) Disconnect(userID string, opts ...DisconnectOption) error {
 	for _, opt := range opts {
 		opt(disconnectOpts)
 	}
+	if disconnectOpts.LabelFilter != nil {
+		if err := filter.Validate(disconnectOpts.LabelFilter); err != nil {
+			return fmt.Errorf("invalid label filter: %w", err)
+		}
+	}
 	// Disconnect user from this node
 	customDisconnect := DisconnectForceNoReconnect
 	if disconnectOpts.Disconnect != nil {
 		customDisconnect = *disconnectOpts.Disconnect
 	}
 	// Send disconnect control message to other nodes.
-	err := n.pubDisconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist)
+	err := n.pubDisconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist, disconnectOpts.LabelFilter)
 	if err != nil {
 		return err
 	}
 	// Disconnect on this node.
-	return n.hub.disconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist)
+	return n.hub.disconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist, disconnectOpts.LabelFilter)
 }
 
 // Refresh user connection.
@@ -1230,12 +1408,17 @@ func (n *Node) Refresh(userID string, opts ...RefreshOption) error {
 	for _, opt := range opts {
 		opt(refreshOpts)
 	}
+	if refreshOpts.LabelFilter != nil {
+		if err := filter.Validate(refreshOpts.LabelFilter); err != nil {
+			return fmt.Errorf("invalid label filter: %w", err)
+		}
+	}
 	err := n.pubRefresh(userID, *refreshOpts)
 	if err != nil {
 		return err
 	}
 	// Refresh on this node.
-	return n.hub.refresh(userID, refreshOpts.clientID, refreshOpts.sessionID, opts...)
+	return n.hub.refresh(userID, refreshOpts.clientID, refreshOpts.sessionID, refreshOpts.LabelFilter, opts...)
 }
 
 func (n *Node) getPresenceManager(ch string) PresenceManager {
@@ -1274,6 +1457,9 @@ var (
 	presenceGroup      singleflight.Group
 	presenceStatsGroup singleflight.Group
 	historyGroup       singleflight.Group
+	mapStateGroup      singleflight.Group
+	mapStreamGroup     singleflight.Group
+	mapStatsGroup      singleflight.Group
 )
 
 // PresenceResult wraps presence.
@@ -1344,10 +1530,16 @@ func pubToProto(pub *Publication) *protocol.Publication {
 		return nil
 	}
 	return &protocol.Publication{
-		Offset: pub.Offset,
-		Data:   pub.Data,
-		Info:   infoToProto(pub.Info),
-		Tags:   pub.Tags,
+		Offset:  pub.Offset,
+		Epoch:   pub.Epoch,
+		Data:    pub.Data,
+		Info:    infoToProto(pub.Info),
+		Tags:    pub.Tags,
+		Channel: pub.Channel,
+		Removed: pub.Removed,
+		Key:     pub.Key,
+		Score:   pub.Score,
+		Version: pub.Version,
 	}
 }
 
@@ -1356,11 +1548,17 @@ func pubFromProto(pub *protocol.Publication) *Publication {
 		return nil
 	}
 	return &Publication{
-		Offset: pub.GetOffset(),
-		Data:   pub.Data,
-		Info:   infoFromProto(pub.GetInfo()),
-		Tags:   pub.GetTags(),
-		Time:   pub.Time,
+		Offset:  pub.GetOffset(),
+		Epoch:   pub.GetEpoch(),
+		Data:    pub.Data,
+		Info:    infoFromProto(pub.GetInfo()),
+		Tags:    pub.GetTags(),
+		Time:    pub.Time,
+		Channel: pub.GetChannel(),
+		Key:     pub.GetKey(),
+		Removed: pub.GetRemoved(),
+		Score:   pub.GetScore(),
+		Version: pub.GetVersion(),
 	}
 }
 
@@ -1408,6 +1606,15 @@ func (n *Node) getBroker(ch string) Broker {
 		}
 	}
 	return n.broker
+}
+
+func (n *Node) getMapBroker(ch string) MapBroker {
+	if n.config.Map.GetMapBroker != nil {
+		if broker, ok := n.config.Map.GetMapBroker(ch); ok {
+			return broker
+		}
+	}
+	return n.mapBroker
 }
 
 func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
@@ -1537,22 +1744,59 @@ func (n *Node) streamTop(ch string, historyMetaTTL time.Duration) (StreamPositio
 	return historyResult.StreamPosition, nil
 }
 
-func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMetaTTL time.Duration) (bool, error) {
+func (n *Node) mapStreamTop(ch string) (StreamPosition, error) {
+	mapBroker := n.getMapBroker(ch)
+	if mapBroker == nil {
+		return StreamPosition{}, nil
+	}
+	streamResult, err := mapBroker.ReadStream(context.Background(), ch, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: 0},
+	})
+	if err != nil {
+		return StreamPosition{}, err
+	}
+	return streamResult.Position, nil
+}
+
+func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMetaTTL time.Duration, isMap bool) (bool, error) {
+	if isMap {
+		mapBroker := n.getMapBroker(ch)
+		if mapBroker == nil {
+			return true, nil
+		}
+		// If the map broker guarantees no-gaps delivery to local subscribers,
+		// the periodic position sync is redundant — trust the broker.
+		if rd, ok := mapBroker.(reliableDeliverer); ok && rd.ReliableDelivery() {
+			return true, nil
+		}
+	} else {
+		// If the stream broker guarantees no-gaps delivery to local subscribers,
+		// skip the position sync request entirely.
+		if rd, ok := n.getBroker(ch).(reliableDeliverer); ok && rd.ReliableDelivery() {
+			return true, nil
+		}
+	}
 	mu := n.subLock(ch)
 	mu.Lock()
 	medium, ok := n.mediums[ch]
 	mu.Unlock()
-	if !ok || !medium.options.SharedPositionSync {
-		// No medium for channel or position sync disabled – we then check position over Broker.
-		streamTop, err := n.streamTop(ch, historyMetaTTL)
+	if ok && medium.options.SharedPositionSync {
+		validPosition := medium.CheckPosition(historyMetaTTL, clientPosition, n.config.ClientChannelPositionCheckDelay)
+		return validPosition, nil
+	}
+	// No medium for channel or position sync disabled – check position over Broker.
+	if isMap {
+		streamTop, err := n.mapStreamTop(ch)
 		if err != nil {
-			// Will be checked later.
 			return false, err
 		}
 		return streamTop.Epoch == clientPosition.Epoch && clientPosition.Offset == streamTop.Offset, nil
 	}
-	validPosition := medium.CheckPosition(historyMetaTTL, clientPosition, n.config.ClientChannelPositionCheckDelay)
-	return validPosition, nil
+	streamTop, err := n.streamTop(ch, historyMetaTTL)
+	if err != nil {
+		return false, err
+	}
+	return streamTop.Epoch == clientPosition.Epoch && clientPosition.Offset == streamTop.Offset, nil
 }
 
 // RemoveHistory removes channel history.
@@ -1689,6 +1933,7 @@ type eventHub struct {
 	commandReadHandler      CommandReadHandler
 	commandProcessedHandler CommandProcessedHandler
 	cacheEmptyHandler       CacheEmptyHandler
+	sharedPollHandler       SharedPollHandler
 }
 
 // OnConnecting allows setting ConnectingHandler.
@@ -1729,10 +1974,67 @@ func (n *Node) OnCacheEmpty(h CacheEmptyHandler) {
 	n.clientEvents.cacheEmptyHandler = h
 }
 
+// OnSharedPoll allows setting SharedPollHandler.
+// SharedPollHandler is called by the refresh worker to fetch current item
+// data from the backend. Called per-channel, not per-client.
+func (n *Node) OnSharedPoll(handler SharedPollHandler) {
+	n.clientEvents.sharedPollHandler = handler
+}
+
+// SharedPollNotify submits notifications that trigger immediate backend polls
+// for the specified keys. Notifications are batched per channel according to
+// SharedPollChannelOptions before triggering polls. Safe for concurrent use.
+// Notifications for unknown channels are silently dropped.
+func (n *Node) SharedPollNotify(notifications []SharedPollNotificationItem) {
+	if n.sharedPollManager == nil {
+		return
+	}
+	for i := range notifications {
+		n.sharedPollManager.notify(notifications[i].Channel, notifications[i].Key)
+	}
+}
+
+// SharedPollPublish pushes data directly to a SharedPoll channel for a specific key.
+// The version must be in the same space as versions returned by the OnSharedPoll handler —
+// stale versions (≤ current) are ignored within a given epoch. When PublishEnabled is set
+// in channel options, the publication is distributed to all nodes via Broker PUB/SUB.
+// Otherwise, local-only.
+//
+// epoch is an optional channel-level string identifying the publisher's epoch.
+// If it differs from the channel's stored epoch, all current subscribers are
+// unsubscribed with insufficient-state code so they re-track from version 0 on
+// resubscribe — this lets a publisher that resets its in-memory version counter
+// (e.g., after a process restart) deliver fresh state without freezing connected
+// clients. Use empty epoch to skip this check (pure version comparison).
+func (n *Node) SharedPollPublish(ctx context.Context, channel string, key string, version uint64, epoch string, data []byte) error {
+	if n.sharedPollManager == nil {
+		return errors.New("shared poll manager not initialized")
+	}
+	return n.sharedPollManager.publish(ctx, channel, key, version, epoch, data)
+}
+
 // HandlePublication coming from Broker.
 func (n *Node) HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 	if pub == nil {
 		panic("nil Publication received, this must never happen")
+	}
+	// Route shared poll key-scoped publications to SharedPollManager.
+	if n.sharedPollManager != nil && pub.Key != "" {
+		if baseCh, key := parseSharedPollKeyChannel(ch); baseCh != "" {
+			n.sharedPollManager.handlePublishedData(baseCh, key, pub.Version, pub.Epoch, pub.Data)
+			return nil
+		}
+		// Fallback: check if it's a direct channel match (local-only path).
+		if n.sharedPollManager.hasChannel(ch) {
+			n.sharedPollManager.handlePublishedData(ch, pub.Key, pub.Version, pub.Epoch, pub.Data)
+			return nil
+		}
+	}
+	// Deliver epoch in the first publication (offset==1) so clients learn
+	// the channel epoch. This covers first-ever publish and post-Clear
+	// scenarios. Subsequent publications omit epoch to save wire bytes.
+	if pub.Offset == 1 && sp.Epoch != "" {
+		pub.Epoch = sp.Epoch
 	}
 	if n.config.GetChannelMediumOptions != nil {
 		mu := n.mediumLock(ch) // Note, avoid using subLock in HandlePublication – this leads to the deadlock.
@@ -1766,4 +2068,205 @@ func (n *Node) HandleLeave(ch string, info *ClientInfo) error {
 // HandleControl coming from Broker.
 func (n *Node) HandleControl(data []byte) error {
 	return n.handleControl(data)
+}
+
+// MapStateRead retrieves keyed snapshot for a channel.
+func (n *Node) MapStateRead(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
+	mapBroker := n.getMapBroker(ch)
+	if mapBroker == nil {
+		return MapStateResult{}, ErrorNotAvailable
+	}
+
+	n.metrics.incActionCount("map_state_read", ch)
+	if n.config.UseSingleFlight {
+		key := n.mapStateKey(ch, opts)
+		result, err, _ := mapStateGroup.Do(key, func() (any, error) {
+			return mapBroker.ReadState(ctx, ch, opts)
+		})
+		if err != nil {
+			return MapStateResult{}, err
+		}
+		return result.(MapStateResult), nil
+	}
+
+	return mapBroker.ReadState(ctx, ch, opts)
+}
+
+func (n *Node) mapStateKey(ch string, opts MapReadStateOptions) string {
+	var builder strings.Builder
+	builder.WriteString(ch)
+	builder.WriteString(",cursor:")
+	builder.WriteString(opts.Cursor)
+	builder.WriteString(",limit:")
+	builder.WriteString(strconv.Itoa(opts.Limit))
+	builder.WriteString(",key:")
+	builder.WriteString(opts.Key)
+	if opts.Asc {
+		builder.WriteString(",asc:1")
+	}
+	if opts.AllowCached {
+		builder.WriteString(",cached:1")
+	}
+	if opts.Revision != nil {
+		builder.WriteString(",rev_offset:")
+		builder.WriteString(strconv.FormatUint(opts.Revision.Offset, 10))
+		builder.WriteString(",rev_epoch:")
+		builder.WriteString(opts.Revision.Epoch)
+	}
+	return builder.String()
+}
+
+// MapStreamRead retrieves keyed stream for a channel.
+func (n *Node) MapStreamRead(ctx context.Context, ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
+	mapBroker := n.getMapBroker(ch)
+	if mapBroker == nil {
+		return MapStreamResult{}, ErrorNotAvailable
+	}
+
+	n.metrics.incActionCount("map_stream_read", ch)
+
+	var result MapStreamResult
+	var err error
+	if n.config.UseSingleFlight {
+		key := n.mapStreamKey(ch, opts)
+		r, e, _ := mapStreamGroup.Do(key, func() (any, error) {
+			return mapBroker.ReadStream(ctx, ch, opts)
+		})
+		if e != nil {
+			return MapStreamResult{}, e
+		}
+		result = r.(MapStreamResult)
+	} else {
+		result, err = mapBroker.ReadStream(ctx, ch, opts)
+		if err != nil {
+			return MapStreamResult{}, err
+		}
+	}
+
+	// Detect unrecoverable position: if we requested entries after a known offset
+	// but the first returned entry has a higher offset, entries were lost due to
+	// stream trimming — the client cannot recover cleanly.
+	if !opts.Filter.Reverse && opts.Filter.Since != nil && opts.Filter.Since.Offset > 0 &&
+		len(result.Publications) > 0 && result.Publications[0].Offset > opts.Filter.Since.Offset+1 {
+		return MapStreamResult{}, ErrorUnrecoverablePosition
+	}
+
+	return result, nil
+}
+
+func (n *Node) mapStreamKey(ch string, opts MapReadStreamOptions) string {
+	var builder strings.Builder
+	builder.WriteString(ch)
+	if opts.Filter.Since != nil {
+		builder.WriteString(",since_offset:")
+		builder.WriteString(strconv.FormatUint(opts.Filter.Since.Offset, 10))
+		builder.WriteString(",since_epoch:")
+		builder.WriteString(opts.Filter.Since.Epoch)
+	}
+	builder.WriteString(",limit:")
+	builder.WriteString(strconv.Itoa(opts.Filter.Limit))
+	builder.WriteString(",reverse:")
+	builder.WriteString(strconv.FormatBool(opts.Filter.Reverse))
+	return builder.String()
+}
+
+// mapStreamPosition returns the current stream position for a map channel.
+// This is useful for capturing the stream top before starting stream pagination.
+func (n *Node) mapStreamPosition(ctx context.Context, ch string) (StreamPosition, error) {
+	mapBroker := n.getMapBroker(ch)
+	if mapBroker == nil {
+		return StreamPosition{}, ErrorNotAvailable
+	}
+	n.metrics.incActionCount("map_stream_position", ch)
+	// ReadStream with Limit=0 returns only the current stream position.
+	result, err := mapBroker.ReadStream(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{Limit: 0},
+	})
+	if err != nil {
+		return StreamPosition{}, err
+	}
+	return result.Position, nil
+}
+
+// MapStatsResult wraps keyed stats result.
+type MapStatsResult struct {
+	MapStats
+}
+
+// MapStats retrieves stats for a map channel.
+func (n *Node) MapStats(ctx context.Context, ch string) (MapStatsResult, error) {
+	mapBroker := n.getMapBroker(ch)
+	if mapBroker == nil {
+		return MapStatsResult{}, ErrorNotAvailable
+	}
+
+	n.metrics.incActionCount("map_stats", ch)
+	if n.config.UseSingleFlight {
+		result, err, _ := mapStatsGroup.Do(ch, func() (any, error) {
+			stats, err := mapBroker.Stats(ctx, ch)
+			if err != nil {
+				return MapStatsResult{}, err
+			}
+			return MapStatsResult{MapStats: stats}, nil
+		})
+		if err != nil {
+			return MapStatsResult{}, err
+		}
+		return result.(MapStatsResult), nil
+	}
+
+	stats, err := mapBroker.Stats(ctx, ch)
+	if err != nil {
+		return MapStatsResult{}, err
+	}
+	return MapStatsResult{MapStats: stats}, nil
+}
+
+// MapPublish publishes data to a map channel.
+// This updates the snapshot and optionally broadcasts to subscribers.
+func (n *Node) MapPublish(ctx context.Context, ch string, key string, opts MapPublishOptions) (MapUpdateResult, error) {
+	if key == "" {
+		return MapUpdateResult{}, ErrorBadRequest
+	}
+	mapBroker := n.getMapBroker(ch)
+	if mapBroker == nil {
+		return MapUpdateResult{}, ErrorNotAvailable
+	}
+	n.metrics.incActionCount("map_publish", ch)
+	n.metrics.incMessagesSent("map_publication", ch)
+	result, err := mapBroker.Publish(ctx, ch, key, opts)
+	if err == nil && result.Suppressed {
+		n.metrics.incMapPublishSuppressed(result.SuppressReason, ch)
+	}
+	return result, err
+}
+
+// MapRemove removes a key from a map channel.
+// This removes the key from snapshot and optionally broadcasts removal to subscribers.
+func (n *Node) MapRemove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapUpdateResult, error) {
+	if key == "" {
+		return MapUpdateResult{}, ErrorBadRequest
+	}
+	mapBroker := n.getMapBroker(ch)
+	if mapBroker == nil {
+		return MapUpdateResult{}, ErrorNotAvailable
+	}
+	n.metrics.incActionCount("map_remove", ch)
+	n.metrics.incMessagesSent("map_removal", ch)
+	result, err := mapBroker.Remove(ctx, ch, key, opts)
+	if err == nil && result.Suppressed {
+		n.metrics.incMapPublishSuppressed(result.SuppressReason, ch)
+	}
+	return result, err
+}
+
+// MapClear deletes all data for a map channel (state and stream).
+// Use for cleanup when a channel data is no longer needed.
+func (n *Node) MapClear(ctx context.Context, ch string, opts MapClearOptions) error {
+	mapBroker := n.getMapBroker(ch)
+	if mapBroker == nil {
+		return ErrorNotAvailable
+	}
+	n.metrics.incActionCount("map_clear", ch)
+	return mapBroker.Clear(ctx, ch, opts)
 }

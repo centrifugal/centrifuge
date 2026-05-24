@@ -72,12 +72,12 @@ func (e *TestBroker) RegisterBrokerEventHandler(_ BrokerEventHandler) error {
 	return nil
 }
 
-func (e *TestBroker) Publish(_ string, _ []byte, _ PublishOptions) (StreamPosition, bool, error) {
+func (e *TestBroker) Publish(_ string, _ []byte, _ PublishOptions) (PublishResult, error) {
 	atomic.AddInt32(&e.publishCount, 1)
 	if e.errorOnPublish {
-		return StreamPosition{}, false, errors.New("boom")
+		return PublishResult{}, errors.New("boom")
 	}
-	return StreamPosition{}, false, nil
+	return PublishResult{}, nil
 }
 
 func (e *TestBroker) PublishJoin(_ string, _ *ClientInfo) error {
@@ -104,14 +104,14 @@ func (e *TestBroker) PublishControl(_ []byte, _, _ string) error {
 	return nil
 }
 
-func (e *TestBroker) Subscribe(_ string) error {
+func (e *TestBroker) Subscribe(_ ...string) error {
 	if e.errorOnSubscribe {
 		return errors.New("boom")
 	}
 	return nil
 }
 
-func (e *TestBroker) Unsubscribe(_ string) error {
+func (e *TestBroker) Unsubscribe(_ ...string) error {
 	if e.errorOnUnsubscribe {
 		return errors.New("boom")
 	}
@@ -278,11 +278,13 @@ func defaultTestNode() *Node {
 }
 
 func TestErrorMessage(t *testing.T) {
+	t.Parallel()
 	errMessage := ErrorTooManyRequests.Error()
 	require.Equal(t, "111: too many requests", errMessage)
 }
 
 func TestNode_Shutdown(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	require.NoError(t, n.Shutdown(context.Background()))
 	require.True(t, n.shutdown)
@@ -291,6 +293,7 @@ func TestNode_Shutdown(t *testing.T) {
 }
 
 func TestNode_shutdownCmd(t *testing.T) {
+	t.Parallel()
 	// Testing that shutdownCmd removes node from nodes registry.
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -300,6 +303,7 @@ func TestNode_shutdownCmd(t *testing.T) {
 }
 
 func TestClientEventHub(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	n.OnConnect(func(_ *Client) {})
@@ -307,6 +311,7 @@ func TestClientEventHub(t *testing.T) {
 }
 
 func TestNodeRegistry(t *testing.T) {
+	t.Parallel()
 	registry := newNodeRegistry("node1")
 	nodeInfo1 := controlpb.Node{Uid: "node1"}
 	nodeInfo2 := controlpb.Node{Uid: "node2"}
@@ -327,6 +332,7 @@ func TestNodeRegistry(t *testing.T) {
 }
 
 func TestNodeLogHandler(t *testing.T) {
+	t.Parallel()
 	doneCh := make(chan struct{})
 	n, _ := New(Config{
 		LogLevel: LogLevelInfo,
@@ -347,6 +353,7 @@ func TestNodeLogHandler(t *testing.T) {
 }
 
 func TestNode_SetBroker(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	broker := testMemoryBroker()
 	n.SetBroker(broker)
@@ -354,6 +361,7 @@ func TestNode_SetBroker(t *testing.T) {
 }
 
 func TestNode_SetPresenceManager_NilPresenceManager(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	n.SetPresenceManager(nil)
 	require.NoError(t, n.addPresence("test", "uid", &ClientInfo{}))
@@ -365,6 +373,7 @@ func TestNode_SetPresenceManager_NilPresenceManager(t *testing.T) {
 }
 
 func TestNode_LogEnabled(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{
 		LogLevel:   LogLevelInfo,
 		LogHandler: func(entry LogEntry) {},
@@ -374,6 +383,7 @@ func TestNode_LogEnabled(t *testing.T) {
 }
 
 func TestNode_RunError(t *testing.T) {
+	t.Parallel()
 	broker := NewTestBroker()
 	broker.errorOnRegister = true
 	node, err := New(Config{})
@@ -384,6 +394,7 @@ func TestNode_RunError(t *testing.T) {
 }
 
 func TestNode_RunPubControlError(t *testing.T) {
+	t.Parallel()
 	controller := NewTestController()
 	controller.errorOnPublishControl = true
 	node, err := New(Config{})
@@ -394,6 +405,7 @@ func TestNode_RunPubControlError(t *testing.T) {
 }
 
 func TestNode_SetPresenceManager(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	presenceManager := testMemoryPresenceManager(t)
 	n.SetPresenceManager(presenceManager)
@@ -401,6 +413,7 @@ func TestNode_SetPresenceManager(t *testing.T) {
 }
 
 func TestNode_Info(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	info, err := n.Info()
@@ -409,6 +422,7 @@ func TestNode_Info(t *testing.T) {
 }
 
 func TestNode_handleJoin(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	err := n.handleJoin("test", &ClientInfo{})
@@ -416,6 +430,7 @@ func TestNode_handleJoin(t *testing.T) {
 }
 
 func TestNode_handleLeave(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	err := n.handleLeave("test", &ClientInfo{})
@@ -423,6 +438,7 @@ func TestNode_handleLeave(t *testing.T) {
 }
 
 func TestNode_Subscribe(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -454,6 +470,7 @@ func TestNode_Subscribe(t *testing.T) {
 }
 
 func TestNode_Unsubscribe(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -485,6 +502,7 @@ func TestNode_Unsubscribe(t *testing.T) {
 }
 
 func TestNode_Disconnect(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -513,30 +531,33 @@ func TestNode_Disconnect(t *testing.T) {
 }
 
 func TestNode_pubUnsubscribe(t *testing.T) {
+	t.Parallel()
 	node := nodeWithTestController()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	testController, _ := node.controller.(*TestController)
 	require.EqualValues(t, 1, testController.publishControlCount)
 
-	err := node.pubUnsubscribe("42", "holypeka", unsubscribeServer, "", "")
+	err := node.pubUnsubscribe("42", "holypeka", unsubscribeServer, "", "", nil)
 	require.NoError(t, err)
 	require.EqualValues(t, 2, testController.publishControlCount)
 }
 
 func TestNode_pubDisconnect(t *testing.T) {
+	t.Parallel()
 	node := nodeWithTestController()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	testController, _ := node.controller.(*TestController)
 	require.EqualValues(t, 1, testController.publishControlCount)
 
-	err := node.pubDisconnect("42", DisconnectForceNoReconnect, "", "", nil)
+	err := node.pubDisconnect("42", DisconnectForceNoReconnect, "", "", nil, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, 2, testController.publishControlCount)
 }
 
 func TestNode_publishJoin(t *testing.T) {
+	t.Parallel()
 	n := nodeWithTestBroker()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -555,6 +576,7 @@ func TestNode_publishJoin(t *testing.T) {
 }
 
 func TestNode_publishLeave(t *testing.T) {
+	t.Parallel()
 	n := nodeWithTestBroker()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -573,6 +595,7 @@ func TestNode_publishLeave(t *testing.T) {
 }
 
 func TestNode_RemoveHistory(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -581,6 +604,7 @@ func TestNode_RemoveHistory(t *testing.T) {
 }
 
 func TestNode_History_ErrorOnReverseWithZeroOffset(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	_, err := n.History("test", WithReverse(true), WithSince(&StreamPosition{Offset: 0}))
@@ -588,6 +612,7 @@ func TestNode_History_ErrorOnReverseWithZeroOffset(t *testing.T) {
 }
 
 func TestIndex(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, 0, index("2121", 1))
 }
 
@@ -739,6 +764,7 @@ func BenchmarkHistory(b *testing.B) {
 }
 
 func TestNode_handleControl(t *testing.T) {
+	t.Parallel()
 	t.Run("BrokenData", func(t *testing.T) {
 		t.Parallel()
 
@@ -926,6 +952,7 @@ func TestNode_handleControl(t *testing.T) {
 }
 
 func Test_infoFromProto(t *testing.T) {
+	t.Parallel()
 	info := infoFromProto(nil)
 	require.Nil(t, info)
 
@@ -953,6 +980,7 @@ func Test_infoFromProto(t *testing.T) {
 }
 
 func Test_infoToProto(t *testing.T) {
+	t.Parallel()
 	info := infoToProto(nil)
 	require.Nil(t, info)
 
@@ -980,6 +1008,7 @@ func Test_infoToProto(t *testing.T) {
 }
 
 func Test_pubToProto(t *testing.T) {
+	t.Parallel()
 	pub := pubToProto(nil)
 	require.Nil(t, pub)
 
@@ -997,6 +1026,7 @@ func Test_pubToProto(t *testing.T) {
 }
 
 func Test_pubFromProto(t *testing.T) {
+	t.Parallel()
 	pub := pubFromProto(nil)
 	require.Nil(t, pub)
 
@@ -1014,6 +1044,7 @@ func Test_pubFromProto(t *testing.T) {
 }
 
 func TestNode_OnSurvey(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1038,6 +1069,7 @@ func TestNode_OnSurvey(t *testing.T) {
 }
 
 func TestNode_OnSurveyWithNodeID(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1062,6 +1094,7 @@ func TestNode_OnSurveyWithNodeID(t *testing.T) {
 }
 
 func TestNode_OnSurvey_NoHandler(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1071,6 +1104,7 @@ func TestNode_OnSurvey_NoHandler(t *testing.T) {
 }
 
 func TestNode_OnSurvey_Timeout(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1096,6 +1130,7 @@ func TestNode_OnSurvey_Timeout(t *testing.T) {
 }
 
 func TestNode_OnNotification(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1114,6 +1149,7 @@ func TestNode_OnNotification(t *testing.T) {
 }
 
 func TestNode_OnNotification_SameNode(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1132,6 +1168,7 @@ func TestNode_OnNotification_SameNode(t *testing.T) {
 }
 
 func TestNode_OnNotification_NoHandler(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	err := node.Notify("notification", []byte(`notification`), "")
@@ -1139,6 +1176,7 @@ func TestNode_OnNotification_NoHandler(t *testing.T) {
 }
 
 func TestNode_handleNotification_NoHandler(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	err := node.handleNotification("test", &controlpb.Notification{})
@@ -1146,6 +1184,7 @@ func TestNode_handleNotification_NoHandler(t *testing.T) {
 }
 
 func TestNode_handleSurveyRequest_NoHandler(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	err := node.handleSurveyRequest("test", &controlpb.SurveyRequest{})
@@ -1153,6 +1192,7 @@ func TestNode_handleSurveyRequest_NoHandler(t *testing.T) {
 }
 
 func TestErrors(t *testing.T) {
+	t.Parallel()
 	err := ErrorUnauthorized
 	protoErr := err.toProto()
 	require.Equal(t, ErrorUnauthorized.Code, protoErr.Code)
@@ -1162,6 +1202,7 @@ func TestErrors(t *testing.T) {
 }
 
 func TestSingleFlightHistory(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	node.config.UseSingleFlight = true
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1181,6 +1222,7 @@ func TestSingleFlightHistory(t *testing.T) {
 }
 
 func TestSingleFlightPresence(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	node.config.UseSingleFlight = true
 
@@ -1214,6 +1256,7 @@ func TestSingleFlightPresence(t *testing.T) {
 }
 
 func TestBrokerEventHandler_PanicsOnNil(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	require.Panics(t, func() {
@@ -1228,6 +1271,7 @@ func TestBrokerEventHandler_PanicsOnNil(t *testing.T) {
 }
 
 func TestNode_OnNodeInfoSend(t *testing.T) {
+	t.Parallel()
 	n, err := New(Config{})
 	if err != nil {
 		panic(err)
@@ -1257,6 +1301,7 @@ func TestNode_OnNodeInfoSend(t *testing.T) {
 }
 
 func TestNode_OnTransportWrite(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1292,6 +1337,7 @@ func TestNode_OnTransportWrite(t *testing.T) {
 }
 
 func TestNode_OnTransportWriteProtocolV2(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1316,6 +1362,7 @@ func TestNode_OnTransportWriteProtocolV2(t *testing.T) {
 }
 
 func TestNode_OnTransportWriteSkip(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1342,6 +1389,7 @@ func TestNode_OnTransportWriteSkip(t *testing.T) {
 }
 
 func TestNode_OnCommandRead(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1393,6 +1441,7 @@ func TestNode_OnCommandRead(t *testing.T) {
 }
 
 func TestNodeCheckPosition(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1407,26 +1456,168 @@ func TestNodeCheckPosition(t *testing.T) {
 	isValid, err := node.checkPosition("test", StreamPosition{
 		Offset: 20,
 		Epoch:  "test",
-	}, 200*time.Second)
+	}, 200*time.Second, false)
 	require.NoError(t, err)
 	require.True(t, isValid)
 
 	isValid, err = node.checkPosition("test", StreamPosition{
 		Offset: 19,
 		Epoch:  "test",
-	}, 200*time.Second)
+	}, 200*time.Second, false)
 	require.NoError(t, err)
 	require.False(t, isValid)
 
 	isValid, err = node.checkPosition("test", StreamPosition{
 		Offset: 20,
 		Epoch:  "test_new",
-	}, 200*time.Second)
+	}, 200*time.Second, false)
+	require.NoError(t, err)
+	require.False(t, isValid)
+}
+
+func TestNodeCheckPositionMap(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	// Set up map broker.
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	ctx := context.Background()
+	channel := "test_map"
+
+	// Publish some data to create stream position.
+	result, err := mapBroker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"test": 1}`),
+	})
+	require.NoError(t, err)
+	streamPos := result.Position
+
+	// Check with correct position - should be valid.
+	isValid, err := node.checkPosition(channel, streamPos, 200*time.Second, true)
+	require.NoError(t, err)
+	require.True(t, isValid)
+
+	// Check with wrong offset - should be invalid.
+	isValid, err = node.checkPosition(channel, StreamPosition{
+		Offset: streamPos.Offset - 1,
+		Epoch:  streamPos.Epoch,
+	}, 200*time.Second, true)
+	require.NoError(t, err)
+	require.False(t, isValid)
+
+	// Check with wrong epoch - should be invalid.
+	isValid, err = node.checkPosition(channel, StreamPosition{
+		Offset: streamPos.Offset,
+		Epoch:  "wrong_epoch",
+	}, 200*time.Second, true)
+	require.NoError(t, err)
+	require.False(t, isValid)
+
+	// Publish more data.
+	result2, err := mapBroker.Publish(ctx, channel, "key2", MapPublishOptions{
+		Data: []byte(`{"test": 2}`),
+	})
+	require.NoError(t, err)
+	streamPos2 := result2.Position
+
+	// Old position should now be invalid.
+	isValid, err = node.checkPosition(channel, streamPos, 200*time.Second, true)
+	require.NoError(t, err)
+	require.False(t, isValid)
+
+	// New position should be valid.
+	isValid, err = node.checkPosition(channel, streamPos2, 200*time.Second, true)
+	require.NoError(t, err)
+	require.True(t, isValid)
+}
+
+func TestNodeCheckPositionMapWithMedium(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+	node.config.GetChannelMediumOptions = func(channel string) ChannelMediumOptions {
+		return ChannelMediumOptions{
+			SharedPositionSync: true,
+		}
+	}
+	node.config.ClientChannelPositionCheckDelay = 0
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	ctx := context.Background()
+	channel := "test_map_medium"
+
+	// Publish data to create stream position.
+	result, err := mapBroker.Publish(ctx, channel, "key1", MapPublishOptions{
+		Data: []byte(`{"test": 1}`),
+	})
+	require.NoError(t, err)
+	streamPos := result.Position
+
+	// Create a subscription to trigger medium creation with isMap=true.
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					EnablePositioning: true,
+					HistoryMetaTTL:    200 * time.Second,
+				},
+			}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+	subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+
+	// Now checkPosition should use the medium's SharedPositionSync path.
+	// Correct position — valid.
+	isValid, err := node.checkPosition(channel, streamPos, 200*time.Second, true)
+	require.NoError(t, err)
+	require.True(t, isValid)
+
+	// Wrong offset — invalid.
+	isValid, err = node.checkPosition(channel, StreamPosition{
+		Offset: streamPos.Offset + 1,
+		Epoch:  streamPos.Epoch,
+	}, 200*time.Second, true)
+	require.NoError(t, err)
+	require.False(t, isValid)
+
+	// Wrong epoch — invalid.
+	isValid, err = node.checkPosition(channel, StreamPosition{
+		Offset: streamPos.Offset,
+		Epoch:  "wrong",
+	}, 200*time.Second, true)
 	require.NoError(t, err)
 	require.False(t, isValid)
 }
 
 func TestGetBroker(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	customBroker := NewTestBroker()
 	node.config.GetBroker = func(channel string) (Broker, bool) {
@@ -1451,6 +1642,7 @@ func TestGetBroker(t *testing.T) {
 }
 
 func TestGetPresenceManager(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	customPresenceManager := NewTestPresenceManager()
 	node.config.GetPresenceManager = func(channel string) (PresenceManager, bool) {
@@ -1470,4 +1662,713 @@ func TestGetPresenceManager(t *testing.T) {
 
 	_, err = node.Presence("test2")
 	require.NoError(t, err)
+}
+
+func TestGetMapBroker(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	// Create two map brokers
+	defaultBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	_ = defaultBroker.RegisterEventHandler(nil)
+
+	customBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	_ = customBroker.RegisterEventHandler(nil)
+
+	// Set default broker
+	node.SetMapBroker(defaultBroker)
+
+	// Configure GetMapBroker to route "custom:*" channels to customBroker
+	node.config.Map.GetMapBroker = func(channel string) (MapBroker, bool) {
+		if len(channel) >= 7 && channel[:7] == "custom:" {
+			return customBroker, true
+		}
+		return nil, false // Use default
+	}
+
+	ctx := context.Background()
+
+	// Publish to default channel - should use defaultBroker
+	_, err = node.MapPublish(ctx, "default:test", "key1", MapPublishOptions{
+		Data: []byte(`{"v":1}`),
+	})
+	require.NoError(t, err)
+
+	// Publish to custom channel - should use customBroker
+	_, err = node.MapPublish(ctx, "custom:test", "key1", MapPublishOptions{
+		Data: []byte(`{"v":2}`),
+	})
+	require.NoError(t, err)
+
+	// Read from default channel - should find the data
+	result, err := node.MapStateRead(ctx, "default:test", MapReadStateOptions{Key: "key1"})
+	require.NoError(t, err)
+	require.Len(t, result.Publications, 1)
+	require.Equal(t, []byte(`{"v":1}`), result.Publications[0].Data)
+
+	// Read from custom channel - should find the data
+	result, err = node.MapStateRead(ctx, "custom:test", MapReadStateOptions{Key: "key1"})
+	require.NoError(t, err)
+	require.Len(t, result.Publications, 1)
+	require.Equal(t, []byte(`{"v":2}`), result.Publications[0].Data)
+
+	// Verify isolation - default channel shouldn't find custom data
+	result, err = node.MapStateRead(ctx, "default:test", MapReadStateOptions{Key: "key1"})
+	require.NoError(t, err)
+	require.Len(t, result.Publications, 1)
+	require.Equal(t, []byte(`{"v":1}`), result.Publications[0].Data) // Still default data
+
+	// Custom channel shouldn't find default data
+	result, err = node.MapStateRead(ctx, "custom:test", MapReadStateOptions{Key: "key1"})
+	require.NoError(t, err)
+	require.Len(t, result.Publications, 1)
+	require.Equal(t, []byte(`{"v":2}`), result.Publications[0].Data) // Still custom data
+}
+
+func TestNode_MapStreamReadUnrecoverablePosition(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	ctx := context.Background()
+	ch := "test_overflow"
+
+	// Publish 200 messages with StreamSize=30 to force heavy trimming.
+	var epoch string
+	for i := 1; i <= 200; i++ {
+		res, err := mapBroker.Publish(ctx, ch, fmt.Sprintf("key_%d", i), MapPublishOptions{
+			Data: []byte(fmt.Sprintf("data_%d", i)),
+		})
+		require.NoError(t, err)
+		epoch = res.Position.Epoch
+	}
+
+	// Try to recover from offset 3 — should fail because entries 4..170+ are gone.
+	_, err = node.MapStreamRead(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{
+			Since: &StreamPosition{Offset: 3, Epoch: epoch},
+			Limit: -1,
+		},
+	})
+	require.ErrorIs(t, err, ErrorUnrecoverablePosition)
+}
+
+func TestNode_MapRemoveEmptyKey(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	_, err = node.MapRemove(context.Background(), "test_ch", "", MapRemoveOptions{})
+	require.ErrorIs(t, err, ErrorBadRequest)
+}
+
+func TestNode_Config(t *testing.T) {
+	t.Parallel()
+	cfg := Config{
+		LogLevel: LogLevelInfo,
+	}
+	n, err := New(cfg)
+	require.NoError(t, err)
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	require.Equal(t, LogLevelInfo, n.Config().LogLevel)
+}
+
+func TestNode_MapMetricMethods(t *testing.T) {
+	t.Parallel()
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	// These should not panic even when metrics are initialized.
+	n.IncMapBrokerCleanupErrors("test")
+	n.AddMapBrokerCleanupKeysRemoved("test", 5)
+	n.SetMapBrokerCleanupLag("test", 1.5)
+}
+
+func TestNode_MapMetricMethods_NilMetrics(t *testing.T) {
+	t.Parallel()
+	n, err := New(Config{})
+	require.NoError(t, err)
+	// Before Run(), metrics may be nil — should not panic.
+	n.IncMapBrokerCleanupErrors("test")
+	n.AddMapBrokerCleanupKeysRemoved("test", 5)
+	n.SetMapBrokerCleanupLag("test", 1.5)
+}
+
+func TestNode_mapStateKey(t *testing.T) {
+	t.Parallel()
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	key := n.mapStateKey("ch1", MapReadStateOptions{})
+	require.Contains(t, key, "ch1")
+
+	key = n.mapStateKey("ch1", MapReadStateOptions{
+		Cursor: "abc", Limit: 10, Key: "k1", Asc: true, AllowCached: true,
+		Revision: &StreamPosition{Offset: 42, Epoch: "e1"},
+	})
+	require.Contains(t, key, "cursor:abc")
+	require.Contains(t, key, "limit:10")
+	require.Contains(t, key, "key:k1")
+	require.Contains(t, key, "asc:1")
+	require.Contains(t, key, "cached:1")
+	require.Contains(t, key, "rev_offset:42")
+	require.Contains(t, key, "rev_epoch:e1")
+}
+
+func TestNode_mapStreamKey(t *testing.T) {
+	t.Parallel()
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	key := n.mapStreamKey("ch1", MapReadStreamOptions{})
+	require.Contains(t, key, "ch1")
+	require.Contains(t, key, "limit:0")
+
+	key = n.mapStreamKey("ch1", MapReadStreamOptions{
+		Filter: StreamFilter{
+			Since:   &StreamPosition{Offset: 5, Epoch: "e2"},
+			Limit:   20,
+			Reverse: true,
+		},
+	})
+	require.Contains(t, key, "since_offset:5")
+	require.Contains(t, key, "since_epoch:e2")
+	require.Contains(t, key, "limit:20")
+	require.Contains(t, key, "reverse:true")
+}
+
+func TestNode_MapStats(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	ctx := context.Background()
+	_, err = mapBroker.Publish(ctx, "ch", "k1", MapPublishOptions{Data: []byte(`"v"`)})
+	require.NoError(t, err)
+
+	stats, err := node.MapStats(ctx, "ch")
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.NumKeys)
+}
+
+func TestNode_MapClear(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	ctx := context.Background()
+	_, err = mapBroker.Publish(ctx, "ch", "k1", MapPublishOptions{Data: []byte(`"v"`)})
+	require.NoError(t, err)
+
+	err = node.MapClear(ctx, "ch", MapClearOptions{})
+	require.NoError(t, err)
+
+	// Verify state is empty after clear.
+	stats, err := node.MapStats(ctx, "ch")
+	require.NoError(t, err)
+	require.Equal(t, 0, stats.NumKeys)
+}
+
+func TestNode_MapPublishEmptyKey(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	_, err = node.MapPublish(context.Background(), "ch", "", MapPublishOptions{Data: []byte(`"v"`)})
+	require.ErrorIs(t, err, ErrorBadRequest)
+}
+
+func TestNode_MapPublish(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	ctx := context.Background()
+	result, err := node.MapPublish(ctx, "ch", "k1", MapPublishOptions{Data: []byte(`"val"`)})
+	require.NoError(t, err)
+	require.True(t, result.Position.Offset > 0)
+}
+
+func TestNode_MapRemove(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	ctx := context.Background()
+	_, err := node.MapPublish(ctx, "ch", "k1", MapPublishOptions{Data: []byte(`"val"`)})
+	require.NoError(t, err)
+
+	_, err = node.MapRemove(ctx, "ch", "k1", MapRemoveOptions{})
+	require.NoError(t, err)
+
+	stats, err := node.MapStats(ctx, "ch")
+	require.NoError(t, err)
+	require.Equal(t, 0, stats.NumKeys)
+}
+
+func TestHub_Connections(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	conns := node.Hub().Connections()
+	require.Empty(t, conns)
+}
+
+// TestNodeMapAPIWithoutBroker validates that map APIs report ErrorNotAvailable
+// when no map broker is configured for the channel.
+func TestNodeMapAPIWithoutBroker(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	// Force the per-channel resolver to report no broker so we test the missing-broker
+	// path in the public Node API (default node always installs a MemoryMapBroker).
+	node.config.Map.GetMapBroker = func(string) (MapBroker, bool) { return nil, true }
+	node.mapBroker = nil
+
+	ctx := context.Background()
+
+	_, err := node.MapPublish(ctx, "ch", "k", MapPublishOptions{Data: []byte(`{}`)})
+	require.Equal(t, ErrorNotAvailable, err)
+
+	_, err = node.MapRemove(ctx, "ch", "k", MapRemoveOptions{})
+	require.Equal(t, ErrorNotAvailable, err)
+
+	_, err = node.MapStateRead(ctx, "ch", MapReadStateOptions{Limit: 1})
+	require.Equal(t, ErrorNotAvailable, err)
+
+	_, err = node.MapStreamRead(ctx, "ch", MapReadStreamOptions{Filter: StreamFilter{Limit: 1}})
+	require.Equal(t, ErrorNotAvailable, err)
+
+	_, err = node.MapStats(ctx, "ch")
+	require.Equal(t, ErrorNotAvailable, err)
+}
+
+// TestNodeMapPublishRemoveKeyRequired validates the key validation in the public Map APIs.
+// An empty key is a programming error and should be rejected before reaching the broker.
+func TestNodeMapPublishRemoveKeyRequired(t *testing.T) {
+	t.Parallel()
+	node, _ := newTestNodeWithMapBroker(t)
+	ctx := context.Background()
+
+	_, err := node.MapPublish(ctx, "ch", "", MapPublishOptions{Data: []byte(`{}`)})
+	require.ErrorIs(t, err, ErrorBadRequest)
+
+	_, err = node.MapRemove(ctx, "ch", "", MapRemoveOptions{})
+	require.ErrorIs(t, err, ErrorBadRequest)
+}
+
+// TestNodeMapStateReadWithSingleFlight covers the UseSingleFlight branch.
+func TestNodeMapStateReadWithSingleFlight(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	node.config.UseSingleFlight = true
+
+	ctx := context.Background()
+	channel := "single-flight-state"
+	_, err := broker.Publish(ctx, channel, "k1", MapPublishOptions{Data: []byte(`{}`)})
+	require.NoError(t, err)
+
+	state, err := node.MapStateRead(ctx, channel, MapReadStateOptions{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 1)
+
+	state, err = node.MapStateRead(ctx, channel, MapReadStateOptions{
+		Limit:    10,
+		Cursor:   "",
+		Asc:      true,
+		Revision: &StreamPosition{Offset: 0, Epoch: state.Position.Epoch},
+	})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 1)
+}
+
+// TestNodeMapStreamReadWithSingleFlight covers the UseSingleFlight branch for stream reads.
+func TestNodeMapStreamReadWithSingleFlight(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+	node.config.UseSingleFlight = true
+
+	ctx := context.Background()
+	channel := "single-flight-stream"
+	_, err := broker.Publish(ctx, channel, "k1", MapPublishOptions{Data: []byte(`{}`)})
+	require.NoError(t, err)
+
+	res, err := node.MapStreamRead(ctx, channel, MapReadStreamOptions{Filter: StreamFilter{Limit: 10}})
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Publications)
+}
+
+// TestNodeMapStatsWithSingleFlight covers the UseSingleFlight branch for stats.
+func TestNodeMapStatsWithSingleFlight(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	node.config.UseSingleFlight = true
+
+	ctx := context.Background()
+	channel := "single-flight-stats"
+	_, err := broker.Publish(ctx, channel, "k1", MapPublishOptions{Data: []byte(`{}`)})
+	require.NoError(t, err)
+
+	stats, err := node.MapStats(ctx, channel)
+	require.NoError(t, err)
+	_ = stats
+}
+
+// TestNode_HandleSurveyResponse_Coverage targets the entirely-uncovered
+// handleSurveyResponse: unknown ID is silently ignored; matching ID delivers
+// the result; full channel drops without blocking.
+func TestNode_HandleSurveyResponse_Coverage(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	// Unknown survey ID → silent no-op.
+	require.NoError(t, n.handleSurveyResponse("other-uid", &controlpb.SurveyResponse{
+		Id: 999, Code: 1, Data: []byte("x"),
+	}))
+
+	// Register a channel and deliver a response.
+	ch := make(chan survey, 1)
+	n.surveyMu.Lock()
+	n.surveyID++
+	id := n.surveyID
+	n.surveyRegistry[id] = ch
+	n.surveyMu.Unlock()
+
+	require.NoError(t, n.handleSurveyResponse("from-uid", &controlpb.SurveyResponse{
+		Id: id, Code: 7, Data: []byte("hello"),
+	}))
+	select {
+	case s := <-ch:
+		require.Equal(t, "from-uid", s.UID)
+		require.Equal(t, uint32(7), s.Result.Code)
+		require.Equal(t, []byte("hello"), s.Result.Data)
+	case <-time.After(time.Second):
+		t.Fatal("response not delivered")
+	}
+
+	// Channel full → silently drops (channel has cap=1, fill it first).
+	ch <- survey{} // pre-fill
+	require.NoError(t, n.handleSurveyResponse("from-uid", &controlpb.SurveyResponse{
+		Id: id, Code: 99, Data: nil,
+	}))
+
+	// Cleanup.
+	n.surveyMu.Lock()
+	delete(n.surveyRegistry, id)
+	n.surveyMu.Unlock()
+}
+
+// TestNode_HandleSurveyRequest_CustomHandler covers the non-emulation path
+// of handleSurveyRequest where surveyHandler runs and a SurveyResponse is
+// published back via publishControl.
+func TestNode_HandleSurveyRequest_CustomHandler(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	called := make(chan SurveyEvent, 1)
+	n.OnSurvey(func(e SurveyEvent, cb SurveyCallback) {
+		called <- e
+		cb(SurveyReply{Code: 42, Data: []byte("ok")})
+	})
+
+	req := &controlpb.SurveyRequest{Id: 1, Op: "custom-op", Data: []byte("payload")}
+	require.NoError(t, n.handleSurveyRequest("peer", req))
+
+	select {
+	case e := <-called:
+		require.Equal(t, "custom-op", e.Op)
+		require.Equal(t, []byte("payload"), e.Data)
+	case <-time.After(time.Second):
+		t.Fatal("survey handler not invoked")
+	}
+}
+
+// TestNode_SetBroker_PreservesController verifies that SetBroker does NOT
+// overwrite an explicitly-set controller, even if the new broker also
+// implements the Controller interface.
+func TestNode_SetBroker_PreservesController(t *testing.T) {
+	t.Parallel()
+	n, err := New(Config{})
+	require.NoError(t, err)
+
+	c := NewTestController()
+	n.SetController(c)
+
+	// MemoryBroker doesn't implement Controller, but the type-assertion branch
+	// is where this matters; the previous controller must remain set.
+	b, err := NewMemoryBroker(n, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	n.SetBroker(b)
+
+	require.Same(t, c, n.controller, "explicitly-set controller must survive SetBroker")
+}
+
+// TestNode_HandleControl_OwnUID covers the early-return branch in handleControl
+// when cmd.Uid matches the receiving node's own UID.
+func TestNode_HandleControl_OwnUID(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	enc := controlproto.NewProtobufEncoder()
+	data, err := enc.EncodeCommand(&controlpb.Command{
+		Uid:  n.uid, // ← same as node UID; should be ignored.
+		Node: &controlpb.Node{Name: "should-be-ignored"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, n.handleControl(data))
+}
+
+// TestNode_HandleControl_SurveyResponse covers handleControl's
+// SurveyResponse routing branch.
+func TestNode_HandleControl_SurveyResponse(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	enc := controlproto.NewProtobufEncoder()
+	data, err := enc.EncodeCommand(&controlpb.Command{
+		Uid:            "peer",
+		SurveyResponse: &controlpb.SurveyResponse{Id: 9999, Code: 1},
+	})
+	require.NoError(t, err)
+	require.NoError(t, n.handleControl(data))
+}
+
+// TestNode_HandleControl_SurveyRequest covers handleControl's
+// SurveyRequest routing branch.
+func TestNode_HandleControl_SurveyRequest(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	called := make(chan struct{})
+	n.OnSurvey(func(e SurveyEvent, cb SurveyCallback) {
+		close(called)
+		cb(SurveyReply{})
+	})
+
+	enc := controlproto.NewProtobufEncoder()
+	data, err := enc.EncodeCommand(&controlpb.Command{
+		Uid:           "peer",
+		SurveyRequest: &controlpb.SurveyRequest{Id: 1, Op: "custom-op"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, n.handleControl(data))
+
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatal("survey handler not called")
+	}
+}
+
+// TestNode_HandleControl_Notification covers handleControl's Notification
+// routing branch.
+func TestNode_HandleControl_Notification(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	got := make(chan NotificationEvent, 1)
+	n.OnNotification(func(e NotificationEvent) {
+		got <- e
+	})
+
+	enc := controlproto.NewProtobufEncoder()
+	data, err := enc.EncodeCommand(&controlpb.Command{
+		Uid:          "peer",
+		Notification: &controlpb.Notification{Op: "ping", Data: []byte("d")},
+	})
+	require.NoError(t, err)
+	require.NoError(t, n.handleControl(data))
+
+	select {
+	case e := <-got:
+		require.Equal(t, "ping", e.Op)
+		require.Equal(t, []byte("d"), e.Data)
+		require.Equal(t, "peer", e.FromNodeID)
+	case <-time.After(time.Second):
+		t.Fatal("notification handler not called")
+	}
+}
+
+// TestNode_SharedPollNotify_NilManager covers the early-return branch in
+// SharedPollNotify when shared poll manager isn't configured.
+func TestNode_SharedPollNotify_NilManager(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	require.Nil(t, n.sharedPollManager)
+	// Should be a silent no-op.
+	n.SharedPollNotify([]SharedPollNotificationItem{{Channel: "ch", Key: "k"}})
+}
+
+// TestNode_SharedPollPublish_NoManager covers the error-return branch when
+// shared poll manager isn't configured.
+func TestNode_SharedPollPublish_NoManager(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	err := n.SharedPollPublish(context.Background(), "ch", "k", 1, "ep", []byte(`{}`))
+	require.Error(t, err)
+}
+
+// TestNode_MapStreamPosition_NoBroker covers the nil-broker error return.
+func TestNode_MapStreamPosition_NoBroker(t *testing.T) {
+	t.Parallel()
+	n, err := New(Config{
+		Map: MapConfig{
+			GetMapBroker: func(channel string) (MapBroker, bool) {
+				return nil, true // returns nil broker for our channel
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	_, err = n.mapStreamPosition(context.Background(), "no-broker-channel")
+	require.ErrorIs(t, err, ErrorNotAvailable)
+}
+
+// TestNode_MapClear_NoBroker covers the nil-broker error return.
+func TestNode_MapClear_NoBroker(t *testing.T) {
+	t.Parallel()
+	n, err := New(Config{
+		Map: MapConfig{
+			GetMapBroker: func(channel string) (MapBroker, bool) {
+				return nil, true
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	err = n.MapClear(context.Background(), "no-broker", MapClearOptions{})
+	require.ErrorIs(t, err, ErrorNotAvailable)
+}
+
+// TestNode_MapPublish_EmptyKey covers the empty-key validation branch.
+func TestNode_MapPublish_EmptyKey(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	_, err := n.MapPublish(context.Background(), "ch", "", MapPublishOptions{Data: []byte("{}")})
+	require.ErrorIs(t, err, ErrorBadRequest)
+}
+
+// TestNode_MapRemove_EmptyKey covers the empty-key validation branch.
+func TestNode_MapRemove_EmptyKey(t *testing.T) {
+	t.Parallel()
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	_, err := n.MapRemove(context.Background(), "ch", "", MapRemoveOptions{})
+	require.ErrorIs(t, err, ErrorBadRequest)
+}
+
+// TestNode_HandlePublication_RoutesToSharedPollManager covers the route in
+// HandlePublication that detects a shared-poll key-channel and forwards to
+// SharedPollManager.handlePublishedData.
+func TestNode_HandlePublication_RoutesToSharedPollManager(t *testing.T) {
+	t.Parallel()
+	n := newTestNodeWithSharedPoll(t)
+	setupSharedPollHandlers(n)
+	client := newTestClientV2(t, n, "u-route")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+	trackSharedPollClient(t, client, "test:channel", []*protocol.KeyedItem{{Key: "k1", Version: 0}})
+
+	// Wire-channel decodes back to the base channel, so handlePublishedData runs.
+	keyCh := sharedPollKeyChannel("test:channel", "k1")
+	require.NoError(t, n.HandlePublication(keyCh, &Publication{
+		Key:     "k1",
+		Data:    []byte(`{"v":1}`),
+		Version: 1,
+	}, StreamPosition{}, false, nil))
 }

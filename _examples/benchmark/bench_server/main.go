@@ -44,13 +44,49 @@ func main() {
 		v, _ := strconv.Atoi(os.Getenv("WRITE_DELAY"))
 		writeDelay = time.Duration(v) * time.Millisecond
 	}
+	var writeWithTimer bool
+	if os.Getenv("WRITE_WITH_TIMER") == "1" || os.Getenv("WRITE_WITH_TIMER") == "true" {
+		writeWithTimer = true
+	}
+	if writeWithTimer && writeDelay == 0 {
+		log.Fatal("WRITE_DELAY must be set when WRITE_WITH_TIMER is on")
+	}
+	var shrinkDelay time.Duration
+	if os.Getenv("SHRINK_DELAY") != "" {
+		v, _ := strconv.Atoi(os.Getenv("SHRINK_DELAY"))
+		shrinkDelay = time.Duration(v) * time.Millisecond
+	}
 	var maxMessagesInFrame int
 	if os.Getenv("MAX_FRAME_MESSAGES") != "" {
 		v, _ := strconv.Atoi(os.Getenv("MAX_FRAME_MESSAGES"))
 		maxMessagesInFrame = v
 	}
-	log.Printf("NumCPU: %d, WRITE_DELAY: %s, MAX_FRAME_MESSAGES: %d, QUEUE_INITIAL_CAP: %d\n",
-		runtime.NumCPU(), writeDelay, maxMessagesInFrame, queueInitialCap)
+	var useWriteBufferPool bool
+	if os.Getenv("USE_WRITE_BUFFER_POOL") == "1" || os.Getenv("USE_WRITE_BUFFER_POOL") == "true" {
+		useWriteBufferPool = true
+	}
+	var readBufferSize int
+	if os.Getenv("READ_BUFFER_SIZE") != "" {
+		v, _ := strconv.Atoi(os.Getenv("READ_BUFFER_SIZE"))
+		readBufferSize = v
+	}
+
+	// Display configuration in a beautiful compact way with colors
+	const (
+		colorReset = "\033[0m"
+		colorCyan  = "\033[36m"
+		colorGreen = "\033[32m"
+	)
+	fmt.Printf("\n%s┌─ Benchmark Server Configuration ─────────────────────────────────┐%s\n", colorCyan, colorReset)
+	fmt.Printf("%s│%s %-25s %s%-38v%s %s│%s\n", colorCyan, colorReset, "NumCPU:", colorGreen, runtime.NumCPU(), colorReset, colorCyan, colorReset)
+	fmt.Printf("%s│%s %-25s %s%-38v%s %s│%s\n", colorCyan, colorReset, "WRITE_DELAY:", colorGreen, writeDelay, colorReset, colorCyan, colorReset)
+	fmt.Printf("%s│%s %-25s %s%-38v%s %s│%s\n", colorCyan, colorReset, "WRITE_WITH_TIMER:", colorGreen, writeWithTimer, colorReset, colorCyan, colorReset)
+	fmt.Printf("%s│%s %-25s %s%-38v%s %s│%s\n", colorCyan, colorReset, "SHRINK_DELAY:", colorGreen, shrinkDelay, colorReset, colorCyan, colorReset)
+	fmt.Printf("%s│%s %-25s %s%-38v%s %s│%s\n", colorCyan, colorReset, "MAX_FRAME_MESSAGES:", colorGreen, maxMessagesInFrame, colorReset, colorCyan, colorReset)
+	fmt.Printf("%s│%s %-25s %s%-38v%s %s│%s\n", colorCyan, colorReset, "QUEUE_INITIAL_CAP:", colorGreen, queueInitialCap, colorReset, colorCyan, colorReset)
+	fmt.Printf("%s│%s %-25s %s%-38v%s %s│%s\n", colorCyan, colorReset, "USE_WRITE_BUFFER_POOL:", colorGreen, useWriteBufferPool, colorReset, colorCyan, colorReset)
+	fmt.Printf("%s│%s %-25s %s%-38v%s %s│%s\n", colorCyan, colorReset, "READ_BUFFER_SIZE:", colorGreen, readBufferSize, colorReset, colorCyan, colorReset)
+	fmt.Printf("%s└───────────────────────────────────────────────────────────────────┘%s\n\n", colorCyan, colorReset)
 
 	node, _ := centrifuge.New(centrifuge.Config{
 		LogLevel:           centrifuge.LogLevelError,
@@ -85,6 +121,8 @@ func main() {
 			MaxMessagesInFrame: maxMessagesInFrame,
 			ReplyWithoutQueue:  true,
 			QueueInitialCap:    queueInitialCap,
+			QueueShrinkDelay:   shrinkDelay,
+			WriteWithTimer:     writeWithTimer,
 			Credentials: &centrifuge.Credentials{
 				UserID: "bench",
 			},
@@ -99,6 +137,11 @@ func main() {
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
 			cb(centrifuge.PublishReply{}, nil)
 		})
+
+		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
+			// Echo back the request data for benchmark RPC mode
+			cb(centrifuge.RPCReply{Data: e.Data}, nil)
+		})
 	})
 
 	if err := node.Run(); err != nil {
@@ -106,7 +149,9 @@ func main() {
 	}
 
 	http.Handle("/connection/websocket", centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
-		WriteTimeout: time.Second,
+		WriteTimeout:       time.Second,
+		UseWriteBufferPool: useWriteBufferPool,
+		ReadBufferSize:     readBufferSize,
 	}))
 
 	go func() {

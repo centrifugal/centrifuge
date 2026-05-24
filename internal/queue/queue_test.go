@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -282,6 +283,73 @@ func TestQueueAddAfterClose(t *testing.T) {
 	require.False(t, added)
 }
 
+func TestQueueRemoveManyInto(t *testing.T) {
+	q := New(5)
+	for i := 0; i < 5; i++ {
+		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	}
+	buf := make([]Item, 10)
+	n, ok := q.RemoveManyInto(buf, 3)
+	require.True(t, ok)
+	require.Equal(t, 3, n)
+	require.Equal(t, 2, q.Len())
+}
+
+func TestQueueRemoveManyIntoAll(t *testing.T) {
+	q := New(3)
+	for i := 0; i < 3; i++ {
+		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	}
+	buf := make([]Item, 10)
+	n, ok := q.RemoveManyInto(buf, -1)
+	require.True(t, ok)
+	require.Equal(t, 3, n)
+	require.Equal(t, 0, q.Len())
+}
+
+func TestQueueRemoveManyIntoBufferLimit(t *testing.T) {
+	q := New(5)
+	for i := 0; i < 5; i++ {
+		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	}
+	buf := make([]Item, 2)
+	n, ok := q.RemoveManyInto(buf, 10)
+	require.True(t, ok)
+	require.Equal(t, 2, n)
+	require.Equal(t, 3, q.Len())
+}
+
+func TestQueueCollectingMode(t *testing.T) {
+	q := New(2)
+
+	// Add initial items
+	q.Add(Item{Data: []byte("msg1"), Channel: "ch"})
+	q.Add(Item{Data: []byte("msg2"), Channel: "ch"})
+	require.Equal(t, 2, q.Cap())
+
+	// Add more items (will cause resize)
+	q.Add(Item{Data: []byte("msg3"), Channel: "ch"})
+	q.Add(Item{Data: []byte("msg4"), Channel: "ch"})
+	require.True(t, q.Cap() > 2)
+
+	// Remove items (no shrink during collection)
+	buf := make([]Item, 10)
+	n, ok := q.RemoveManyInto(buf, -1)
+	require.True(t, ok)
+	require.Equal(t, 4, n)
+	require.Equal(t, 0, q.Len())
+
+	// Queue should not have shrunk yet
+	capBeforeFinish := q.Cap()
+
+	// Finish collecting - now shrink happens (immediate with delay=0)
+	q.FinishCollect(0)
+
+	// Queue should have shrunk back to initCap
+	require.Equal(t, 2, q.Cap())
+	require.True(t, q.Cap() < capBeforeFinish)
+}
+
 func TestQueueRemoveFromEmptyQueue(t *testing.T) {
 	q := New(2)
 	_, ok := q.Remove()
@@ -432,7 +500,7 @@ func TestQueueResizeWraparound(t *testing.T) {
 func BenchmarkQueueAdd(b *testing.B) {
 	q := New(initialCapacity)
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		q.Add(testItem([]byte("test")))
 	}
 	b.StopTimer()
@@ -466,7 +534,7 @@ func addAndConsume(q *Queue, n int) {
 func BenchmarkQueueAddConsume(b *testing.B) {
 	q := New(initialCapacity)
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		addAndConsume(q, 10000)
 	}
 	b.StopTimer()
@@ -487,4 +555,212 @@ func BenchmarkQueueAdd10k(b *testing.B) {
 			q.Remove()
 		}
 	}
+}
+
+// Tests for shrink mechanism
+
+func TestQueueDelayedShrink(t *testing.T) {
+	q := New(2)
+
+	// Add items to trigger growth
+	for i := 0; i < 8; i++ {
+		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	}
+	require.Equal(t, 8, q.Cap())
+
+	// Remove all items
+	buf := make([]Item, 10)
+	n, ok := q.RemoveManyInto(buf, -1)
+	require.True(t, ok)
+	require.Equal(t, 8, n)
+	require.Equal(t, 0, q.Len())
+
+	// Queue should not have shrunk yet (still collecting)
+	require.Equal(t, 8, q.Cap())
+
+	// Finish collecting with delay
+	q.FinishCollect(50 * time.Millisecond)
+
+	// Queue should not have shrunk immediately
+	require.Equal(t, 8, q.Cap())
+
+	// Wait for shrink to happen
+	time.Sleep(100 * time.Millisecond)
+
+	// Queue should have shrunk back to initCap
+	require.Equal(t, 2, q.Cap())
+}
+
+func TestQueueImmediateShrink(t *testing.T) {
+	q := New(2)
+
+	// Add items to trigger growth
+	for i := 0; i < 8; i++ {
+		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	}
+	require.Equal(t, 8, q.Cap())
+
+	// Remove all items
+	buf := make([]Item, 10)
+	n, ok := q.RemoveManyInto(buf, -1)
+	require.True(t, ok)
+	require.Equal(t, 8, n)
+
+	// Finish collecting with zero delay (immediate shrink)
+	q.FinishCollect(0)
+
+	// Queue should have shrunk immediately
+	require.Equal(t, 2, q.Cap())
+}
+
+func TestQueueShrinkTimerReset(t *testing.T) {
+	q := New(2)
+
+	// Grow the queue
+	for i := 0; i < 8; i++ {
+		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	}
+	require.Equal(t, 8, q.Cap())
+
+	// First collect cycle
+	buf := make([]Item, 10)
+	q.RemoveManyInto(buf, -1)
+	q.FinishCollect(100 * time.Millisecond)
+
+	// Wait a bit, but not enough for shrink
+	time.Sleep(50 * time.Millisecond)
+	require.Equal(t, 8, q.Cap()) // Should not have shrunk yet
+
+	// Add more items and do another collect cycle (this should reset the timer)
+	for i := 0; i < 4; i++ {
+		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	}
+	q.RemoveManyInto(buf, -1)
+	q.FinishCollect(100 * time.Millisecond)
+
+	// Wait 60ms (total would be 110ms from first FinishCollect, but timer was reset)
+	time.Sleep(60 * time.Millisecond)
+	require.Equal(t, 8, q.Cap()) // Should still not have shrunk (timer was reset)
+
+	// Wait for the new timer to expire
+	time.Sleep(60 * time.Millisecond)
+	require.Equal(t, 2, q.Cap()) // Should have shrunk now
+}
+
+func TestQueueShrinkPartial(t *testing.T) {
+	q := New(2)
+
+	// Grow queue to 16
+	for i := 0; i < 16; i++ {
+		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	}
+	require.Equal(t, 16, q.Cap())
+
+	// Remove items, leaving 4
+	buf := make([]Item, 20)
+	n, ok := q.RemoveManyInto(buf, 12)
+	require.True(t, ok)
+	require.Equal(t, 12, n)
+	require.Equal(t, 4, q.Len())
+
+	// Finish collecting
+	q.FinishCollect(0)
+
+	// Queue should shrink to 4 (smallest power of 2 >= initCap that can hold 4 items)
+	require.Equal(t, 4, q.Cap())
+}
+
+func TestQueueNoShrinkBelowInitCap(t *testing.T) {
+	q := New(4)
+
+	// Add items to trigger growth
+	for i := 0; i < 8; i++ {
+		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	}
+	require.Equal(t, 8, q.Cap())
+
+	// Remove all items
+	buf := make([]Item, 10)
+	q.RemoveManyInto(buf, -1)
+
+	// Finish collecting
+	q.FinishCollect(0)
+
+	// Queue should shrink to initCap (4), not below
+	require.Equal(t, 4, q.Cap())
+}
+
+func TestQueueShrinkEmptyQueue(t *testing.T) {
+	q := New(2)
+
+	// Queue starts empty
+	require.Equal(t, 2, q.Cap())
+	require.Equal(t, 0, q.Len())
+
+	// Collect on empty queue
+	q.FinishCollect(0)
+
+	// Should remain at initCap
+	require.Equal(t, 2, q.Cap())
+	require.Equal(t, 0, q.Len())
+}
+
+func TestQueueMultipleShrinkCycles(t *testing.T) {
+	q := New(2)
+
+	// Cycle 1: Grow and shrink
+	for i := 0; i < 8; i++ {
+		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	}
+	require.Equal(t, 8, q.Cap())
+
+	buf := make([]Item, 20)
+	q.RemoveManyInto(buf, -1)
+	q.FinishCollect(0)
+	require.Equal(t, 2, q.Cap())
+
+	// Cycle 2: Grow and shrink again
+	for i := 0; i < 16; i++ {
+		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	}
+	require.Equal(t, 16, q.Cap())
+
+	q.RemoveManyInto(buf, -1)
+	q.FinishCollect(0)
+	require.Equal(t, 2, q.Cap())
+
+	// Verify queue still works
+	q.Add(Item{Data: []byte("test"), Channel: "ch"})
+	item, ok := q.Remove()
+	require.True(t, ok)
+	require.Equal(t, "test", string(item.Data))
+}
+
+func TestQueueShrinkWithItemsRemaining(t *testing.T) {
+	q := New(2)
+
+	// Add 32 items
+	for i := 0; i < 32; i++ {
+		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	}
+	require.Equal(t, 32, q.Cap())
+
+	// Remove 30 items, leaving 2
+	buf := make([]Item, 40)
+	n, ok := q.RemoveManyInto(buf, 30)
+	require.True(t, ok)
+	require.Equal(t, 30, n)
+	require.Equal(t, 2, q.Len())
+
+	// Finish collecting
+	q.FinishCollect(0)
+
+	// Queue should shrink to 2 (smallest power of 2 >= initCap that fits 2 items)
+	require.Equal(t, 2, q.Cap())
+	require.Equal(t, 2, q.Len())
+
+	// Verify items are still accessible
+	item, ok := q.Remove()
+	require.True(t, ok)
+	require.Equal(t, "msg", string(item.Data))
 }

@@ -67,4 +67,11 @@ const (
 	UnsubscribeCodeInsufficient uint32 = 2500
 	// UnsubscribeCodeExpired set when client subscription expired.
 	UnsubscribeCodeExpired uint32 = 2501
+	// UnsubscribeCodeStateInvalidated set when server determines that the
+	// subscription's cached state and/or token are no longer valid. Upon
+	// receiving this code, the client SDK should clear the subscription
+	// token (to force obtaining a new one via getToken) and clear any cached
+	// map subscription state (to force full state re-sync instead of stream
+	// recovery on resubscribe).
+	UnsubscribeCodeStateInvalidated uint32 = 2502
 )

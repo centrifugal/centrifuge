@@ -17,6 +17,59 @@ import (
 
 const numHubShards = 64
 
+var pushPool = sync.Pool{
+	New: func() any {
+		return &protocol.Push{}
+	},
+}
+
+var replyPool = sync.Pool{
+	New: func() any {
+		return &protocol.Reply{}
+	},
+}
+
+func getPush() *protocol.Push {
+	return pushPool.Get().(*protocol.Push)
+}
+
+func putPush(p *protocol.Push) {
+	p.Channel = ""
+	p.Id = 0
+	p.Pub = nil
+	p.Join = nil
+	p.Leave = nil
+	p.Message = nil
+	p.Subscribe = nil
+	p.Unsubscribe = nil
+	p.Connect = nil
+	p.Disconnect = nil
+	p.Refresh = nil
+	pushPool.Put(p)
+}
+
+func getReply() *protocol.Reply {
+	return replyPool.Get().(*protocol.Reply)
+}
+
+func putReply(r *protocol.Reply) {
+	r.Id = 0
+	r.Error = nil
+	r.Push = nil
+	r.Connect = nil
+	r.Subscribe = nil
+	r.Unsubscribe = nil
+	r.Publish = nil
+	r.Presence = nil
+	r.PresenceStats = nil
+	r.History = nil
+	r.Ping = nil
+	r.Rpc = nil
+	r.Refresh = nil
+	r.SubRefresh = nil
+	replyPool.Put(r)
+}
+
 // Hub tracks Client connections on the current Node.
 type Hub struct {
 	connShards [numHubShards]*connShard
@@ -110,20 +163,20 @@ func (h *Hub) UserConnections(userID string) map[string]*Client {
 	return h.connShards[index(userID, numHubShards)].userConnections(userID)
 }
 
-func (h *Hub) refresh(userID string, clientID, sessionID string, opts ...RefreshOption) error {
-	return h.connShards[index(userID, numHubShards)].refresh(userID, clientID, sessionID, opts...)
+func (h *Hub) refresh(userID string, clientID, sessionID string, labelFilter *FilterNode, opts ...RefreshOption) error {
+	return h.connShards[index(userID, numHubShards)].refresh(userID, clientID, sessionID, labelFilter, opts...)
 }
 
-func (h *Hub) subscribe(userID string, ch string, clientID string, sessionID string, opts ...SubscribeOption) error {
-	return h.connShards[index(userID, numHubShards)].subscribe(userID, ch, clientID, sessionID, opts...)
+func (h *Hub) subscribe(userID string, ch string, clientID string, sessionID string, labelFilter *FilterNode, opts ...SubscribeOption) error {
+	return h.connShards[index(userID, numHubShards)].subscribe(userID, ch, clientID, sessionID, labelFilter, opts...)
 }
 
-func (h *Hub) unsubscribe(userID string, ch string, unsubscribe Unsubscribe, clientID string, sessionID string) error {
-	return h.connShards[index(userID, numHubShards)].unsubscribe(userID, ch, unsubscribe, clientID, sessionID)
+func (h *Hub) unsubscribe(userID string, ch string, unsubscribe Unsubscribe, clientID string, sessionID string, labelFilter *FilterNode) error {
+	return h.connShards[index(userID, numHubShards)].unsubscribe(userID, ch, unsubscribe, clientID, sessionID, labelFilter)
 }
 
-func (h *Hub) disconnect(userID string, disconnect Disconnect, clientID, sessionID string, whitelist []string) error {
-	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, clientID, sessionID, whitelist)
+func (h *Hub) disconnect(userID string, disconnect Disconnect, clientID, sessionID string, whitelist []string, labelFilter *FilterNode) error {
+	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, clientID, sessionID, whitelist, labelFilter)
 }
 
 func (h *Hub) addSub(ch string, sub subInfo) (int64, bool, error) {
@@ -131,8 +184,13 @@ func (h *Hub) addSub(ch string, sub subInfo) (int64, bool, error) {
 }
 
 // removeSub removes connection from clientHub subscriptions registry.
-func (h *Hub) removeSub(ch string, c *Client) (bool, bool) {
+// Returns (isEmpty, wasRemoved, wasKeyed).
+func (h *Hub) removeSub(ch string, c *Client) (bool, bool, bool) {
 	return h.subShards[index(ch, numHubShards)].removeSub(ch, c)
+}
+
+func (h *Hub) updateServerTagsFilter(ch string, clientID string, tf *tagsFilter) (bool, bool) {
+	return h.subShards[index(ch, numHubShards)].updateServerTagsFilter(ch, clientID, tf)
 }
 
 func (h *Hub) removeSubID(ch string) {
@@ -146,6 +204,13 @@ func (h *Hub) removeSubID(ch string) {
 // to the current node subscribers without any defined offset semantics, without delta support.
 func (h *Hub) BroadcastPublication(ch string, pub *Publication, sp StreamPosition) error {
 	return h.broadcastPublication(ch, sp, pub, nil, nil, ChannelBatchConfig{})
+}
+
+// BroadcastPublicationDelta is like BroadcastPublication but supports delta compression.
+// When prevPub is non-nil, subscribers with delta enabled receive a computed delta
+// instead of the full publication data. Only sent to the current node subscribers.
+func (h *Hub) BroadcastPublicationDelta(ch string, pub *Publication, prevPub *Publication, sp StreamPosition) error {
+	return h.broadcastPublication(ch, sp, pub, prevPub, prevPub, ChannelBatchConfig{})
 }
 
 func (h *Hub) broadcastPublication(
@@ -293,7 +358,19 @@ func stringInSlice(str string, slice []string) bool {
 	return false
 }
 
-func (h *connShard) subscribe(user string, ch string, clientID string, sessionID string, opts ...SubscribeOption) error {
+// matchLabelFilter returns true when c should be included in a label-filtered
+// operation. A nil filter matches every client. c.labels is set once before the
+// client is published to the hub (see Client connect flow) and never mutated,
+// so the read is safe without taking c.mu.
+func matchLabelFilter(c *Client, f *FilterNode) bool {
+	if f == nil {
+		return true
+	}
+	ok, _ := filter.Match(f, c.labels)
+	return ok
+}
+
+func (h *connShard) subscribe(user string, ch string, clientID string, sessionID string, labelFilter *FilterNode, opts ...SubscribeOption) error {
 	userConnections := h.userConnections(user)
 
 	var firstErr error
@@ -305,6 +382,9 @@ func (h *connShard) subscribe(user string, ch string, clientID string, sessionID
 			continue
 		}
 		if sessionID != "" && c.sessionID() != sessionID {
+			continue
+		}
+		if !matchLabelFilter(c, labelFilter) {
 			continue
 		}
 		wg.Add(1)
@@ -322,7 +402,7 @@ func (h *connShard) subscribe(user string, ch string, clientID string, sessionID
 	return firstErr
 }
 
-func (h *connShard) refresh(user string, clientID string, sessionID string, opts ...RefreshOption) error {
+func (h *connShard) refresh(user string, clientID string, sessionID string, labelFilter *FilterNode, opts ...RefreshOption) error {
 	userConnections := h.userConnections(user)
 
 	var firstErr error
@@ -334,6 +414,9 @@ func (h *connShard) refresh(user string, clientID string, sessionID string, opts
 			continue
 		}
 		if sessionID != "" && c.sessionID() != sessionID {
+			continue
+		}
+		if !matchLabelFilter(c, labelFilter) {
 			continue
 		}
 		wg.Add(1)
@@ -351,7 +434,7 @@ func (h *connShard) refresh(user string, clientID string, sessionID string, opts
 	return firstErr
 }
 
-func (h *connShard) unsubscribe(user string, ch string, unsubscribe Unsubscribe, clientID string, sessionID string) error {
+func (h *connShard) unsubscribe(user string, ch string, unsubscribe Unsubscribe, clientID string, sessionID string, labelFilter *FilterNode) error {
 	userConnections := h.userConnections(user)
 
 	var wg sync.WaitGroup
@@ -360,6 +443,9 @@ func (h *connShard) unsubscribe(user string, ch string, unsubscribe Unsubscribe,
 			continue
 		}
 		if sessionID != "" && c.sessionID() != sessionID {
+			continue
+		}
+		if !matchLabelFilter(c, labelFilter) {
 			continue
 		}
 		wg.Add(1)
@@ -372,7 +458,7 @@ func (h *connShard) unsubscribe(user string, ch string, unsubscribe Unsubscribe,
 	return nil
 }
 
-func (h *connShard) disconnect(user string, disconnect Disconnect, clientID string, sessionID string, whitelist []string) error {
+func (h *connShard) disconnect(user string, disconnect Disconnect, clientID string, sessionID string, whitelist []string, labelFilter *FilterNode) error {
 	userConnections := h.userConnections(user)
 	for _, c := range userConnections {
 		if stringInSlice(c.ID(), whitelist) {
@@ -382,6 +468,9 @@ func (h *connShard) disconnect(user string, disconnect Disconnect, clientID stri
 			continue
 		}
 		if sessionID != "" && c.sessionID() != sessionID {
+			continue
+		}
+		if !matchLabelFilter(c, labelFilter) {
 			continue
 		}
 		c.Disconnect(disconnect)
@@ -493,10 +582,12 @@ type tagsFilter struct {
 }
 
 type subInfo struct {
-	client     *Client
-	deltaType  DeltaType
-	useID      bool
-	tagsFilter *tagsFilter
+	client           *Client
+	deltaType        DeltaType
+	useID            bool
+	tagsFilter       *tagsFilter
+	serverTagsFilter *tagsFilter
+	isMap            bool // true for map subscriptions.
 }
 
 type subShard struct {
@@ -508,8 +599,9 @@ type subShard struct {
 	metrics         *metrics
 	shardIndex      int
 
-	chanIDs    map[string]int64
-	lastChanID atomic.Int64
+	chanIDs     map[string]int64
+	lastChanID  atomic.Int64
+	mapChannels map[string]bool // tracks which channels are keyed subscriptions
 }
 
 func newSubShard(logger *logger, metrics *metrics, maxTimeLagMilli int64, shardIndex int) *subShard {
@@ -520,10 +612,12 @@ func newSubShard(logger *logger, metrics *metrics, maxTimeLagMilli int64, shardI
 		maxTimeLagMilli: maxTimeLagMilli,
 		shardIndex:      shardIndex,
 		chanIDs:         make(map[string]int64),
+		mapChannels:     make(map[string]bool),
 	}
 }
 
 // addSub adds connection into clientHub subscriptions registry.
+// Returns (chanID, isFirst, error) where isFirst is true if this is the first subscriber.
 func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -533,6 +627,10 @@ func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
 	_, ok := s.subs[ch]
 	if !ok {
 		s.subs[ch] = make(map[string]subInfo)
+		// Track if this channel is keyed (first subscriber determines this).
+		if sub.isMap {
+			s.mapChannels[ch] = true
+		}
 	}
 	s.subs[ch][uid] = sub
 
@@ -556,6 +654,31 @@ func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
 	return chanID, false, nil
 }
 
+// updateServerTagsFilter updates the server-side tags filter for a specific
+// client subscription. Returns (found, changed) where changed is true only
+// if the filter hash differs from the current one.
+func (s *subShard) updateServerTagsFilter(ch string, clientID string, tf *tagsFilter) (bool, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	chSubs, ok := s.subs[ch]
+	if !ok {
+		return false, false
+	}
+	sub, ok := chSubs[clientID]
+	if !ok {
+		return false, false
+	}
+	if sub.serverTagsFilter != nil && sub.serverTagsFilter.hash == tf.hash {
+		return true, false
+	}
+	if sub.serverTagsFilter == nil && tf == nil {
+		return true, false
+	}
+	sub.serverTagsFilter = tf
+	chSubs[clientID] = sub
+	return true, true
+}
+
 func (s *subShard) removeSubID(ch string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -563,9 +686,11 @@ func (s *subShard) removeSubID(ch string) {
 }
 
 // removeSub removes connection from clientHub subscriptions registry.
-// Returns true if channel does not have any subscribers left in first return value.
-// Returns true if found and really removed from registry in second return value.
-func (s *subShard) removeSub(ch string, c *Client) (bool, bool) {
+// Returns (isEmpty, wasRemoved, wasKeyed) where:
+// - isEmpty: true if channel has no subscribers left
+// - wasRemoved: true if subscription was found and removed
+// - wasMap: true if the now-empty channel was a keyed subscription channel
+func (s *subShard) removeSub(ch string, c *Client) (bool, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -573,10 +698,10 @@ func (s *subShard) removeSub(ch string, c *Client) (bool, bool) {
 
 	// try to find subscription to delete, return early if not found.
 	if _, ok := s.subs[ch]; !ok {
-		return true, false
+		return true, false, false
 	}
 	if _, ok := s.subs[ch][uid]; !ok {
-		return true, false
+		return true, false, false
 	}
 
 	// actually remove subscription from hub.
@@ -585,10 +710,12 @@ func (s *subShard) removeSub(ch string, c *Client) (bool, bool) {
 	// clean up subs map if it's needed.
 	if len(s.subs[ch]) == 0 {
 		delete(s.subs, ch)
-		return true, true
+		wasMap := s.mapChannels[ch]
+		delete(s.mapChannels, ch)
+		return true, true, wasMap
 	}
 
-	return false, true
+	return false, true, false
 }
 
 type encodeError struct {
@@ -612,6 +739,10 @@ type preparedData struct {
 	deltaSub        bool
 	wasFiltered     bool
 	filteredPub     *protocol.Publication
+	// For keyed channel lazy delta encoding (set by buildPreparedPollData).
+	keyedDeltaPatch       []byte // raw fossil delta data (patch or full data if patch >= full)
+	keyedDeltaIsReal      bool   // true when the patch is a real delta (smaller than full)
+	keyedDeltaPrevVersion uint64 // version corresponding to the delta's base data (entry.version BEFORE the publish)
 }
 
 func getDeltaPub(prevPub *Publication, fullPub *protocol.Publication, key preparedKey) *protocol.Publication {
@@ -628,19 +759,27 @@ func getDeltaPub(prevPub *Publication, fullPub *protocol.Publication, key prepar
 			deltaData = json.Escape(convert.BytesToString(deltaData))
 		}
 		deltaPub = &protocol.Publication{
-			Offset: fullPub.Offset,
-			Data:   deltaData,
-			Info:   fullPub.Info,
-			Tags:   fullPub.Tags,
-			Delta:  delta,
+			Offset:  fullPub.Offset,
+			Data:    deltaData,
+			Info:    fullPub.Info,
+			Tags:    fullPub.Tags,
+			Delta:   delta,
+			Key:     fullPub.Key,
+			Removed: fullPub.Removed,
+			Score:   fullPub.Score,
+			Channel: fullPub.Channel,
 		}
 	} else if prevPub == nil && key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
 		// In JSON and Fossil case we need to send full state in JSON string format.
 		deltaPub = &protocol.Publication{
-			Offset: fullPub.Offset,
-			Data:   json.Escape(convert.BytesToString(fullPub.Data)),
-			Info:   fullPub.Info,
-			Tags:   fullPub.Tags,
+			Offset:  fullPub.Offset,
+			Data:    json.Escape(convert.BytesToString(fullPub.Data)),
+			Info:    fullPub.Info,
+			Tags:    fullPub.Tags,
+			Key:     fullPub.Key,
+			Removed: fullPub.Removed,
+			Score:   fullPub.Score,
+			Channel: fullPub.Channel,
 		}
 	}
 	return deltaPub
@@ -650,7 +789,8 @@ func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protoc
 	var deltaData []byte
 	if key.ProtocolType == protocol.TypeJSON {
 		if sub.client.transport.Unidirectional() {
-			push := &protocol.Push{Pub: deltaPub}
+			push := getPush()
+			push.Pub = deltaPub
 			if key.UseID {
 				push.Id = channelSubID
 			} else {
@@ -658,25 +798,32 @@ func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protoc
 			}
 			var err error
 			deltaData, err = protocol.DefaultJsonPushEncoder.Encode(push)
+			putPush(push)
 			if err != nil {
 				*jsonEncodeErr = encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 			}
 		} else {
-			push := &protocol.Push{Pub: deltaPub}
+			push := getPush()
+			push.Pub = deltaPub
 			if key.UseID {
 				push.Id = channelSubID
 			} else {
 				push.Channel = channel
 			}
+			reply := getReply()
+			reply.Push = push
 			var err error
-			deltaData, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+			deltaData, err = protocol.DefaultJsonReplyEncoder.Encode(reply)
+			putReply(reply)
+			putPush(push)
 			if err != nil {
 				*jsonEncodeErr = encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 			}
 		}
 	} else if key.ProtocolType == protocol.TypeProtobuf {
 		if sub.client.transport.Unidirectional() {
-			push := &protocol.Push{Pub: deltaPub}
+			push := getPush()
+			push.Pub = deltaPub
 			if key.UseID {
 				push.Id = channelSubID
 			} else {
@@ -684,18 +831,24 @@ func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protoc
 			}
 			var err error
 			deltaData, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+			putPush(push)
 			if err != nil {
 				return nil, err
 			}
 		} else {
-			push := &protocol.Push{Pub: deltaPub}
+			push := getPush()
+			push.Pub = deltaPub
 			if key.UseID {
 				push.Id = channelSubID
 			} else {
 				push.Channel = channel
 			}
+			reply := getReply()
+			reply.Push = push
 			var err error
-			deltaData, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+			deltaData, err = protocol.DefaultProtobufReplyEncoder.Encode(reply)
+			putReply(reply)
+			putPush(push)
 			if err != nil {
 				return nil, err
 			}
@@ -719,7 +872,7 @@ func (s *subShard) broadcastPublication(
 		if s.maxTimeLagMilli > 0 && timeLagMilli > s.maxTimeLagMilli {
 			maxLagExceeded = true
 		}
-		s.metrics.observePubSubDeliveryLag(timeLagMilli)
+		s.metrics.observePubSubDeliveryLag(timeLagMilli, channel)
 	}
 
 	fullPub := pubToProto(pub)
@@ -742,7 +895,6 @@ func (s *subShard) broadcastPublication(
 	var (
 		jsonEncodeErr     *encodeError
 		tagsFilterDropped int
-		jsonClientFound   bool
 	)
 
 	// Get subID for this channel if it exists
@@ -752,10 +904,17 @@ func (s *subShard) broadcastPublication(
 		useChannelID := sub.useID && hasSubID
 
 		wasFiltered := false
-		if sub.tagsFilter != nil {
+		if sub.serverTagsFilter != nil {
+			match, _ := filter.Match(sub.serverTagsFilter.filter, pub.Tags)
+			if !match {
+				wasFiltered = true
+				tagsFilterDropped++
+			}
+		}
+		if !wasFiltered && sub.tagsFilter != nil {
 			match, _ := filter.Match(sub.tagsFilter.filter, pub.Tags)
-			wasFiltered = !match
-			if wasFiltered {
+			if !match {
+				wasFiltered = true
 				tagsFilterDropped++
 			}
 		}
@@ -801,9 +960,13 @@ func (s *subShard) broadcastPublication(
 							Info:    fullPub.Info,
 							Tags:    fullPub.Tags,
 							Channel: fullPub.Channel,
+							Key:     fullPub.Key,
+							Removed: fullPub.Removed,
+							Score:   fullPub.Score,
 						}
 					}
-					push := &protocol.Push{Pub: pubToUse}
+					push := getPush()
+					push.Pub = pubToUse
 					if key.UseID {
 						push.Id = channelSubID
 					} else {
@@ -811,6 +974,7 @@ func (s *subShard) broadcastPublication(
 					}
 					var err error
 					fullData, err = protocol.DefaultJsonPushEncoder.Encode(push)
+					putPush(push)
 					if err != nil {
 						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 					}
@@ -823,23 +987,32 @@ func (s *subShard) broadcastPublication(
 							Info:    fullPub.Info,
 							Tags:    fullPub.Tags,
 							Channel: fullPub.Channel,
+							Key:     fullPub.Key,
+							Removed: fullPub.Removed,
+							Score:   fullPub.Score,
 						}
 					}
-					push := &protocol.Push{Pub: pubToUse}
+					push := getPush()
+					push.Pub = pubToUse
 					if key.UseID {
 						push.Id = channelSubID
 					} else {
 						push.Channel = channel
 					}
+					reply := getReply()
+					reply.Push = push
 					var err error
-					fullData, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+					fullData, err = protocol.DefaultJsonReplyEncoder.Encode(reply)
+					putReply(reply)
+					putPush(push)
 					if err != nil {
 						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 					}
 				}
 			} else if key.ProtocolType == protocol.TypeProtobuf {
 				if sub.client.transport.Unidirectional() {
-					push := &protocol.Push{Pub: fullPub}
+					push := getPush()
+					push.Pub = fullPub
 					if key.UseID {
 						push.Id = channelSubID
 					} else {
@@ -847,18 +1020,24 @@ func (s *subShard) broadcastPublication(
 					}
 					var err error
 					fullData, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+					putPush(push)
 					if err != nil {
 						return err
 					}
 				} else {
-					push := &protocol.Push{Pub: fullPub}
+					push := getPush()
+					push.Pub = fullPub
 					if key.UseID {
 						push.Id = channelSubID
 					} else {
 						push.Channel = channel
 					}
+					reply := getReply()
+					reply.Push = push
 					var err error
-					fullData, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+					fullData, err = protocol.DefaultProtobufReplyEncoder.Encode(reply)
+					putReply(reply)
+					putPush(push)
 					if err != nil {
 						return err
 					}
@@ -882,8 +1061,7 @@ func (s *subShard) broadcastPublication(
 			preparedDataByKey[key] = prepValue
 		}
 		if sub.client.transport.Protocol() == ProtocolTypeJSON {
-			jsonClientFound = true
-			if jsonEncodeErr != nil || len(pub.Data) == 0 {
+			if jsonEncodeErr != nil {
 				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 				continue
 			}
@@ -900,12 +1078,6 @@ func (s *subShard) broadcastPublication(
 			"user":    jsonEncodeErr.user,
 			"client":  jsonEncodeErr.client,
 			"error":   jsonEncodeErr.error,
-		}))
-	}
-	if jsonClientFound && len(pub.Data) == 0 {
-		// Log that we had clients disconnected due to empty data – which is not supported in a JSON protocol case.
-		s.logger.log(newLogEntry(LogLevelWarn, "inappropriate protocol publication – empty data for JSON client", map[string]any{
-			"channel": channel,
 		}))
 	}
 
@@ -949,7 +1121,8 @@ func (s *subShard) broadcastJoin(channel string, join *protocol.Join, batchConfi
 			var data []byte
 
 			if key.ProtocolType == protocol.TypeJSON {
-				push := &protocol.Push{Join: join}
+				push := getPush()
+				push.Join = join
 				if key.UseID {
 					push.Id = channelSubID
 				} else {
@@ -959,14 +1132,20 @@ func (s *subShard) broadcastJoin(channel string, join *protocol.Join, batchConfi
 				var err error
 				if key.Unidirectional {
 					data, err = protocol.DefaultJsonPushEncoder.Encode(push)
+					putPush(push)
 				} else {
-					data, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+					reply := getReply()
+					reply.Push = push
+					data, err = protocol.DefaultJsonReplyEncoder.Encode(reply)
+					putReply(reply)
+					putPush(push)
 				}
 				if err != nil {
 					jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 				}
 			} else if key.ProtocolType == protocol.TypeProtobuf {
-				push := &protocol.Push{Join: join}
+				push := getPush()
+				push.Join = join
 				if key.UseID {
 					push.Id = channelSubID
 				} else {
@@ -976,8 +1155,13 @@ func (s *subShard) broadcastJoin(channel string, join *protocol.Join, batchConfi
 				var err error
 				if key.Unidirectional {
 					data, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+					putPush(push)
 				} else {
-					data, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+					reply := getReply()
+					reply.Push = push
+					data, err = protocol.DefaultProtobufReplyEncoder.Encode(reply)
+					putReply(reply)
+					putPush(push)
 				}
 				if err != nil {
 					return err
@@ -1041,7 +1225,8 @@ func (s *subShard) broadcastLeave(channel string, leave *protocol.Leave, batchCo
 			var data []byte
 
 			if key.ProtocolType == protocol.TypeJSON {
-				push := &protocol.Push{Leave: leave}
+				push := getPush()
+				push.Leave = leave
 				if key.UseID {
 					push.Id = channelSubID
 				} else {
@@ -1051,14 +1236,20 @@ func (s *subShard) broadcastLeave(channel string, leave *protocol.Leave, batchCo
 				var err error
 				if key.Unidirectional {
 					data, err = protocol.DefaultJsonPushEncoder.Encode(push)
+					putPush(push)
 				} else {
-					data, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+					reply := getReply()
+					reply.Push = push
+					data, err = protocol.DefaultJsonReplyEncoder.Encode(reply)
+					putReply(reply)
+					putPush(push)
 				}
 				if err != nil {
 					jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 				}
 			} else if key.ProtocolType == protocol.TypeProtobuf {
-				push := &protocol.Push{Leave: leave}
+				push := getPush()
+				push.Leave = leave
 				if key.UseID {
 					push.Id = channelSubID
 				} else {
@@ -1068,8 +1259,13 @@ func (s *subShard) broadcastLeave(channel string, leave *protocol.Leave, batchCo
 				var err error
 				if key.Unidirectional {
 					data, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+					putPush(push)
 				} else {
-					data, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+					reply := getReply()
+					reply.Push = push
+					data, err = protocol.DefaultProtobufReplyEncoder.Encode(reply)
+					putReply(reply)
+					putPush(push)
 				}
 				if err != nil {
 					return err

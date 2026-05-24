@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Feature Flags Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0f0f13;
+            color: #e4e4e7;
+            min-height: 100vh;
+        }
+
+        header {
+            background: linear-gradient(135deg, #18181b 0%, #1e1b2e 100%);
+            border-bottom: 1px solid #27272a;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        header h1 {
+            font-size: 18px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #a78bfa, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        header .subtitle {
+            font-size: 12px;
+            color: #71717a;
+            margin-top: 2px;
+        }
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .role-selector {
+            display: flex;
+            background: #27272a;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid #3f3f46;
+        }
+        .role-btn {
+            padding: 6px 16px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: inherit;
+            border: none;
+            cursor: pointer;
+            background: transparent;
+            color: #71717a;
+            transition: all 0.2s;
+        }
+        .role-btn.active {
+            background: #4c1d95;
+            color: #c4b5fd;
+        }
+        .role-btn:hover:not(.active) {
+            background: #3f3f46;
+            color: #a1a1aa;
+        }
+
+        .badge {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 100px;
+            letter-spacing: 0.03em;
+        }
+        .badge.connected { background: #064e3b; color: #6ee7b7; }
+        .badge.connecting { background: #713f12; color: #fcd34d; }
+        .badge.disconnected { background: #7f1d1d; color: #fca5a5; }
+
+        .container {
+            max-width: 680px;
+            margin: 0 auto;
+            padding: 24px 16px 40px;
+        }
+
+        .info-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 14px;
+            background: #1a1625;
+            border: 1px solid #2e2346;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-size: 12px;
+            color: #a78bfa;
+        }
+        .info-bar .icon { font-size: 14px; flex-shrink: 0; }
+        .info-bar a { color: #c4b5fd; text-decoration: underline; }
+
+        .section-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #52525b;
+            margin-bottom: 8px;
+            padding-left: 4px;
+        }
+
+        .flag-card {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 14px 16px;
+            background: #18181b;
+            border: 1px solid #27272a;
+            border-radius: 10px;
+            margin-bottom: 6px;
+            transition: border-color 0.5s, background 0.5s, box-shadow 0.5s;
+        }
+        .flag-card.flash {
+            border-color: #7c3aed;
+            background: #1a1625;
+            box-shadow: 0 0 12px rgba(139, 92, 246, 0.15), inset 0 0 12px rgba(139, 92, 246, 0.05);
+        }
+
+        .flag-info { flex: 1; min-width: 0; }
+        .flag-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: #d4d4d8;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .flag-key {
+            font-size: 11px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            color: #52525b;
+            background: #27272a;
+            padding: 1px 6px;
+            border-radius: 4px;
+        }
+        .flag-desc {
+            font-size: 12px;
+            color: #71717a;
+            margin-top: 3px;
+        }
+        .admin-badge {
+            font-size: 10px;
+            font-weight: 600;
+            background: #7f1d1d;
+            color: #fca5a5;
+            padding: 1px 6px;
+            border-radius: 4px;
+            letter-spacing: 0.03em;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            transition: background 0.3s;
+        }
+        .status-dot.on { background: #6ee7b7; box-shadow: 0 0 6px rgba(110, 231, 183, 0.4); }
+        .status-dot.off { background: #3f3f46; }
+
+        .toggle-switch {
+            position: relative;
+            width: 40px;
+            height: 22px;
+            flex-shrink: 0;
+        }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-switch .slider {
+            position: absolute; cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: #3f3f46; border-radius: 22px;
+            transition: background 0.2s;
+        }
+        .toggle-switch .slider::before {
+            content: ''; position: absolute;
+            height: 16px; width: 16px; left: 3px; bottom: 3px;
+            background: #a1a1aa; border-radius: 50%;
+            transition: transform 0.2s, background 0.2s;
+        }
+        .toggle-switch input:checked + .slider { background: #4c1d95; }
+        .toggle-switch input:checked + .slider::before { transform: translateX(18px); background: #c4b5fd; }
+
+        .security-panel {
+            margin-top: 24px;
+            padding: 16px;
+            background: #18181b;
+            border: 1px solid #27272a;
+            border-radius: 10px;
+        }
+        .security-panel h3 {
+            font-size: 13px;
+            font-weight: 600;
+            color: #a1a1aa;
+            margin-bottom: 10px;
+        }
+        .security-item {
+            font-size: 12px;
+            color: #71717a;
+            padding: 4px 0;
+            display: flex;
+            gap: 8px;
+        }
+        .security-item .label {
+            color: #a78bfa;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #52525b;
+        }
+        .empty-state p { font-size: 14px; margin-top: 8px; }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>Feature Flags</h1>
+            <div class="subtitle">Real-time feature flag dashboard with shared polling</div>
+        </div>
+        <div class="header-right">
+            <div class="role-selector">
+                <button class="role-btn" data-role="viewer" onclick="switchRole('viewer')">Viewer</button>
+                <button class="role-btn" data-role="admin" onclick="switchRole('admin')">Admin</button>
+            </div>
+            <span id="connStatus" class="badge disconnected">disconnected</span>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="info-bar" id="infoBar">
+            <span class="icon">&#128274;</span>
+            <span id="infoText">Select a role above to connect.</span>
+        </div>
+
+        <div id="flagsContainer"></div>
+
+        <div class="security-panel">
+            <h3>Security Model</h3>
+            <div class="security-item">
+                <span class="label">HMAC Signatures</span>
+                <span>Every track request carries an HMAC-SHA256 signature issued by the backend. The server verifies it before allowing access — forged signatures are rejected.</span>
+            </div>
+            <div class="security-item">
+                <span class="label">Role-Based Access</span>
+                <span>The role is embedded in the signature. Viewers only receive public flags; admin-only flags are filtered out at signature issuance and double-checked on the server.</span>
+            </div>
+            <div class="security-item">
+                <span class="label">Short-Lived Tokens</span>
+                <span>Signatures expire after <span id="ttlDisplay">30</span>s. The client automatically requests fresh signatures, letting the backend revoke access at each renewal.</span>
+            </div>
+            <div class="security-item">
+                <span class="label">Shared Polling</span>
+                <span>All clients share a single backend poll per refresh cycle — no per-client polling. Flag toggles use instant notifications for sub-second updates.</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="http://localhost:2000/centrifuge.js"></script>
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        let currentRole = params.get('role') || 'viewer';
+
+        // Highlight active role button.
+        function updateRoleButtons() {
+            document.querySelectorAll('.role-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.role === currentRole);
+            });
+        }
+
+        function switchRole(role) {
+            const url = new URL(window.location);
+            url.searchParams.set('role', role);
+            window.location = url;
+        }
+
+        updateRoleButtons();
+
+        const connStatus = document.getElementById('connStatus');
+        const flagsContainer = document.getElementById('flagsContainer');
+        const infoBar = document.getElementById('infoText');
+
+        // Connect with role in query — the auth middleware reads it.
+        const client = new Centrifuge(
+            'ws://' + window.location.host + '/connection/websocket?role=' + currentRole,
+        );
+
+        client.on('connecting', () => {
+            connStatus.textContent = 'connecting';
+            connStatus.className = 'badge connecting';
+        });
+        client.on('connected', () => {
+            connStatus.textContent = 'connected';
+            connStatus.className = 'badge connected';
+        });
+        client.on('disconnected', () => {
+            connStatus.textContent = 'disconnected';
+            connStatus.className = 'badge disconnected';
+        });
+
+        // Create shared poll subscription with signature refresh callback.
+        const sub = client.newSharedPollSubscription('feature_flags', {
+            getSignature: async (ctx) => {
+                // Called when: (1) signature expires, (2) reconnect replays tracked keys.
+                // The backend filters out keys the role can no longer access.
+                const resp = await fetch('/api/track_refresh', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ keys: ctx.keys, role: currentRole }),
+                });
+                return await resp.json();
+            },
+        });
+
+        const flashTimers = {};
+        const flagData = {}; // key → latest flag data
+
+        sub.on('update', (ctx) => {
+            if (ctx.removed) {
+                delete flagData[ctx.key];
+                const el = document.querySelector(`[data-flag="${ctx.key}"]`);
+                if (el) el.remove();
+                return;
+            }
+            if (ctx.data) {
+                flagData[ctx.key] = ctx.data;
+                updateFlagCard(ctx.key, ctx.data);
+            }
+        });
+
+        function updateFlagCard(key, data) {
+            let el = document.querySelector(`[data-flag="${key}"]`);
+            if (!el) return;
+
+            // Update status indicator.
+            const dot = el.querySelector('.status-dot');
+            if (dot) {
+                dot.className = 'status-dot ' + (data.enabled ? 'on' : 'off');
+            }
+
+            // Update toggle switch (admin).
+            const toggle = el.querySelector('input[type="checkbox"]');
+            if (toggle) {
+                toggle.checked = data.enabled;
+            }
+
+            // Flash animation.
+            if (flashTimers[key]) clearTimeout(flashTimers[key]);
+            el.classList.add('flash');
+            flashTimers[key] = setTimeout(() => el.classList.remove('flash'), 600);
+        }
+
+        function renderFlags(flagList) {
+            flagsContainer.innerHTML = '';
+
+            const publicFlags = flagList.filter(f => !f.admin_only);
+            const adminFlags = flagList.filter(f => f.admin_only);
+
+            if (publicFlags.length > 0) {
+                const label = document.createElement('div');
+                label.className = 'section-label';
+                label.textContent = 'Public Flags';
+                flagsContainer.appendChild(label);
+                publicFlags.forEach(f => flagsContainer.appendChild(createFlagCard(f)));
+            }
+
+            if (adminFlags.length > 0) {
+                const label = document.createElement('div');
+                label.className = 'section-label';
+                label.style.marginTop = '16px';
+                label.textContent = 'Admin-Only Flags';
+                flagsContainer.appendChild(label);
+                adminFlags.forEach(f => flagsContainer.appendChild(createFlagCard(f)));
+            }
+
+            if (flagList.length === 0) {
+                flagsContainer.innerHTML = '<div class="empty-state"><p>No flags available for this role.</p></div>';
+            }
+        }
+
+        function createFlagCard(flag) {
+            const card = document.createElement('div');
+            card.className = 'flag-card';
+            card.setAttribute('data-flag', flag.key);
+
+            let controlHTML;
+            if (currentRole === 'admin') {
+                controlHTML = `
+                    <label class="toggle-switch">
+                        <input type="checkbox" ${flag.enabled ? 'checked' : ''} onchange="toggleFlag('${flag.key}')">
+                        <span class="slider"></span>
+                    </label>`;
+            } else {
+                controlHTML = `<div class="status-dot ${flag.enabled ? 'on' : 'off'}"></div>`;
+            }
+
+            card.innerHTML = `
+                <div class="flag-info">
+                    <div class="flag-name">
+                        ${flag.name}
+                        <span class="flag-key">${flag.key}</span>
+                        ${flag.admin_only ? '<span class="admin-badge">ADMIN</span>' : ''}
+                    </div>
+                    <div class="flag-desc">${flag.description}</div>
+                </div>
+                ${controlHTML}`;
+
+            return card;
+        }
+
+        async function toggleFlag(key) {
+            try {
+                await fetch(`/api/flags/${key}/toggle?role=${currentRole}`, { method: 'POST' });
+            } catch (err) {
+                console.error('toggle failed:', err);
+            }
+        }
+
+        // Load flags and start tracking.
+        async function init() {
+            const resp = await fetch(`/api/flags?role=${currentRole}`);
+            const data = await resp.json();
+
+            renderFlags(data.flags);
+            for (const f of data.flags) {
+                flagData[f.key] = f;
+            }
+
+            sub.track(data.keys, data.signature);
+
+            if (currentRole === 'admin') {
+                infoBar.textContent = 'Admin: you can see and toggle all flags. Admin-only flags are hidden from viewers.';
+            } else {
+                infoBar.textContent = 'Viewer: you see public flags only. Admin-only flags require elevated access.';
+            }
+        }
+
+        sub.subscribe();
+        client.connect();
+        init();
+    </script>
+</body>
+</html>

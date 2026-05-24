@@ -51,8 +51,6 @@ func (o ChannelMediumOptions) isMediumEnabled() bool {
 	return o.SharedPositionSync || o.KeepLatestPublication || o.enableQueue || o.broadcastDelay > 0
 }
 
-// Keep global to save 8 byte per-channel. Must be only changed by tests.
-var channelMediumTimeNow = time.Now
 
 // channelMedium is initialized when first subscriber comes into channel, and dropped as soon as last
 // subscriber leaves the channel on the Node.
@@ -60,6 +58,7 @@ type channelMedium struct {
 	channel string
 	node    nodeSubset
 	options ChannelMediumOptions
+	isMap   bool
 
 	mu      sync.RWMutex
 	closeCh chan struct{}
@@ -72,11 +71,16 @@ type channelMedium struct {
 	latestPublication *Publication
 	// positionCheckTime is a time (Unix Nanoseconds) when last position check was performed.
 	positionCheckTime int64
+	// nowFn is the clock used by this medium. Defaults to time.Now in
+	// newChannelMedium; tests override it on the medium instance instead of
+	// mutating a package-level variable (which races with parallel readers).
+	nowFn func() time.Time
 }
 
 type nodeSubset interface {
 	handlePublication(ch string, sp StreamPosition, pub, prevPub *Publication, localPrevPub *Publication) error
 	streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error)
+	mapStreamTop(ch string) (StreamPosition, error)
 }
 
 func newChannelMedium(channel string, node nodeSubset, options ChannelMediumOptions) (*channelMedium, error) {
@@ -84,12 +88,13 @@ func newChannelMedium(channel string, node nodeSubset, options ChannelMediumOpti
 		return nil, errors.New("broadcast delay can only be used with queue enabled")
 	}
 	c := &channelMedium{
-		channel:           channel,
-		node:              node,
-		options:           options,
-		closeCh:           make(chan struct{}),
-		positionCheckTime: channelMediumTimeNow().UnixNano(),
+		channel: channel,
+		node:    node,
+		options: options,
+		closeCh: make(chan struct{}),
+		nowFn:   time.Now,
 	}
+	c.positionCheckTime = c.nowFn().UnixNano()
 	if options.enableQueue {
 		c.messages = newPublicationQueue(2)
 		go c.writer()
@@ -110,7 +115,7 @@ const defaultChannelLayerQueueMaxSize = 16 * 1024 * 1024
 func (c *channelMedium) broadcastPublication(pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) {
 	bp := queuedPub{pub: pub, sp: sp, prevPub: prevPub, delta: delta}
 	c.mu.Lock()
-	c.positionCheckTime = channelMediumTimeNow().UnixNano()
+	c.positionCheckTime = c.nowFn().UnixNano()
 	c.mu.Unlock()
 
 	if c.options.enableQueue {
@@ -132,7 +137,7 @@ func (c *channelMedium) broadcastPublication(pub *Publication, sp StreamPosition
 func (c *channelMedium) broadcastInsufficientState() {
 	bp := queuedPub{prevPub: nil, isInsufficientState: true}
 	c.mu.Lock()
-	c.positionCheckTime = channelMediumTimeNow().UnixNano()
+	c.positionCheckTime = c.nowFn().UnixNano()
 	c.mu.Unlock()
 	if c.options.enableQueue {
 		// TODO: possibly support c.messages.dropQueued() for this path ?
@@ -156,7 +161,11 @@ func (c *channelMedium) broadcast(qp queuedPub) {
 	prevPub := qp.prevPub
 	var localPrevPub *Publication
 	useLocalLatestPub := c.options.KeepLatestPublication && !qp.isInsufficientState
-	if useLocalLatestPub && qp.delta {
+	if useLocalLatestPub && qp.delta && qp.pub.Key == "" {
+		// Only provide localPrevPub for non-map publications. For map subs,
+		// keys are independent streams — a single latestPublication can't serve
+		// as a correct delta base across different keys. Map subs rely on the
+		// broker-level prevPub (positioned path) for delta instead.
 		localPrevPub = c.latestPublication
 	}
 	if c.options.broadcastDelay > 0 && !c.options.KeepLatestPublication {
@@ -166,7 +175,7 @@ func (c *channelMedium) broadcast(qp queuedPub) {
 		prevPub = nil
 	}
 	_ = c.node.handlePublication(c.channel, spToBroadcast, pubToBroadcast, prevPub, localPrevPub)
-	if useLocalLatestPub {
+	if useLocalLatestPub && qp.pub.Key == "" {
 		c.latestPublication = qp.pub
 	}
 }
@@ -225,7 +234,7 @@ func (c *channelMedium) waitSendPub(delay time.Duration) bool {
 }
 
 func (c *channelMedium) CheckPosition(historyMetaTTL time.Duration, clientPosition StreamPosition, checkDelay time.Duration) bool {
-	nowUnixNano := channelMediumTimeNow().UnixNano()
+	nowUnixNano := c.nowFn().UnixNano()
 	c.mu.Lock()
 	needCheckPosition := nowUnixNano-c.positionCheckTime >= checkDelay.Nanoseconds()
 	if needCheckPosition {
@@ -255,7 +264,13 @@ func (c *channelMedium) checkPositionWithRetry(historyMetaTTL time.Duration, cli
 }
 
 func (c *channelMedium) checkPositionOnce(historyMetaTTL time.Duration, clientPosition StreamPosition) (StreamPosition, bool, error) {
-	streamTop, err := c.node.streamTop(c.channel, historyMetaTTL)
+	var streamTop StreamPosition
+	var err error
+	if c.isMap {
+		streamTop, err = c.node.mapStreamTop(c.channel)
+	} else {
+		streamTop, err = c.node.streamTop(c.channel, historyMetaTTL)
+	}
 	if err != nil {
 		return StreamPosition{}, false, err
 	}
@@ -267,6 +282,15 @@ func (c *channelMedium) checkPositionOnce(historyMetaTTL time.Duration, clientPo
 
 func (c *channelMedium) close() {
 	close(c.closeCh)
+	// Unblock the writer goroutine. publicationQueue.Wait sleeps on a
+	// sync.Cond and is woken only by an Add (cnt > 0) or Close (broadcast).
+	// closeCh is checked only inside the broadcastDelay timer branch, which
+	// is unreachable until Wait returns — so without closing the queue the
+	// writer goroutine sits forever on an empty channel and leaks for every
+	// channelMedium that ever existed.
+	if c.messages != nil {
+		c.messages.Close()
+	}
 }
 
 type queuedPublication struct {

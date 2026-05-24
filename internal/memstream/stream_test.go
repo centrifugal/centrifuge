@@ -162,6 +162,22 @@ func TestStreamOffsetReverseNonExistingOffset(t *testing.T) {
 	require.Len(t, items, 0)
 }
 
+func TestStreamTopVersion(t *testing.T) {
+	s := New()
+	require.Equal(t, uint64(0), s.TopVersion())
+	require.Equal(t, "", s.TopVersionEpoch())
+
+	_, err := s.Add([]byte("1"), 5, 42, "e1")
+	require.NoError(t, err)
+	require.Equal(t, uint64(42), s.TopVersion())
+	require.Equal(t, "e1", s.TopVersionEpoch())
+
+	_, err = s.Add([]byte("2"), 5, 100, "e2")
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), s.TopVersion())
+	require.Equal(t, "e2", s.TopVersionEpoch())
+}
+
 func TestStreamNoLimitWithMiddle(t *testing.T) {
 	s := New()
 	const streamSize = 10

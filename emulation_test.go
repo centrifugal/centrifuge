@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -275,4 +276,165 @@ func TestEmulation_SameNode(t *testing.T) {
 			break
 		}
 	}
+}
+
+// TestEmulationHandlerBadJSON covers the unmarshal-error branch in EmulationHandler
+// when the body cannot be decoded.
+func TestEmulationHandlerBadJSON(t *testing.T) {
+	t.Parallel()
+	n, _ := New(Config{LogLevel: LogLevelInfo, LogHandler: func(LogEntry) {}})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	mux := http.NewServeMux()
+	mux.Handle("/emulation", NewEmulationHandler(n, EmulationConfig{}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/emulation", "application/json", strings.NewReader("not-json"))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	_ = resp.Body.Close()
+}
+
+// TestEmulationHandlerProtobufInvalid exercises the protobuf branch of the emulation
+// handler with an invalid (random-bytes) protobuf payload — drives the unmarshal-error
+// path for Content-Type=application/octet-stream.
+func TestEmulationHandlerProtobufInvalid(t *testing.T) {
+	t.Parallel()
+	n, _ := New(Config{LogLevel: LogLevelInfo, LogHandler: func(LogEntry) {}})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	mux := http.NewServeMux()
+	mux.Handle("/emulation", NewEmulationHandler(n, EmulationConfig{}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	// Random bytes that won't decode as a valid EmulationRequest protobuf.
+	resp, err := http.Post(server.URL+"/emulation", "application/octet-stream",
+		strings.NewReader("\xff\xff\xff\xff"))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	_ = resp.Body.Close()
+}
+
+// TestEmulationSurveyHandler_BadProtobuf covers the UnmarshalVT-error branch
+// of emulationSurveyHandler.HandleEmulation.
+func TestEmulationSurveyHandler_BadProtobuf(t *testing.T) {
+	t.Parallel()
+	n, _ := New(Config{LogLevel: LogLevelInfo, LogHandler: func(LogEntry) {}})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	h := newEmulationSurveyHandler(n)
+	got := make(chan SurveyReply, 1)
+	h.HandleEmulation(SurveyEvent{Op: emulationOp, Data: []byte("\xff\xff garbage")}, func(r SurveyReply) { got <- r })
+
+	select {
+	case r := <-got:
+		require.Equal(t, uint32(emulationErrorCodeBadRequest), r.Code)
+	case <-time.After(time.Second):
+		t.Fatal("survey callback not invoked")
+	}
+}
+
+// TestEmulationSurveyHandler_NoSession covers the no-session branch.
+func TestEmulationSurveyHandler_NoSession(t *testing.T) {
+	t.Parallel()
+	n, _ := New(Config{LogLevel: LogLevelInfo, LogHandler: func(LogEntry) {}})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	h := newEmulationSurveyHandler(n)
+
+	req := &protocol.EmulationRequest{
+		Node:    "any-node",
+		Session: "missing-session",
+		Data:    []byte(`""`),
+	}
+	data, err := req.MarshalVT()
+	require.NoError(t, err)
+
+	got := make(chan SurveyReply, 1)
+	h.HandleEmulation(SurveyEvent{Op: emulationOp, Data: data}, func(r SurveyReply) { got <- r })
+
+	select {
+	case r := <-got:
+		require.Equal(t, uint32(emulationErrorCodeNoSession), r.Code)
+	case <-time.After(time.Second):
+		t.Fatal("survey callback not invoked")
+	}
+}
+
+// TestEmulationHandler_NodeNotFoundDirect covers the sendEmulation
+// errNodeNotFound path returning HTTP 404 from EmulationHandler.ServeHTTP.
+//
+// (The existing TestEmulationHandler_NodeNotFound covers it too via JSON; we
+// add a Protobuf variant to also cover the application/octet-stream branch.)
+func TestEmulationHandler_NodeNotFoundProtobuf(t *testing.T) {
+	t.Parallel()
+	n, _ := New(Config{LogLevel: LogLevelInfo, LogHandler: func(LogEntry) {}})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	mux := http.NewServeMux()
+	mux.Handle("/emulation", NewEmulationHandler(n, EmulationConfig{}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	req := &protocol.EmulationRequest{
+		Node:    "no-such-node",
+		Session: "sess",
+		Data:    []byte("payload"),
+	}
+	body, err := req.MarshalVT()
+	require.NoError(t, err)
+
+	resp, err := http.Post(server.URL+"/emulation", "application/octet-stream", bytes.NewReader(body))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	_ = resp.Body.Close()
+}
+
+// TestEmulationHandler_GetMethodNotAllowed covers the method-not-allowed
+// branch in EmulationHandler.ServeHTTP (any non-POST without OPTIONS).
+func TestEmulationHandler_GetMethodNotAllowed(t *testing.T) {
+	t.Parallel()
+	n, _ := New(Config{LogLevel: LogLevelInfo, LogHandler: func(LogEntry) {}})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	mux := http.NewServeMux()
+	mux.Handle("/emulation", NewEmulationHandler(n, EmulationConfig{}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/emulation")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	// Either MethodNotAllowed or 405 — accept anything in 4xx range that's not 200.
+	require.True(t, resp.StatusCode >= 400 && resp.StatusCode < 500,
+		"unexpected status %d", resp.StatusCode)
+}
+
+// TestEmulationHandler_BadJSONString tests that the JSON parse path in
+// EmulationHandler with valid JSON-but-wrong-type (number where string
+// expected) hits the bad-request branch.
+func TestEmulationHandler_BadJSONString(t *testing.T) {
+	t.Parallel()
+	n, _ := New(Config{LogLevel: LogLevelInfo, LogHandler: func(LogEntry) {}})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	mux := http.NewServeMux()
+	mux.Handle("/emulation", NewEmulationHandler(n, EmulationConfig{}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/emulation", "application/json",
+		strings.NewReader(`{"node":123}`))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	_ = resp.Body.Close()
 }

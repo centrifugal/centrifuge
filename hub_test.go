@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/controlpb"
+	"github.com/centrifugal/centrifuge/internal/controlproto"
 	"github.com/centrifugal/centrifuge/internal/convert"
 
 	"github.com/centrifugal/protocol"
@@ -157,6 +159,7 @@ func (t *testTransport) Close(disconnect Disconnect) error {
 }
 
 func TestHub(t *testing.T) {
+	t.Parallel()
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
@@ -187,6 +190,7 @@ func TestHub(t *testing.T) {
 }
 
 func TestHubUnsubscribe(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -196,11 +200,11 @@ func TestHubUnsubscribe(t *testing.T) {
 	newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
 
 	// Unsubscribe not existed user.
-	err := n.hub.unsubscribe("1", "test_channel", unsubscribeServer, "", "")
+	err := n.hub.unsubscribe("1", "test_channel", unsubscribeServer, "", "", nil)
 	require.NoError(t, err)
 
 	// Unsubscribe subscribed user.
-	err = n.hub.unsubscribe("42", "test_channel", unsubscribeServer, "", "")
+	err = n.hub.unsubscribe("42", "test_channel", unsubscribeServer, "", "", nil)
 	require.NoError(t, err)
 
 LOOP:
@@ -219,6 +223,7 @@ LOOP:
 }
 
 func TestHubDisconnect(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -249,11 +254,11 @@ func TestHubDisconnect(t *testing.T) {
 	}
 
 	// Disconnect not existed user.
-	err := n.hub.disconnect("1", DisconnectForceNoReconnect, "", "", nil)
+	err := n.hub.disconnect("1", DisconnectForceNoReconnect, "", "", nil, nil)
 	require.NoError(t, err)
 
 	// Disconnect subscribed user.
-	err = n.hub.disconnect("42", DisconnectForceNoReconnect, "", "", nil)
+	err = n.hub.disconnect("42", DisconnectForceNoReconnect, "", "", nil, nil)
 	require.NoError(t, err)
 	select {
 	case <-client.transport.(*testTransport).closeCh:
@@ -264,7 +269,7 @@ func TestHubDisconnect(t *testing.T) {
 	require.Equal(t, 0, n.hub.NumSubscribers("test_channel"))
 
 	// Disconnect subscribed user with reconnect.
-	err = n.hub.disconnect("24", DisconnectForceReconnect, "", "", nil)
+	err = n.hub.disconnect("24", DisconnectForceReconnect, "", "", nil, nil)
 	require.NoError(t, err)
 	select {
 	case <-clientWithReconnect.transport.(*testTransport).closeCh:
@@ -283,6 +288,7 @@ func TestHubDisconnect(t *testing.T) {
 }
 
 func TestHubDisconnect_ClientWhitelist(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -312,7 +318,7 @@ func TestHubDisconnect_ClientWhitelist(t *testing.T) {
 	whitelist := []string{clientToKeep.ID()}
 
 	// Disconnect not existed user.
-	err := n.hub.disconnect("12", DisconnectConnectionLimit, "", "", whitelist)
+	err := n.hub.disconnect("12", DisconnectConnectionLimit, "", "", whitelist, nil)
 	require.NoError(t, err)
 
 	select {
@@ -361,14 +367,14 @@ func TestHubOperationsWithClientID(t *testing.T) {
 	clientToDisconnect := client.ID()
 
 	require.Equal(t, 2, n.hub.NumSubscriptions())
-	err := n.hub.subscribe("12", "channel", clientToKeep.ID(), "")
+	err := n.hub.subscribe("12", "channel", clientToKeep.ID(), "", nil)
 	require.NoError(t, err)
 	require.Equal(t, 3, n.hub.NumSubscriptions())
-	err = n.hub.unsubscribe("12", "channel", unsubscribeServer, clientToKeep.ID(), "")
+	err = n.hub.unsubscribe("12", "channel", unsubscribeServer, clientToKeep.ID(), "", nil)
 	require.NoError(t, err)
 	require.Equal(t, 2, n.hub.NumSubscriptions())
 
-	err = n.hub.disconnect("12", DisconnectConnectionLimit, clientToDisconnect, "", nil)
+	err = n.hub.disconnect("12", DisconnectConnectionLimit, clientToDisconnect, "", nil, nil)
 	require.NoError(t, err)
 
 	select {
@@ -427,14 +433,14 @@ func TestHubOperationsWithSessionID(t *testing.T) {
 	_, ok := n.hub.clientBySession(sessionToDisconnect)
 	require.True(t, ok)
 	require.Equal(t, 0, n.hub.NumSubscriptions())
-	err := n.hub.subscribe("12", "test", "", clientToKeep.sessionID())
+	err := n.hub.subscribe("12", "test", "", clientToKeep.sessionID(), nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, n.hub.NumSubscriptions())
-	err = n.hub.unsubscribe("12", "test", unsubscribeServer, "", clientToKeep.sessionID())
+	err = n.hub.unsubscribe("12", "test", unsubscribeServer, "", clientToKeep.sessionID(), nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, n.hub.NumSubscriptions())
 
-	err = n.hub.disconnect("12", DisconnectConnectionLimit, "", sessionToDisconnect, nil)
+	err = n.hub.disconnect("12", DisconnectConnectionLimit, "", sessionToDisconnect, nil, nil)
 	require.NoError(t, err)
 
 	select {
@@ -451,6 +457,7 @@ func TestHubOperationsWithSessionID(t *testing.T) {
 }
 
 func TestHubBroadcastPublication(t *testing.T) {
+	t.Parallel()
 	tcs := []struct {
 		name            string
 		protocolType    ProtocolType
@@ -565,6 +572,7 @@ func subscribeClientDelta(t testing.TB, client *Client, ch string, deltaType Del
 }
 
 func TestHubBroadcastPublicationDelta(t *testing.T) {
+	t.Parallel()
 	tcs := []struct {
 		name            string
 		protocolType    ProtocolType
@@ -646,6 +654,7 @@ func TestHubBroadcastPublicationDelta(t *testing.T) {
 }
 
 func TestHubBroadcastPublicationDeltaAtMostOnce(t *testing.T) {
+	t.Parallel()
 	tcs := []struct {
 		name            string
 		protocolType    ProtocolType
@@ -726,6 +735,7 @@ func TestHubBroadcastPublicationDeltaAtMostOnce(t *testing.T) {
 }
 
 func TestHubBroadcastPublicationDeltaAtMostOnceNoOffset(t *testing.T) {
+	t.Parallel()
 	tcs := []struct {
 		name            string
 		protocolType    ProtocolType
@@ -804,6 +814,7 @@ func TestHubBroadcastPublicationDeltaAtMostOnceNoOffset(t *testing.T) {
 }
 
 func TestHubBroadcastJoin(t *testing.T) {
+	t.Parallel()
 	tcs := []struct {
 		name            string
 		protocolType    ProtocolType
@@ -855,6 +866,7 @@ func TestHubBroadcastJoin(t *testing.T) {
 }
 
 func TestHubBroadcastLeave(t *testing.T) {
+	t.Parallel()
 	tcs := []struct {
 		name            string
 		protocolType    ProtocolType
@@ -906,6 +918,7 @@ func TestHubBroadcastLeave(t *testing.T) {
 }
 
 func TestHubShutdown(t *testing.T) {
+	t.Parallel()
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
@@ -928,6 +941,7 @@ func TestHubShutdown(t *testing.T) {
 }
 
 func TestHubSubscriptions(t *testing.T) {
+	t.Parallel()
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
@@ -945,25 +959,25 @@ func TestHubSubscriptions(t *testing.T) {
 	require.NotZero(t, h.NumSubscribers("test2"))
 
 	// Not exited sub.
-	empty, wasRemoved := h.removeSub("not_existed", c)
+	empty, wasRemoved, _ := h.removeSub("not_existed", c)
 	require.True(t, empty)
 	require.False(t, wasRemoved)
 
 	// Exited sub with invalid uid.
 	validUID := c.uid
 	c.uid = "invalid"
-	empty, wasRemoved = h.removeSub("test1", c)
+	empty, wasRemoved, _ = h.removeSub("test1", c)
 	require.True(t, empty)
 	require.False(t, wasRemoved)
 	c.uid = validUID
 
 	// Exited sub.
-	empty, wasRemoved = h.removeSub("test1", c)
+	empty, wasRemoved, _ = h.removeSub("test1", c)
 	require.True(t, empty)
 	require.True(t, wasRemoved)
 
 	// Exited sub.
-	empty, wasRemoved = h.removeSub("test2", c)
+	empty, wasRemoved, _ = h.removeSub("test2", c)
 	require.True(t, empty)
 	require.True(t, wasRemoved)
 
@@ -973,6 +987,7 @@ func TestHubSubscriptions(t *testing.T) {
 }
 
 func TestUserConnections(t *testing.T) {
+	t.Parallel()
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
@@ -987,6 +1002,7 @@ func TestUserConnections(t *testing.T) {
 }
 
 func TestHubSharding(t *testing.T) {
+	t.Parallel()
 	numUsers := numHubShards * 10
 	numChannels := numHubShards * 10
 
@@ -1027,6 +1043,28 @@ func TestHubSharding(t *testing.T) {
 // This benchmark allows to estimate the benefit from Hub sharding.
 // As we have a broadcasting goroutine here it's not very useful to look at
 // total allocations here - it's better to look at operation time.
+// BenchmarkHubDisconnect_LabelFilter measures the per-client cost added by
+// LabelFilter on the disconnect iteration path. The filter is constructed to
+// match none of the 1000 connections so the benchmark exercises only the match
+// overhead (no actual Disconnect side effects, keeps the iteration stable
+// across b.N runs).
+func BenchmarkHubDisconnect_LabelFilter(b *testing.B) {
+	const numClients = 1000
+	n := defaultTestNodeBenchmark(b)
+
+	for i := 0; i < numClients; i++ {
+		c := newTestConnectedClientWithTransport(b, context.Background(), n, newTestTransport(func() {}), "u-bench")
+		c.labels = map[string]string{"region": "us-east", "tier": "free"}
+	}
+
+	f := &FilterNode{Op: "", Key: "region", Cmp: "eq", Val: "nowhere"}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = n.hub.disconnect("u-bench", DisconnectForceNoReconnect, "", "", nil, f)
+	}
+}
+
 func BenchmarkHub_Contention(b *testing.B) {
 	numClients := 100
 	numChannels := 128
@@ -1128,6 +1166,7 @@ func BenchmarkHub_MassiveBroadcast(b *testing.B) {
 }
 
 func TestHubBroadcastInappropriateProtocol_Publication(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1157,6 +1196,7 @@ func TestHubBroadcastInappropriateProtocol_Publication(t *testing.T) {
 }
 
 func TestHubBroadcastInappropriateProtocol_Join(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1186,6 +1226,7 @@ func TestHubBroadcastInappropriateProtocol_Join(t *testing.T) {
 }
 
 func TestHubBroadcastInappropriateProtocol_Leave(t *testing.T) {
+	t.Parallel()
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1300,6 +1341,7 @@ var testNewJsonData = []byte(`{
 }`)
 
 func TestJsonStringEncode(t *testing.T) {
+	t.Parallel()
 	testBenchmarkDeltaFossilPatch = fdelta.Create(testJsonData, testNewJsonData)
 	if len(testBenchmarkDeltaFossilPatch) == 0 {
 		t.Fatal("empty fossil patch")
@@ -1336,6 +1378,7 @@ func BenchmarkDeltaFossil(b *testing.B) {
 }
 
 func TestSubIDUniquenessAcrossShards(t *testing.T) {
+	t.Parallel()
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
@@ -1418,6 +1461,7 @@ func TestSubIDUniquenessAcrossShards(t *testing.T) {
 }
 
 func TestSubIDShardDistribution(t *testing.T) {
+	t.Parallel()
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
@@ -1480,6 +1524,7 @@ func TestSubIDShardDistribution(t *testing.T) {
 }
 
 func TestCompressedChannelBroadcast(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1537,6 +1582,7 @@ func TestCompressedChannelBroadcast(t *testing.T) {
 }
 
 func TestUseIDSubscribersSameMessages(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1625,6 +1671,7 @@ OUTER2:
 }
 
 func TestUseIDSubscribersDifferentMessages(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1714,6 +1761,7 @@ OUTER2:
 }
 
 func TestDeltaPublicationsWithCompressedChannels(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1821,7 +1869,255 @@ OUTER2:
 		"Delta messages should be different when compressChannel=true due to Id vs Channel field")
 }
 
+func TestGetDeltaPubPreservesMapFields(t *testing.T) {
+	t.Parallel()
+	fullPub := &protocol.Publication{
+		Offset:  10,
+		Data:    []byte(`{"name":"alice"}`),
+		Key:     "user:1",
+		Score:   42,
+		Removed: false,
+		Channel: "map_channel",
+		Tags:    map[string]string{"tag1": "val1"},
+	}
+
+	prevPubData := &Publication{
+		Data: []byte(`{"name":"bob"}`),
+	}
+
+	// Test 1: JSON+Fossil with prevPub (delta path).
+	key := preparedKey{
+		DeltaType:    DeltaTypeFossil,
+		ProtocolType: protocol.TypeJSON,
+	}
+	result := getDeltaPub(prevPubData, fullPub, key)
+	require.Equal(t, "user:1", result.Key)
+	require.Equal(t, int64(42), result.Score)
+	require.False(t, result.Removed)
+	require.Equal(t, "map_channel", result.Channel)
+	require.Equal(t, uint64(10), result.Offset)
+	require.Equal(t, map[string]string{"tag1": "val1"}, result.Tags)
+
+	// Test 2: JSON+Fossil without prevPub (full data with JSON escaping).
+	result = getDeltaPub(nil, fullPub, key)
+	require.Equal(t, "user:1", result.Key)
+	require.Equal(t, int64(42), result.Score)
+	require.False(t, result.Removed)
+	require.Equal(t, "map_channel", result.Channel)
+	require.False(t, result.Delta)
+	// Data should be JSON-escaped.
+	require.Equal(t, []byte(json.Escape(convert.BytesToString(fullPub.Data))), []byte(result.Data))
+
+	// Test 3: Protobuf+Fossil with prevPub — data is not JSON-escaped.
+	keyProto := preparedKey{
+		DeltaType:    DeltaTypeFossil,
+		ProtocolType: protocol.TypeProtobuf,
+	}
+	result = getDeltaPub(prevPubData, fullPub, keyProto)
+	require.Equal(t, "user:1", result.Key)
+	require.Equal(t, int64(42), result.Score)
+	// Protobuf delta data should NOT be JSON-escaped.
+	require.NotEqual(t, []byte(json.Escape(convert.BytesToString(fullPub.Data))), []byte(result.Data))
+
+	// Test 4: Removed publication preserves Removed flag.
+	removedPub := &protocol.Publication{
+		Offset:  11,
+		Data:    []byte(`{}`),
+		Key:     "user:2",
+		Removed: true,
+		Channel: "map_channel",
+	}
+	result = getDeltaPub(nil, removedPub, key)
+	require.True(t, result.Removed)
+	require.Equal(t, "user:2", result.Key)
+}
+
+func TestEscapeStateForDelta(t *testing.T) {
+	t.Parallel()
+	pubs := []*protocol.Publication{
+		{Offset: 1, Key: "a", Data: []byte(`{"x":1}`), Score: 10},
+		{Offset: 2, Key: "b", Data: []byte(`{"y":2}`), Score: 20, Removed: true},
+		{Offset: 3, Key: "c"}, // no data
+	}
+
+	// Not delta-enabled: returns unchanged.
+	result := escapeStateForDelta(pubs, false, true)
+	require.Equal(t, []byte(`{"x":1}`), []byte(result[0].Data))
+
+	// Delta-enabled + JSON: data is JSON-escaped, fields preserved.
+	pubs2 := []*protocol.Publication{
+		{Offset: 1, Key: "a", Data: []byte(`{"x":1}`), Score: 10},
+		{Offset: 2, Key: "b", Data: []byte(`{"y":2}`), Score: 20, Removed: true},
+		{Offset: 3, Key: "c"}, // no data
+	}
+	result = escapeStateForDelta(pubs2, true, true)
+	require.Equal(t, []byte(json.Escape(`{"x":1}`)), []byte(result[0].Data))
+	require.Equal(t, "a", result[0].Key)
+	require.Equal(t, int64(10), result[0].Score)
+	require.Equal(t, []byte(json.Escape(`{"y":2}`)), []byte(result[1].Data))
+	require.Equal(t, "b", result[1].Key)
+	require.True(t, result[1].Removed)
+	require.Equal(t, int64(20), result[1].Score)
+	// No data entry is unchanged.
+	require.Nil(t, result[2].Data)
+	require.Equal(t, "c", result[2].Key)
+
+	// Delta-enabled + Protobuf: returns unchanged (no escaping).
+	pubs3 := []*protocol.Publication{
+		{Offset: 1, Key: "a", Data: []byte(`{"x":1}`)},
+	}
+	result = escapeStateForDelta(pubs3, true, false)
+	require.Equal(t, []byte(`{"x":1}`), []byte(result[0].Data))
+}
+
+func TestBroadcastMapPublicationDelta(t *testing.T) {
+	t.Parallel()
+	tcs := []struct {
+		name            string
+		protocolType    ProtocolType
+		protocolVersion ProtocolVersion
+		uni             bool
+	}{
+		{name: "JSON", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
+		{name: "JSON-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
+		{name: "Protobuf", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
+		{name: "Protobuf-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			n := deltaTestNode()
+			defer func() { _ = n.Shutdown(context.Background()) }()
+
+			ctx, cancelFn := context.WithCancel(context.Background())
+			transport := newTestTransport(cancelFn)
+			transport.sink = make(chan []byte, 100)
+			transport.setProtocolType(tc.protocolType)
+			transport.setProtocolVersion(tc.protocolVersion)
+			transport.setUnidirectional(tc.uni)
+			newTestSubscribedClientWithTransportDelta(
+				t, ctx, n, transport, "42", "test_channel", DeltaTypeFossil)
+
+			res, err := n.History("test_channel")
+			require.NoError(t, err)
+
+			// Use larger data so fossil delta is actually smaller than full data.
+			data1 := []byte(`{"name":"alice","email":"alice@example.com","age":30,"city":"New York","country":"US","bio":"Software engineer with 10 years of experience"}`)
+			data2 := []byte(`{"name":"alice","email":"alice@example.com","age":31,"city":"New York","country":"US","bio":"Software engineer with 11 years of experience"}`)
+
+			// First broadcast — map publication with Key (no prevPub → full data).
+			pub1 := &Publication{
+				Data:   data1,
+				Key:    "user:1",
+				Offset: 1,
+			}
+			err = n.hub.broadcastPublication(
+				"test_channel",
+				StreamPosition{Offset: 1, Epoch: res.StreamPosition.Epoch},
+				pub1, nil, nil, ChannelBatchConfig{},
+			)
+			require.NoError(t, err)
+
+			var msg1 []byte
+		LOOP1:
+			for {
+				select {
+				case data := <-transport.sink:
+					if tc.protocolType == ProtocolTypeJSON {
+						if strings.Contains(string(data), "alice") {
+							msg1 = data
+							break LOOP1
+						}
+					} else {
+						msg1 = data
+						break LOOP1
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("no message received for first map pub")
+				}
+			}
+
+			if tc.protocolType == ProtocolTypeJSON {
+				// Verify Key is present in JSON output.
+				require.Contains(t, string(msg1), `"key":"user:1"`,
+					"JSON map publication must contain key field")
+			}
+
+			// Second broadcast — same key, with prevPub → should produce delta.
+			pub2 := &Publication{
+				Data:   data2,
+				Key:    "user:1",
+				Offset: 2,
+			}
+			err = n.hub.broadcastPublication(
+				"test_channel",
+				StreamPosition{Offset: 2, Epoch: res.StreamPosition.Epoch},
+				pub2, pub1, nil, ChannelBatchConfig{},
+			)
+			require.NoError(t, err)
+
+			var msg2 []byte
+		LOOP2:
+			for {
+				select {
+				case data := <-transport.sink:
+					msg2 = data
+					break LOOP2
+				case <-time.After(2 * time.Second):
+					t.Fatal("no message received for second map pub")
+				}
+			}
+
+			if tc.protocolType == ProtocolTypeJSON {
+				// Delta pub should still contain key field.
+				require.Contains(t, string(msg2), `"key":"user:1"`,
+					"JSON delta map publication must contain key field")
+				// Should contain delta flag.
+				require.Contains(t, string(msg2), `"delta":true`,
+					"JSON delta map publication must have delta flag")
+				// Should NOT contain the full data as readable string.
+				require.NotContains(t, string(msg2), `Software engineer`,
+					"Delta pub should not contain full data as readable string")
+			}
+
+			// Third broadcast — different key, no prevPub, removed → full data with key.
+			pub3 := &Publication{
+				Data:    []byte(`{"status":"offline"}`),
+				Key:     "user:2",
+				Removed: true,
+				Offset:  3,
+			}
+			err = n.hub.broadcastPublication(
+				"test_channel",
+				StreamPosition{Offset: 3, Epoch: res.StreamPosition.Epoch},
+				pub3, nil, nil, ChannelBatchConfig{},
+			)
+			require.NoError(t, err)
+
+			var msg3 []byte
+		LOOP3:
+			for {
+				select {
+				case data := <-transport.sink:
+					msg3 = data
+					break LOOP3
+				case <-time.After(2 * time.Second):
+					t.Fatal("no message received for removed map pub")
+				}
+			}
+
+			if tc.protocolType == ProtocolTypeJSON {
+				require.Contains(t, string(msg3), `"key":"user:2"`,
+					"Removed map pub must contain key field")
+				require.Contains(t, string(msg3), `"removed":true`,
+					"Removed map pub must have removed flag")
+			}
+		})
+	}
+}
+
 func TestCompressedJoinMessages(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1936,6 +2232,7 @@ OUTER2:
 }
 
 func TestCompressedLeaveMessages(t *testing.T) {
+	t.Parallel()
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -2047,4 +2344,445 @@ OUTER2:
 
 	t.Logf("Leave message without useID: %s", msgWithoutIDStr)
 	t.Logf("Leave message with useID: %s", msgWithIDStr)
+}
+
+// TestHubBroadcastPublicationDeltaPublic verifies the public BroadcastPublicationDelta
+// helper delegates to the internal broadcast path. We only check successful delivery —
+// the delta semantics are covered by TestHubBroadcastPublicationDelta.
+func TestHubBroadcastPublicationDeltaPublic(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	transport.sink = make(chan []byte, 16)
+	newTestSubscribedClientWithTransport(t, ctx, node, transport, "broadcast-user", "bcast")
+
+	drainTransport(transport.sink, 200*time.Millisecond)
+
+	err := node.hub.BroadcastPublicationDelta(
+		"bcast",
+		&Publication{Data: []byte(`{"a":1}`), Offset: 1},
+		nil,
+		StreamPosition{Offset: 1, Epoch: "epoch"},
+	)
+	require.NoError(t, err)
+
+	require.True(t, waitForPayload(t, transport.sink, `"a":1`, 2*time.Second))
+}
+
+// drainTransport drains messages from a transport sink until silent for `quiet`.
+func drainTransport(sink chan []byte, quiet time.Duration) {
+	for {
+		select {
+		case <-sink:
+		case <-time.After(quiet):
+			return
+		}
+	}
+}
+
+// waitForPayload returns true if a message containing `needle` is received before timeout.
+func waitForPayload(t *testing.T, sink chan []byte, needle string, timeout time.Duration) bool {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case data := <-sink:
+			if strings.Contains(string(data), needle) {
+				return true
+			}
+		case <-deadline:
+			return false
+		}
+	}
+}
+
+// TestSubShard_UpdateServerTagsFilter_NotFound covers the chSubs-not-found and
+// sub-not-found branches of updateServerTagsFilter, plus the no-op path when
+// neither old nor new filter is set.
+func TestSubShard_UpdateServerTagsFilter_NotFound(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	hub := node.hub
+	shard := hub.subShards[0]
+
+	// Channel not in shard at all → both returns false.
+	found, changed := shard.updateServerTagsFilter("ghost-channel", "anyone", nil)
+	require.False(t, found)
+	require.False(t, changed)
+
+	// Subscribe a real client, then call with a different (unknown) clientID
+	// to hit the sub-not-found branch. The function returns (false, false) for
+	// both "channel not in subs" and "client not in chSubs" — distinguishing
+	// them externally requires no extra assertion; the branch is what we want.
+	client := newTestSubscribedClientV2(t, node, "u-tags", "test-tags-channel")
+	t.Cleanup(func() { _ = client.close(DisconnectForceNoReconnect) })
+
+	chShard := hub.subShards[index("test-tags-channel", numHubShards)]
+	_, _ = chShard.updateServerTagsFilter("test-tags-channel", "no-such-client", nil)
+
+	// Same client, no existing filter, new filter is also nil → both-nil no-op.
+	found, changed = chShard.updateServerTagsFilter("test-tags-channel", client.uid, nil)
+	require.True(t, found)
+	require.False(t, changed)
+
+	// Now set a real filter and assert it changed.
+	tf := &tagsFilter{filter: &FilterNode{Key: "k", Cmp: "eq", Val: "v"}}
+	found, changed = chShard.updateServerTagsFilter("test-tags-channel", client.uid, tf)
+	require.True(t, found)
+	require.True(t, changed)
+
+	// Same hash again — no-op.
+	found, changed = chShard.updateServerTagsFilter("test-tags-channel", client.uid, tf)
+	require.True(t, found)
+	require.False(t, changed)
+}
+
+// ---------------------------------------------------------------------------
+// hub.go subscribe / refresh client+session filters
+// ---------------------------------------------------------------------------
+
+// TestHubSubscribe_ClientIDFilter covers the clientID-mismatch continue and
+// session-mismatch continue branches in connShard.subscribe.
+func TestHubSubscribe_ClientIDFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c1 := newTestConnectedClientV2(t, node, "u-multi")
+	c2 := newTestConnectedClientV2(t, node, "u-multi")
+	t.Cleanup(func() { _ = c1.close(DisconnectForceNoReconnect); _ = c2.close(DisconnectForceNoReconnect) })
+
+	// Subscribe only c1 by clientID.
+	err := node.Subscribe("u-multi", "ch-1", WithSubscribeClient(c1.uid))
+	require.NoError(t, err)
+	require.Contains(t, c1.channels, "ch-1")
+	require.NotContains(t, c2.channels, "ch-1")
+
+	// Subscribe only c2 by sessionID (which is empty for both — use a non-matching value
+	// to force the continue branch on both clients with no actual subscribe call).
+	err = node.Subscribe("u-multi", "ch-2", WithSubscribeSession("nonexistent-session"))
+	require.NoError(t, err)
+	require.NotContains(t, c1.channels, "ch-2")
+	require.NotContains(t, c2.channels, "ch-2")
+}
+
+// TestHubRefresh_ClientIDFilter covers the same filter branches in refresh.
+func TestHubRefresh_ClientIDFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c1 := newTestConnectedClientV2(t, node, "u-refresh")
+	c2 := newTestConnectedClientV2(t, node, "u-refresh")
+	t.Cleanup(func() { _ = c1.close(DisconnectForceNoReconnect); _ = c2.close(DisconnectForceNoReconnect) })
+
+	// Refresh only c1 by clientID.
+	err := node.Refresh("u-refresh", WithRefreshClient(c1.uid))
+	require.NoError(t, err)
+
+	// Filter by sessionID that no client has → no-op, no error.
+	err = node.Refresh("u-refresh", WithRefreshSession("nope"))
+	require.NoError(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// hub.go LabelFilter — narrows destructive ops to connections whose
+// Client.Labels match a protocol.FilterNode tree (AND-combined with the
+// clientID/sessionID/whitelist filters).
+// ---------------------------------------------------------------------------
+
+// labelFilterEQ is a tiny helper for the leaf `key == val` shape used in the
+// LabelFilter tests below. Keeps each test focused on what's being checked
+// rather than how the filter tree is built.
+func labelFilterEQ(key, val string) *FilterNode {
+	return &FilterNode{Op: "", Key: key, Cmp: "eq", Val: val}
+}
+
+func TestHubDisconnect_LabelFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c1 := newTestConnectedClientV2(t, node, "u-lf")
+	c2 := newTestConnectedClientV2(t, node, "u-lf")
+	c1.labels = map[string]string{"region": "us-east"}
+	c2.labels = map[string]string{"region": "eu-west"}
+
+	err := node.Disconnect("u-lf", WithDisconnectLabelFilter(labelFilterEQ("region", "us-east")))
+	require.NoError(t, err)
+
+	// c1 (us-east) is gone; c2 (eu-west) survives.
+	require.Eventually(t, func() bool {
+		conns := node.hub.UserConnections("u-lf")
+		_, ok1 := conns[c1.uid]
+		_, ok2 := conns[c2.uid]
+		return !ok1 && ok2
+	}, time.Second, 10*time.Millisecond)
+
+	_ = c2.close(DisconnectForceNoReconnect)
+}
+
+func TestHubUnsubscribe_LabelFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c1 := newTestSubscribedClientV2(t, node, "u-lf-u", "ch")
+	c2 := newTestSubscribedClientV2(t, node, "u-lf-u", "ch")
+	c1.labels = map[string]string{"tier": "premium"}
+	c2.labels = map[string]string{"tier": "free"}
+	t.Cleanup(func() { _ = c1.close(DisconnectForceNoReconnect); _ = c2.close(DisconnectForceNoReconnect) })
+
+	err := node.Unsubscribe("u-lf-u", "ch", WithUnsubscribeLabelFilter(labelFilterEQ("tier", "premium")))
+	require.NoError(t, err)
+
+	require.NotContains(t, c1.channels, "ch")
+	require.Contains(t, c2.channels, "ch")
+}
+
+func TestHubSubscribe_LabelFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c1 := newTestConnectedClientV2(t, node, "u-lf-s")
+	c2 := newTestConnectedClientV2(t, node, "u-lf-s")
+	c1.labels = map[string]string{"region": "us-east"}
+	c2.labels = map[string]string{"region": "eu-west"}
+	t.Cleanup(func() { _ = c1.close(DisconnectForceNoReconnect); _ = c2.close(DisconnectForceNoReconnect) })
+
+	err := node.Subscribe("u-lf-s", "ch-only-us", WithSubscribeLabelFilter(labelFilterEQ("region", "us-east")))
+	require.NoError(t, err)
+
+	require.Contains(t, c1.channels, "ch-only-us")
+	require.NotContains(t, c2.channels, "ch-only-us")
+}
+
+func TestHubRefresh_LabelFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c1 := newTestConnectedClientV2(t, node, "u-lf-r")
+	c2 := newTestConnectedClientV2(t, node, "u-lf-r")
+	c1.labels = map[string]string{"tier": "premium"}
+	c2.labels = map[string]string{"tier": "free"}
+	t.Cleanup(func() { _ = c1.close(DisconnectForceNoReconnect); _ = c2.close(DisconnectForceNoReconnect) })
+
+	err := node.Refresh("u-lf-r", WithRefreshLabelFilter(labelFilterEQ("tier", "premium")))
+	require.NoError(t, err)
+}
+
+// TestHubDisconnect_LabelFilter_NoMatch ensures that a filter matching no
+// connection is a clean no-op (no error, nothing closed).
+func TestHubDisconnect_LabelFilter_NoMatch(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c := newTestConnectedClientV2(t, node, "u-lf-nm")
+	c.labels = map[string]string{"region": "us-east"}
+	t.Cleanup(func() { _ = c.close(DisconnectForceNoReconnect) })
+
+	err := node.Disconnect("u-lf-nm", WithDisconnectLabelFilter(labelFilterEQ("region", "ap-south")))
+	require.NoError(t, err)
+
+	// Still connected.
+	require.Contains(t, node.hub.UserConnections("u-lf-nm"), c.uid)
+}
+
+// TestHubDisconnect_LabelFilter_NilLabels confirms a client with no labels at
+// all is cleanly excluded by a filter that requires a key.
+func TestHubDisconnect_LabelFilter_NilLabels(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c := newTestConnectedClientV2(t, node, "u-lf-nil")
+	// c.labels intentionally left nil.
+	t.Cleanup(func() { _ = c.close(DisconnectForceNoReconnect) })
+
+	err := node.Disconnect("u-lf-nil", WithDisconnectLabelFilter(labelFilterEQ("region", "us-east")))
+	require.NoError(t, err)
+
+	// Untouched — filter required a key the labels map doesn't have.
+	require.Contains(t, node.hub.UserConnections("u-lf-nil"), c.uid)
+}
+
+// TestHubDisconnect_LabelFilter_AND_ClientID exercises the AND combination of
+// LabelFilter with the existing clientID filter: only connections that clear
+// BOTH gates get disconnected.
+func TestHubDisconnect_LabelFilter_AND_ClientID(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c1 := newTestConnectedClientV2(t, node, "u-lf-and")
+	c2 := newTestConnectedClientV2(t, node, "u-lf-and")
+	c3 := newTestConnectedClientV2(t, node, "u-lf-and")
+	c1.labels = map[string]string{"region": "us-east"}
+	c2.labels = map[string]string{"region": "us-east"}
+	c3.labels = map[string]string{"region": "eu-west"}
+
+	// clientID = c1 AND region = us-east → only c1 matches.
+	err := node.Disconnect("u-lf-and",
+		WithDisconnectClient(c1.uid),
+		WithDisconnectLabelFilter(labelFilterEQ("region", "us-east")))
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		conns := node.hub.UserConnections("u-lf-and")
+		_, ok1 := conns[c1.uid]
+		_, ok2 := conns[c2.uid]
+		_, ok3 := conns[c3.uid]
+		return !ok1 && ok2 && ok3
+	}, time.Second, 10*time.Millisecond)
+
+	_ = c2.close(DisconnectForceNoReconnect)
+	_ = c3.close(DisconnectForceNoReconnect)
+}
+
+// TestNode_LabelFilter_Invalid asserts that a malformed FilterNode is rejected
+// at the Node.* boundary (no control message sent, hub iteration not entered).
+func TestNode_LabelFilter_Invalid(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	bad := &FilterNode{} // zero value: op="" (leaf) with no Cmp → invalid.
+
+	require.Error(t, node.Disconnect("u-bad", WithDisconnectLabelFilter(bad)))
+	require.Error(t, node.Unsubscribe("u-bad", "ch", WithUnsubscribeLabelFilter(bad)))
+	require.Error(t, node.Subscribe("u-bad", "ch", WithSubscribeLabelFilter(bad)))
+	require.Error(t, node.Refresh("u-bad", WithRefreshLabelFilter(bad)))
+}
+
+// TestNode_LabelFilter_OldControlMessageCompat fabricates a control message
+// with no label_filter field set (the pre-LabelFilter wire shape) and feeds it
+// through the dispatcher, asserting it still works as a plain destructive op.
+// Locks in forward compatibility with older nodes.
+func TestNode_LabelFilter_OldControlMessageCompat(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c := newTestConnectedClientV2(t, node, "u-compat")
+	c.labels = map[string]string{"region": "us-east"} // present but no filter is set
+
+	// Build a Disconnect control message exactly as a pre-LabelFilter sender would.
+	cmd := &controlpb.Command{
+		Uid: "remote-node",
+		Disconnect: &controlpb.Disconnect{
+			User:      "u-compat",
+			Code:      DisconnectForceNoReconnect.Code,
+			Reason:    DisconnectForceNoReconnect.Reason,
+			Whitelist: nil,
+			// LabelFilter intentionally not set
+		},
+	}
+	require.NoError(t, node.handleControl(mustMarshalControlCommand(t, cmd)))
+
+	require.Eventually(t, func() bool {
+		_, ok := node.hub.UserConnections("u-compat")[c.uid]
+		return !ok
+	}, time.Second, 10*time.Millisecond)
+}
+
+// TestNode_LabelFilter_AppliedOnReceive sends a Disconnect through pubDisconnect
+// so the control message round-trips through marshal → handleControl, and the
+// receiving node must apply the filter to its local hub (not just round-trip
+// the bytes). Guards against a future refactor that silently drops the
+// unmarshal/convert path.
+func TestNode_LabelFilter_AppliedOnReceive(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c1 := newTestConnectedClientV2(t, node, "u-recv")
+	c2 := newTestConnectedClientV2(t, node, "u-recv")
+	c1.labels = map[string]string{"region": "us-east"}
+	c2.labels = map[string]string{"region": "eu-west"}
+
+	cmd := &controlpb.Command{
+		Uid: "remote-node",
+		Disconnect: &controlpb.Disconnect{
+			User:        "u-recv",
+			Code:        DisconnectForceNoReconnect.Code,
+			Reason:      DisconnectForceNoReconnect.Reason,
+			LabelFilter: controlpbFilterFromProto(labelFilterEQ("region", "us-east")),
+		},
+	}
+	require.NoError(t, node.handleControl(mustMarshalControlCommand(t, cmd)))
+
+	require.Eventually(t, func() bool {
+		conns := node.hub.UserConnections("u-recv")
+		_, ok1 := conns[c1.uid]
+		_, ok2 := conns[c2.uid]
+		return !ok1 && ok2
+	}, time.Second, 10*time.Millisecond)
+
+	_ = c2.close(DisconnectForceNoReconnect)
+}
+
+// mustMarshalControlCommand encodes a control command for handleControl in tests.
+func mustMarshalControlCommand(t *testing.T, cmd *controlpb.Command) []byte {
+	t.Helper()
+	b, err := controlproto.NewProtobufEncoder().EncodeCommand(cmd)
+	require.NoError(t, err)
+	return b
+}
+
+// TestHubConnections_NonEmpty covers the Connections() loop body when the
+// shard contains at least one client.
+func TestHubConnections_NonEmpty(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c := newTestConnectedClientV2(t, node, "u-conn")
+	t.Cleanup(func() { _ = c.close(DisconnectForceNoReconnect) })
+
+	conns := node.hub.Connections()
+	require.GreaterOrEqual(t, len(conns), 1)
+	require.Contains(t, conns, c.uid)
+}
+
+// ---------------------------------------------------------------------------
+// hub.go broadcastJoin / broadcastLeave Protobuf path
+// ---------------------------------------------------------------------------
+
+// TestBroadcastJoinLeave_ProtobufClient covers the Protobuf encoding paths
+// in subShard.broadcastJoin / subShard.broadcastLeave by ensuring a Protobuf
+// subscriber receives join/leave events.
+func TestBroadcastJoinLeave_ProtobufClient(t *testing.T) {
+	t.Parallel()
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{
+				EmitJoinLeave: true, PushJoinLeave: true,
+			}}, nil)
+		})
+	})
+
+	// Protobuf-protocol subscriber (covers Protobuf branch).
+	c1 := newTestClientV2Protocol(t, n, "u1", ProtocolTypeProtobuf)
+	connectClientV2(t, c1)
+	subscribeClientV2(t, c1, "joinleave:protobuf")
+
+	// Trigger join + leave through the hub. Hub.broadcast{Join,Leave} take
+	// *ClientInfo and dispatch to subShard.broadcast{Join,Leave} with a
+	// *protocol.Join/Leave wrapper internally — so we exercise the Protobuf
+	// encoding paths in subShard.
+	require.NoError(t, n.hub.broadcastJoin("joinleave:protobuf",
+		&ClientInfo{ClientID: "joiner", UserID: "u2"}, ChannelBatchConfig{}))
+	require.NoError(t, n.hub.broadcastLeave("joinleave:protobuf",
+		&ClientInfo{ClientID: "joiner", UserID: "u2"}, ChannelBatchConfig{}))
 }

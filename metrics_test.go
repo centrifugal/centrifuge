@@ -7,6 +7,7 @@ import (
 
 	"github.com/centrifugal/protocol"
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -100,6 +101,33 @@ func BenchmarkMetricsIncReplyError(b *testing.B) {
 		i := 0
 		for pb.Next() {
 			m.incReplyError(protocol.FrameTypePresence, 100, channels[i%1024], nil)
+			i++
+		}
+	})
+}
+
+func BenchmarkMetricsCommandDuration_NativeHistogram(b *testing.B) {
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:       "test_native",
+		EnableNativeHistograms: true,
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(b, err)
+
+	// Pre-allocate channel strings to avoid strconv.Itoa allocations in hot path
+	channels := make([]string, 1024)
+	for i := 0; i < 1024; i++ {
+		channels[i] = "channel" + strconv.Itoa(i)
+	}
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			started := time.Now()
+			m.observeCommandDuration(protocol.FrameTypePresence, time.Since(started), channels[i%1024], nil)
 			i++
 		}
 	})
@@ -462,6 +490,7 @@ func BenchmarkMetricsCommandDuration_ClientLabels(b *testing.B) {
 }
 
 func TestMetrics(t *testing.T) {
+	t.Parallel()
 	_, err := newMetricsRegistry(MetricsConfig{
 		GetChannelNamespaceLabel: func(channel string) string {
 			return channel
@@ -553,8 +582,8 @@ func TestMetrics(t *testing.T) {
 				m.incRecover(true, "channel"+strconv.Itoa(i%2), false)
 				m.incRecover(false, "channel"+strconv.Itoa(i%2), false)
 				m.observeRecoveredPublications(10, "channel"+strconv.Itoa(i%2))
-				m.observePubSubDeliveryLag(100)
-				m.observePubSubDeliveryLag(-10)
+				m.observePubSubDeliveryLag(100, "channel"+strconv.Itoa(i%2))
+				m.observePubSubDeliveryLag(-10, "channel"+strconv.Itoa(i%2))
 				m.observePingPongDuration(time.Second, transportWebsocket)
 				m.incServerDisconnect(3000, nil)
 				m.incServerDisconnect(30000, nil)
@@ -566,6 +595,33 @@ func TestMetrics(t *testing.T) {
 				m.setNumUsers(300)
 				m.setNumNodes(4)
 				m.setNumSubscriptions(500)
+
+				// Shared poll metrics.
+				cc := m.getSharedPollChannelCached("channel" + strconv.Itoa(i%2))
+				cc.cycleDuration.Observe(1.5)
+				cc.cycleWorkDuration.Observe(1.0)
+				cc.notifyCount.Inc()
+
+				for _, trigger := range []string{"timer", "notification"} {
+					ch := "channel" + strconv.Itoa(i%2)
+					hc := m.getSharedPollHandlerCached(trigger, ch)
+					hc.duration.Observe(0.05)
+					hc.semWait.Observe(0.001)
+					hc.errorCount.Inc()
+					hc.itemsPolled.Add(100)
+
+					rc := m.getSharedPollResultCached(trigger, ch)
+					rc.changed.Add(5)
+					rc.unchanged.Add(90)
+					rc.removed.Add(2)
+				}
+
+				pc := m.getSharedPollPublishCached("channel" + strconv.Itoa(i%2))
+				pc.applied.Inc()
+				pc.skipped.Inc()
+
+				m.setSharedPollNumChannels(10)
+				m.setSharedPollNumKeys(500)
 			}
 		})
 	}
@@ -690,6 +746,7 @@ func TestClientLabels(t *testing.T) {
 }
 
 func Test_getHTTPTransportProto(t *testing.T) {
+	t.Parallel()
 	type args struct {
 		protoMajor int8
 	}
@@ -725,5 +782,122 @@ func Test_getHTTPTransportProto(t *testing.T) {
 				t.Errorf("getAcceptProtocolLabel() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMetrics_MapBrokerAndRedisBrokerCounters(t *testing.T) {
+	t.Parallel()
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test_map",
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(t, err)
+	// These were previously uncovered.
+	m.incRedisBrokerPubSubErrors("test_broker", "subscribe")
+	m.incMapBrokerCleanupErrors("test_broker")
+	m.addMapBrokerCleanupKeysRemoved("test_broker", 10)
+	m.setMapBrokerCleanupLag("test_broker", 2.5)
+}
+
+func BenchmarkSharedPollHandlerCached(b *testing.B) {
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(b, err)
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			hc := m.getSharedPollHandlerCached("timer", "channel"+strconv.Itoa(i%10))
+			hc.duration.Observe(0.05)
+			hc.itemsPolled.Add(100)
+			i++
+		}
+	})
+}
+
+func BenchmarkSharedPollResultCached(b *testing.B) {
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(b, err)
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			rc := m.getSharedPollResultCached("timer", "channel"+strconv.Itoa(i%10))
+			rc.changed.Add(5)
+			rc.unchanged.Add(90)
+			i++
+		}
+	})
+}
+
+func TestMetrics_EnableNativeHistograms(t *testing.T) {
+	t.Parallel()
+	reg := prometheus.NewRegistry()
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:       "test_nh",
+		RegistererGatherer:     reg,
+		EnableNativeHistograms: true,
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(t, err)
+
+	for i := 0; i < 10; i++ {
+		m.observeCommandDuration(protocol.FrameTypePublish, time.Duration(i+1)*time.Millisecond, "ns1", nil)
+		m.observeSurveyDuration("test_op", time.Duration(i+1)*10*time.Millisecond)
+	}
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	// With EnableNativeHistograms on, the legacy Summary metrics must not
+	// be exposed; their _histogram companions carry the observations in
+	// native (sparse, exponential) form.
+	mustNotExist := map[string]bool{
+		"test_nh_client_command_duration_seconds": true,
+		"test_nh_node_survey_duration_seconds":    true,
+	}
+	wantHistograms := map[string]bool{
+		"test_nh_client_command_duration_seconds_histogram": false,
+		"test_nh_node_survey_duration_seconds_histogram":    false,
+	}
+	for _, mf := range families {
+		name := mf.GetName()
+		require.False(t, mustNotExist[name],
+			"legacy Summary metric %s should not be exposed when flag is on", name)
+		if _, ok := wantHistograms[name]; !ok {
+			continue
+		}
+		require.Equal(t, dto.MetricType_HISTOGRAM, mf.GetType(),
+			"metric %s should be HISTOGRAM, got %s", name, mf.GetType())
+		var native *dto.Histogram
+		for _, series := range mf.Metric {
+			h := series.Histogram
+			if h == nil || h.GetSampleCount() == 0 {
+				continue
+			}
+			native = h
+			break
+		}
+		require.NotNil(t, native, "metric %s has no observed series", name)
+		require.NotNil(t, native.Schema, "metric %s missing native Schema", name)
+		require.NotEmpty(t, native.PositiveSpan, "metric %s missing PositiveSpan — not in native form", name)
+		require.Empty(t, native.Bucket, "metric %s should not expose classic buckets in native-only mode", name)
+		wantHistograms[name] = true
+	}
+	for name, found := range wantHistograms {
+		require.True(t, found, "histogram metric %s not present in registry output", name)
 	}
 }
