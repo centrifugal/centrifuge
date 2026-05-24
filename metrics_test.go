@@ -741,7 +741,7 @@ func TestClientLabels(t *testing.T) {
 		require.NoError(t, err)
 
 		labels := m.buildMetricLabels([]string{"transport", "frame_type"})
-		require.Equal(t, []string{"transport", "frame_type", "region", "tier"}, labels)
+		require.Equal(t, []string{"transport", "frame_type", "app_region", "app_tier"}, labels)
 	})
 }
 

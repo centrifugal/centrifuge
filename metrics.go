@@ -196,14 +196,23 @@ func getMetricsNamespace(config MetricsConfig) string {
 	return config.MetricsNamespace
 }
 
+// clientLabelPrefix is prepended to every client-label name exported as a
+// Prometheus dimension. It guarantees that user-chosen names in
+// MetricsConfig.ClientLabels can never collide with built-in metric labels
+// like "transport", "code", "method", etc.
+const clientLabelPrefix = "app_"
+
 // buildMetricLabels creates a label slice, optionally appending client labels if enabled.
+// Exported client-label names are prefixed with clientLabelPrefix.
 func (m *metrics) buildMetricLabels(baseLabels []string) []string {
 	if len(m.config.ClientLabels) == 0 {
 		return baseLabels
 	}
 	labels := make([]string, 0, len(baseLabels)+len(m.config.ClientLabels))
 	labels = append(labels, baseLabels...)
-	labels = append(labels, m.config.ClientLabels...)
+	for _, name := range m.config.ClientLabels {
+		labels = append(labels, clientLabelPrefix+name)
+	}
 	return labels
 }
 
