@@ -398,6 +398,26 @@ type MetricsConfig struct {
 	// ExposeTransportAcceptProtocol enables exposing in labels the accept protocol used by client's transport.
 	// If not enabled - empty string will be used as a label value.
 	ExposeTransportAcceptProtocol bool
+	// ClientLabels defines which Client.Labels keys are exported as additional
+	// Prometheus dimensions on per-connection metrics. Label values are read
+	// from ConnectReply.Labels set in the OnConnecting handler. If a configured
+	// key is missing on a particular client, an empty string is used.
+	//
+	// Exported dimension names are prefixed with "app_" to guarantee no
+	// collision with built-in metric labels (transport, method, code, …).
+	// For example, ClientLabels: []string{"region", "tier"} appears in
+	// Prometheus as the dimensions "app_region" and "app_tier". Your
+	// application code reads the unprefixed keys from Client.Labels()
+	// unchanged — the prefix is applied only on the metric export path.
+	//
+	// Warning: each unique combination of values creates a new Prometheus
+	// time series. Keep cardinality low by using controlled finite value
+	// sets (region, tier, app version) — do not export user IDs, session
+	// IDs, or any unbounded input.
+	//
+	// If empty (the default), client labels are disabled and there is no
+	// overhead on the metric emission path.
+	ClientLabels []string
 	// EnableNativeHistograms switches every Histogram instrument in the
 	// package to Prometheus native (sparse, exponential) schema with no
 	// explicit buckets exposed, and stops exposing the legacy Summary

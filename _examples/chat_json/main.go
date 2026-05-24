@@ -72,6 +72,9 @@ func main() {
 		LogLevel:       centrifuge.LogLevelInfo,
 		LogHandler:     handleLog,
 		HistoryMetaTTL: 24 * time.Hour,
+		Metrics: centrifuge.MetricsConfig{
+			ClientLabels: []string{"auth"},
+		},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -89,6 +92,9 @@ func main() {
 					EmitJoinLeave:  true,
 					PushJoinLeave:  true,
 				},
+			},
+			Labels: map[string]string{
+				"auth": "jwt",
 			},
 		}, nil
 	})

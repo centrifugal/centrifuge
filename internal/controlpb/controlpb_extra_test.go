@@ -50,3 +50,62 @@ func TestUnsubscribeProtoExtra(t *testing.T) {
 	require.Equal(t, "test channel", msg.GetChannel())
 	require.NotZero(t, msg.String())
 }
+
+// TestFilterNodeRoundTrip locks in the wire layout of FilterNode (used as
+// label_filter on Subscribe / Unsubscribe / Disconnect / Refresh). Any field
+// renumbering or type change here would silently break cluster-wide
+// destructive ops with a label filter.
+func TestFilterNodeRoundTrip(t *testing.T) {
+	original := &FilterNode{
+		Op: "and",
+		Nodes: []*FilterNode{
+			{Op: "", Key: "region", Cmp: "eq", Val: "us-east"},
+			{Op: "or", Nodes: []*FilterNode{
+				{Op: "", Key: "tier", Cmp: "in", Vals: []string{"premium", "enterprise"}},
+				{Op: "not", Nodes: []*FilterNode{
+					{Op: "", Key: "blocked", Cmp: "ex"},
+				}},
+			}},
+		},
+	}
+
+	for name, build := range map[string]func() ([]byte, error){
+		"Subscribe":   func() ([]byte, error) { return (&Subscribe{LabelFilter: original}).MarshalVT() },
+		"Unsubscribe": func() ([]byte, error) { return (&Unsubscribe{LabelFilter: original}).MarshalVT() },
+		"Disconnect":  func() ([]byte, error) { return (&Disconnect{LabelFilter: original}).MarshalVT() },
+		"Refresh":     func() ([]byte, error) { return (&Refresh{LabelFilter: original}).MarshalVT() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			data, err := build()
+			require.NoError(t, err)
+
+			var got *FilterNode
+			switch name {
+			case "Subscribe":
+				m := &Subscribe{}
+				require.NoError(t, m.UnmarshalVT(data))
+				got = m.LabelFilter
+			case "Unsubscribe":
+				m := &Unsubscribe{}
+				require.NoError(t, m.UnmarshalVT(data))
+				got = m.LabelFilter
+			case "Disconnect":
+				m := &Disconnect{}
+				require.NoError(t, m.UnmarshalVT(data))
+				got = m.LabelFilter
+			case "Refresh":
+				m := &Refresh{}
+				require.NoError(t, m.UnmarshalVT(data))
+				got = m.LabelFilter
+			}
+			require.Equal(t, original.Op, got.Op)
+			require.Len(t, got.Nodes, 2)
+			require.Equal(t, "region", got.Nodes[0].Key)
+			require.Equal(t, "us-east", got.Nodes[0].Val)
+			require.Equal(t, "or", got.Nodes[1].Op)
+			require.Equal(t, []string{"premium", "enterprise"}, got.Nodes[1].Nodes[0].Vals)
+			require.Equal(t, "not", got.Nodes[1].Nodes[1].Op)
+			require.Equal(t, "blocked", got.Nodes[1].Nodes[1].Nodes[0].Key)
+		})
+	}
+}

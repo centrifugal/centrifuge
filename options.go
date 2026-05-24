@@ -227,6 +227,15 @@ type SubscribeOptions struct {
 	// as publish_debounce (milliseconds). The SDK debounces client-initiated publishes
 	// to this channel locally.
 	ClientPublishDebounceInterval time.Duration
+	// LabelFilter narrows the subscribe to a subset of the user's connections by
+	// matching against Client.Labels (the full map set via ConnectReply.Labels —
+	// NOT only the keys whitelisted in MetricsConfig.ClientLabels). A user with
+	// multiple connections may end up partially subscribed; non-matching
+	// connections are left untouched. Subscribe never removes an existing
+	// subscription from a non-matching connection. Combined with clientID and
+	// sessionID using AND semantics. A malformed filter causes Node.Subscribe
+	// to return an error. Nil means no label filtering.
+	LabelFilter *FilterNode
 }
 
 // SubscribeOption is a type to represent various Subscribe options.
@@ -339,6 +348,15 @@ func WithSubscribeHistoryMetaTTL(metaTTL time.Duration) SubscribeOption {
 	}
 }
 
+// WithSubscribeLabelFilter restricts the subscribe to connections whose
+// Client.Labels match the filter. See SubscribeOptions.LabelFilter for the
+// detailed contract.
+func WithSubscribeLabelFilter(f *FilterNode) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.LabelFilter = f
+	}
+}
+
 // RefreshOptions ...
 type RefreshOptions struct {
 	// Expired can close connection with expired reason.
@@ -352,6 +370,13 @@ type RefreshOptions struct {
 	clientID string
 	// sessionID to refresh.
 	sessionID string
+	// LabelFilter narrows the refresh to a subset of the user's connections by
+	// matching against Client.Labels (the full map set via ConnectReply.Labels —
+	// NOT only the keys whitelisted in MetricsConfig.ClientLabels). A user with
+	// multiple connections may end up partially refreshed. Combined with clientID
+	// and sessionID using AND semantics. A malformed filter causes Node.Refresh
+	// to return an error. Nil means no label filtering.
+	LabelFilter *FilterNode
 }
 
 // RefreshOption is a type to represent various Refresh options.
@@ -393,6 +418,15 @@ func WithRefreshInfo(info []byte) RefreshOption {
 	}
 }
 
+// WithRefreshLabelFilter restricts the refresh to connections whose
+// Client.Labels match the filter. See RefreshOptions.LabelFilter for the
+// detailed contract.
+func WithRefreshLabelFilter(f *FilterNode) RefreshOption {
+	return func(opts *RefreshOptions) {
+		opts.LabelFilter = f
+	}
+}
+
 // UnsubscribeOptions ...
 type UnsubscribeOptions struct {
 	// clientID to unsubscribe.
@@ -401,6 +435,14 @@ type UnsubscribeOptions struct {
 	sessionID string
 	// custom unsubscribe object.
 	unsubscribe *Unsubscribe
+	// LabelFilter narrows the unsubscribe to a subset of the user's connections
+	// by matching against Client.Labels (the full map set via ConnectReply.Labels
+	// — NOT only the keys whitelisted in MetricsConfig.ClientLabels). When the
+	// channel argument is empty (unsubscribe from all channels), the filter still
+	// applies and narrows which connections are affected. Combined with clientID
+	// and sessionID using AND semantics. A malformed filter causes
+	// Node.Unsubscribe to return an error. Nil means no label filtering.
+	LabelFilter *FilterNode
 }
 
 // UnsubscribeOption is a type to represent various Unsubscribe options.
@@ -429,6 +471,15 @@ func WithCustomUnsubscribe(unsubscribe Unsubscribe) UnsubscribeOption {
 	}
 }
 
+// WithUnsubscribeLabelFilter restricts the unsubscribe to connections whose
+// Client.Labels match the filter. See UnsubscribeOptions.LabelFilter for the
+// detailed contract.
+func WithUnsubscribeLabelFilter(f *FilterNode) UnsubscribeOption {
+	return func(opts *UnsubscribeOptions) {
+		opts.LabelFilter = f
+	}
+}
+
 // DisconnectOptions define some fields to alter behaviour of Disconnect operation.
 type DisconnectOptions struct {
 	// Disconnect represents custom disconnect to use.
@@ -440,6 +491,13 @@ type DisconnectOptions struct {
 	clientID string
 	// sessionID to disconnect.
 	sessionID string
+	// LabelFilter narrows the disconnect to a subset of the user's connections by
+	// matching against Client.Labels (the full map set via ConnectReply.Labels —
+	// NOT only the keys whitelisted in MetricsConfig.ClientLabels). Combined with
+	// ClientWhitelist, clientID and sessionID using AND semantics — a connection
+	// must clear every set check to be disconnected. A malformed filter causes
+	// Node.Disconnect to return an error. Nil means no label filtering.
+	LabelFilter *FilterNode
 }
 
 // DisconnectOption is a type to represent various Disconnect options.
@@ -470,6 +528,15 @@ func WithDisconnectSession(sessionID string) DisconnectOption {
 func WithDisconnectClientWhitelist(whitelist []string) DisconnectOption {
 	return func(opts *DisconnectOptions) {
 		opts.ClientWhitelist = whitelist
+	}
+}
+
+// WithDisconnectLabelFilter restricts the disconnect to connections whose
+// Client.Labels match the filter. See DisconnectOptions.LabelFilter for the
+// detailed contract.
+func WithDisconnectLabelFilter(f *FilterNode) DisconnectOption {
+	return func(opts *DisconnectOptions) {
+		opts.LabelFilter = f
 	}
 }
 

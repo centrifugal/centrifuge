@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/controlpb"
+	"github.com/centrifugal/centrifuge/internal/controlproto"
 	"github.com/centrifugal/centrifuge/internal/convert"
 
 	"github.com/centrifugal/protocol"
@@ -198,11 +200,11 @@ func TestHubUnsubscribe(t *testing.T) {
 	newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
 
 	// Unsubscribe not existed user.
-	err := n.hub.unsubscribe("1", "test_channel", unsubscribeServer, "", "")
+	err := n.hub.unsubscribe("1", "test_channel", unsubscribeServer, "", "", nil)
 	require.NoError(t, err)
 
 	// Unsubscribe subscribed user.
-	err = n.hub.unsubscribe("42", "test_channel", unsubscribeServer, "", "")
+	err = n.hub.unsubscribe("42", "test_channel", unsubscribeServer, "", "", nil)
 	require.NoError(t, err)
 
 LOOP:
@@ -252,11 +254,11 @@ func TestHubDisconnect(t *testing.T) {
 	}
 
 	// Disconnect not existed user.
-	err := n.hub.disconnect("1", DisconnectForceNoReconnect, "", "", nil)
+	err := n.hub.disconnect("1", DisconnectForceNoReconnect, "", "", nil, nil)
 	require.NoError(t, err)
 
 	// Disconnect subscribed user.
-	err = n.hub.disconnect("42", DisconnectForceNoReconnect, "", "", nil)
+	err = n.hub.disconnect("42", DisconnectForceNoReconnect, "", "", nil, nil)
 	require.NoError(t, err)
 	select {
 	case <-client.transport.(*testTransport).closeCh:
@@ -267,7 +269,7 @@ func TestHubDisconnect(t *testing.T) {
 	require.Equal(t, 0, n.hub.NumSubscribers("test_channel"))
 
 	// Disconnect subscribed user with reconnect.
-	err = n.hub.disconnect("24", DisconnectForceReconnect, "", "", nil)
+	err = n.hub.disconnect("24", DisconnectForceReconnect, "", "", nil, nil)
 	require.NoError(t, err)
 	select {
 	case <-clientWithReconnect.transport.(*testTransport).closeCh:
@@ -316,7 +318,7 @@ func TestHubDisconnect_ClientWhitelist(t *testing.T) {
 	whitelist := []string{clientToKeep.ID()}
 
 	// Disconnect not existed user.
-	err := n.hub.disconnect("12", DisconnectConnectionLimit, "", "", whitelist)
+	err := n.hub.disconnect("12", DisconnectConnectionLimit, "", "", whitelist, nil)
 	require.NoError(t, err)
 
 	select {
@@ -365,14 +367,14 @@ func TestHubOperationsWithClientID(t *testing.T) {
 	clientToDisconnect := client.ID()
 
 	require.Equal(t, 2, n.hub.NumSubscriptions())
-	err := n.hub.subscribe("12", "channel", clientToKeep.ID(), "")
+	err := n.hub.subscribe("12", "channel", clientToKeep.ID(), "", nil)
 	require.NoError(t, err)
 	require.Equal(t, 3, n.hub.NumSubscriptions())
-	err = n.hub.unsubscribe("12", "channel", unsubscribeServer, clientToKeep.ID(), "")
+	err = n.hub.unsubscribe("12", "channel", unsubscribeServer, clientToKeep.ID(), "", nil)
 	require.NoError(t, err)
 	require.Equal(t, 2, n.hub.NumSubscriptions())
 
-	err = n.hub.disconnect("12", DisconnectConnectionLimit, clientToDisconnect, "", nil)
+	err = n.hub.disconnect("12", DisconnectConnectionLimit, clientToDisconnect, "", nil, nil)
 	require.NoError(t, err)
 
 	select {
@@ -431,14 +433,14 @@ func TestHubOperationsWithSessionID(t *testing.T) {
 	_, ok := n.hub.clientBySession(sessionToDisconnect)
 	require.True(t, ok)
 	require.Equal(t, 0, n.hub.NumSubscriptions())
-	err := n.hub.subscribe("12", "test", "", clientToKeep.sessionID())
+	err := n.hub.subscribe("12", "test", "", clientToKeep.sessionID(), nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, n.hub.NumSubscriptions())
-	err = n.hub.unsubscribe("12", "test", unsubscribeServer, "", clientToKeep.sessionID())
+	err = n.hub.unsubscribe("12", "test", unsubscribeServer, "", clientToKeep.sessionID(), nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, n.hub.NumSubscriptions())
 
-	err = n.hub.disconnect("12", DisconnectConnectionLimit, "", sessionToDisconnect, nil)
+	err = n.hub.disconnect("12", DisconnectConnectionLimit, "", sessionToDisconnect, nil, nil)
 	require.NoError(t, err)
 
 	select {
@@ -1041,6 +1043,28 @@ func TestHubSharding(t *testing.T) {
 // This benchmark allows to estimate the benefit from Hub sharding.
 // As we have a broadcasting goroutine here it's not very useful to look at
 // total allocations here - it's better to look at operation time.
+// BenchmarkHubDisconnect_LabelFilter measures the per-client cost added by
+// LabelFilter on the disconnect iteration path. The filter is constructed to
+// match none of the 1000 connections so the benchmark exercises only the match
+// overhead (no actual Disconnect side effects, keeps the iteration stable
+// across b.N runs).
+func BenchmarkHubDisconnect_LabelFilter(b *testing.B) {
+	const numClients = 1000
+	n := defaultTestNodeBenchmark(b)
+
+	for i := 0; i < numClients; i++ {
+		c := newTestConnectedClientWithTransport(b, context.Background(), n, newTestTransport(func() {}), "u-bench")
+		c.labels = map[string]string{"region": "us-east", "tier": "free"}
+	}
+
+	f := &FilterNode{Op: "", Key: "region", Cmp: "eq", Val: "nowhere"}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = n.hub.disconnect("u-bench", DisconnectForceNoReconnect, "", "", nil, f)
+	}
+}
+
 func BenchmarkHub_Contention(b *testing.B) {
 	numClients := 100
 	numChannels := 128
@@ -2464,6 +2488,253 @@ func TestHubRefresh_ClientIDFilter(t *testing.T) {
 	// Filter by sessionID that no client has → no-op, no error.
 	err = node.Refresh("u-refresh", WithRefreshSession("nope"))
 	require.NoError(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// hub.go LabelFilter — narrows destructive ops to connections whose
+// Client.Labels match a protocol.FilterNode tree (AND-combined with the
+// clientID/sessionID/whitelist filters).
+// ---------------------------------------------------------------------------
+
+// labelFilterEQ is a tiny helper for the leaf `key == val` shape used in the
+// LabelFilter tests below. Keeps each test focused on what's being checked
+// rather than how the filter tree is built.
+func labelFilterEQ(key, val string) *FilterNode {
+	return &FilterNode{Op: "", Key: key, Cmp: "eq", Val: val}
+}
+
+func TestHubDisconnect_LabelFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c1 := newTestConnectedClientV2(t, node, "u-lf")
+	c2 := newTestConnectedClientV2(t, node, "u-lf")
+	c1.labels = map[string]string{"region": "us-east"}
+	c2.labels = map[string]string{"region": "eu-west"}
+
+	err := node.Disconnect("u-lf", WithDisconnectLabelFilter(labelFilterEQ("region", "us-east")))
+	require.NoError(t, err)
+
+	// c1 (us-east) is gone; c2 (eu-west) survives.
+	require.Eventually(t, func() bool {
+		conns := node.hub.UserConnections("u-lf")
+		_, ok1 := conns[c1.uid]
+		_, ok2 := conns[c2.uid]
+		return !ok1 && ok2
+	}, time.Second, 10*time.Millisecond)
+
+	_ = c2.close(DisconnectForceNoReconnect)
+}
+
+func TestHubUnsubscribe_LabelFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c1 := newTestSubscribedClientV2(t, node, "u-lf-u", "ch")
+	c2 := newTestSubscribedClientV2(t, node, "u-lf-u", "ch")
+	c1.labels = map[string]string{"tier": "premium"}
+	c2.labels = map[string]string{"tier": "free"}
+	t.Cleanup(func() { _ = c1.close(DisconnectForceNoReconnect); _ = c2.close(DisconnectForceNoReconnect) })
+
+	err := node.Unsubscribe("u-lf-u", "ch", WithUnsubscribeLabelFilter(labelFilterEQ("tier", "premium")))
+	require.NoError(t, err)
+
+	require.NotContains(t, c1.channels, "ch")
+	require.Contains(t, c2.channels, "ch")
+}
+
+func TestHubSubscribe_LabelFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c1 := newTestConnectedClientV2(t, node, "u-lf-s")
+	c2 := newTestConnectedClientV2(t, node, "u-lf-s")
+	c1.labels = map[string]string{"region": "us-east"}
+	c2.labels = map[string]string{"region": "eu-west"}
+	t.Cleanup(func() { _ = c1.close(DisconnectForceNoReconnect); _ = c2.close(DisconnectForceNoReconnect) })
+
+	err := node.Subscribe("u-lf-s", "ch-only-us", WithSubscribeLabelFilter(labelFilterEQ("region", "us-east")))
+	require.NoError(t, err)
+
+	require.Contains(t, c1.channels, "ch-only-us")
+	require.NotContains(t, c2.channels, "ch-only-us")
+}
+
+func TestHubRefresh_LabelFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c1 := newTestConnectedClientV2(t, node, "u-lf-r")
+	c2 := newTestConnectedClientV2(t, node, "u-lf-r")
+	c1.labels = map[string]string{"tier": "premium"}
+	c2.labels = map[string]string{"tier": "free"}
+	t.Cleanup(func() { _ = c1.close(DisconnectForceNoReconnect); _ = c2.close(DisconnectForceNoReconnect) })
+
+	err := node.Refresh("u-lf-r", WithRefreshLabelFilter(labelFilterEQ("tier", "premium")))
+	require.NoError(t, err)
+}
+
+// TestHubDisconnect_LabelFilter_NoMatch ensures that a filter matching no
+// connection is a clean no-op (no error, nothing closed).
+func TestHubDisconnect_LabelFilter_NoMatch(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c := newTestConnectedClientV2(t, node, "u-lf-nm")
+	c.labels = map[string]string{"region": "us-east"}
+	t.Cleanup(func() { _ = c.close(DisconnectForceNoReconnect) })
+
+	err := node.Disconnect("u-lf-nm", WithDisconnectLabelFilter(labelFilterEQ("region", "ap-south")))
+	require.NoError(t, err)
+
+	// Still connected.
+	require.Contains(t, node.hub.UserConnections("u-lf-nm"), c.uid)
+}
+
+// TestHubDisconnect_LabelFilter_NilLabels confirms a client with no labels at
+// all is cleanly excluded by a filter that requires a key.
+func TestHubDisconnect_LabelFilter_NilLabels(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c := newTestConnectedClientV2(t, node, "u-lf-nil")
+	// c.labels intentionally left nil.
+	t.Cleanup(func() { _ = c.close(DisconnectForceNoReconnect) })
+
+	err := node.Disconnect("u-lf-nil", WithDisconnectLabelFilter(labelFilterEQ("region", "us-east")))
+	require.NoError(t, err)
+
+	// Untouched — filter required a key the labels map doesn't have.
+	require.Contains(t, node.hub.UserConnections("u-lf-nil"), c.uid)
+}
+
+// TestHubDisconnect_LabelFilter_AND_ClientID exercises the AND combination of
+// LabelFilter with the existing clientID filter: only connections that clear
+// BOTH gates get disconnected.
+func TestHubDisconnect_LabelFilter_AND_ClientID(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c1 := newTestConnectedClientV2(t, node, "u-lf-and")
+	c2 := newTestConnectedClientV2(t, node, "u-lf-and")
+	c3 := newTestConnectedClientV2(t, node, "u-lf-and")
+	c1.labels = map[string]string{"region": "us-east"}
+	c2.labels = map[string]string{"region": "us-east"}
+	c3.labels = map[string]string{"region": "eu-west"}
+
+	// clientID = c1 AND region = us-east → only c1 matches.
+	err := node.Disconnect("u-lf-and",
+		WithDisconnectClient(c1.uid),
+		WithDisconnectLabelFilter(labelFilterEQ("region", "us-east")))
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		conns := node.hub.UserConnections("u-lf-and")
+		_, ok1 := conns[c1.uid]
+		_, ok2 := conns[c2.uid]
+		_, ok3 := conns[c3.uid]
+		return !ok1 && ok2 && ok3
+	}, time.Second, 10*time.Millisecond)
+
+	_ = c2.close(DisconnectForceNoReconnect)
+	_ = c3.close(DisconnectForceNoReconnect)
+}
+
+// TestNode_LabelFilter_Invalid asserts that a malformed FilterNode is rejected
+// at the Node.* boundary (no control message sent, hub iteration not entered).
+func TestNode_LabelFilter_Invalid(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	bad := &FilterNode{} // zero value: op="" (leaf) with no Cmp → invalid.
+
+	require.Error(t, node.Disconnect("u-bad", WithDisconnectLabelFilter(bad)))
+	require.Error(t, node.Unsubscribe("u-bad", "ch", WithUnsubscribeLabelFilter(bad)))
+	require.Error(t, node.Subscribe("u-bad", "ch", WithSubscribeLabelFilter(bad)))
+	require.Error(t, node.Refresh("u-bad", WithRefreshLabelFilter(bad)))
+}
+
+// TestNode_LabelFilter_OldControlMessageCompat fabricates a control message
+// with no label_filter field set (the pre-LabelFilter wire shape) and feeds it
+// through the dispatcher, asserting it still works as a plain destructive op.
+// Locks in forward compatibility with older nodes.
+func TestNode_LabelFilter_OldControlMessageCompat(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c := newTestConnectedClientV2(t, node, "u-compat")
+	c.labels = map[string]string{"region": "us-east"} // present but no filter is set
+
+	// Build a Disconnect control message exactly as a pre-LabelFilter sender would.
+	cmd := &controlpb.Command{
+		Uid: "remote-node",
+		Disconnect: &controlpb.Disconnect{
+			User:      "u-compat",
+			Code:      DisconnectForceNoReconnect.Code,
+			Reason:    DisconnectForceNoReconnect.Reason,
+			Whitelist: nil,
+			// LabelFilter intentionally not set
+		},
+	}
+	require.NoError(t, node.handleControl(mustMarshalControlCommand(t, cmd)))
+
+	require.Eventually(t, func() bool {
+		_, ok := node.hub.UserConnections("u-compat")[c.uid]
+		return !ok
+	}, time.Second, 10*time.Millisecond)
+}
+
+// TestNode_LabelFilter_AppliedOnReceive sends a Disconnect through pubDisconnect
+// so the control message round-trips through marshal → handleControl, and the
+// receiving node must apply the filter to its local hub (not just round-trip
+// the bytes). Guards against a future refactor that silently drops the
+// unmarshal/convert path.
+func TestNode_LabelFilter_AppliedOnReceive(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	c1 := newTestConnectedClientV2(t, node, "u-recv")
+	c2 := newTestConnectedClientV2(t, node, "u-recv")
+	c1.labels = map[string]string{"region": "us-east"}
+	c2.labels = map[string]string{"region": "eu-west"}
+
+	cmd := &controlpb.Command{
+		Uid: "remote-node",
+		Disconnect: &controlpb.Disconnect{
+			User:        "u-recv",
+			Code:        DisconnectForceNoReconnect.Code,
+			Reason:      DisconnectForceNoReconnect.Reason,
+			LabelFilter: controlpbFilterFromProto(labelFilterEQ("region", "us-east")),
+		},
+	}
+	require.NoError(t, node.handleControl(mustMarshalControlCommand(t, cmd)))
+
+	require.Eventually(t, func() bool {
+		conns := node.hub.UserConnections("u-recv")
+		_, ok1 := conns[c1.uid]
+		_, ok2 := conns[c2.uid]
+		return !ok1 && ok2
+	}, time.Second, 10*time.Millisecond)
+
+	_ = c2.close(DisconnectForceNoReconnect)
+}
+
+// mustMarshalControlCommand encodes a control command for handleControl in tests.
+func mustMarshalControlCommand(t *testing.T, cmd *controlpb.Command) []byte {
+	t.Helper()
+	b, err := controlproto.NewProtobufEncoder().EncodeCommand(cmd)
+	require.NoError(t, err)
+	return b
 }
 
 // TestHubConnections_NonEmpty covers the Connections() loop body when the

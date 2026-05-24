@@ -163,20 +163,20 @@ func (h *Hub) UserConnections(userID string) map[string]*Client {
 	return h.connShards[index(userID, numHubShards)].userConnections(userID)
 }
 
-func (h *Hub) refresh(userID string, clientID, sessionID string, opts ...RefreshOption) error {
-	return h.connShards[index(userID, numHubShards)].refresh(userID, clientID, sessionID, opts...)
+func (h *Hub) refresh(userID string, clientID, sessionID string, labelFilter *FilterNode, opts ...RefreshOption) error {
+	return h.connShards[index(userID, numHubShards)].refresh(userID, clientID, sessionID, labelFilter, opts...)
 }
 
-func (h *Hub) subscribe(userID string, ch string, clientID string, sessionID string, opts ...SubscribeOption) error {
-	return h.connShards[index(userID, numHubShards)].subscribe(userID, ch, clientID, sessionID, opts...)
+func (h *Hub) subscribe(userID string, ch string, clientID string, sessionID string, labelFilter *FilterNode, opts ...SubscribeOption) error {
+	return h.connShards[index(userID, numHubShards)].subscribe(userID, ch, clientID, sessionID, labelFilter, opts...)
 }
 
-func (h *Hub) unsubscribe(userID string, ch string, unsubscribe Unsubscribe, clientID string, sessionID string) error {
-	return h.connShards[index(userID, numHubShards)].unsubscribe(userID, ch, unsubscribe, clientID, sessionID)
+func (h *Hub) unsubscribe(userID string, ch string, unsubscribe Unsubscribe, clientID string, sessionID string, labelFilter *FilterNode) error {
+	return h.connShards[index(userID, numHubShards)].unsubscribe(userID, ch, unsubscribe, clientID, sessionID, labelFilter)
 }
 
-func (h *Hub) disconnect(userID string, disconnect Disconnect, clientID, sessionID string, whitelist []string) error {
-	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, clientID, sessionID, whitelist)
+func (h *Hub) disconnect(userID string, disconnect Disconnect, clientID, sessionID string, whitelist []string, labelFilter *FilterNode) error {
+	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, clientID, sessionID, whitelist, labelFilter)
 }
 
 func (h *Hub) addSub(ch string, sub subInfo) (int64, bool, error) {
@@ -358,7 +358,19 @@ func stringInSlice(str string, slice []string) bool {
 	return false
 }
 
-func (h *connShard) subscribe(user string, ch string, clientID string, sessionID string, opts ...SubscribeOption) error {
+// matchLabelFilter returns true when c should be included in a label-filtered
+// operation. A nil filter matches every client. c.labels is set once before the
+// client is published to the hub (see Client connect flow) and never mutated,
+// so the read is safe without taking c.mu.
+func matchLabelFilter(c *Client, f *FilterNode) bool {
+	if f == nil {
+		return true
+	}
+	ok, _ := filter.Match(f, c.labels)
+	return ok
+}
+
+func (h *connShard) subscribe(user string, ch string, clientID string, sessionID string, labelFilter *FilterNode, opts ...SubscribeOption) error {
 	userConnections := h.userConnections(user)
 
 	var firstErr error
@@ -370,6 +382,9 @@ func (h *connShard) subscribe(user string, ch string, clientID string, sessionID
 			continue
 		}
 		if sessionID != "" && c.sessionID() != sessionID {
+			continue
+		}
+		if !matchLabelFilter(c, labelFilter) {
 			continue
 		}
 		wg.Add(1)
@@ -387,7 +402,7 @@ func (h *connShard) subscribe(user string, ch string, clientID string, sessionID
 	return firstErr
 }
 
-func (h *connShard) refresh(user string, clientID string, sessionID string, opts ...RefreshOption) error {
+func (h *connShard) refresh(user string, clientID string, sessionID string, labelFilter *FilterNode, opts ...RefreshOption) error {
 	userConnections := h.userConnections(user)
 
 	var firstErr error
@@ -399,6 +414,9 @@ func (h *connShard) refresh(user string, clientID string, sessionID string, opts
 			continue
 		}
 		if sessionID != "" && c.sessionID() != sessionID {
+			continue
+		}
+		if !matchLabelFilter(c, labelFilter) {
 			continue
 		}
 		wg.Add(1)
@@ -416,7 +434,7 @@ func (h *connShard) refresh(user string, clientID string, sessionID string, opts
 	return firstErr
 }
 
-func (h *connShard) unsubscribe(user string, ch string, unsubscribe Unsubscribe, clientID string, sessionID string) error {
+func (h *connShard) unsubscribe(user string, ch string, unsubscribe Unsubscribe, clientID string, sessionID string, labelFilter *FilterNode) error {
 	userConnections := h.userConnections(user)
 
 	var wg sync.WaitGroup
@@ -425,6 +443,9 @@ func (h *connShard) unsubscribe(user string, ch string, unsubscribe Unsubscribe,
 			continue
 		}
 		if sessionID != "" && c.sessionID() != sessionID {
+			continue
+		}
+		if !matchLabelFilter(c, labelFilter) {
 			continue
 		}
 		wg.Add(1)
@@ -437,7 +458,7 @@ func (h *connShard) unsubscribe(user string, ch string, unsubscribe Unsubscribe,
 	return nil
 }
 
-func (h *connShard) disconnect(user string, disconnect Disconnect, clientID string, sessionID string, whitelist []string) error {
+func (h *connShard) disconnect(user string, disconnect Disconnect, clientID string, sessionID string, whitelist []string, labelFilter *FilterNode) error {
 	userConnections := h.userConnections(user)
 	for _, c := range userConnections {
 		if stringInSlice(c.ID(), whitelist) {
@@ -447,6 +468,9 @@ func (h *connShard) disconnect(user string, disconnect Disconnect, clientID stri
 			continue
 		}
 		if sessionID != "" && c.sessionID() != sessionID {
+			continue
+		}
+		if !matchLabelFilter(c, labelFilter) {
 			continue
 		}
 		c.Disconnect(disconnect)

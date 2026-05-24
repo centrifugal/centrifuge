@@ -538,7 +538,7 @@ func TestNode_pubUnsubscribe(t *testing.T) {
 	testController, _ := node.controller.(*TestController)
 	require.EqualValues(t, 1, testController.publishControlCount)
 
-	err := node.pubUnsubscribe("42", "holypeka", unsubscribeServer, "", "")
+	err := node.pubUnsubscribe("42", "holypeka", unsubscribeServer, "", "", nil)
 	require.NoError(t, err)
 	require.EqualValues(t, 2, testController.publishControlCount)
 }
@@ -551,7 +551,7 @@ func TestNode_pubDisconnect(t *testing.T) {
 	testController, _ := node.controller.(*TestController)
 	require.EqualValues(t, 1, testController.publishControlCount)
 
-	err := node.pubDisconnect("42", DisconnectForceNoReconnect, "", "", nil)
+	err := node.pubDisconnect("42", DisconnectForceNoReconnect, "", "", nil, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, 2, testController.publishControlCount)
 }
