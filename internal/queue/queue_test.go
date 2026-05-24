@@ -3,6 +3,7 @@ package queue
 import (
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -763,4 +764,219 @@ func TestQueueShrinkWithItemsRemaining(t *testing.T) {
 	item, ok := q.Remove()
 	require.True(t, ok)
 	require.Equal(t, "msg", string(item.Data))
+}
+
+// ---- Correctness tests for the v1 (atomic + chan doorbell) refactor ----
+
+func TestQueueCloseIsIdempotent(t *testing.T) {
+	q := New(2)
+	q.Add(Item{Data: []byte("a")})
+	q.Close()
+	require.True(t, q.Closed())
+	// Second Close must not panic (would double-close closeCh).
+	q.Close()
+	require.True(t, q.Closed())
+}
+
+func TestQueueCloseAfterCloseRemaining(t *testing.T) {
+	q := New(2)
+	q.Add(Item{Data: []byte("a")})
+	q.Add(Item{Data: []byte("b")})
+	rem := q.CloseRemaining()
+	require.Len(t, rem, 2)
+	require.True(t, q.Closed())
+	// Calling Close after CloseRemaining must not panic.
+	q.Close()
+	require.True(t, q.Closed())
+}
+
+func TestQueueCloseRemainingAfterClose(t *testing.T) {
+	q := New(2)
+	q.Add(Item{Data: []byte("a")})
+	q.Close()
+	rem := q.CloseRemaining()
+	require.Empty(t, rem)
+	require.True(t, q.Closed())
+}
+
+func TestQueueCloseWakesParkedWaiters(t *testing.T) {
+	// Multiple parked Waiters all wake when Close runs — close(closeCh)
+	// is a broadcast even though the notify chan is single-fire.
+	q := New(2)
+	const nWaiters = 8
+	var wg sync.WaitGroup
+	wg.Add(nWaiters)
+	for i := 0; i < nWaiters; i++ {
+		go func() {
+			defer wg.Done()
+			require.False(t, q.Wait())
+		}()
+	}
+	// Give waiters a moment to actually park.
+	time.Sleep(20 * time.Millisecond)
+	q.Close()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not wake all parked Waiters")
+	}
+}
+
+func TestQueueWaitConcurrentClose(t *testing.T) {
+	// Hammer Wait vs Close to flush out wake/closed ordering bugs.
+	for iter := 0; iter < 50; iter++ {
+		q := New(2)
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Wait should return — either true (item arrived) or
+			// false (closed). Must not block forever or panic.
+			q.Wait()
+		}()
+		q.Close()
+		wg.Wait()
+	}
+}
+
+func TestQueueCapAfterClose(t *testing.T) {
+	q := New(8)
+	require.Equal(t, 8, q.Cap())
+	q.Close()
+	require.Equal(t, 0, q.Cap())
+}
+
+func TestQueueProducerConsumerStress(t *testing.T) {
+	// Many concurrent producers + a single consumer. Verify every item
+	// produced is eventually consumed (no losses) and that Len/Size are
+	// non-negative throughout.
+	const (
+		nProducers       = 16
+		perProducer      = 2000
+		payloadSizeBytes = 7 // "msg-XXX" — varies by id; close enough
+	)
+	q := New(4)
+
+	var consumed int64
+	var consumedBytes int64
+	done := make(chan struct{})
+	go func() {
+		buf := make([]Item, 64)
+		for {
+			if !q.Wait() {
+				close(done)
+				return
+			}
+			n, ok := q.RemoveManyInto(buf, -1)
+			if !ok {
+				continue
+			}
+			for i := 0; i < n; i++ {
+				consumed++
+				consumedBytes += int64(len(buf[i].Data))
+			}
+			q.FinishCollect(0)
+		}
+	}()
+
+	var wg sync.WaitGroup
+	var expectedBytes int64
+	for p := 0; p < nProducers; p++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < perProducer; i++ {
+				data := []byte("msg-" + strconv.Itoa(id))
+				q.Add(Item{Data: data})
+				atomic.AddInt64(&expectedBytes, int64(len(data)))
+				// Lightweight invariant: Len/Size never negative.
+				if q.Len() < 0 || q.Size() < 0 {
+					t.Errorf("negative counter: len=%d size=%d", q.Len(), q.Size())
+					return
+				}
+			}
+		}(p)
+	}
+	wg.Wait()
+
+	// Drain remaining via CloseRemaining (Close drops items;
+	// CloseRemaining gives us a deterministic count).
+	leftover := q.CloseRemaining()
+	for _, it := range leftover {
+		consumed++
+		consumedBytes += int64(len(it.Data))
+	}
+	<-done
+
+	expected := int64(nProducers * perProducer)
+	require.Equal(t, expected, consumed, "items lost or duplicated")
+	require.Equal(t, expectedBytes, consumedBytes, "byte count mismatch")
+}
+
+func TestQueueLenSizeAtomicSnapshot(t *testing.T) {
+	// Many readers calling Len/Size in parallel with one producer must
+	// never see torn or negative values. Real assertion: this test
+	// passes under -race without data race reports.
+	q := New(2)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	// Producer.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			q.Add(Item{Data: []byte("xyz")})
+			if q.Len() > 100 {
+				_, _ = q.Remove()
+			}
+		}
+	}()
+	// Readers.
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				l := q.Len()
+				s := q.Size()
+				if l < 0 || s < 0 {
+					t.Errorf("negative counter: len=%d size=%d", l, s)
+					return
+				}
+			}
+		}()
+	}
+	time.Sleep(200 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+	q.Close()
+}
+
+func TestQueueAddManyEmptyOnClosed(t *testing.T) {
+	// Regression: AddMany() with no items on a closed queue must
+	// return false (matching the original behavior — closed queue
+	// rejects all writes), not short-circuit to true.
+	q := New(2)
+	q.Close()
+	require.False(t, q.AddMany())
+	require.False(t, q.AddMany([]Item{}...))
+}
+
+func TestQueueAddManyEmptyOnOpen(t *testing.T) {
+	// AddMany() with no items on an open queue is a successful no-op.
+	q := New(2)
+	require.True(t, q.AddMany())
+	require.Equal(t, 0, q.Len())
 }
