@@ -859,8 +859,8 @@ func TestQueueProducerConsumerStress(t *testing.T) {
 	)
 	q := New(4, ItemSize)
 
-	var consumed int64
-	var consumedBytes int64
+	var consumed atomic.Int64
+	var consumedBytes atomic.Int64
 	done := make(chan struct{})
 	go func() {
 		buf := make([]Item, 64)
@@ -874,15 +874,15 @@ func TestQueueProducerConsumerStress(t *testing.T) {
 				continue
 			}
 			for i := 0; i < n; i++ {
-				consumed++
-				consumedBytes += int64(len(buf[i].Data))
+				consumed.Add(1)
+				consumedBytes.Add(int64(len(buf[i].Data)))
 			}
 			q.FinishCollect(0)
 		}
 	}()
 
 	var wg sync.WaitGroup
-	var expectedBytes int64
+	var expectedBytes atomic.Int64
 	for p := 0; p < nProducers; p++ {
 		wg.Add(1)
 		go func(id int) {
@@ -890,7 +890,7 @@ func TestQueueProducerConsumerStress(t *testing.T) {
 			for i := 0; i < perProducer; i++ {
 				data := []byte("msg-" + strconv.Itoa(id))
 				q.Add(Item{Data: data})
-				atomic.AddInt64(&expectedBytes, int64(len(data)))
+				expectedBytes.Add(int64(len(data)))
 				// Lightweight invariant: Len/Size never negative.
 				if q.Len() < 0 || q.Size() < 0 {
 					t.Errorf("negative counter: len=%d size=%d", q.Len(), q.Size())
@@ -905,14 +905,14 @@ func TestQueueProducerConsumerStress(t *testing.T) {
 	// CloseRemaining gives us a deterministic count).
 	leftover := q.CloseRemaining()
 	for _, it := range leftover {
-		consumed++
-		consumedBytes += int64(len(it.Data))
+		consumed.Add(1)
+		consumedBytes.Add(int64(len(it.Data)))
 	}
 	<-done
 
 	expected := int64(nProducers * perProducer)
-	require.Equal(t, expected, consumed, "items lost or duplicated")
-	require.Equal(t, expectedBytes, consumedBytes, "byte count mismatch")
+	require.Equal(t, expected, consumed.Load(), "items lost or duplicated")
+	require.Equal(t, expectedBytes.Load(), consumedBytes.Load(), "byte count mismatch")
 }
 
 func TestQueueLenSizeAtomicSnapshot(t *testing.T) {

@@ -92,7 +92,7 @@ func TestGenericQueueInt_StressProducerConsumer(t *testing.T) {
 	const perProducer = 500
 	q := New[int](4, nil)
 
-	var consumed int64
+	var consumed atomic.Int64
 	done := make(chan struct{})
 	go func() {
 		buf := make([]int, 32)
@@ -102,7 +102,7 @@ func TestGenericQueueInt_StressProducerConsumer(t *testing.T) {
 				return
 			}
 			n, _ := q.RemoveManyInto(buf, -1)
-			consumed += int64(n)
+			consumed.Add(int64(n))
 			q.FinishCollect(0)
 		}
 	}()
@@ -125,11 +125,11 @@ func TestGenericQueueInt_StressProducerConsumer(t *testing.T) {
 
 	for _, it := range q.CloseRemaining() {
 		_ = it
-		consumed++
+		consumed.Add(1)
 	}
 	<-done
 
-	require.Equal(t, int64(nProducers*perProducer), atomic.LoadInt64(&consumed))
+	require.Equal(t, int64(nProducers*perProducer), consumed.Load())
 }
 
 // Pointer-type T verifies that the zero-value clearing on dequeue
