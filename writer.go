@@ -19,7 +19,7 @@ type writerConfig struct {
 type writer struct {
 	mu       sync.Mutex
 	config   writerConfig
-	messages *queue.Queue
+	messages *queue.Queue[queue.Item]
 	closed   bool
 	closeCh  chan struct{}
 
@@ -38,7 +38,7 @@ func newWriter(config writerConfig, queueInitialCap int) *writer {
 	}
 	w := &writer{
 		config:   config,
-		messages: queue.New(queueInitialCap),
+		messages: queue.New(queueInitialCap, queue.ItemSize),
 		closeCh:  make(chan struct{}),
 	}
 	return w

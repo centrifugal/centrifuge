@@ -17,7 +17,7 @@ func testItem(data []byte) Item {
 var initialCapacity = 2
 
 func TestByteQueueResize(t *testing.T) {
-	q := New(initialCapacity)
+	q := New(initialCapacity, ItemSize)
 	require.Equal(t, 0, q.Len())
 	require.Equal(t, false, q.Closed())
 
@@ -37,7 +37,7 @@ func TestByteQueueResize(t *testing.T) {
 }
 
 func TestByteQueueSize(t *testing.T) {
-	q := New(initialCapacity)
+	q := New(initialCapacity, ItemSize)
 	require.Equal(t, 0, q.Size())
 	q.Add(testItem([]byte("1")))
 	q.Add(testItem([]byte("2")))
@@ -47,7 +47,7 @@ func TestByteQueueSize(t *testing.T) {
 }
 
 func TestByteQueueWait(t *testing.T) {
-	q := New(initialCapacity)
+	q := New(initialCapacity, ItemSize)
 	q.Add(testItem([]byte("1")))
 	q.Add(testItem([]byte("2")))
 
@@ -75,7 +75,7 @@ func TestByteQueueWait(t *testing.T) {
 }
 
 func TestByteQueueAddMany(t *testing.T) {
-	q := New(initialCapacity)
+	q := New(initialCapacity, ItemSize)
 	q.AddMany(testItem([]byte("1")), testItem([]byte("2")))
 	ok := q.Wait()
 	require.Equal(t, true, ok)
@@ -91,7 +91,7 @@ func TestByteQueueAddMany(t *testing.T) {
 }
 
 func TestByteQueueRemoveMany(t *testing.T) {
-	q := New(initialCapacity)
+	q := New(initialCapacity, ItemSize)
 	q.AddMany(testItem([]byte("1")), testItem([]byte("2")))
 	ok := q.Wait()
 	require.Equal(t, true, ok)
@@ -101,7 +101,7 @@ func TestByteQueueRemoveMany(t *testing.T) {
 }
 
 func TestByteQueueRemoveManyFixed(t *testing.T) {
-	q := New(initialCapacity)
+	q := New(initialCapacity, ItemSize)
 	q.AddMany(testItem([]byte("1")), testItem([]byte("2")))
 	ok := q.Wait()
 	require.Equal(t, true, ok)
@@ -111,7 +111,7 @@ func TestByteQueueRemoveManyFixed(t *testing.T) {
 }
 
 func TestQueueClose(t *testing.T) {
-	q := New(initialCapacity)
+	q := New(initialCapacity, ItemSize)
 
 	// test removing from empty queue
 	_, ok := q.Remove()
@@ -134,7 +134,7 @@ func TestQueueClose(t *testing.T) {
 }
 
 func TestByteQueueCloseRemaining(t *testing.T) {
-	q := New(initialCapacity)
+	q := New(initialCapacity, ItemSize)
 	q.Add(testItem([]byte("1")))
 	q.Add(testItem([]byte("2")))
 	messages := q.CloseRemaining()
@@ -149,7 +149,7 @@ func TestByteQueueCloseRemaining(t *testing.T) {
 func TestQueueAddConsume(t *testing.T) {
 	// Add many items to queue and then consume.
 	// Make sure item data is expected.
-	q := New(initialCapacity)
+	q := New(initialCapacity, ItemSize)
 
 	for range 5 {
 		for i := 0; i < 1000; i++ {
@@ -169,7 +169,7 @@ func TestQueueAddConsume(t *testing.T) {
 func TestQueueAddConsumeInBatch(t *testing.T) {
 	// Add many items to queue and then consume.
 	// Make sure item data is expected.
-	q := New(initialCapacity)
+	q := New(initialCapacity, ItemSize)
 
 	for range 5 {
 		for i := 0; i < 1000; i++ {
@@ -191,7 +191,7 @@ func TestQueueAddConsumeInBatch(t *testing.T) {
 func TestQueueAddConsumeAll(t *testing.T) {
 	// Add many items to queue and then consume.
 	// Make sure item data is expected.
-	q := New(initialCapacity)
+	q := New(initialCapacity, ItemSize)
 
 	for range 5 {
 		for i := 0; i < 1000; i++ {
@@ -209,7 +209,7 @@ func TestQueueAddConsumeAll(t *testing.T) {
 }
 
 func TestQueueResizing(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 	for i := 0; i < 10; i++ {
 		item := Item{Data: []byte("msg"), Channel: "ch"}
 		require.True(t, q.Add(item))
@@ -218,7 +218,7 @@ func TestQueueResizing(t *testing.T) {
 }
 
 func TestQueueCloseRemaining(t *testing.T) {
-	q := New(3)
+	q := New(3, ItemSize)
 	q.Add(Item{Data: []byte("msg1"), Channel: "ch1"})
 	q.Add(Item{Data: []byte("msg2"), Channel: "ch2"})
 
@@ -228,7 +228,7 @@ func TestQueueCloseRemaining(t *testing.T) {
 }
 
 func TestQueueWait(t *testing.T) {
-	q := New(1)
+	q := New(1, ItemSize)
 	var wg sync.WaitGroup
 
 	wg.Add(1)
@@ -242,7 +242,7 @@ func TestQueueWait(t *testing.T) {
 }
 
 func TestQueueConcurrency(t *testing.T) {
-	q := New(5)
+	q := New(5, ItemSize)
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
@@ -256,7 +256,7 @@ func TestQueueConcurrency(t *testing.T) {
 }
 
 func TestQueueRemoveMany(t *testing.T) {
-	q := New(5)
+	q := New(5, ItemSize)
 	for i := 0; i < 5; i++ {
 		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
 	}
@@ -267,7 +267,7 @@ func TestQueueRemoveMany(t *testing.T) {
 }
 
 func TestQueueRemoveManyAll(t *testing.T) {
-	q := New(3)
+	q := New(3, ItemSize)
 	for i := 0; i < 3; i++ {
 		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
 	}
@@ -278,14 +278,14 @@ func TestQueueRemoveManyAll(t *testing.T) {
 }
 
 func TestQueueAddAfterClose(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 	q.Close()
 	added := q.Add(Item{Data: []byte("msg"), Channel: "ch"})
 	require.False(t, added)
 }
 
 func TestQueueRemoveManyInto(t *testing.T) {
-	q := New(5)
+	q := New(5, ItemSize)
 	for i := 0; i < 5; i++ {
 		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
 	}
@@ -297,7 +297,7 @@ func TestQueueRemoveManyInto(t *testing.T) {
 }
 
 func TestQueueRemoveManyIntoAll(t *testing.T) {
-	q := New(3)
+	q := New(3, ItemSize)
 	for i := 0; i < 3; i++ {
 		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
 	}
@@ -309,7 +309,7 @@ func TestQueueRemoveManyIntoAll(t *testing.T) {
 }
 
 func TestQueueRemoveManyIntoBufferLimit(t *testing.T) {
-	q := New(5)
+	q := New(5, ItemSize)
 	for i := 0; i < 5; i++ {
 		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
 	}
@@ -321,7 +321,7 @@ func TestQueueRemoveManyIntoBufferLimit(t *testing.T) {
 }
 
 func TestQueueCollectingMode(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 
 	// Add initial items
 	q.Add(Item{Data: []byte("msg1"), Channel: "ch"})
@@ -352,33 +352,33 @@ func TestQueueCollectingMode(t *testing.T) {
 }
 
 func TestQueueRemoveFromEmptyQueue(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 	_, ok := q.Remove()
 	require.False(t, ok)
 }
 
 func TestQueueAddManyAfterClose(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 	q.Close()
 	added := q.AddMany(Item{Data: []byte("msg1"), Channel: "ch"}, Item{Data: []byte("msg2"), Channel: "ch"})
 	require.False(t, added)
 }
 
 func TestQueueRemoveManyFromEmptyQueue(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 	removed, ok := q.RemoveMany(5)
 	require.False(t, ok)
 	require.Nil(t, removed)
 }
 
 func TestQueueWaitOnClosedQueue(t *testing.T) {
-	q := New(1)
+	q := New(1, ItemSize)
 	q.Close()
 	require.False(t, q.Wait())
 }
 
 func TestQueueCorrectness(t *testing.T) {
-	q := New(5)
+	q := New(5, ItemSize)
 	items := []Item{
 		{Data: []byte("A"), Channel: "ch1"},
 		{Data: []byte("B"), Channel: "ch2"},
@@ -411,7 +411,7 @@ func TestQueueCorrectness(t *testing.T) {
 }
 
 func TestQueueAddManyWithResize(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 	items := []Item{
 		{Data: []byte("A"), Channel: "ch1"},
 		{Data: []byte("B"), Channel: "ch2"},
@@ -434,14 +434,14 @@ func TestQueueAddManyWithResize(t *testing.T) {
 }
 
 func TestQueueResizeEmptyQueue(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 	q.resize(4)
 	require.Equal(t, 0, q.Len())
 	require.Equal(t, 4, q.Cap())
 }
 
 func TestQueueResizeWithSequentialData(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 	q.Add(Item{Data: []byte("A"), Channel: "ch1"})
 	q.Add(Item{Data: []byte("B"), Channel: "ch2"})
 
@@ -452,7 +452,7 @@ func TestQueueResizeWithSequentialData(t *testing.T) {
 }
 
 func TestQueueResizeWithWrappedData(t *testing.T) {
-	q := New(3)
+	q := New(3, ItemSize)
 	q.Add(Item{Data: []byte("X"), Channel: "ch1"})
 	q.Add(Item{Data: []byte("Y"), Channel: "ch2"})
 	q.Remove()
@@ -467,7 +467,7 @@ func TestQueueResizeWithWrappedData(t *testing.T) {
 }
 
 func TestQueueResizeToSmallerSize(t *testing.T) {
-	q := New(6)
+	q := New(6, ItemSize)
 	q.Add(Item{Data: []byte("1"), Channel: "ch1"})
 	q.Add(Item{Data: []byte("2"), Channel: "ch2"})
 	q.Add(Item{Data: []byte("3"), Channel: "ch3"})
@@ -481,7 +481,7 @@ func TestQueueResizeToSmallerSize(t *testing.T) {
 }
 
 func TestQueueResizeWraparound(t *testing.T) {
-	q := New(4)
+	q := New(4, ItemSize)
 	q.Add(Item{Data: []byte("A"), Channel: "ch1"})
 	q.Add(Item{Data: []byte("B"), Channel: "ch2"})
 	q.Add(Item{Data: []byte("C"), Channel: "ch3"})
@@ -499,7 +499,7 @@ func TestQueueResizeWraparound(t *testing.T) {
 }
 
 func BenchmarkQueueAdd(b *testing.B) {
-	q := New(initialCapacity)
+	q := New(initialCapacity, ItemSize)
 	b.ResetTimer()
 	for b.Loop() {
 		q.Add(testItem([]byte("test")))
@@ -508,7 +508,7 @@ func BenchmarkQueueAdd(b *testing.B) {
 	q.Close()
 }
 
-func addAndConsume(q *Queue, n int) {
+func addAndConsume(q *Queue[Item], n int) {
 	// Add to queue and consume in another goroutine.
 	done := make(chan struct{})
 	go func() {
@@ -533,7 +533,7 @@ func addAndConsume(q *Queue, n int) {
 }
 
 func BenchmarkQueueAddConsume(b *testing.B) {
-	q := New(initialCapacity)
+	q := New(initialCapacity, ItemSize)
 	b.ResetTimer()
 	for b.Loop() {
 		addAndConsume(q, 10000)
@@ -544,9 +544,9 @@ func BenchmarkQueueAddConsume(b *testing.B) {
 
 func BenchmarkQueueAdd10k(b *testing.B) {
 	n := 10000
-	queues := make([]*Queue, n)
+	queues := make([]*Queue[Item], n)
 	for i := range n {
-		queues[i] = New(initialCapacity)
+		queues[i] = New(initialCapacity, ItemSize)
 	}
 	item := testItem([]byte("test"))
 	b.ResetTimer()
@@ -561,7 +561,7 @@ func BenchmarkQueueAdd10k(b *testing.B) {
 // Tests for shrink mechanism
 
 func TestQueueDelayedShrink(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 
 	// Add items to trigger growth
 	for i := 0; i < 8; i++ {
@@ -593,7 +593,7 @@ func TestQueueDelayedShrink(t *testing.T) {
 }
 
 func TestQueueImmediateShrink(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 
 	// Add items to trigger growth
 	for i := 0; i < 8; i++ {
@@ -615,7 +615,7 @@ func TestQueueImmediateShrink(t *testing.T) {
 }
 
 func TestQueueShrinkTimerReset(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 
 	// Grow the queue
 	for i := 0; i < 8; i++ {
@@ -649,7 +649,7 @@ func TestQueueShrinkTimerReset(t *testing.T) {
 }
 
 func TestQueueShrinkPartial(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 
 	// Grow queue to 16
 	for i := 0; i < 16; i++ {
@@ -672,7 +672,7 @@ func TestQueueShrinkPartial(t *testing.T) {
 }
 
 func TestQueueNoShrinkBelowInitCap(t *testing.T) {
-	q := New(4)
+	q := New(4, ItemSize)
 
 	// Add items to trigger growth
 	for i := 0; i < 8; i++ {
@@ -692,7 +692,7 @@ func TestQueueNoShrinkBelowInitCap(t *testing.T) {
 }
 
 func TestQueueShrinkEmptyQueue(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 
 	// Queue starts empty
 	require.Equal(t, 2, q.Cap())
@@ -707,7 +707,7 @@ func TestQueueShrinkEmptyQueue(t *testing.T) {
 }
 
 func TestQueueMultipleShrinkCycles(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 
 	// Cycle 1: Grow and shrink
 	for i := 0; i < 8; i++ {
@@ -738,7 +738,7 @@ func TestQueueMultipleShrinkCycles(t *testing.T) {
 }
 
 func TestQueueShrinkWithItemsRemaining(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 
 	// Add 32 items
 	for i := 0; i < 32; i++ {
@@ -769,7 +769,7 @@ func TestQueueShrinkWithItemsRemaining(t *testing.T) {
 // ---- Correctness tests for the v1 (atomic + chan doorbell) refactor ----
 
 func TestQueueCloseIsIdempotent(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 	q.Add(Item{Data: []byte("a")})
 	q.Close()
 	require.True(t, q.Closed())
@@ -779,7 +779,7 @@ func TestQueueCloseIsIdempotent(t *testing.T) {
 }
 
 func TestQueueCloseAfterCloseRemaining(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 	q.Add(Item{Data: []byte("a")})
 	q.Add(Item{Data: []byte("b")})
 	rem := q.CloseRemaining()
@@ -791,7 +791,7 @@ func TestQueueCloseAfterCloseRemaining(t *testing.T) {
 }
 
 func TestQueueCloseRemainingAfterClose(t *testing.T) {
-	q := New(2)
+	q := New(2, ItemSize)
 	q.Add(Item{Data: []byte("a")})
 	q.Close()
 	rem := q.CloseRemaining()
@@ -802,7 +802,7 @@ func TestQueueCloseRemainingAfterClose(t *testing.T) {
 func TestQueueCloseWakesParkedWaiters(t *testing.T) {
 	// Multiple parked Waiters all wake when Close runs — close(closeCh)
 	// is a broadcast even though the notify chan is single-fire.
-	q := New(2)
+	q := New(2, ItemSize)
 	const nWaiters = 8
 	var wg sync.WaitGroup
 	wg.Add(nWaiters)
@@ -827,7 +827,7 @@ func TestQueueCloseWakesParkedWaiters(t *testing.T) {
 func TestQueueWaitConcurrentClose(t *testing.T) {
 	// Hammer Wait vs Close to flush out wake/closed ordering bugs.
 	for iter := 0; iter < 50; iter++ {
-		q := New(2)
+		q := New(2, ItemSize)
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {
@@ -842,7 +842,7 @@ func TestQueueWaitConcurrentClose(t *testing.T) {
 }
 
 func TestQueueCapAfterClose(t *testing.T) {
-	q := New(8)
+	q := New(8, ItemSize)
 	require.Equal(t, 8, q.Cap())
 	q.Close()
 	require.Equal(t, 0, q.Cap())
@@ -857,7 +857,7 @@ func TestQueueProducerConsumerStress(t *testing.T) {
 		perProducer      = 2000
 		payloadSizeBytes = 7 // "msg-XXX" — varies by id; close enough
 	)
-	q := New(4)
+	q := New(4, ItemSize)
 
 	var consumed int64
 	var consumedBytes int64
@@ -919,7 +919,7 @@ func TestQueueLenSizeAtomicSnapshot(t *testing.T) {
 	// Many readers calling Len/Size in parallel with one producer must
 	// never see torn or negative values. Real assertion: this test
 	// passes under -race without data race reports.
-	q := New(2)
+	q := New(2, ItemSize)
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	// Producer.
@@ -968,7 +968,7 @@ func TestQueueAddManyEmptyOnClosed(t *testing.T) {
 	// Regression: AddMany() with no items on a closed queue must
 	// return false (matching the original behavior — closed queue
 	// rejects all writes), not short-circuit to true.
-	q := New(2)
+	q := New(2, ItemSize)
 	q.Close()
 	require.False(t, q.AddMany())
 	require.False(t, q.AddMany([]Item{}...))
@@ -976,7 +976,7 @@ func TestQueueAddManyEmptyOnClosed(t *testing.T) {
 
 func TestQueueAddManyEmptyOnOpen(t *testing.T) {
 	// AddMany() with no items on an open queue is a successful no-op.
-	q := New(2)
+	q := New(2, ItemSize)
 	require.True(t, q.AddMany())
 	require.Equal(t, 0, q.Len())
 }

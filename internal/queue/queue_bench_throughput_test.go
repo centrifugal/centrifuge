@@ -13,7 +13,7 @@ import (
 // These use RemoveMany instead of RemoveManyInto to show pure queue performance
 
 func runProducerConsumerBaseline(b *testing.B, batchSize int) {
-	q := New(2)
+	q := New(2, ItemSize)
 	item := Item{Data: []byte("test message"), Channel: "test"}
 
 	// Stop signal for consumer
@@ -66,7 +66,7 @@ func runProducerConsumerBaseline(b *testing.B, batchSize int) {
 // Producer adds items continuously, consumer removes items in batches with collect/shrink logic.
 // This measures the actual overhead of the shrink mechanism in a realistic scenario.
 func runProducerConsumer(b *testing.B, batchSize int, shrinkDelay time.Duration, useShrink bool) {
-	q := New(2)
+	q := New(2, ItemSize)
 	buf := make([]Item, batchSize)
 	item := Item{Data: []byte("test message"), Channel: "test"}
 
@@ -183,7 +183,7 @@ func BenchmarkThroughput_Batch64_DelayedShrink100ms(b *testing.B) {
 // that drains in batches. The producer count is the contention dimension
 // — that's where the writer-queue mutex actually hurts in production.
 func runMPSC(b *testing.B, producers, batchSize int, useShrink bool) {
-	q := New(2)
+	q := New(2, ItemSize)
 	buf := make([]Item, batchSize)
 	item := Item{Data: []byte("test message"), Channel: "test"}
 
@@ -254,7 +254,7 @@ func BenchmarkMPSC_P32_Batch64(b *testing.B) { runMPSC(b, 32, 64, true) }
 // BenchmarkLen models the common backpressure check `q.Len() > X` from
 // many goroutines. Was RLock+load+RUnlock; now atomic load.
 func BenchmarkLen_Parallel(b *testing.B) {
-	q := New(2)
+	q := New(2, ItemSize)
 	for i := 0; i < 100; i++ {
 		q.Add(Item{Data: []byte("x")})
 	}
@@ -268,7 +268,7 @@ func BenchmarkLen_Parallel(b *testing.B) {
 
 // BenchmarkSize same but for Size — used for MaxQueueSize backpressure.
 func BenchmarkSize_Parallel(b *testing.B) {
-	q := New(2)
+	q := New(2, ItemSize)
 	for i := 0; i < 100; i++ {
 		q.Add(Item{Data: []byte("x")})
 	}
