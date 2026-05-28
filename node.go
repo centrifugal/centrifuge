@@ -780,17 +780,30 @@ func (n *Node) handleControl(data []byte) error {
 		return n.shutdownCmd(uid)
 	} else if cmd.Unsubscribe != nil {
 		cmd := cmd.Unsubscribe
-		return n.hub.unsubscribe(cmd.User, cmd.Channel, Unsubscribe{Code: cmd.Code, Reason: cmd.Reason}, cmd.Client, cmd.Session, protoFilterFromControlpb(cmd.LabelFilter))
+		labelFilter := protoFilterFromControlpb(cmd.LabelFilter)
+		if cmd.User == "" && cmd.AllUsers {
+			return n.hub.unsubscribeAcrossUsers(cmd.Channel, Unsubscribe{Code: cmd.Code, Reason: cmd.Reason}, cmd.Client, cmd.Session, labelFilter)
+		}
+		return n.hub.unsubscribe(cmd.User, cmd.Channel, Unsubscribe{Code: cmd.Code, Reason: cmd.Reason}, cmd.Client, cmd.Session, labelFilter)
 	} else if cmd.Subscribe != nil {
 		cmd := cmd.Subscribe
 		var recoverSince *StreamPosition
 		if cmd.RecoverSince != nil {
 			recoverSince = &StreamPosition{Offset: cmd.RecoverSince.Offset, Epoch: cmd.RecoverSince.Epoch}
 		}
-		return n.hub.subscribe(cmd.User, cmd.Channel, cmd.Client, cmd.Session, protoFilterFromControlpb(cmd.LabelFilter), WithExpireAt(cmd.ExpireAt), WithChannelInfo(cmd.ChannelInfo), WithEmitPresence(cmd.EmitPresence), WithEmitJoinLeave(cmd.EmitJoinLeave), WithPushJoinLeave(cmd.PushJoinLeave), WithPositioning(cmd.Position), WithRecovery(cmd.Recover), WithSubscribeData(cmd.Data), WithRecoverSince(recoverSince), WithSubscribeSource(uint8(cmd.Source)))
+		labelFilter := protoFilterFromControlpb(cmd.LabelFilter)
+		subOpts := []SubscribeOption{WithExpireAt(cmd.ExpireAt), WithChannelInfo(cmd.ChannelInfo), WithEmitPresence(cmd.EmitPresence), WithEmitJoinLeave(cmd.EmitJoinLeave), WithPushJoinLeave(cmd.PushJoinLeave), WithPositioning(cmd.Position), WithRecovery(cmd.Recover), WithSubscribeData(cmd.Data), WithRecoverSince(recoverSince), WithSubscribeSource(uint8(cmd.Source))}
+		if cmd.User == "" && cmd.AllUsers {
+			return n.hub.subscribeAcrossUsers(cmd.Channel, cmd.Client, cmd.Session, labelFilter, subOpts...)
+		}
+		return n.hub.subscribe(cmd.User, cmd.Channel, cmd.Client, cmd.Session, labelFilter, subOpts...)
 	} else if cmd.Disconnect != nil {
 		cmd := cmd.Disconnect
-		return n.hub.disconnect(cmd.User, Disconnect{Code: cmd.Code, Reason: cmd.Reason}, cmd.Client, cmd.Session, cmd.Whitelist, protoFilterFromControlpb(cmd.LabelFilter))
+		labelFilter := protoFilterFromControlpb(cmd.LabelFilter)
+		if cmd.User == "" && cmd.AllUsers {
+			return n.hub.disconnectAcrossUsers(Disconnect{Code: cmd.Code, Reason: cmd.Reason}, cmd.Client, cmd.Session, cmd.Whitelist, labelFilter)
+		}
+		return n.hub.disconnect(cmd.User, Disconnect{Code: cmd.Code, Reason: cmd.Reason}, cmd.Client, cmd.Session, cmd.Whitelist, labelFilter)
 	} else if cmd.SurveyRequest != nil {
 		cmd := cmd.SurveyRequest
 		return n.handleSurveyRequest(uid, cmd)
@@ -802,7 +815,12 @@ func (n *Node) handleControl(data []byte) error {
 		return n.handleNotification(uid, cmd)
 	} else if cmd.Refresh != nil {
 		cmd := cmd.Refresh
-		return n.hub.refresh(cmd.User, cmd.Client, cmd.Session, protoFilterFromControlpb(cmd.LabelFilter), WithRefreshExpired(cmd.Expired), WithRefreshExpireAt(cmd.ExpireAt), WithRefreshInfo(cmd.Info))
+		labelFilter := protoFilterFromControlpb(cmd.LabelFilter)
+		refreshOpts := []RefreshOption{WithRefreshExpired(cmd.Expired), WithRefreshExpireAt(cmd.ExpireAt), WithRefreshInfo(cmd.Info)}
+		if cmd.User == "" && cmd.AllUsers {
+			return n.hub.refreshAcrossUsers(cmd.Client, cmd.Session, labelFilter, refreshOpts...)
+		}
+		return n.hub.refresh(cmd.User, cmd.Client, cmd.Session, labelFilter, refreshOpts...)
 	}
 	n.logger.log(newErrorLogEntry(err, "unknown control command", map[string]any{"command": fmt.Sprintf("%#v", cmd)}))
 	return nil
@@ -1077,7 +1095,8 @@ func (n *Node) pubSubscribe(user string, ch string, opts SubscribeOptions) error
 		Session:       opts.sessionID,
 		Data:          opts.Data,
 		Source:        uint32(opts.Source),
-		LabelFilter:   controlpbFilterFromProto(opts.LabelFilter),
+		LabelFilter:   controlpbFilterFromProto(opts.labelFilter),
+		AllUsers:      opts.allUsers,
 	}
 	if opts.RecoverSince != nil {
 		subscribe.RecoverSince = &controlpb.StreamPosition{
@@ -1100,7 +1119,8 @@ func (n *Node) pubRefresh(user string, opts RefreshOptions) error {
 		Client:      opts.clientID,
 		Session:     opts.sessionID,
 		Info:        opts.Info,
-		LabelFilter: controlpbFilterFromProto(opts.LabelFilter),
+		LabelFilter: controlpbFilterFromProto(opts.labelFilter),
+		AllUsers:    opts.allUsers,
 	}
 	cmd := &controlpb.Command{
 		Uid:     n.uid,
@@ -1111,7 +1131,7 @@ func (n *Node) pubRefresh(user string, opts RefreshOptions) error {
 
 // pubUnsubscribe publishes unsubscribe control message to all nodes – so all
 // nodes could unsubscribe user from channel.
-func (n *Node) pubUnsubscribe(user string, ch string, unsubscribe Unsubscribe, clientID, sessionID string, labelFilter *FilterNode) error {
+func (n *Node) pubUnsubscribe(user string, ch string, unsubscribe Unsubscribe, clientID, sessionID string, labelFilter *FilterNode, allUsers bool) error {
 	unsub := &controlpb.Unsubscribe{
 		User:        user,
 		Channel:     ch,
@@ -1120,6 +1140,7 @@ func (n *Node) pubUnsubscribe(user string, ch string, unsubscribe Unsubscribe, c
 		Client:      clientID,
 		Session:     sessionID,
 		LabelFilter: controlpbFilterFromProto(labelFilter),
+		AllUsers:    allUsers,
 	}
 	cmd := &controlpb.Command{
 		Uid:         n.uid,
@@ -1130,7 +1151,7 @@ func (n *Node) pubUnsubscribe(user string, ch string, unsubscribe Unsubscribe, c
 
 // pubDisconnect publishes disconnect control message to all nodes – so all
 // nodes could disconnect user from server.
-func (n *Node) pubDisconnect(user string, disconnect Disconnect, clientID string, sessionID string, whitelist []string, labelFilter *FilterNode) error {
+func (n *Node) pubDisconnect(user string, disconnect Disconnect, clientID string, sessionID string, whitelist []string, labelFilter *FilterNode, allUsers bool) error {
 	protoDisconnect := &controlpb.Disconnect{
 		User:        user,
 		Whitelist:   whitelist,
@@ -1139,6 +1160,7 @@ func (n *Node) pubDisconnect(user string, disconnect Disconnect, clientID string
 		Client:      clientID,
 		Session:     sessionID,
 		LabelFilter: controlpbFilterFromProto(labelFilter),
+		AllUsers:    allUsers,
 	}
 	cmd := &controlpb.Command{
 		Uid:        n.uid,
@@ -1335,8 +1357,8 @@ func (n *Node) Subscribe(userID string, channel string, opts ...SubscribeOption)
 	for _, opt := range opts {
 		opt(subscribeOpts)
 	}
-	if subscribeOpts.LabelFilter != nil {
-		if err := filter.Validate(subscribeOpts.LabelFilter); err != nil {
+	if subscribeOpts.labelFilter != nil {
+		if err := filter.Validate(subscribeOpts.labelFilter); err != nil {
 			return fmt.Errorf("invalid label filter: %w", err)
 		}
 	}
@@ -1345,8 +1367,12 @@ func (n *Node) Subscribe(userID string, channel string, opts ...SubscribeOption)
 	if err != nil {
 		return err
 	}
-	// Subscribe on this node.
-	return n.hub.subscribe(userID, channel, subscribeOpts.clientID, subscribeOpts.sessionID, subscribeOpts.LabelFilter, opts...)
+	// Subscribe on this node. When userID is empty and allUsers is set, dispatch
+	// across the full hub instead of the anonymous-only bucket.
+	if userID == "" && subscribeOpts.allUsers {
+		return n.hub.subscribeAcrossUsers(channel, subscribeOpts.clientID, subscribeOpts.sessionID, subscribeOpts.labelFilter, opts...)
+	}
+	return n.hub.subscribe(userID, channel, subscribeOpts.clientID, subscribeOpts.sessionID, subscribeOpts.labelFilter, opts...)
 }
 
 // Unsubscribe unsubscribes user from a channel.
@@ -1356,8 +1382,8 @@ func (n *Node) Unsubscribe(userID string, channel string, opts ...UnsubscribeOpt
 	for _, opt := range opts {
 		opt(unsubscribeOpts)
 	}
-	if unsubscribeOpts.LabelFilter != nil {
-		if err := filter.Validate(unsubscribeOpts.LabelFilter); err != nil {
+	if unsubscribeOpts.labelFilter != nil {
+		if err := filter.Validate(unsubscribeOpts.labelFilter); err != nil {
 			return fmt.Errorf("invalid label filter: %w", err)
 		}
 	}
@@ -1366,12 +1392,15 @@ func (n *Node) Unsubscribe(userID string, channel string, opts ...UnsubscribeOpt
 		customUnsubscribe = *unsubscribeOpts.unsubscribe
 	}
 	// Send unsubscribe control message to other nodes.
-	err := n.pubUnsubscribe(userID, channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID, unsubscribeOpts.LabelFilter)
+	err := n.pubUnsubscribe(userID, channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID, unsubscribeOpts.labelFilter, unsubscribeOpts.allUsers)
 	if err != nil {
 		return err
 	}
-	// Unsubscribe on this node.
-	return n.hub.unsubscribe(userID, channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID, unsubscribeOpts.LabelFilter)
+	// Unsubscribe on this node. Fleet-wide path when userID is empty and allUsers is set.
+	if userID == "" && unsubscribeOpts.allUsers {
+		return n.hub.unsubscribeAcrossUsers(channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID, unsubscribeOpts.labelFilter)
+	}
+	return n.hub.unsubscribe(userID, channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID, unsubscribeOpts.labelFilter)
 }
 
 // Disconnect allows closing all user connections on all nodes.
@@ -1380,8 +1409,8 @@ func (n *Node) Disconnect(userID string, opts ...DisconnectOption) error {
 	for _, opt := range opts {
 		opt(disconnectOpts)
 	}
-	if disconnectOpts.LabelFilter != nil {
-		if err := filter.Validate(disconnectOpts.LabelFilter); err != nil {
+	if disconnectOpts.labelFilter != nil {
+		if err := filter.Validate(disconnectOpts.labelFilter); err != nil {
 			return fmt.Errorf("invalid label filter: %w", err)
 		}
 	}
@@ -1391,12 +1420,15 @@ func (n *Node) Disconnect(userID string, opts ...DisconnectOption) error {
 		customDisconnect = *disconnectOpts.Disconnect
 	}
 	// Send disconnect control message to other nodes.
-	err := n.pubDisconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist, disconnectOpts.LabelFilter)
+	err := n.pubDisconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist, disconnectOpts.labelFilter, disconnectOpts.allUsers)
 	if err != nil {
 		return err
 	}
-	// Disconnect on this node.
-	return n.hub.disconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist, disconnectOpts.LabelFilter)
+	// Disconnect on this node. Fleet-wide path when userID is empty and allUsers is set.
+	if userID == "" && disconnectOpts.allUsers {
+		return n.hub.disconnectAcrossUsers(customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist, disconnectOpts.labelFilter)
+	}
+	return n.hub.disconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist, disconnectOpts.labelFilter)
 }
 
 // Refresh user connection.
@@ -1408,8 +1440,8 @@ func (n *Node) Refresh(userID string, opts ...RefreshOption) error {
 	for _, opt := range opts {
 		opt(refreshOpts)
 	}
-	if refreshOpts.LabelFilter != nil {
-		if err := filter.Validate(refreshOpts.LabelFilter); err != nil {
+	if refreshOpts.labelFilter != nil {
+		if err := filter.Validate(refreshOpts.labelFilter); err != nil {
 			return fmt.Errorf("invalid label filter: %w", err)
 		}
 	}
@@ -1417,8 +1449,11 @@ func (n *Node) Refresh(userID string, opts ...RefreshOption) error {
 	if err != nil {
 		return err
 	}
-	// Refresh on this node.
-	return n.hub.refresh(userID, refreshOpts.clientID, refreshOpts.sessionID, refreshOpts.LabelFilter, opts...)
+	// Refresh on this node. Fleet-wide path when userID is empty and allUsers is set.
+	if userID == "" && refreshOpts.allUsers {
+		return n.hub.refreshAcrossUsers(refreshOpts.clientID, refreshOpts.sessionID, refreshOpts.labelFilter, opts...)
+	}
+	return n.hub.refresh(userID, refreshOpts.clientID, refreshOpts.sessionID, refreshOpts.labelFilter, opts...)
 }
 
 func (n *Node) getPresenceManager(ch string) PresenceManager {

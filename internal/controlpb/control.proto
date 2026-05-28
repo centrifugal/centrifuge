@@ -59,6 +59,12 @@ message Subscribe {
     bool push_join_leave = 13;
     uint32 source = 14;
     FilterNode label_filter = 15;
+    // all_users changes the meaning of an empty `user` on the receiving node:
+    // default ("") targets the anonymous bucket; with all_users=true the
+    // receiving node iterates every connection on its hub instead. No effect
+    // when `user` is non-empty. Older nodes that don't know this field default
+    // it to false (anonymous-only path) — safer fallback than fleet-wide.
+    bool all_users = 16;
 }
 
 message StreamPosition {
@@ -86,6 +92,8 @@ message Unsubscribe {
     uint32 code = 5;
     string reason = 6;
     FilterNode label_filter = 7;
+    // See Subscribe.all_users.
+    bool all_users = 8;
 }
 
 message Disconnect {
@@ -97,6 +105,8 @@ message Disconnect {
     string client = 6;
     string session = 7;
     FilterNode label_filter = 8;
+    // See Subscribe.all_users.
+    bool all_users = 9;
 }
 
 message SurveyRequest {
@@ -124,4 +134,6 @@ message Refresh {
     bytes info = 5;
     string session = 6;
     FilterNode label_filter = 7;
+    // See Subscribe.all_users.
+    bool all_users = 8;
 }

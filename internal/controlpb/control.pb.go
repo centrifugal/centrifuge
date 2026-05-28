@@ -365,6 +365,12 @@ type Subscribe struct {
 	PushJoinLeave bool                   `protobuf:"varint,13,opt,name=push_join_leave,json=pushJoinLeave,proto3" json:"push_join_leave,omitempty"`
 	Source        uint32                 `protobuf:"varint,14,opt,name=source,proto3" json:"source,omitempty"`
 	LabelFilter   *FilterNode            `protobuf:"bytes,15,opt,name=label_filter,json=labelFilter,proto3" json:"label_filter,omitempty"`
+	// all_users changes the meaning of an empty `user` on the receiving node:
+	// default ("") targets the anonymous bucket; with all_users=true the
+	// receiving node iterates every connection on its hub instead. No effect
+	// when `user` is non-empty. Older nodes that don't know this field default
+	// it to false (anonymous-only path) — safer fallback than fleet-wide.
+	AllUsers      bool `protobuf:"varint,16,opt,name=all_users,json=allUsers,proto3" json:"all_users,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -502,6 +508,13 @@ func (x *Subscribe) GetLabelFilter() *FilterNode {
 		return x.LabelFilter
 	}
 	return nil
+}
+
+func (x *Subscribe) GetAllUsers() bool {
+	if x != nil {
+		return x.AllUsers
+	}
+	return false
 }
 
 type StreamPosition struct {
@@ -644,14 +657,16 @@ func (x *FilterNode) GetNodes() []*FilterNode {
 }
 
 type Unsubscribe struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Channel       string                 `protobuf:"bytes,1,opt,name=channel,proto3" json:"channel,omitempty"`
-	User          string                 `protobuf:"bytes,2,opt,name=user,proto3" json:"user,omitempty"`
-	Client        string                 `protobuf:"bytes,3,opt,name=client,proto3" json:"client,omitempty"`
-	Session       string                 `protobuf:"bytes,4,opt,name=session,proto3" json:"session,omitempty"`
-	Code          uint32                 `protobuf:"varint,5,opt,name=code,proto3" json:"code,omitempty"`
-	Reason        string                 `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
-	LabelFilter   *FilterNode            `protobuf:"bytes,7,opt,name=label_filter,json=labelFilter,proto3" json:"label_filter,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Channel     string                 `protobuf:"bytes,1,opt,name=channel,proto3" json:"channel,omitempty"`
+	User        string                 `protobuf:"bytes,2,opt,name=user,proto3" json:"user,omitempty"`
+	Client      string                 `protobuf:"bytes,3,opt,name=client,proto3" json:"client,omitempty"`
+	Session     string                 `protobuf:"bytes,4,opt,name=session,proto3" json:"session,omitempty"`
+	Code        uint32                 `protobuf:"varint,5,opt,name=code,proto3" json:"code,omitempty"`
+	Reason      string                 `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
+	LabelFilter *FilterNode            `protobuf:"bytes,7,opt,name=label_filter,json=labelFilter,proto3" json:"label_filter,omitempty"`
+	// See Subscribe.all_users.
+	AllUsers      bool `protobuf:"varint,8,opt,name=all_users,json=allUsers,proto3" json:"all_users,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -735,16 +750,25 @@ func (x *Unsubscribe) GetLabelFilter() *FilterNode {
 	return nil
 }
 
+func (x *Unsubscribe) GetAllUsers() bool {
+	if x != nil {
+		return x.AllUsers
+	}
+	return false
+}
+
 type Disconnect struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	User          string                 `protobuf:"bytes,1,opt,name=user,proto3" json:"user,omitempty"`
-	Whitelist     []string               `protobuf:"bytes,2,rep,name=whitelist,proto3" json:"whitelist,omitempty"`
-	Code          uint32                 `protobuf:"varint,3,opt,name=code,proto3" json:"code,omitempty"`
-	Reason        string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
-	Reconnect     bool                   `protobuf:"varint,5,opt,name=reconnect,proto3" json:"reconnect,omitempty"`
-	Client        string                 `protobuf:"bytes,6,opt,name=client,proto3" json:"client,omitempty"`
-	Session       string                 `protobuf:"bytes,7,opt,name=session,proto3" json:"session,omitempty"`
-	LabelFilter   *FilterNode            `protobuf:"bytes,8,opt,name=label_filter,json=labelFilter,proto3" json:"label_filter,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	User        string                 `protobuf:"bytes,1,opt,name=user,proto3" json:"user,omitempty"`
+	Whitelist   []string               `protobuf:"bytes,2,rep,name=whitelist,proto3" json:"whitelist,omitempty"`
+	Code        uint32                 `protobuf:"varint,3,opt,name=code,proto3" json:"code,omitempty"`
+	Reason      string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+	Reconnect   bool                   `protobuf:"varint,5,opt,name=reconnect,proto3" json:"reconnect,omitempty"`
+	Client      string                 `protobuf:"bytes,6,opt,name=client,proto3" json:"client,omitempty"`
+	Session     string                 `protobuf:"bytes,7,opt,name=session,proto3" json:"session,omitempty"`
+	LabelFilter *FilterNode            `protobuf:"bytes,8,opt,name=label_filter,json=labelFilter,proto3" json:"label_filter,omitempty"`
+	// See Subscribe.all_users.
+	AllUsers      bool `protobuf:"varint,9,opt,name=all_users,json=allUsers,proto3" json:"all_users,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -833,6 +857,13 @@ func (x *Disconnect) GetLabelFilter() *FilterNode {
 		return x.LabelFilter
 	}
 	return nil
+}
+
+func (x *Disconnect) GetAllUsers() bool {
+	if x != nil {
+		return x.AllUsers
+	}
+	return false
 }
 
 type SurveyRequest struct {
@@ -1008,14 +1039,16 @@ func (x *Notification) GetData() []byte {
 }
 
 type Refresh struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	User          string                 `protobuf:"bytes,1,opt,name=user,proto3" json:"user,omitempty"`
-	Client        string                 `protobuf:"bytes,2,opt,name=client,proto3" json:"client,omitempty"`
-	Expired       bool                   `protobuf:"varint,3,opt,name=expired,proto3" json:"expired,omitempty"`
-	ExpireAt      int64                  `protobuf:"varint,4,opt,name=expire_at,json=expireAt,proto3" json:"expire_at,omitempty"`
-	Info          []byte                 `protobuf:"bytes,5,opt,name=info,proto3" json:"info,omitempty"`
-	Session       string                 `protobuf:"bytes,6,opt,name=session,proto3" json:"session,omitempty"`
-	LabelFilter   *FilterNode            `protobuf:"bytes,7,opt,name=label_filter,json=labelFilter,proto3" json:"label_filter,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	User        string                 `protobuf:"bytes,1,opt,name=user,proto3" json:"user,omitempty"`
+	Client      string                 `protobuf:"bytes,2,opt,name=client,proto3" json:"client,omitempty"`
+	Expired     bool                   `protobuf:"varint,3,opt,name=expired,proto3" json:"expired,omitempty"`
+	ExpireAt    int64                  `protobuf:"varint,4,opt,name=expire_at,json=expireAt,proto3" json:"expire_at,omitempty"`
+	Info        []byte                 `protobuf:"bytes,5,opt,name=info,proto3" json:"info,omitempty"`
+	Session     string                 `protobuf:"bytes,6,opt,name=session,proto3" json:"session,omitempty"`
+	LabelFilter *FilterNode            `protobuf:"bytes,7,opt,name=label_filter,json=labelFilter,proto3" json:"label_filter,omitempty"`
+	// See Subscribe.all_users.
+	AllUsers      bool `protobuf:"varint,8,opt,name=all_users,json=allUsers,proto3" json:"all_users,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1099,6 +1132,13 @@ func (x *Refresh) GetLabelFilter() *FilterNode {
 	return nil
 }
 
+func (x *Refresh) GetAllUsers() bool {
+	if x != nil {
+		return x.AllUsers
+	}
+	return false
+}
+
 var File_control_proto protoreflect.FileDescriptor
 
 const file_control_proto_rawDesc = "" +
@@ -1139,7 +1179,7 @@ const file_control_proto_rawDesc = "" +
 	"\n" +
 	"ItemsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\xfc\x03\n" +
+	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\x99\x04\n" +
 	"\tSubscribe\x12\x12\n" +
 	"\x04user\x18\x01 \x01(\tR\x04user\x12\x18\n" +
 	"\achannel\x18\x02 \x01(\tR\achannel\x12#\n" +
@@ -1156,7 +1196,8 @@ const file_control_proto_rawDesc = "" +
 	"\asession\x18\f \x01(\tR\asession\x12&\n" +
 	"\x0fpush_join_leave\x18\r \x01(\bR\rpushJoinLeave\x12\x16\n" +
 	"\x06source\x18\x0e \x01(\rR\x06source\x128\n" +
-	"\flabel_filter\x18\x0f \x01(\v2\x15.controlpb.FilterNodeR\vlabelFilter\">\n" +
+	"\flabel_filter\x18\x0f \x01(\v2\x15.controlpb.FilterNodeR\vlabelFilter\x12\x1b\n" +
+	"\tall_users\x18\x10 \x01(\bR\ballUsers\">\n" +
 	"\x0eStreamPosition\x12\x16\n" +
 	"\x06offset\x18\x01 \x01(\x04R\x06offset\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\tR\x05epoch\"\x93\x01\n" +
@@ -1167,7 +1208,7 @@ const file_control_proto_rawDesc = "" +
 	"\x03cmp\x18\x03 \x01(\tR\x03cmp\x12\x10\n" +
 	"\x03val\x18\x04 \x01(\tR\x03val\x12\x12\n" +
 	"\x04vals\x18\x05 \x03(\tR\x04vals\x12+\n" +
-	"\x05nodes\x18\x06 \x03(\v2\x15.controlpb.FilterNodeR\x05nodes\"\xd3\x01\n" +
+	"\x05nodes\x18\x06 \x03(\v2\x15.controlpb.FilterNodeR\x05nodes\"\xf0\x01\n" +
 	"\vUnsubscribe\x12\x18\n" +
 	"\achannel\x18\x01 \x01(\tR\achannel\x12\x12\n" +
 	"\x04user\x18\x02 \x01(\tR\x04user\x12\x16\n" +
@@ -1175,7 +1216,8 @@ const file_control_proto_rawDesc = "" +
 	"\asession\x18\x04 \x01(\tR\asession\x12\x12\n" +
 	"\x04code\x18\x05 \x01(\rR\x04code\x12\x16\n" +
 	"\x06reason\x18\x06 \x01(\tR\x06reason\x128\n" +
-	"\flabel_filter\x18\a \x01(\v2\x15.controlpb.FilterNodeR\vlabelFilter\"\xf4\x01\n" +
+	"\flabel_filter\x18\a \x01(\v2\x15.controlpb.FilterNodeR\vlabelFilter\x12\x1b\n" +
+	"\tall_users\x18\b \x01(\bR\ballUsers\"\x91\x02\n" +
 	"\n" +
 	"Disconnect\x12\x12\n" +
 	"\x04user\x18\x01 \x01(\tR\x04user\x12\x1c\n" +
@@ -1185,7 +1227,8 @@ const file_control_proto_rawDesc = "" +
 	"\treconnect\x18\x05 \x01(\bR\treconnect\x12\x16\n" +
 	"\x06client\x18\x06 \x01(\tR\x06client\x12\x18\n" +
 	"\asession\x18\a \x01(\tR\asession\x128\n" +
-	"\flabel_filter\x18\b \x01(\v2\x15.controlpb.FilterNodeR\vlabelFilter\"C\n" +
+	"\flabel_filter\x18\b \x01(\v2\x15.controlpb.FilterNodeR\vlabelFilter\x12\x1b\n" +
+	"\tall_users\x18\t \x01(\bR\ballUsers\"C\n" +
 	"\rSurveyRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x0e\n" +
 	"\x02op\x18\x02 \x01(\tR\x02op\x12\x12\n" +
@@ -1196,7 +1239,7 @@ const file_control_proto_rawDesc = "" +
 	"\x04data\x18\x03 \x01(\fR\x04data\"2\n" +
 	"\fNotification\x12\x0e\n" +
 	"\x02op\x18\x01 \x01(\tR\x02op\x12\x12\n" +
-	"\x04data\x18\x02 \x01(\fR\x04data\"\xd4\x01\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"\xf1\x01\n" +
 	"\aRefresh\x12\x12\n" +
 	"\x04user\x18\x01 \x01(\tR\x04user\x12\x16\n" +
 	"\x06client\x18\x02 \x01(\tR\x06client\x12\x18\n" +
@@ -1204,7 +1247,8 @@ const file_control_proto_rawDesc = "" +
 	"\texpire_at\x18\x04 \x01(\x03R\bexpireAt\x12\x12\n" +
 	"\x04info\x18\x05 \x01(\fR\x04info\x12\x18\n" +
 	"\asession\x18\x06 \x01(\tR\asession\x128\n" +
-	"\flabel_filter\x18\a \x01(\v2\x15.controlpb.FilterNodeR\vlabelFilterB\x0eZ\f./;controlpbb\x06proto3"
+	"\flabel_filter\x18\a \x01(\v2\x15.controlpb.FilterNodeR\vlabelFilter\x12\x1b\n" +
+	"\tall_users\x18\b \x01(\bR\ballUsersB\x0eZ\f./;controlpbb\x06proto3"
 
 var (
 	file_control_proto_rawDescOnce sync.Once
