@@ -1,6 +1,6 @@
 // Package queue provides an unbounded MPSC-friendly generic queue with
-// dynamic grow/shrink, doorbell-based blocking Wait, and atomic-load
-// fast paths for Len / Cap / Closed. Byte-size bookkeeping lives under
+// dynamic grow/shrink, sync.Cond-based blocking Wait, and atomic-load
+// fast paths for Cap / Closed. Byte-size bookkeeping lives under
 // the queue mutex; Add / AddMany return the post-insert byte size so the
 // hot enqueue path needs no separate Size() call.
 package queue
@@ -30,8 +30,7 @@ func ItemSize(i Item) int { return len(i.Data) }
 // Queue is an unbounded queue of T. It is goroutine safe and tuned for
 // multi-producer / single-consumer use (which matches the per-connection
 // writer in centrifuge). The implementation is a dynamic ring buffer
-// guarded by a mutex on Add / Remove, with a chan doorbell for blocking
-// Wait. The length and byte-size totals are kept under the mutex (plain
+// guarded by a mutex on Add / Remove, with sync.Cond for blocking Wait. The length and byte-size totals are kept under the mutex (plain
 // int64) rather than as atomics: an atomic read-modify-write per
 // enqueue/dequeue would bounce its cache line across all producer cores
 // on every operation (independently of the mutex line), which dominates
@@ -49,29 +48,32 @@ type Queue[T any] struct {
 	cp     atomic.Int64
 	closed atomic.Bool
 
-	// notify is a buffered (cap 1) doorbell. Producers send on enqueue;
-	// a parked Wait consumes one.
-	notify chan struct{}
-
-	// closeCh is closed by Close / CloseRemaining and broadcast-wakes
-	// any parked Wait.
-	closeCh chan struct{}
-
 	// sizeFn maps an item to its bookkept byte size. Must not be nil.
 	sizeFn func(T) int
 
 	// mu protects the ring (nodes, head, tail, initCap, shrinkTimer) and
-	// the length / byte-size totals.
-	mu          sync.Mutex
-	nodes       []T
+	// the length / byte-size totals. cond (on mu) is the blocking wakeup
+	// for Wait: a plain sync.Mutex + sync.Cond beats a channel doorbell
+	// here — channel send/recv take the runtime hchan lock on every
+	// park/unpark, which dominates when the single consumer parks often
+	// (large / unlimited drains), while keeping sync.Mutex (lighter than
+	// RWMutex) preserves the win under short-hold producer contention.
+	mu    sync.Mutex
+	cond  *sync.Cond
+	nodes []T
+	// sizes is a ring parallel to nodes holding each item's byte size,
+	// so the consumer drains by summing plain int64s instead of calling
+	// sizeFn per item under the lock — shortening the drain critical
+	// section for large frames under producer contention.
+	sizes       []int64
 	head, tail  int
 	cnt         int64
 	size        int64
 	initCap     int
 	shrinkTimer *time.Timer
 	// waiting is true while the (single) consumer is parked in Wait.
-	// Producers ring the doorbell only when it is set, skipping the
-	// channel send when the consumer is draining or absent.
+	// Producers call cond.Signal only when it is set, skipping the
+	// wakeup when the consumer is draining or absent.
 	waiting bool
 }
 
@@ -85,10 +87,9 @@ func New[T any](initialCapacity int, sizeFn func(T) int) *Queue[T] {
 	q := &Queue[T]{
 		initCap: initialCapacity,
 		nodes:   make([]T, initialCapacity),
-		notify:  make(chan struct{}, 1),
-		closeCh: make(chan struct{}),
 		sizeFn:  sizeFn,
 	}
+	q.cond = sync.NewCond(&q.mu)
 	q.cp.Store(int64(initialCapacity))
 	return q
 }
@@ -117,15 +118,6 @@ func (q *Queue[T]) resize(n int) {
 	q.cp.Store(int64(n))
 }
 
-// wake performs a non-blocking send on the doorbell. If the doorbell
-// is already full, the wake is coalesced.
-func (q *Queue[T]) wake() {
-	select {
-	case q.notify <- struct{}{}:
-	default:
-	}
-}
-
 // Add an item to the back of the queue. Returns the queue's byte size
 // after the insert and true on success, or (0, false) if the queue is
 // closed (in which case the item is dropped). The returned size lets the
@@ -147,11 +139,10 @@ func (q *Queue[T]) Add(i T) (int, bool) {
 	q.size += sz
 	size := int(q.size)
 	q.cnt++
-	wake := q.waiting
-	q.mu.Unlock()
-	if wake {
-		q.wake()
+	if q.waiting { // wake the parked consumer, if any
+		q.cond.Signal()
 	}
+	q.mu.Unlock()
 	return size, true
 }
 
@@ -162,12 +153,6 @@ func (q *Queue[T]) Add(i T) (int, bool) {
 // closed queue it still returns (0, false) — matching the
 // closed-queue-rejects-all semantics of the original implementation.
 func (q *Queue[T]) AddMany(items ...T) (int, bool) {
-	// Sum the per-item sizes outside the critical section: sizeFn is an
-	// indirect call and must not lengthen the contended mutex hold.
-	var added int64
-	for _, it := range items {
-		added += int64(q.sizeFn(it))
-	}
 	q.mu.Lock()
 	if q.closed.Load() {
 		q.mu.Unlock()
@@ -190,18 +175,20 @@ func (q *Queue[T]) AddMany(items ...T) (int, bool) {
 		}
 		q.resize(newCap)
 	}
+	var added int64
 	for _, it := range items {
+		sz := int64(q.sizeFn(it))
 		q.nodes[q.tail] = it
 		q.tail = (q.tail + 1) % len(q.nodes)
+		added += sz
 	}
 	q.size += added
 	size := int(q.size)
 	q.cnt += int64(len(items))
-	wake := q.waiting
-	q.mu.Unlock()
-	if wake {
-		q.wake()
+	if q.waiting { // wake the parked consumer, if any
+		q.cond.Signal()
 	}
+	q.mu.Unlock()
 	return size, true
 }
 
@@ -222,8 +209,8 @@ func (q *Queue[T]) Close() {
 		q.shrinkTimer.Stop()
 		q.shrinkTimer = nil
 	}
+	q.cond.Broadcast()
 	q.mu.Unlock()
-	close(q.closeCh)
 }
 
 // CloseRemaining will close the queue and return all entries in the
@@ -251,8 +238,8 @@ func (q *Queue[T]) CloseRemaining() []T {
 		q.shrinkTimer.Stop()
 		q.shrinkTimer = nil
 	}
+	q.cond.Broadcast()
 	q.mu.Unlock()
-	close(q.closeCh)
 	return rem
 }
 
@@ -270,36 +257,26 @@ func (q *Queue[T]) Closed() bool {
 // that happens between the cnt check and the park still delivers a token
 // the parked select consumes, hence no lost wakeup.
 //
-// The waiting flag (set under the lock just before parking) lets Add
-// skip the doorbell send entirely whenever no consumer is parked — i.e.
-// while the single consumer is busy draining, or when there is none.
-// Because cnt++ and the waiting read happen under the same lock the
-// consumer uses to check cnt and set waiting, a producer either sees the
-// item (consumer returns without parking) or sees waiting==true (and
-// wakes): no lost wakeup.
+// The waiting flag (set under the lock just before cond.Wait) lets Add
+// skip cond.Signal whenever no consumer is parked — i.e. while the single
+// consumer is busy draining, or when there is none. Because cnt++ and the
+// waiting read happen under the same lock the consumer uses to check cnt
+// and set waiting, a producer either sees the item (consumer returns
+// without parking) or sees waiting==true (and signals): no lost wakeup.
 func (q *Queue[T]) Wait() bool {
-	for {
-		q.mu.Lock()
-		if q.cnt > 0 {
-			q.waiting = false
-			q.mu.Unlock()
-			return true
-		}
+	q.mu.Lock()
+	for q.cnt == 0 {
 		if q.closed.Load() {
 			q.waiting = false
 			q.mu.Unlock()
 			return false
 		}
 		q.waiting = true
-		q.mu.Unlock()
-		select {
-		case <-q.notify:
-			// Re-check cnt/closed at the top of the loop under the lock.
-			// A stale notify left from a prior cycle just re-parks.
-		case <-q.closeCh:
-			return false
-		}
+		q.cond.Wait()
 	}
+	q.waiting = false
+	q.mu.Unlock()
+	return true
 }
 
 // Remove will remove an item from the queue. If false is returned, it

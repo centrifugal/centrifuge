@@ -1,10 +1,7 @@
 package centrifuge
 
 import (
-	"bytes"
 	"errors"
-	"os"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,111 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const numQueueMessages = 4
-
-type benchmarkTransport struct {
-	f     *os.File
-	ch    chan struct{}
-	count int64
-	buf   []byte
-}
-
-func newBenchmarkTransport() *benchmarkTransport {
-	f, err := os.Create("/dev/null")
-	if err != nil {
-		panic(err)
-	}
-
-	buf := make([]byte, 512)
-	for i := 0; i < 512; i++ {
-		buf[i] = 'a'
-	}
-
-	return &benchmarkTransport{
-		f:   f,
-		ch:  make(chan struct{}),
-		buf: buf,
-	}
-}
-
-func (t *benchmarkTransport) inc(num int) {
-	atomic.AddInt64(&t.count, int64(num))
-	if atomic.LoadInt64(&t.count) == numQueueMessages {
-		atomic.StoreInt64(&t.count, 0)
-		close(t.ch)
-	}
-}
-
-func (t *benchmarkTransport) writeCombined(items ...queue.Item) error {
-	buffers := make([][]byte, len(items))
-	for i := 0; i < len(items); i++ {
-		buffers[i] = items[i].Data
-	}
-	_, err := t.f.Write(bytes.Join(buffers, []byte("\n")))
-	if err != nil {
-		panic(err)
-	}
-	t.inc(len(buffers))
-	return nil
-}
-
-func (t *benchmarkTransport) writeSingle(item queue.Item) error {
-	_, err := t.f.Write(item.Data)
-	if err != nil {
-		panic(err)
-	}
-	t.inc(1)
-	return nil
-}
-
-func (t *benchmarkTransport) close() error {
-	return t.f.Close()
-}
-
-func runWrite(w *writer, t *benchmarkTransport) {
-	go func() {
-		for j := 0; j < numQueueMessages; j++ {
-			w.messages.Add(queue.Item{Data: t.buf})
-		}
-	}()
-	<-t.ch
-	t.ch = make(chan struct{})
-}
-
-// BenchmarkWriteMerge allows to be sure that merging messages into one frame
-// works and makes sense from syscall economy perspective. Compare result to
-// BenchmarkWriteMergeDisabled.
-func BenchmarkWriteMerge(b *testing.B) {
-	transport := newBenchmarkTransport()
-	defer func() { _ = transport.close() }()
-	writer := newWriter(writerConfig{
-		WriteFn:     transport.writeSingle,
-		WriteManyFn: transport.writeCombined,
-	}, 0)
-	go writer.run(0, 4, 0, false)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		runWrite(writer, transport)
-	}
-	b.StopTimer()
-}
-
-func BenchmarkWriteMergeDisabled(b *testing.B) {
-	transport := newBenchmarkTransport()
-	defer func() { _ = transport.close() }()
-	writer := newWriter(writerConfig{
-		WriteFn:     transport.writeSingle,
-		WriteManyFn: transport.writeCombined,
-	}, 0)
-	go writer.run(0, 1, 0, false)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		runWrite(writer, transport)
-	}
-	b.StopTimer()
-}
+// Writer throughput benchmarks live in writer_queue_bench_test.go
+// (BenchmarkWriterQueue) — a single self-contained suite covering all
+// flush modes, frame sizes and producer concurrencies.
 
 type fakeTransport struct {
 	count          int

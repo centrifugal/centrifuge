@@ -171,17 +171,16 @@ func (w *writer) flush() {
 	w.timerScheduled = false
 	w.timerScheduledFlag.Store(false)
 
-	// Check if there are messages to flush
-	messagesLen := w.messages.Len()
-	if messagesLen == 0 {
-		w.mu.Unlock()
-		return
-	}
-
-	// Determine buffer size
+	// Determine buffer size. For a bounded frame we don't need the
+	// current length up front — RemoveManyInto reports an empty queue;
+	// only the unlimited case needs Len() to size the buffer.
 	bufSize := w.maxMessagesInFrame
 	if bufSize < 0 { // Unlimited, just use current length.
-		bufSize = messagesLen
+		bufSize = w.messages.Len()
+		if bufSize == 0 {
+			w.mu.Unlock()
+			return
+		}
 	}
 
 	// Get buffer from tiered pool
@@ -206,16 +205,18 @@ func (w *writer) flush() {
 
 	putItemBuf(itemBuf)
 
-	// If there are still messages and no error, schedule another flush
-	if writeErr == nil && w.messages.Len() > 0 && !w.closed {
-		remainingMessages := w.messages.Len()
-		// If we have more messages than max batch size (and max is not unlimited),
-		// flush immediately to keep up, otherwise we'll fall behind.
-		if w.maxMessagesInFrame > 0 && remainingMessages >= w.maxMessagesInFrame {
-			w.scheduleFlushImmediateLocked()
-		} else {
-			// Messages below threshold or unlimited batch size, use normal delay
-			w.scheduleFlushLocked()
+	// If there are still messages and no error, schedule another flush.
+	// A single Len() read drives the decision (it takes the queue mutex).
+	if writeErr == nil && !w.closed {
+		remaining := w.messages.Len()
+		if remaining > 0 {
+			// At least a full bounded frame queued -> flush immediately to
+			// keep up; otherwise wait for the normal delay.
+			if w.maxMessagesInFrame > 0 && remaining >= w.maxMessagesInFrame {
+				w.scheduleFlushImmediateLocked()
+			} else {
+				w.scheduleFlushLocked()
+			}
 		}
 	}
 

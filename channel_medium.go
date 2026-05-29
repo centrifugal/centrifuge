@@ -52,7 +52,6 @@ func (o ChannelMediumOptions) isMediumEnabled() bool {
 	return o.SharedPositionSync || o.KeepLatestPublication || o.enableQueue || o.broadcastDelay > 0
 }
 
-
 // channelMedium is initialized when first subscriber comes into channel, and dropped as soon as last
 // subscriber leaves the channel on the Node.
 type channelMedium struct {
