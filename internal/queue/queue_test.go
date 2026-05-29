@@ -36,6 +36,36 @@ func TestByteQueueResize(t *testing.T) {
 	require.Equal(t, initialCapacity+2, q.Len())
 }
 
+func TestByteQueueAddReturnsSize(t *testing.T) {
+	// Add / AddMany must return the post-insert byte size so callers can
+	// avoid a separate Size() call on the hot path.
+	q := New(initialCapacity, ItemSize)
+	size, ok := q.Add(testItem([]byte("ab")))
+	require.True(t, ok)
+	require.Equal(t, 2, size)
+	size, ok = q.Add(testItem([]byte("cde")))
+	require.True(t, ok)
+	require.Equal(t, 5, size)
+	require.Equal(t, 5, q.Size())
+
+	// AddMany returns the size after all items are inserted.
+	size, ok = q.AddMany(testItem([]byte("f")), testItem([]byte("gh")))
+	require.True(t, ok)
+	require.Equal(t, 8, size)
+	require.Equal(t, 8, q.Size())
+
+	// Empty AddMany on an open queue returns the current size unchanged.
+	size, ok = q.AddMany()
+	require.True(t, ok)
+	require.Equal(t, 8, size)
+
+	// Add on a closed queue returns (0, false).
+	q.Close()
+	size, ok = q.Add(testItem([]byte("x")))
+	require.False(t, ok)
+	require.Equal(t, 0, size)
+}
+
 func TestByteQueueSize(t *testing.T) {
 	q := New(initialCapacity, ItemSize)
 	require.Equal(t, 0, q.Size())
@@ -121,7 +151,7 @@ func TestQueueClose(t *testing.T) {
 	q.Add(testItem([]byte("2")))
 	q.Close()
 
-	ok = q.Add(testItem([]byte("3")))
+	_, ok = q.Add(testItem([]byte("3")))
 	require.Equal(t, false, ok)
 
 	ok = q.Wait()
@@ -139,7 +169,7 @@ func TestByteQueueCloseRemaining(t *testing.T) {
 	q.Add(testItem([]byte("2")))
 	messages := q.CloseRemaining()
 	require.Equal(t, 2, len(messages))
-	ok := q.Add(testItem([]byte("3")))
+	_, ok := q.Add(testItem([]byte("3")))
 	require.Equal(t, false, ok)
 	require.Equal(t, true, q.Closed())
 	messages = q.CloseRemaining()
@@ -212,7 +242,8 @@ func TestQueueResizing(t *testing.T) {
 	q := New(2, ItemSize)
 	for i := 0; i < 10; i++ {
 		item := Item{Data: []byte("msg"), Channel: "ch"}
-		require.True(t, q.Add(item))
+		_, ok := q.Add(item)
+		require.True(t, ok)
 	}
 	require.GreaterOrEqual(t, q.Cap(), 10)
 }
@@ -280,7 +311,7 @@ func TestQueueRemoveManyAll(t *testing.T) {
 func TestQueueAddAfterClose(t *testing.T) {
 	q := New(2, ItemSize)
 	q.Close()
-	added := q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	_, added := q.Add(Item{Data: []byte("msg"), Channel: "ch"})
 	require.False(t, added)
 }
 
@@ -360,7 +391,7 @@ func TestQueueRemoveFromEmptyQueue(t *testing.T) {
 func TestQueueAddManyAfterClose(t *testing.T) {
 	q := New(2, ItemSize)
 	q.Close()
-	added := q.AddMany(Item{Data: []byte("msg1"), Channel: "ch"}, Item{Data: []byte("msg2"), Channel: "ch"})
+	_, added := q.AddMany(Item{Data: []byte("msg1"), Channel: "ch"}, Item{Data: []byte("msg2"), Channel: "ch"})
 	require.False(t, added)
 }
 
@@ -421,7 +452,7 @@ func TestQueueAddManyWithResize(t *testing.T) {
 	}
 
 	// Add more items than initial capacity to trigger resize.
-	added := q.AddMany(items...)
+	_, added := q.AddMany(items...)
 	require.True(t, added)
 	require.GreaterOrEqual(t, q.Cap(), 5)
 
@@ -970,13 +1001,16 @@ func TestQueueAddManyEmptyOnClosed(t *testing.T) {
 	// rejects all writes), not short-circuit to true.
 	q := New(2, ItemSize)
 	q.Close()
-	require.False(t, q.AddMany())
-	require.False(t, q.AddMany([]Item{}...))
+	_, ok := q.AddMany()
+	require.False(t, ok)
+	_, ok = q.AddMany([]Item{}...)
+	require.False(t, ok)
 }
 
 func TestQueueAddManyEmptyOnOpen(t *testing.T) {
 	// AddMany() with no items on an open queue is a successful no-op.
 	q := New(2, ItemSize)
-	require.True(t, q.AddMany())
+	_, ok := q.AddMany()
+	require.True(t, ok)
 	require.Equal(t, 0, q.Len())
 }

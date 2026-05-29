@@ -330,11 +330,13 @@ func TestPublicationQueueCloseAndClosed(t *testing.T) {
 	t.Parallel()
 	q := queue.New(2, queuedPublicationSize)
 	require.False(t, q.Closed())
-	require.True(t, q.Add(queuedPublication{}))
+	_, ok := q.Add(queuedPublication{})
+	require.True(t, ok)
 	q.Close()
 	require.True(t, q.Closed())
 	// Adding after Close must report failure and not panic.
-	require.False(t, q.Add(queuedPublication{}))
+	_, ok = q.Add(queuedPublication{})
+	require.False(t, ok)
 	// Wait must report false on a closed queue without blocking.
 	require.False(t, q.Wait())
 }

@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"math/bits"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/queue"
@@ -30,6 +31,10 @@ type writer struct {
 	shrinkDelay        time.Duration
 	flushTimer         *time.Timer
 	timerScheduled     bool
+	// timerScheduledFlag mirrors timerScheduled (always written under mu)
+	// so enqueue can skip taking mu when a flush is already pending — the
+	// common case under many concurrent producers in timer mode.
+	timerScheduledFlag atomic.Bool
 }
 
 func newWriter(config writerConfig, queueInitialCap int) *writer {
@@ -164,6 +169,7 @@ func (w *writer) flush() {
 	w.mu.Lock()
 
 	w.timerScheduled = false
+	w.timerScheduledFlag.Store(false)
 
 	// Check if there are messages to flush
 	messagesLen := w.messages.Len()
@@ -223,6 +229,7 @@ func (w *writer) scheduleFlushLocked() {
 		return
 	}
 	w.timerScheduled = true
+	w.timerScheduledFlag.Store(true)
 	if w.flushTimer == nil {
 		w.flushTimer = time.AfterFunc(w.writeDelay, w.flush)
 	} else {
@@ -236,6 +243,7 @@ func (w *writer) scheduleFlushImmediateLocked() {
 		return
 	}
 	w.timerScheduled = true
+	w.timerScheduledFlag.Store(true)
 	if w.flushTimer == nil {
 		w.flushTimer = time.AfterFunc(0, w.flush)
 	} else {
@@ -244,16 +252,18 @@ func (w *writer) scheduleFlushImmediateLocked() {
 }
 
 func (w *writer) enqueue(item queue.Item) *Disconnect {
-	ok := w.messages.Add(item)
+	size, ok := w.messages.Add(item)
 	if !ok {
 		return &DisconnectConnectionClosed
 	}
-	if w.config.MaxQueueSize > 0 && w.messages.Size() > w.config.MaxQueueSize {
+	if w.config.MaxQueueSize > 0 && size > w.config.MaxQueueSize {
 		return &DisconnectSlow
 	}
 
-	// In timer mode, schedule flush if not already scheduled
-	if w.timerMode {
+	// In timer mode, schedule flush if not already scheduled. The atomic
+	// fast path lets concurrent producers skip mu entirely while a flush
+	// is already pending (the steady-state case under load).
+	if w.timerMode && !w.timerScheduledFlag.Load() {
 		w.mu.Lock()
 		if !w.closed && !w.timerScheduled {
 			w.scheduleFlushLocked()
@@ -265,16 +275,18 @@ func (w *writer) enqueue(item queue.Item) *Disconnect {
 }
 
 func (w *writer) enqueueMany(item ...queue.Item) *Disconnect {
-	ok := w.messages.AddMany(item...)
+	size, ok := w.messages.AddMany(item...)
 	if !ok {
 		return &DisconnectConnectionClosed
 	}
-	if w.config.MaxQueueSize > 0 && w.messages.Size() > w.config.MaxQueueSize {
+	if w.config.MaxQueueSize > 0 && size > w.config.MaxQueueSize {
 		return &DisconnectSlow
 	}
 
-	// In timer mode, schedule flush if not already scheduled
-	if w.timerMode {
+	// In timer mode, schedule flush if not already scheduled. The atomic
+	// fast path lets concurrent producers skip mu entirely while a flush
+	// is already pending (the steady-state case under load).
+	if w.timerMode && !w.timerScheduledFlag.Load() {
 		w.mu.Lock()
 		if !w.closed && !w.timerScheduled {
 			w.scheduleFlushLocked()

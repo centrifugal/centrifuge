@@ -15,7 +15,8 @@ import (
 func TestGenericQueueInt_BasicAddRemove(t *testing.T) {
 	q := New[int](2, func(int) int { return 0 })
 	for i := 0; i < 100; i++ {
-		require.True(t, q.Add(i))
+		_, ok := q.Add(i)
+		require.True(t, ok)
 	}
 	require.Equal(t, 100, q.Len())
 	require.Equal(t, 0, q.Size()) // sizeFn returns 0
