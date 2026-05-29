@@ -58,14 +58,9 @@ type Queue[T any] struct {
 	// park/unpark, which dominates when the single consumer parks often
 	// (large / unlimited drains), while keeping sync.Mutex (lighter than
 	// RWMutex) preserves the win under short-hold producer contention.
-	mu    sync.Mutex
-	cond  *sync.Cond
-	nodes []T
-	// sizes is a ring parallel to nodes holding each item's byte size,
-	// so the consumer drains by summing plain int64s instead of calling
-	// sizeFn per item under the lock — shortening the drain critical
-	// section for large frames under producer contention.
-	sizes       []int64
+	mu          sync.Mutex
+	cond        *sync.Cond
+	nodes       []T
 	head, tail  int
 	cnt         int64
 	size        int64
