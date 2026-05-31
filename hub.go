@@ -175,6 +175,47 @@ func (h *Hub) unsubscribe(userID string, ch string, unsubscribe Unsubscribe, cli
 	return h.connShards[index(userID, numHubShards)].unsubscribe(userID, ch, unsubscribe, clientID, sessionID, labelFilter)
 }
 
+// refreshAcrossUsers iterates every connection on every shard, applying
+// clientID/sessionID/labelFilter narrowers. Used by Node.Refresh when userID
+// is empty and the allUsers flag is set. Not used through the normal per-user
+// dispatch path; see Node.Refresh for the routing decision.
+func (h *Hub) refreshAcrossUsers(clientID, sessionID string, labelFilter *FilterNode, opts ...RefreshOption) error {
+	var firstErr error
+	for _, shard := range h.connShards {
+		if err := shard.refreshAcrossUsers(clientID, sessionID, labelFilter, opts...); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// subscribeAcrossUsers — see refreshAcrossUsers.
+func (h *Hub) subscribeAcrossUsers(ch string, clientID, sessionID string, labelFilter *FilterNode, opts ...SubscribeOption) error {
+	var firstErr error
+	for _, shard := range h.connShards {
+		if err := shard.subscribeAcrossUsers(ch, clientID, sessionID, labelFilter, opts...); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// unsubscribeAcrossUsers — see refreshAcrossUsers.
+func (h *Hub) unsubscribeAcrossUsers(ch string, unsubscribe Unsubscribe, clientID, sessionID string, labelFilter *FilterNode) error {
+	for _, shard := range h.connShards {
+		_ = shard.unsubscribeAcrossUsers(ch, unsubscribe, clientID, sessionID, labelFilter)
+	}
+	return nil
+}
+
+// disconnectAcrossUsers — see refreshAcrossUsers.
+func (h *Hub) disconnectAcrossUsers(disconnect Disconnect, clientID, sessionID string, whitelist []string, labelFilter *FilterNode) error {
+	for _, shard := range h.connShards {
+		_ = shard.disconnectAcrossUsers(disconnect, clientID, sessionID, whitelist, labelFilter)
+	}
+	return nil
+}
+
 func (h *Hub) disconnect(userID string, disconnect Disconnect, clientID, sessionID string, whitelist []string, labelFilter *FilterNode) error {
 	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, clientID, sessionID, whitelist, labelFilter)
 }
@@ -456,6 +497,128 @@ func (h *connShard) unsubscribe(user string, ch string, unsubscribe Unsubscribe,
 	}
 	wg.Wait()
 	return nil
+}
+
+// connShard.*AcrossUsers methods iterate the shard's full client map applying
+// clientID/sessionID/labelFilter narrowers. Used by the fleet-wide dispatch
+// path in Node ops when userID is empty AND the allUsers flag is set. The
+// shard read-lock is released before invoking client operations to avoid
+// holding it during downstream IO; in flight changes to the connection set
+// during the loop are acceptable (the op is best-effort over a roughly-current
+// snapshot of the hub, same guarantee the regular paths give).
+func (h *connShard) refreshAcrossUsers(clientID, sessionID string, labelFilter *FilterNode, opts ...RefreshOption) error {
+	clients := h.allClientsSnapshot()
+	var firstErr error
+	var errMu sync.Mutex
+	var wg sync.WaitGroup
+	for _, c := range clients {
+		if clientID != "" && c.ID() != clientID {
+			continue
+		}
+		if sessionID != "" && c.sessionID() != sessionID {
+			continue
+		}
+		if !matchLabelFilter(c, labelFilter) {
+			continue
+		}
+		wg.Add(1)
+		go func(c *Client) {
+			defer wg.Done()
+			err := c.Refresh(opts...)
+			errMu.Lock()
+			defer errMu.Unlock()
+			if err != nil && err != io.EOF && firstErr == nil {
+				firstErr = err
+			}
+		}(c)
+	}
+	wg.Wait()
+	return firstErr
+}
+
+func (h *connShard) subscribeAcrossUsers(ch string, clientID, sessionID string, labelFilter *FilterNode, opts ...SubscribeOption) error {
+	clients := h.allClientsSnapshot()
+	var firstErr error
+	var errMu sync.Mutex
+	var wg sync.WaitGroup
+	for _, c := range clients {
+		if clientID != "" && c.ID() != clientID {
+			continue
+		}
+		if sessionID != "" && c.sessionID() != sessionID {
+			continue
+		}
+		if !matchLabelFilter(c, labelFilter) {
+			continue
+		}
+		wg.Add(1)
+		go func(c *Client) {
+			defer wg.Done()
+			err := c.Subscribe(ch, opts...)
+			errMu.Lock()
+			defer errMu.Unlock()
+			if err != nil && err != io.EOF && firstErr == nil {
+				firstErr = err
+			}
+		}(c)
+	}
+	wg.Wait()
+	return firstErr
+}
+
+func (h *connShard) unsubscribeAcrossUsers(ch string, unsubscribe Unsubscribe, clientID, sessionID string, labelFilter *FilterNode) error {
+	clients := h.allClientsSnapshot()
+	var wg sync.WaitGroup
+	for _, c := range clients {
+		if clientID != "" && c.ID() != clientID {
+			continue
+		}
+		if sessionID != "" && c.sessionID() != sessionID {
+			continue
+		}
+		if !matchLabelFilter(c, labelFilter) {
+			continue
+		}
+		wg.Add(1)
+		go func(c *Client) {
+			defer wg.Done()
+			c.Unsubscribe(ch, unsubscribe)
+		}(c)
+	}
+	wg.Wait()
+	return nil
+}
+
+func (h *connShard) disconnectAcrossUsers(disconnect Disconnect, clientID, sessionID string, whitelist []string, labelFilter *FilterNode) error {
+	clients := h.allClientsSnapshot()
+	for _, c := range clients {
+		if stringInSlice(c.ID(), whitelist) {
+			continue
+		}
+		if clientID != "" && c.ID() != clientID {
+			continue
+		}
+		if sessionID != "" && c.sessionID() != sessionID {
+			continue
+		}
+		if !matchLabelFilter(c, labelFilter) {
+			continue
+		}
+		c.Disconnect(disconnect)
+	}
+	return nil
+}
+
+// allClientsSnapshot copies the current shard's client map under read-lock,
+// then releases the lock so the per-client op work isn't done under it.
+func (h *connShard) allClientsSnapshot() []*Client {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	out := make([]*Client, 0, len(h.clients))
+	for _, c := range h.clients {
+		out = append(out, c)
+	}
+	return out
 }
 
 func (h *connShard) disconnect(user string, disconnect Disconnect, clientID string, sessionID string, whitelist []string, labelFilter *FilterNode) error {
