@@ -19,7 +19,7 @@ require (
 	github.com/kelseyhightower/envconfig v1.4.0
 	github.com/nats-io/nats.go v1.52.0
 	github.com/prometheus/client_golang v1.23.2
-	github.com/quic-go/quic-go v0.59.0
+	github.com/quic-go/quic-go v0.59.1
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/contrib/bridges/prometheus v0.68.0
 	go.opentelemetry.io/otel/exporters/stdout/stdoutmetric v1.43.0
