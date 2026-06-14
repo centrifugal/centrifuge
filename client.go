@@ -3476,13 +3476,17 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			res.Recoverable = true
 		}
 
-		if reply.Options.EnableRecovery && req.Recover {
+		// Recovery is attempted either when the client itself asked for it (req.Recover)
+		// or when the server forces it via SubscribeOptions.Recover (e.g. for server-side
+		// subscriptions of unidirectional clients, or to always deliver the latest
+		// publication in cache recovery mode without a client-provided position).
+		if reply.Options.EnableRecovery && (req.Recover || reply.Options.Recover) {
 			cmdOffset := req.Offset
 			cmdEpoch := req.Epoch
 			recoveryMode := reply.Options.RecoveryMode
 
-			// Client provided subscribe request with recover flag on. Try to recover missed
-			// publications automatically from history (we assume here that the history configured wisely).
+			// Try to recover missed publications automatically from history (we assume here
+			// that the history configured wisely).
 
 			if recoveryMode == RecoveryModeCache {
 				var latestPub *Publication
@@ -3628,7 +3632,12 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		// Valid stream position will be then caught up upon processing publications.
 		res.Offset = req.Offset
 	}
-	res.WasRecovering = req.Recover
+	// WasRecovering reflects whether a recovery attempt was made for this subscription –
+	// either requested by the client (req.Recover) or forced by the server via
+	// SubscribeOptions.Recover. This keeps the documented invariant that Recovered can only
+	// be true when WasRecovering is true, and makes a server-forced recovery look the same to
+	// the client as a client-initiated one.
+	res.WasRecovering = req.Recover || (reply.Options.EnableRecovery && reply.Options.Recover)
 
 	// Append publications from subscribe reply (e.g., initial full state).
 	if len(reply.Publications) > 0 && len(res.Publications) == 0 {

@@ -1249,6 +1249,183 @@ func TestServerSideSubscriptions(t *testing.T) {
 	}
 }
 
+func TestServerSideSubscriptionServerInitiatedCacheRecovery(t *testing.T) {
+	// A server-side subscription with EnableRecovery + RecoveryModeCache + Recover
+	// must deliver the latest publication on connect even though the client does not
+	// send any recover flag/position itself (e.g. a unidirectional client which does
+	// not know channels at all). See https://github.com/centrifugal/centrifugo/issues/1156.
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	const channel = "server-side-cache"
+
+	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			Subscriptions: map[string]SubscribeOptions{
+				channel: {
+					EnableRecovery: true,
+					RecoveryMode:   RecoveryModeCache,
+					Recover:        true,
+				},
+			},
+		}, nil
+	})
+
+	// Populate channel history with the latest publication before client connects.
+	_, err := node.Publish(channel, []byte(`{"input": "latest"}`), WithHistory(1, time.Minute))
+	require.NoError(t, err)
+
+	transport := newTestTransport(func() {})
+	ctx := SetCredentials(context.Background(), &Credentials{UserID: "42"})
+	client, _ := newClient(ctx, node, transport)
+
+	rwWrapper := testReplyWriterWrapper()
+	// Note: no Subs in the connect request - the client does not request recovery.
+	err = client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	result := extractConnectReply(rwWrapper.replies)
+	require.Contains(t, result.Subs, channel)
+	subResult := result.Subs[channel]
+	require.True(t, subResult.Recoverable)
+	require.True(t, subResult.Recovered, "server-side subscription must be recovered without client recover request")
+	require.True(t, subResult.WasRecovering, "forced recovery must report was_recovering so the recovered=>was_recovering invariant holds")
+	require.Len(t, subResult.Publications, 1)
+	require.Equal(t, `{"input": "latest"}`, string(subResult.Publications[0].Data))
+}
+
+func TestServerSideSubscriptionForcedCacheRecoveryEmpty(t *testing.T) {
+	// Forced recovery on an empty cache must not deliver publications and must report
+	// recovered=false (but still was_recovering=true).
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	const channel = "server-side-cache-empty"
+
+	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			Subscriptions: map[string]SubscribeOptions{
+				channel: {
+					EnableRecovery: true,
+					RecoveryMode:   RecoveryModeCache,
+					Recover:        true,
+				},
+			},
+		}, nil
+	})
+
+	transport := newTestTransport(func() {})
+	ctx := SetCredentials(context.Background(), &Credentials{UserID: "42"})
+	client, _ := newClient(ctx, node, transport)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	result := extractConnectReply(rwWrapper.replies)
+	require.Contains(t, result.Subs, channel)
+	subResult := result.Subs[channel]
+	require.True(t, subResult.Recoverable)
+	require.False(t, subResult.Recovered)
+	require.True(t, subResult.WasRecovering)
+	require.Empty(t, subResult.Publications)
+}
+
+func TestClientSubscribeForcedStreamRecovery(t *testing.T) {
+	// Forced recovery (Recover option) also works in stream mode where it behaves like a
+	// client subscribing with an empty `since`: it recovers from the beginning of the
+	// available history. This is why Centrifugo only auto-enables forced recovery in cache
+	// mode - in stream mode it would replay the whole history.
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	const channel = "test-stream"
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					EnableRecovery:    true,
+					RecoveryMode:      RecoveryModeStream,
+					EnablePositioning: true,
+					Recover:           true,
+				},
+			}, nil)
+		})
+	})
+
+	for i := 0; i < 3; i++ {
+		_, err := node.Publish(channel, []byte(`{"input": "msg"}`), WithHistory(10, time.Minute))
+		require.NoError(t, err)
+	}
+
+	client := newTestClient(t, node, "42")
+	connectClientV2(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	// Note: no Recover flag and no position in the subscribe request.
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	result := rwWrapper.replies[0].Subscribe
+	require.NotNil(t, result)
+	require.True(t, result.Recovered)
+	require.True(t, result.WasRecovering)
+	require.Len(t, result.Publications, 3, "stream forced recovery delivers the whole available history")
+}
+
+func TestClientSubscribeForcedCacheRecovery(t *testing.T) {
+	// A client-side subscription with EnableRecovery + RecoveryModeCache + Recover must
+	// deliver the latest publication even though the client did not set the recover flag
+	// (i.e. did not provide an empty `since`). See
+	// https://github.com/centrifugal/centrifugo/issues/1156.
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	const channel = "test"
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					EnableRecovery:    true,
+					RecoveryMode:      RecoveryModeCache,
+					EnablePositioning: true,
+					Recover:           true,
+				},
+			}, nil)
+		})
+	})
+
+	_, err := node.Publish(channel, []byte(`{"input": "latest"}`), WithHistory(1, time.Minute))
+	require.NoError(t, err)
+
+	client := newTestClient(t, node, "42")
+	connectClientV2(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	// Note: no Recover flag in the subscribe request.
+	err = client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	require.True(t, len(rwWrapper.replies) > 0)
+	result := rwWrapper.replies[0].Subscribe
+	require.NotNil(t, result)
+	require.True(t, result.Recoverable)
+	require.True(t, result.Recovered, "subscription must be recovered without client recover request")
+	require.True(t, result.WasRecovering, "forced recovery must report was_recovering")
+	require.Len(t, result.Publications, 1)
+	require.Equal(t, `{"input": "latest"}`, string(result.Publications[0].Data))
+}
+
 func TestClientRefresh(t *testing.T) {
 	t.Parallel()
 	node := defaultTestNode()
