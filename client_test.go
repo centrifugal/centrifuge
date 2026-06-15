@@ -1264,9 +1264,9 @@ func TestServerSideSubscriptionServerInitiatedCacheRecovery(t *testing.T) {
 		return ConnectReply{
 			Subscriptions: map[string]SubscribeOptions{
 				channel: {
-					EnableRecovery: true,
-					RecoveryMode:   RecoveryModeCache,
-					Recover:        true,
+					EnableRecovery:   true,
+					RecoveryMode:     RecoveryModeCache,
+					AutoCacheRecover: true,
 				},
 			},
 		}, nil
@@ -1308,9 +1308,9 @@ func TestServerSideSubscriptionForcedCacheRecoveryEmpty(t *testing.T) {
 		return ConnectReply{
 			Subscriptions: map[string]SubscribeOptions{
 				channel: {
-					EnableRecovery: true,
-					RecoveryMode:   RecoveryModeCache,
-					Recover:        true,
+					EnableRecovery:   true,
+					RecoveryMode:     RecoveryModeCache,
+					AutoCacheRecover: true,
 				},
 			},
 		}, nil
@@ -1333,11 +1333,12 @@ func TestServerSideSubscriptionForcedCacheRecoveryEmpty(t *testing.T) {
 	require.Empty(t, subResult.Publications)
 }
 
-func TestClientSubscribeForcedStreamRecovery(t *testing.T) {
-	// Forced recovery (Recover option) also works in stream mode where it behaves like a
-	// client subscribing with an empty `since`: it recovers from the beginning of the
-	// available history. This is why Centrifugo only auto-enables forced recovery in cache
-	// mode - in stream mode it would replay the whole history.
+func TestClientSubscribeForcedRecoveryIgnoredInStream(t *testing.T) {
+	// Forced recovery (SubscribeOptions.Recover) only applies in cache recovery mode. In
+	// stream recovery mode it must be ignored when the client supplies no position: forcing
+	// recovery there can't preserve continuity and would break the "recovered=false implies no
+	// publications" contract. So no recovery is attempted and no history is delivered – the
+	// subscription just starts positioned at the current stream top.
 	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1351,7 +1352,7 @@ func TestClientSubscribeForcedStreamRecovery(t *testing.T) {
 					EnableRecovery:    true,
 					RecoveryMode:      RecoveryModeStream,
 					EnablePositioning: true,
-					Recover:           true,
+					AutoCacheRecover:  true,
 				},
 			}, nil)
 		})
@@ -1374,9 +1375,60 @@ func TestClientSubscribeForcedStreamRecovery(t *testing.T) {
 
 	result := rwWrapper.replies[0].Subscribe
 	require.NotNil(t, result)
-	require.True(t, result.Recovered)
+	require.True(t, result.Recoverable, "positioning is still enabled")
+	require.False(t, result.WasRecovering, "forced recovery must be ignored in stream mode")
+	require.False(t, result.Recovered)
+	require.Empty(t, result.Publications, "no history must be delivered for forced recovery in stream mode")
+	require.Equal(t, uint64(3), result.Offset, "subscription starts at the current stream top")
+}
+
+func TestClientSubscribeStreamClientRecoveryStillWorks(t *testing.T) {
+	// Gating forced recovery to cache mode must not affect normal client-initiated stream
+	// recovery: a client that supplies a position still recovers missed publications.
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	const channel = "test-stream-client-recovery"
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					EnableRecovery:    true,
+					RecoveryMode:      RecoveryModeStream,
+					EnablePositioning: true,
+				},
+			}, nil)
+		})
+	})
+
+	res1, err := node.Publish(channel, []byte(`{"n": 1}`), WithHistory(10, time.Minute))
+	require.NoError(t, err)
+	_, err = node.Publish(channel, []byte(`{"n": 2}`), WithHistory(10, time.Minute))
+	require.NoError(t, err)
+	_, err = node.Publish(channel, []byte(`{"n": 3}`), WithHistory(10, time.Minute))
+	require.NoError(t, err)
+
+	client := newTestClient(t, node, "42")
+	connectClientV2(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err = client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Recover: true,
+		Offset:  res1.Offset,
+		Epoch:   res1.Epoch,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	result := rwWrapper.replies[0].Subscribe
+	require.NotNil(t, result)
 	require.True(t, result.WasRecovering)
-	require.Len(t, result.Publications, 3, "stream forced recovery delivers the whole available history")
+	require.True(t, result.Recovered, "client-initiated stream recovery from a position must still work")
+	require.Len(t, result.Publications, 2)
+	require.Equal(t, `{"n": 2}`, string(result.Publications[0].Data))
+	require.Equal(t, `{"n": 3}`, string(result.Publications[1].Data))
 }
 
 func TestClientSubscribeForcedCacheRecovery(t *testing.T) {
@@ -1397,7 +1449,7 @@ func TestClientSubscribeForcedCacheRecovery(t *testing.T) {
 					EnableRecovery:    true,
 					RecoveryMode:      RecoveryModeCache,
 					EnablePositioning: true,
-					Recover:           true,
+					AutoCacheRecover:  true,
 				},
 			}, nil)
 		})
@@ -1746,10 +1798,10 @@ func TestFossilRecoveredMapPubs(t *testing.T) {
 		{Offset: 3, Key: "x", Data: []byte("This is a message for key X: after removal")},
 	})
 	require.Len(t, pubs, 3)
-	require.False(t, pubs[0].Delta)   // first occurrence
-	require.False(t, pubs[1].Delta)   // removal — no delta
-	require.True(t, pubs[1].Removed)  // removed flag preserved
-	require.False(t, pubs[2].Delta)   // after removal — full, not delta
+	require.False(t, pubs[0].Delta)  // first occurrence
+	require.False(t, pubs[1].Delta)  // removal — no delta
+	require.True(t, pubs[1].Removed) // removed flag preserved
+	require.False(t, pubs[2].Delta)  // after removal — full, not delta
 	require.Equal(t, []byte("This is a message for key X: after removal"), []byte(pubs[2].Data))
 
 	// Score field is preserved.
