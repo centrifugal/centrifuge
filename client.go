@@ -3460,6 +3460,15 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		maxSeenOffset uint64
 	)
 
+	// autoCacheRecover reflects server-forced cache recovery via SubscribeOptions.AutoCacheRecover
+	// (no client position). It only applies in cache recovery mode, where it delivers the latest
+	// publication regardless of position. In stream recovery mode it is intentionally ignored:
+	// forcing recovery without a position can't preserve continuity, and delivering history
+	// there would break the "recovered=false implies no publications" contract. Stream
+	// subscriptions that want to recover from a specific position must use req.Recover (client)
+	// or SubscribeOptions.RecoverSince (server).
+	autoCacheRecover := reply.Options.AutoCacheRecover && reply.Options.RecoveryMode == RecoveryModeCache
+
 	if reply.Options.EnablePositioning || reply.Options.EnableRecovery {
 		handleErr := func(err error) subscribeContext {
 			c.pubSubSync.StopBuffering(channel)
@@ -3477,10 +3486,10 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		}
 
 		// Recovery is attempted either when the client itself asked for it (req.Recover)
-		// or when the server forces it via SubscribeOptions.Recover (e.g. for server-side
-		// subscriptions of unidirectional clients, or to always deliver the latest
-		// publication in cache recovery mode without a client-provided position).
-		if reply.Options.EnableRecovery && (req.Recover || reply.Options.Recover) {
+		// or when the server forces it in cache recovery mode via SubscribeOptions.AutoCacheRecover
+		// (e.g. for server-side subscriptions of unidirectional clients, to deliver the latest
+		// publication without a client-provided position).
+		if reply.Options.EnableRecovery && (req.Recover || autoCacheRecover) {
 			cmdOffset := req.Offset
 			cmdEpoch := req.Epoch
 			recoveryMode := reply.Options.RecoveryMode
@@ -3633,11 +3642,11 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		res.Offset = req.Offset
 	}
 	// WasRecovering reflects whether a recovery attempt was made for this subscription –
-	// either requested by the client (req.Recover) or forced by the server via
-	// SubscribeOptions.Recover. This keeps the documented invariant that Recovered can only
-	// be true when WasRecovering is true, and makes a server-forced recovery look the same to
-	// the client as a client-initiated one.
-	res.WasRecovering = req.Recover || (reply.Options.EnableRecovery && reply.Options.Recover)
+	// either requested by the client (req.Recover) or forced by the server in cache recovery
+	// mode via SubscribeOptions.AutoCacheRecover. This keeps the documented invariant that
+	// Recovered can only be true when WasRecovering is true, and makes a server-forced recovery
+	// look the same to the client as a client-initiated one.
+	res.WasRecovering = req.Recover || (reply.Options.EnableRecovery && autoCacheRecover)
 
 	// Append publications from subscribe reply (e.g., initial full state).
 	if len(reply.Publications) > 0 && len(res.Publications) == 0 {

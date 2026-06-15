@@ -177,18 +177,23 @@ type SubscribeOptions struct {
 	Data []byte
 	// RecoverSince will try to subscribe a client and recover from a certain StreamPosition.
 	RecoverSince *StreamPosition
-	// Recover, when set, makes Centrifuge initiate recovery for a subscription even if the
-	// client did not request it (i.e. without a recover flag/position in the subscribe
-	// request). It applies to both client-initiated and server-side subscriptions and
-	// requires EnableRecovery to be set. Recovery starts from an empty StreamPosition: in
-	// cache recovery mode (RecoveryModeCache) this delivers the latest publication on each
-	// (re)subscribe, which is especially useful for unidirectional clients with server-side
-	// subscriptions that can't request recovery themselves, or to avoid requiring an empty
-	// "since" on the client. In stream recovery mode an empty position means recovery from
-	// the beginning of the available history, so prefer RecoverSince to recover from a
-	// specific position. The option applies to stream and cache subscriptions and is ignored
-	// for map subscriptions.
-	Recover bool
+	// AutoCacheRecover, when set, makes Centrifuge initiate cache recovery for a subscription
+	// even if the client did not request it (i.e. without a recover flag/position in the
+	// subscribe request). It applies to both client-initiated and server-side subscriptions and
+	// requires EnableRecovery to be set.
+	//
+	// AutoCacheRecover only takes effect in cache recovery mode (RecoveryModeCache): there it
+	// delivers the latest publication on each (re)subscribe regardless of position, which is
+	// especially useful for unidirectional clients with server-side subscriptions that can't
+	// request recovery themselves, or to avoid requiring an empty "since" on the client.
+	//
+	// In stream recovery mode AutoCacheRecover is ignored: forcing recovery without a client
+	// position can't preserve continuity (there is no baseline to compare against), and the
+	// cache-style "deliver latest" semantics don't map onto a stream. To recover a stream
+	// subscription use the client recover flag/position, or SubscribeOptions.RecoverSince for a
+	// specific position; to deliver an initial backlog use SubscribeReply.Publications.
+	// AutoCacheRecover is also ignored for map subscriptions.
+	AutoCacheRecover bool
 
 	// HistoryMetaTTL allows to override default (set in Config.HistoryMetaTTL) history
 	// meta information expiration time.
@@ -354,12 +359,12 @@ func WithRecoverSince(since *StreamPosition) SubscribeOption {
 	}
 }
 
-// WithRecover allows setting SubscribeOptions.Recover. It makes Centrifuge initiate
-// recovery for a subscription even if the client did not request it. See
-// SubscribeOptions.Recover for details.
-func WithRecover(enabled bool) SubscribeOption {
+// WithAutoCacheRecover allows setting SubscribeOptions.AutoCacheRecover. It makes Centrifuge
+// initiate cache recovery for a subscription even if the client did not request it. See
+// SubscribeOptions.AutoCacheRecover for details.
+func WithAutoCacheRecover(enabled bool) SubscribeOption {
 	return func(opts *SubscribeOptions) {
-		opts.Recover = enabled
+		opts.AutoCacheRecover = enabled
 	}
 }
 
