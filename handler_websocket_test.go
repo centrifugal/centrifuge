@@ -19,6 +19,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/websocket"
 
 	"github.com/centrifugal/protocol"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1281,4 +1282,144 @@ func TestWebsocketTransportAcceptProtocol(t *testing.T) {
 		},
 	}
 	require.Equal(t, "h1", transport.AcceptProtocol())
+}
+
+// dialCompressed opens a permessage-deflate WebSocket connection to handler and
+// returns the client conn. The client compresses outbound frames at the maximum
+// level so a redundant payload yields a tiny compressed frame.
+func dialCompressed(t *testing.T, config WebsocketConfig) *websocket.Conn {
+	t.Helper()
+	n, _ := New(Config{})
+	require.NoError(t, n.Run())
+	t.Cleanup(func() { _ = n.Shutdown(context.Background()) })
+
+	config.CheckOrigin = func(r *http.Request) bool { return true }
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(n, config))
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	dialer := &websocket.Dialer{EnableCompression: true}
+	url := "ws" + server.URL[4:]
+	conn, resp, _, err := dialer.Dial(url+"/connection/websocket", nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
+	require.NoError(t, conn.SetCompressionLevel(9))
+	return conn
+}
+
+// TestWebsocketHandlerDecompressionBombRejected proves end-to-end that with
+// compression enabled the default decompressed limit (MessageSizeLimit *
+// DefaultWebsocketDecompressedMessageSizeLimitMultiplier) rejects a tiny
+// compressed frame that inflates past the limit, before any authentication.
+func TestWebsocketHandlerDecompressionBombRejected(t *testing.T) {
+	t.Parallel()
+	// MessageSizeLimit 1024 -> decompressed limit = 1024 * 10 = 10240 bytes.
+	conn := dialCompressed(t, WebsocketConfig{
+		Compression:      true,
+		MessageSizeLimit: 1024,
+	})
+
+	// 64KB of zeros compresses to well under the 1024-byte compressed limit but
+	// inflates far past the 10240-byte decompressed limit.
+	bomb := make([]byte, 64*1024)
+	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, bomb))
+
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, _, err := conn.ReadMessage()
+	require.Error(t, err)
+	require.Truef(t, websocket.IsCloseError(err, websocket.CloseMessageTooBig),
+		"expected close %d, got %v", websocket.CloseMessageTooBig, err)
+	var closeErr *websocket.CloseError
+	require.ErrorAs(t, err, &closeErr)
+	require.Contains(t, closeErr.Text, "after decompression")
+}
+
+// TestWebsocketHandlerOutgoingCloseMetric proves the server-sent 1009 close from
+// the decompression-limit path is recorded in the outgoing close metric labeled
+// by transport and code.
+func TestWebsocketHandlerOutgoingCloseMetric(t *testing.T) {
+	t.Parallel()
+	n, _ := New(Config{})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
+		Compression:      true,
+		MessageSizeLimit: 1024, // decompressed limit = 10240
+		CheckOrigin:      func(r *http.Request) bool { return true },
+	}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	dialer := &websocket.Dialer{EnableCompression: true}
+	url := "ws" + server.URL[4:]
+	conn, resp, _, err := dialer.Dial(url+"/connection/websocket", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	defer func() { _ = conn.Close() }()
+	require.NoError(t, conn.SetCompressionLevel(9))
+
+	bomb := make([]byte, 64*1024)
+	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, bomb))
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, _, _ = conn.ReadMessage() // server closes with 1009
+
+	counter := n.metrics.transportOutgoingCloseCount.WithLabelValues(transportWebsocket, "1009")
+	require.Eventually(t, func() bool {
+		var m dto.Metric
+		if err := counter.Write(&m); err != nil {
+			return false
+		}
+		return m.GetCounter().GetValue() == 1
+	}, 2*time.Second, 10*time.Millisecond, "expected outgoing close 1009 to be metered")
+}
+
+// TestWebsocketHandlerDecompressedMessageSizeLimitOverride proves the explicit
+// DecompressedMessageSizeLimit takes precedence over the multiplier-derived
+// default: a payload that would pass the multiplier limit (10240) but exceeds
+// the override (2048) is rejected.
+func TestWebsocketHandlerDecompressedMessageSizeLimitOverride(t *testing.T) {
+	t.Parallel()
+	conn := dialCompressed(t, WebsocketConfig{
+		Compression:                  true,
+		MessageSizeLimit:             1024, // multiplier default would be 10240
+		DecompressedMessageSizeLimit: 2048, // explicit, must win
+	})
+
+	// 4096 zeros: > 2048 (override) but < 10240 (multiplier). A 1009 close
+	// therefore proves the override is in effect; otherwise the frame would
+	// pass the size gate and be rejected later as an invalid command.
+	payload := make([]byte, 4096)
+	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, payload))
+
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, _, err := conn.ReadMessage()
+	require.Error(t, err)
+	require.Truef(t, websocket.IsCloseError(err, websocket.CloseMessageTooBig),
+		"expected close %d (override in effect), got %v", websocket.CloseMessageTooBig, err)
+}
+
+// TestWebsocketHandlerCompressedHeadroom proves the multiplier leaves headroom
+// above MessageSizeLimit for legitimately compressible inbound frames: a payload
+// larger than MessageSizeLimit but within the decompressed limit is NOT rejected
+// for being too big (it is only later rejected as an invalid command, with a
+// different close code).
+func TestWebsocketHandlerCompressedHeadroom(t *testing.T) {
+	t.Parallel()
+	conn := dialCompressed(t, WebsocketConfig{
+		Compression:      true,
+		MessageSizeLimit: 1024, // decompressed limit = 10240
+	})
+
+	// 4096 zeros: > MessageSizeLimit (1024) but < decompressed limit (10240).
+	payload := make([]byte, 4096)
+	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, payload))
+
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, _, err := conn.ReadMessage()
+	require.Error(t, err) // invalid command -> disconnect, but...
+	require.Falsef(t, websocket.IsCloseError(err, websocket.CloseMessageTooBig),
+		"frame within decompressed limit must not be rejected as too big, got %v", err)
 }

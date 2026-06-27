@@ -361,6 +361,18 @@ func (n *Node) SetMapBrokerCleanupLag(name string, seconds float64) {
 	}
 }
 
+// IncTransportOutgoingClose increments the counter of close frames sent to
+// clients, labeled by transport and close code. It is exported so that custom
+// transports implemented outside this package (e.g. unidirectional WebSocket)
+// can record their outgoing close codes too. Only server-sent close codes
+// should be passed - client-supplied close codes must not be recorded as their
+// label cardinality is not bounded.
+func (n *Node) IncTransportOutgoingClose(transport string, code int) {
+	if n.metrics != nil {
+		n.metrics.incTransportOutgoingClose(transport, code)
+	}
+}
+
 // Shutdown sets shutdown flag to Node so handlers could stop accepting
 // new requests and disconnects clients with shutdown reason.
 func (n *Node) Shutdown(ctx context.Context) error {

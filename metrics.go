@@ -73,25 +73,30 @@ var (
 		Subsystem: "transport",
 		Name:      "messages_received_size",
 	}
+	metricTransportOutgoingClose = clientMetricDef{
+		Subsystem: "transport",
+		Name:      "outgoing_close_count",
+	}
 )
 
 type metrics struct {
-	messagesSentCount      *prometheus.CounterVec
-	messagesReceivedCount  *prometheus.CounterVec
-	actionCount            *prometheus.CounterVec
-	buildInfoGauge         *prometheus.GaugeVec
-	numClientsGauge        prometheus.Gauge
-	numUsersGauge          prometheus.Gauge
-	numSubsGauge           prometheus.Gauge
-	numChannelsGauge       prometheus.Gauge
-	numNodesGauge          prometheus.Gauge
-	replyErrorCount        *prometheus.CounterVec
-	connectionsAccepted    *prometheus.CounterVec
-	connectionsInflight    *prometheus.GaugeVec
-	subscriptionsAccepted  *prometheus.CounterVec
-	subscriptionsInflight  *prometheus.GaugeVec
-	serverUnsubscribeCount *prometheus.CounterVec
-	serverDisconnectCount  *prometheus.CounterVec
+	messagesSentCount           *prometheus.CounterVec
+	messagesReceivedCount       *prometheus.CounterVec
+	actionCount                 *prometheus.CounterVec
+	buildInfoGauge              *prometheus.GaugeVec
+	numClientsGauge             prometheus.Gauge
+	numUsersGauge               prometheus.Gauge
+	numSubsGauge                prometheus.Gauge
+	numChannelsGauge            prometheus.Gauge
+	numNodesGauge               prometheus.Gauge
+	replyErrorCount             *prometheus.CounterVec
+	connectionsAccepted         *prometheus.CounterVec
+	connectionsInflight         *prometheus.GaugeVec
+	subscriptionsAccepted       *prometheus.CounterVec
+	subscriptionsInflight       *prometheus.GaugeVec
+	serverUnsubscribeCount      *prometheus.CounterVec
+	serverDisconnectCount       *prometheus.CounterVec
+	transportOutgoingCloseCount *prometheus.CounterVec
 	// commandDurationSummary holds the legacy Summary by default; when
 	// EnableNativeHistograms is true it is a no-op (the Summary is not
 	// exposed). The companion commandDurationHistogram below always carries
@@ -592,6 +597,18 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "Number of server initiated disconnects.",
 	}, m.buildMetricLabels([]string{"code"}))
 
+	// Note: only server-sent (outgoing) close codes are recorded. They are
+	// chosen by the server/operator, so the "code" label cardinality is bounded.
+	// Client-supplied (incoming) close codes are deliberately not recorded - a
+	// client may send any code in the RFC 6455 application range (3000-4999),
+	// which would let an unauthenticated peer inflate metric cardinality.
+	m.transportOutgoingCloseCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: metricTransportOutgoingClose.Subsystem,
+		Name:      metricTransportOutgoingClose.Name,
+		Help:      "Number of close frames sent to clients, by transport and code.",
+	}, []string{"transport", "code"})
+
 	m.recoverCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "client",
@@ -922,6 +939,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.subscriptionsInflight,
 		m.serverUnsubscribeCount,
 		m.serverDisconnectCount,
+		m.transportOutgoingCloseCount,
 		m.recoverCount,
 		m.pingPongDurationHistogram,
 		m.transportMessagesSent,
@@ -1290,6 +1308,10 @@ func (m *metrics) getCodeLabel(code uint32) string {
 
 type disconnectLabels struct {
 	Code string
+}
+
+func (m *metrics) incTransportOutgoingClose(transport string, code int) {
+	m.transportOutgoingCloseCount.WithLabelValues(transport, m.getCodeLabel(uint32(code))).Inc()
 }
 
 func (m *metrics) incServerDisconnect(code uint32, c *Client) {
