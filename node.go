@@ -880,6 +880,9 @@ func (n *Node) publish(ch string, data []byte, opts ...PublishOption) (PublishRe
 	if err != nil {
 		return PublishResult{}, err
 	}
+	if result.Suppressed {
+		n.metrics.incBrokerPublishSuppressed(result.SuppressReason, ch)
+	}
 	return result, nil
 }
 
@@ -2271,7 +2274,7 @@ func (n *Node) MapPublish(ctx context.Context, ch string, key string, opts MapPu
 	n.metrics.incMessagesSent("map_publication", ch)
 	result, err := mapBroker.Publish(ctx, ch, key, opts)
 	if err == nil && result.Suppressed {
-		n.metrics.incMapPublishSuppressed(result.SuppressReason, ch)
+		n.metrics.incMapBrokerPublishSuppressed(result.SuppressReason, ch)
 	}
 	return result, err
 }
@@ -2290,7 +2293,7 @@ func (n *Node) MapRemove(ctx context.Context, ch string, key string, opts MapRem
 	n.metrics.incMessagesSent("map_removal", ch)
 	result, err := mapBroker.Remove(ctx, ch, key, opts)
 	if err == nil && result.Suppressed {
-		n.metrics.incMapPublishSuppressed(result.SuppressReason, ch)
+		n.metrics.incMapBrokerRemoveSuppressed(result.SuppressReason, ch)
 	}
 	return result, err
 }

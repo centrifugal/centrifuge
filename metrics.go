@@ -134,7 +134,9 @@ type metrics struct {
 	broadcastDurationHistogram  *prometheus.HistogramVec
 	pubSubLagHistogram          *prometheus.HistogramVec
 	pingPongDurationHistogram   *prometheus.HistogramVec
-	mapPublishSuppressedCount   *prometheus.CounterVec
+	brokerPublishSuppressedCount    *prometheus.CounterVec
+	mapBrokerPublishSuppressedCount *prometheus.CounterVec
+	mapBrokerRemoveSuppressedCount  *prometheus.CounterVec
 	mapBrokerCleanupLag      *prometheus.GaugeVec
 	mapBrokerCleanupRemoved  *prometheus.CounterVec
 	mapBrokerCleanupErrors   *prometheus.CounterVec
@@ -175,7 +177,9 @@ type metrics struct {
 	messagesSentCache              sync.Map
 	messagesReceivedCache          sync.Map
 	tagsFilterDroppedCache         sync.Map
-	mapPublishSuppressedCache      sync.Map
+	brokerPublishSuppressedCache    sync.Map
+	mapBrokerPublishSuppressedCache sync.Map
+	mapBrokerRemoveSuppressedCache  sync.Map
 	pubSubLagCache                 sync.Map
 	sharedPollHandlerCache         sync.Map
 	sharedPollResultCache          sync.Map
@@ -711,11 +715,25 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			1.0, 2.5, 5.0, 10.0, // Second resolution.
 		}}, config.EnableNativeHistograms), []string{"type", "channel_namespace"})
 
-	m.mapPublishSuppressedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.brokerPublishSuppressedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "broker",
+		Name:      "publish_suppressed_count",
+		Help:      "Number of suppressed publish operations.",
+	}, []string{"reason", "channel_namespace"})
+
+	m.mapBrokerPublishSuppressedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "map_broker",
 		Name:      "publish_suppressed_count",
-		Help:      "Number of suppressed map publish/remove operations.",
+		Help:      "Number of suppressed map publish operations.",
+	}, []string{"reason", "channel_namespace"})
+
+	m.mapBrokerRemoveSuppressedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "map_broker",
+		Name:      "remove_suppressed_count",
+		Help:      "Number of suppressed map remove operations.",
 	}, []string{"reason", "channel_namespace"})
 
 	m.mapBrokerCleanupLag = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -970,7 +988,9 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.surveyDurationHistogram,
 		m.pubSubLagHistogram,
 		m.broadcastDurationHistogram,
-		m.mapPublishSuppressedCount,
+		m.brokerPublishSuppressedCount,
+		m.mapBrokerPublishSuppressedCount,
+		m.mapBrokerRemoveSuppressedCount,
 		m.mapBrokerCleanupLag,
 		m.mapBrokerCleanupRemoved,
 		m.mapBrokerCleanupErrors,
@@ -1486,23 +1506,37 @@ func (m *metrics) incTagsFilterDropped(ch string, count int) {
 	counter.(prometheus.Counter).Add(float64(count))
 }
 
-type mapPublishSuppressedLabels struct {
+type suppressedLabels struct {
 	Reason           string
 	ChannelNamespace string
 }
 
-func (m *metrics) incMapPublishSuppressed(reason SuppressReason, ch string) {
+// incSuppressed increments a suppressed-operation counter, caching the resolved
+// child by {reason, channel_namespace} to keep the hot publish path cheap.
+func (m *metrics) incSuppressed(vec *prometheus.CounterVec, cache *sync.Map, reason SuppressReason, ch string) {
 	channelNamespace := m.getChannelNamespaceLabel(ch)
-	labels := mapPublishSuppressedLabels{
+	labels := suppressedLabels{
 		Reason:           string(reason),
 		ChannelNamespace: channelNamespace,
 	}
-	counter, ok := m.mapPublishSuppressedCache.Load(labels)
+	counter, ok := cache.Load(labels)
 	if !ok {
-		counter = m.mapPublishSuppressedCount.WithLabelValues(string(reason), channelNamespace)
-		m.mapPublishSuppressedCache.Store(labels, counter)
+		counter = vec.WithLabelValues(string(reason), channelNamespace)
+		cache.Store(labels, counter)
 	}
 	counter.(prometheus.Counter).Inc()
+}
+
+func (m *metrics) incBrokerPublishSuppressed(reason SuppressReason, ch string) {
+	m.incSuppressed(m.brokerPublishSuppressedCount, &m.brokerPublishSuppressedCache, reason, ch)
+}
+
+func (m *metrics) incMapBrokerPublishSuppressed(reason SuppressReason, ch string) {
+	m.incSuppressed(m.mapBrokerPublishSuppressedCount, &m.mapBrokerPublishSuppressedCache, reason, ch)
+}
+
+func (m *metrics) incMapBrokerRemoveSuppressed(reason SuppressReason, ch string) {
+	m.incSuppressed(m.mapBrokerRemoveSuppressedCount, &m.mapBrokerRemoveSuppressedCache, reason, ch)
 }
 
 func (m *metrics) setMapBrokerCleanupLag(name string, seconds float64) {
