@@ -1812,7 +1812,7 @@ func TestNode_MapMetricMethods(t *testing.T) {
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	// These should not panic even when metrics are initialized.
 	n.IncMapBrokerCleanupErrors("test")
-	n.AddMapBrokerCleanupKeysRemoved("test", 5)
+	n.AddMapBrokerCleanupRemoved("test", 5)
 	n.SetMapBrokerCleanupLag("test", 1.5)
 }
 
@@ -1822,7 +1822,7 @@ func TestNode_MapMetricMethods_NilMetrics(t *testing.T) {
 	require.NoError(t, err)
 	// Before Run(), metrics may be nil — should not panic.
 	n.IncMapBrokerCleanupErrors("test")
-	n.AddMapBrokerCleanupKeysRemoved("test", 5)
+	n.AddMapBrokerCleanupRemoved("test", 5)
 	n.SetMapBrokerCleanupLag("test", 1.5)
 }
 

@@ -347,10 +347,10 @@ func (n *Node) IncMapBrokerCleanupErrors(name string) {
 	}
 }
 
-// AddMapBrokerCleanupKeysRemoved adds to the map broker cleanup keys removed counter for observability.
-func (n *Node) AddMapBrokerCleanupKeysRemoved(name string, count int64) {
+// AddMapBrokerCleanupRemoved adds to the map broker cleanup removed-entries counter for observability.
+func (n *Node) AddMapBrokerCleanupRemoved(name string, count int64) {
 	if n.metrics != nil {
-		n.metrics.addMapBrokerCleanupKeysRemoved(name, count)
+		n.metrics.addMapBrokerCleanupRemoved(name, count)
 	}
 }
 

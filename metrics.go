@@ -135,9 +135,9 @@ type metrics struct {
 	pubSubLagHistogram          *prometheus.HistogramVec
 	pingPongDurationHistogram   *prometheus.HistogramVec
 	mapPublishSuppressedCount   *prometheus.CounterVec
-	mapBrokerCleanupLag         *prometheus.GaugeVec
-	mapBrokerCleanupKeysRemoved *prometheus.CounterVec
-	mapBrokerCleanupErrors      *prometheus.CounterVec
+	mapBrokerCleanupLag      *prometheus.GaugeVec
+	mapBrokerCleanupRemoved  *prometheus.CounterVec
+	mapBrokerCleanupErrors   *prometheus.CounterVec
 
 	redisBrokerPubSubErrors           *prometheus.CounterVec
 	redisBrokerPubSubDroppedMessages  *prometheus.CounterVec
@@ -725,17 +725,17 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "Lag between now and the oldest expired entry awaiting cleanup. 0 means caught up.",
 	}, []string{"broker_name"})
 
-	m.mapBrokerCleanupKeysRemoved = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.mapBrokerCleanupRemoved = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "map_broker",
-		Name:      "cleanup_keys_removed_count",
-		Help:      "Total number of keys removed by cleanup.",
+		Name:      "cleanup_removed_total",
+		Help:      "Total number of expired entries removed by cleanup.",
 	}, []string{"broker_name"})
 
 	m.mapBrokerCleanupErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "map_broker",
-		Name:      "cleanup_errors_count",
+		Name:      "cleanup_errors_total",
 		Help:      "Total number of cleanup errors.",
 	}, []string{"broker_name"})
 
@@ -972,7 +972,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.broadcastDurationHistogram,
 		m.mapPublishSuppressedCount,
 		m.mapBrokerCleanupLag,
-		m.mapBrokerCleanupKeysRemoved,
+		m.mapBrokerCleanupRemoved,
 		m.mapBrokerCleanupErrors,
 		m.redisBrokerPubSubErrors,
 		m.redisBrokerPubSubDroppedMessages,
@@ -1509,8 +1509,8 @@ func (m *metrics) setMapBrokerCleanupLag(name string, seconds float64) {
 	m.mapBrokerCleanupLag.WithLabelValues(name).Set(seconds)
 }
 
-func (m *metrics) addMapBrokerCleanupKeysRemoved(name string, count int64) {
-	m.mapBrokerCleanupKeysRemoved.WithLabelValues(name).Add(float64(count))
+func (m *metrics) addMapBrokerCleanupRemoved(name string, count int64) {
+	m.mapBrokerCleanupRemoved.WithLabelValues(name).Add(float64(count))
 }
 
 func (m *metrics) incMapBrokerCleanupErrors(name string) {

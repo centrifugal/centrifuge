@@ -2537,7 +2537,7 @@ func TestMemoryMapBroker_CleanupMetrics(t *testing.T) {
 			return false
 		}
 		for _, f := range families {
-			if f.GetName() == "centrifuge_map_broker_cleanup_keys_removed_count" {
+			if f.GetName() == "centrifuge_map_broker_cleanup_removed_total" {
 				for _, m := range f.GetMetric() {
 					if m.GetCounter().GetValue() >= 2 {
 						return true
@@ -2546,7 +2546,7 @@ func TestMemoryMapBroker_CleanupMetrics(t *testing.T) {
 			}
 		}
 		return false
-	}, 5*time.Second, 100*time.Millisecond, "cleanup_keys_removed_count should reach at least 2")
+	}, 5*time.Second, 100*time.Millisecond, "cleanup_removed_total should reach at least 2")
 
 	// Verify lag metric was set (should be >= 0).
 	families, err := registry.Gather()

@@ -797,7 +797,7 @@ func TestMetrics_MapBrokerAndRedisBrokerCounters(t *testing.T) {
 	// These were previously uncovered.
 	m.incRedisBrokerPubSubErrors("test_broker", "subscribe")
 	m.incMapBrokerCleanupErrors("test_broker")
-	m.addMapBrokerCleanupKeysRemoved("test_broker", 10)
+	m.addMapBrokerCleanupRemoved("test_broker", 10)
 	m.setMapBrokerCleanupLag("test_broker", 2.5)
 }
 

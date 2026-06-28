@@ -751,7 +751,7 @@ func (h *mapHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 	}
 
 	if h.node != nil && h.node.metrics != nil && keysRemoved > 0 {
-		h.node.metrics.addMapBrokerCleanupKeysRemoved("", keysRemoved)
+		h.node.metrics.addMapBrokerCleanupRemoved("", keysRemoved)
 	}
 }
 
