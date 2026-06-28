@@ -746,14 +746,14 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	m.mapBrokerCleanupRemoved = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "map_broker",
-		Name:      "cleanup_removed_total",
+		Name:      "cleanup_removed_count",
 		Help:      "Total number of expired entries removed by cleanup.",
 	}, []string{"broker_name"})
 
 	m.mapBrokerCleanupErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "map_broker",
-		Name:      "cleanup_errors_total",
+		Name:      "cleanup_errors_count",
 		Help:      "Total number of cleanup errors.",
 	}, []string{"broker_name"})
 

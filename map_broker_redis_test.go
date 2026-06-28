@@ -3352,13 +3352,13 @@ func TestRedisMapBroker_CleanupMetrics(t *testing.T) {
 		require.NoError(t, err)
 		var removedCount float64
 		for _, f := range families {
-			if f.GetName() == "centrifuge_map_broker_cleanup_removed_total" {
+			if f.GetName() == "centrifuge_map_broker_cleanup_removed_count" {
 				for _, m := range f.GetMetric() {
 					removedCount += m.GetCounter().GetValue()
 				}
 			}
 		}
-		require.GreaterOrEqual(t, removedCount, float64(2), "cleanup_removed_total should be at least 2")
+		require.GreaterOrEqual(t, removedCount, float64(2), "cleanup_removed_count should be at least 2")
 	})
 }
 
