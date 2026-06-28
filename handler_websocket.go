@@ -18,6 +18,17 @@ import (
 	"github.com/maypok86/otter/v2"
 )
 
+// defaultWebsocketDecompressedMessageSizeLimitMultiplier is the default factor
+// applied to MessageSizeLimit to derive the maximum allowed decompressed
+// message size when permessage-deflate compression is negotiated and
+// WebsocketConfig.DecompressedMessageSizeLimit is not set explicitly.
+// MessageSizeLimit alone only bounds the compressed bytes received on the wire,
+// so a small compressed frame could otherwise be inflated into a much larger
+// amount of memory (a "decompression bomb"). The multiplier leaves generous
+// headroom for legitimately compressible messages while still rejecting
+// extreme expansion ratios.
+const defaultWebsocketDecompressedMessageSizeLimitMultiplier = 10
+
 // WebsocketConfig represents config for WebsocketHandler.
 type WebsocketConfig struct {
 	// CheckOrigin func to provide custom origin check logic.
@@ -38,7 +49,19 @@ type WebsocketConfig struct {
 
 	// MessageSizeLimit sets the maximum size in bytes of allowed message from client.
 	// By default, 65536 bytes (64KB) will be used.
+	// Note that with Compression enabled this only bounds the compressed bytes
+	// received on the wire - see DecompressedMessageSizeLimit which bounds the
+	// size after decompression.
 	MessageSizeLimit int
+
+	// DecompressedMessageSizeLimit sets the maximum size in bytes of a single
+	// message after permessage-deflate decompression. It only has an effect when
+	// Compression is enabled. MessageSizeLimit alone bounds only the compressed
+	// bytes received on the wire, so without this limit a small compressed frame
+	// could be inflated into a much larger amount of memory (a "decompression
+	// bomb"). When set to zero (the default) the limit is derived from
+	// MessageSizeLimit multiplied by 10 (const multiplier).
+	DecompressedMessageSizeLimit int
 
 	// WriteTimeout is maximum time of write message operation.
 	// Slow client will be disconnected.
@@ -177,6 +200,15 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if messageSizeLimit > 0 {
 		conn.SetReadLimit(int64(messageSizeLimit))
 	}
+	if compression {
+		decompressedMessageSizeLimit := s.config.DecompressedMessageSizeLimit
+		if decompressedMessageSizeLimit == 0 {
+			decompressedMessageSizeLimit = messageSizeLimit * defaultWebsocketDecompressedMessageSizeLimitMultiplier
+		}
+		if decompressedMessageSizeLimit > 0 {
+			conn.SetDecompressedReadLimit(int64(decompressedMessageSizeLimit))
+		}
+	}
 
 	if useFramePingPong {
 		pongTimeout := s.config.PingPongConfig.PongTimeout
@@ -196,6 +228,14 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	handleConn := func() {
+		// Registered first so it runs last, after any teardown close frame has
+		// been written. Only server-sent (outgoing) close codes are recorded -
+		// client-supplied codes are skipped to keep metric cardinality bounded.
+		defer func() {
+			if code, incoming := conn.CloseCode(); code != 0 && !incoming {
+				s.node.IncTransportOutgoingClose(transportWebsocket, code)
+			}
+		}()
 		opts := websocketTransportOptions{
 			pingPong:           s.config.PingPongConfig,
 			writeTimeout:       writeTimeout,
