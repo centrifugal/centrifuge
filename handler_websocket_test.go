@@ -1311,7 +1311,7 @@ func dialCompressed(t *testing.T, config WebsocketConfig) *websocket.Conn {
 
 // TestWebsocketHandlerDecompressionBombRejected proves end-to-end that with
 // compression enabled the default decompressed limit (MessageSizeLimit *
-// DefaultWebsocketDecompressedMessageSizeLimitMultiplier) rejects a tiny
+// defaultWebsocketDecompressedMessageSizeLimitMultiplier) rejects a tiny
 // compressed frame that inflates past the limit, before any authentication.
 func TestWebsocketHandlerDecompressionBombRejected(t *testing.T) {
 	t.Parallel()

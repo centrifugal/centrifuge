@@ -18,7 +18,7 @@ import (
 	"github.com/maypok86/otter/v2"
 )
 
-// DefaultWebsocketDecompressedMessageSizeLimitMultiplier is the default factor
+// defaultWebsocketDecompressedMessageSizeLimitMultiplier is the default factor
 // applied to MessageSizeLimit to derive the maximum allowed decompressed
 // message size when permessage-deflate compression is negotiated and
 // WebsocketConfig.DecompressedMessageSizeLimit is not set explicitly.
@@ -27,7 +27,7 @@ import (
 // amount of memory (a "decompression bomb"). The multiplier leaves generous
 // headroom for legitimately compressible messages while still rejecting
 // extreme expansion ratios.
-const DefaultWebsocketDecompressedMessageSizeLimitMultiplier = 10
+const defaultWebsocketDecompressedMessageSizeLimitMultiplier = 10
 
 // WebsocketConfig represents config for WebsocketHandler.
 type WebsocketConfig struct {
@@ -60,8 +60,7 @@ type WebsocketConfig struct {
 	// bytes received on the wire, so without this limit a small compressed frame
 	// could be inflated into a much larger amount of memory (a "decompression
 	// bomb"). When set to zero (the default) the limit is derived from
-	// MessageSizeLimit multiplied by
-	// DefaultWebsocketDecompressedMessageSizeLimitMultiplier.
+	// MessageSizeLimit multiplied by 10 (const multiplier).
 	DecompressedMessageSizeLimit int
 
 	// WriteTimeout is maximum time of write message operation.
@@ -204,7 +203,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if compression {
 		decompressedMessageSizeLimit := s.config.DecompressedMessageSizeLimit
 		if decompressedMessageSizeLimit == 0 {
-			decompressedMessageSizeLimit = messageSizeLimit * DefaultWebsocketDecompressedMessageSizeLimitMultiplier
+			decompressedMessageSizeLimit = messageSizeLimit * defaultWebsocketDecompressedMessageSizeLimitMultiplier
 		}
 		if decompressedMessageSizeLimit > 0 {
 			conn.SetDecompressedReadLimit(int64(decompressedMessageSizeLimit))
