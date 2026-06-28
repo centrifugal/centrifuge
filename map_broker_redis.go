@@ -2765,7 +2765,7 @@ func (e *RedisMapBroker) batchRemoveExpired(ctx context.Context, shard *RedisSha
 	if len(result) > 0 {
 		if removedCount, parseErr := result[0].AsInt64(); parseErr == nil && removedCount > 0 {
 			if e.node.metrics != nil {
-				e.node.metrics.addMapBrokerCleanupKeysRemoved(e.conf.Name, removedCount)
+				e.node.metrics.addMapBrokerCleanupRemoved(e.conf.Name, removedCount)
 			}
 		}
 	}
@@ -2803,6 +2803,7 @@ func (e *RedisMapBroker) runPubSub(s *brokerShardWrapper, logFields map[string]a
 		cb,
 		e.node,
 		e.conf.Name,
+		e.node.metrics.mapBrokerPubSub,
 		e.conf.SubscribeOnReplica,
 		e.conf.numPubSubProcessors,
 		e.conf.numResubscribeShards,

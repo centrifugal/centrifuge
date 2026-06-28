@@ -58,6 +58,7 @@ func runPubSubLoop(
 	cb pubSubCallbacks,
 	node *Node,
 	name string,
+	psm redisPubSubMetrics,
 	subscribeOnReplica bool,
 	numProcessors, numResubscribeShards, numSubscribeShards, numPartitions int,
 	logFields map[string]any,
@@ -111,7 +112,7 @@ func runPubSubLoop(
 				case msg := <-ch:
 					err := cb.handleMessage(shard.isCluster, eventHandler, msg.Channel, convert.StringToBytes(msg.Message))
 					if err != nil {
-						node.metrics.incRedisBrokerPubSubErrors(name, "handle_client_message")
+						psm.incErrors(name, "handle_client_message")
 						node.logger.log(newErrorLogEntry(err, "error handling client message", logFields))
 						continue
 					}
@@ -130,7 +131,7 @@ func runPubSubLoop(
 				return
 			case <-ticker.C:
 				for i := 0; i < numProcessors; i++ {
-					node.metrics.redisBrokerPubSubBufferedMessages.WithLabelValues(name, "client", strconv.Itoa(i)).Set(float64(len(processors[i])))
+					psm.buffered.WithLabelValues(name, "client", strconv.Itoa(i)).Set(float64(len(processors[i])))
 				}
 			}
 		}
@@ -156,7 +157,7 @@ func runPubSubLoop(
 				// Blocking here will block Redis connection read loop which is not a
 				// good thing and can lead to slower command processing and potentially
 				// to deadlocks (see https://github.com/redis/rueidis/issues/596).
-				node.metrics.redisBrokerPubSubDroppedMessages.WithLabelValues(name, "client").Inc()
+				psm.dropped.WithLabelValues(name, "client").Inc()
 			}
 		},
 		OnSubscription: func(ps rueidis.PubSubSubscription) {
@@ -179,7 +180,7 @@ func runPubSubLoop(
 	}
 	if err != nil {
 		startOnce(err)
-		node.metrics.incRedisBrokerPubSubErrors(name, "subscribe_shard_channel")
+		psm.incErrors(name, "subscribe_shard_channel")
 		node.logger.log(newErrorLogEntry(err, "pub/sub subscribe error", logFields))
 		return
 	}
@@ -228,7 +229,7 @@ func runPubSubLoop(
 				if len(batch) > 0 && i%redisSubscribeBatchLimit == 0 {
 					err := subscribeBatch(batch)
 					if err != nil {
-						node.metrics.incRedisBrokerPubSubErrors(name, "subscribe_channel")
+						psm.incErrors(name, "subscribe_channel")
 						node.logger.log(newErrorLogEntry(err, "error subscribing", logFields))
 						closeDoneOnce()
 						return
@@ -240,7 +241,7 @@ func runPubSubLoop(
 			if len(batch) > 0 {
 				err := subscribeBatch(batch)
 				if err != nil {
-					node.metrics.incRedisBrokerPubSubErrors(name, "subscribe_channel")
+					psm.incErrors(name, "subscribe_channel")
 					node.logger.log(newErrorLogEntry(err, "error subscribing", logFields))
 					closeDoneOnce()
 					return
@@ -283,7 +284,7 @@ func runPubSubLoop(
 	case err = <-wait:
 		startOnce(err)
 		if err != nil {
-			node.metrics.incRedisBrokerPubSubErrors(name, "connection")
+			psm.incErrors(name, "connection")
 			node.logger.log(newErrorLogEntry(err, "pub/sub connection error", logFields))
 		}
 	case <-done:

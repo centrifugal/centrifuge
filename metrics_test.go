@@ -787,8 +787,12 @@ func Test_getHTTPTransportProto(t *testing.T) {
 
 func TestMetrics_MapBrokerAndRedisBrokerCounters(t *testing.T) {
 	t.Parallel()
+	// Use a dedicated registry: the "test_map" namespace + "broker" subsystem
+	// would otherwise collide with another test's "test" namespace + "map_broker"
+	// subsystem on the shared default registry (both form *_map_broker_* fqNames).
 	m, err := newMetricsRegistry(MetricsConfig{
-		MetricsNamespace: "test_map",
+		MetricsNamespace:   "test_map",
+		RegistererGatherer: prometheus.NewRegistry(),
 		GetChannelNamespaceLabel: func(channel string) string {
 			return channel
 		},
@@ -797,7 +801,7 @@ func TestMetrics_MapBrokerAndRedisBrokerCounters(t *testing.T) {
 	// These were previously uncovered.
 	m.incRedisBrokerPubSubErrors("test_broker", "subscribe")
 	m.incMapBrokerCleanupErrors("test_broker")
-	m.addMapBrokerCleanupKeysRemoved("test_broker", 10)
+	m.addMapBrokerCleanupRemoved("test_broker", 10)
 	m.setMapBrokerCleanupLag("test_broker", 2.5)
 }
 

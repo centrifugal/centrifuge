@@ -134,14 +134,22 @@ type metrics struct {
 	broadcastDurationHistogram  *prometheus.HistogramVec
 	pubSubLagHistogram          *prometheus.HistogramVec
 	pingPongDurationHistogram   *prometheus.HistogramVec
-	mapPublishSuppressedCount   *prometheus.CounterVec
-	mapBrokerCleanupLag         *prometheus.GaugeVec
-	mapBrokerCleanupKeysRemoved *prometheus.CounterVec
-	mapBrokerCleanupErrors      *prometheus.CounterVec
+	brokerPublishSuppressedCount    *prometheus.CounterVec
+	mapBrokerPublishSuppressedCount *prometheus.CounterVec
+	mapBrokerRemoveSuppressedCount  *prometheus.CounterVec
+	mapBrokerCleanupLag      *prometheus.GaugeVec
+	mapBrokerCleanupRemoved  *prometheus.CounterVec
+	mapBrokerCleanupErrors   *prometheus.CounterVec
 
 	redisBrokerPubSubErrors           *prometheus.CounterVec
 	redisBrokerPubSubDroppedMessages  *prometheus.CounterVec
 	redisBrokerPubSubBufferedMessages *prometheus.GaugeVec
+
+	// brokerPubSub and mapBrokerPubSub bundle the Redis PUB/SUB metric vectors per
+	// broker kind so the shared pub/sub loop reports under each broker's own
+	// subsystem: broker_* for RedisBroker, map_broker_* for RedisMapBroker.
+	brokerPubSub    redisPubSubMetrics
+	mapBrokerPubSub redisPubSubMetrics
 
 	// Shared poll metrics.
 	sharedPollCycleDurationHistogram     *prometheus.HistogramVec
@@ -169,7 +177,9 @@ type metrics struct {
 	messagesSentCache              sync.Map
 	messagesReceivedCache          sync.Map
 	tagsFilterDroppedCache         sync.Map
-	mapPublishSuppressedCache      sync.Map
+	brokerPublishSuppressedCache    sync.Map
+	mapBrokerPublishSuppressedCache sync.Map
+	mapBrokerRemoveSuppressedCache  sync.Map
 	pubSubLagCache                 sync.Map
 	sharedPollHandlerCache         sync.Map
 	sharedPollResultCache          sync.Map
@@ -705,11 +715,25 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			1.0, 2.5, 5.0, 10.0, // Second resolution.
 		}}, config.EnableNativeHistograms), []string{"type", "channel_namespace"})
 
-	m.mapPublishSuppressedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.brokerPublishSuppressedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "broker",
+		Name:      "publish_suppressed_count",
+		Help:      "Number of suppressed publish operations.",
+	}, []string{"reason", "channel_namespace"})
+
+	m.mapBrokerPublishSuppressedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "map_broker",
 		Name:      "publish_suppressed_count",
-		Help:      "Number of suppressed map publish/remove operations.",
+		Help:      "Number of suppressed map publish operations.",
+	}, []string{"reason", "channel_namespace"})
+
+	m.mapBrokerRemoveSuppressedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "map_broker",
+		Name:      "remove_suppressed_count",
+		Help:      "Number of suppressed map remove operations.",
 	}, []string{"reason", "channel_namespace"})
 
 	m.mapBrokerCleanupLag = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -719,11 +743,11 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "Lag between now and the oldest expired entry awaiting cleanup. 0 means caught up.",
 	}, []string{"broker_name"})
 
-	m.mapBrokerCleanupKeysRemoved = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.mapBrokerCleanupRemoved = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "map_broker",
-		Name:      "cleanup_keys_removed_count",
-		Help:      "Total number of keys removed by cleanup.",
+		Name:      "cleanup_removed_count",
+		Help:      "Total number of expired entries removed by cleanup.",
 	}, []string{"broker_name"})
 
 	m.mapBrokerCleanupErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -851,6 +875,36 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	m.redisBrokerPubSubDroppedMessages.WithLabelValues("", "control").Add(0)
 	m.redisBrokerPubSubDroppedMessages.WithLabelValues("", "client").Add(0)
 
+	m.brokerPubSub = redisPubSubMetrics{
+		errors:   m.redisBrokerPubSubErrors,
+		dropped:  m.redisBrokerPubSubDroppedMessages,
+		buffered: m.redisBrokerPubSubBufferedMessages,
+	}
+
+	// RedisMapBroker reports the same Redis PUB/SUB metrics under its own
+	// map_broker subsystem so its series never collide with the stream broker's.
+	m.mapBrokerPubSub = redisPubSubMetrics{
+		errors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace,
+			Subsystem: "map_broker",
+			Name:      "redis_pub_sub_errors",
+			Help:      "Number of times there was an error in Redis PUB/SUB connection.",
+		}, []string{"broker_name", "error"}),
+		dropped: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace,
+			Subsystem: "map_broker",
+			Name:      "redis_pub_sub_dropped_messages",
+			Help:      "Number of dropped messages on application level in Redis PUB/SUB.",
+		}, []string{"broker_name", "channel_type"}),
+		buffered: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: metricsNamespace,
+			Subsystem: "map_broker",
+			Name:      "redis_pub_sub_buffered_messages",
+			Help:      "Number of messages buffered in Redis PUB/SUB.",
+		}, []string{"broker_name", "channel_type", "pub_sub_processor"}),
+	}
+	m.mapBrokerPubSub.dropped.WithLabelValues("", "client").Add(0)
+
 	// Helper to build message labels for node-level broker message metrics
 	// These metrics don't support client labels as they track node-to-broker communication
 	buildMessageLabels := func(msgType string) []string {
@@ -934,13 +988,18 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.surveyDurationHistogram,
 		m.pubSubLagHistogram,
 		m.broadcastDurationHistogram,
-		m.mapPublishSuppressedCount,
+		m.brokerPublishSuppressedCount,
+		m.mapBrokerPublishSuppressedCount,
+		m.mapBrokerRemoveSuppressedCount,
 		m.mapBrokerCleanupLag,
-		m.mapBrokerCleanupKeysRemoved,
+		m.mapBrokerCleanupRemoved,
 		m.mapBrokerCleanupErrors,
 		m.redisBrokerPubSubErrors,
 		m.redisBrokerPubSubDroppedMessages,
 		m.redisBrokerPubSubBufferedMessages,
+		m.mapBrokerPubSub.errors,
+		m.mapBrokerPubSub.dropped,
+		m.mapBrokerPubSub.buffered,
 		m.sharedPollCycleDurationHistogram,
 		m.sharedPollCycleWorkDurationHistogram,
 		m.sharedPollHandlerDurationHistogram,
@@ -965,6 +1024,19 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	}
 
 	return m, nil
+}
+
+// redisPubSubMetrics bundles the Redis PUB/SUB metric vectors for one broker kind
+// so the shared pub/sub loop (runPubSubLoop) reports under the calling broker's
+// own subsystem — broker_* for RedisBroker, map_broker_* for RedisMapBroker.
+type redisPubSubMetrics struct {
+	errors   *prometheus.CounterVec
+	dropped  *prometheus.CounterVec
+	buffered *prometheus.GaugeVec
+}
+
+func (p redisPubSubMetrics) incErrors(name, errType string) {
+	p.errors.WithLabelValues(name, errType).Inc()
 }
 
 func (m *metrics) incRedisBrokerPubSubErrors(name string, error string) {
@@ -1434,31 +1506,45 @@ func (m *metrics) incTagsFilterDropped(ch string, count int) {
 	counter.(prometheus.Counter).Add(float64(count))
 }
 
-type mapPublishSuppressedLabels struct {
+type suppressedLabels struct {
 	Reason           string
 	ChannelNamespace string
 }
 
-func (m *metrics) incMapPublishSuppressed(reason SuppressReason, ch string) {
+// incSuppressed increments a suppressed-operation counter, caching the resolved
+// child by {reason, channel_namespace} to keep the hot publish path cheap.
+func (m *metrics) incSuppressed(vec *prometheus.CounterVec, cache *sync.Map, reason SuppressReason, ch string) {
 	channelNamespace := m.getChannelNamespaceLabel(ch)
-	labels := mapPublishSuppressedLabels{
+	labels := suppressedLabels{
 		Reason:           string(reason),
 		ChannelNamespace: channelNamespace,
 	}
-	counter, ok := m.mapPublishSuppressedCache.Load(labels)
+	counter, ok := cache.Load(labels)
 	if !ok {
-		counter = m.mapPublishSuppressedCount.WithLabelValues(string(reason), channelNamespace)
-		m.mapPublishSuppressedCache.Store(labels, counter)
+		counter = vec.WithLabelValues(string(reason), channelNamespace)
+		cache.Store(labels, counter)
 	}
 	counter.(prometheus.Counter).Inc()
+}
+
+func (m *metrics) incBrokerPublishSuppressed(reason SuppressReason, ch string) {
+	m.incSuppressed(m.brokerPublishSuppressedCount, &m.brokerPublishSuppressedCache, reason, ch)
+}
+
+func (m *metrics) incMapBrokerPublishSuppressed(reason SuppressReason, ch string) {
+	m.incSuppressed(m.mapBrokerPublishSuppressedCount, &m.mapBrokerPublishSuppressedCache, reason, ch)
+}
+
+func (m *metrics) incMapBrokerRemoveSuppressed(reason SuppressReason, ch string) {
+	m.incSuppressed(m.mapBrokerRemoveSuppressedCount, &m.mapBrokerRemoveSuppressedCache, reason, ch)
 }
 
 func (m *metrics) setMapBrokerCleanupLag(name string, seconds float64) {
 	m.mapBrokerCleanupLag.WithLabelValues(name).Set(seconds)
 }
 
-func (m *metrics) addMapBrokerCleanupKeysRemoved(name string, count int64) {
-	m.mapBrokerCleanupKeysRemoved.WithLabelValues(name).Add(float64(count))
+func (m *metrics) addMapBrokerCleanupRemoved(name string, count int64) {
+	m.mapBrokerCleanupRemoved.WithLabelValues(name).Add(float64(count))
 }
 
 func (m *metrics) incMapBrokerCleanupErrors(name string) {

@@ -662,6 +662,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, logFields map[string]any, event
 		cb,
 		b.node,
 		b.config.Name,
+		b.node.metrics.brokerPubSub,
 		b.config.SubscribeOnReplica,
 		b.config.numPubSubProcessors,
 		b.config.numResubscribeShards,

@@ -347,10 +347,10 @@ func (n *Node) IncMapBrokerCleanupErrors(name string) {
 	}
 }
 
-// AddMapBrokerCleanupKeysRemoved adds to the map broker cleanup keys removed counter for observability.
-func (n *Node) AddMapBrokerCleanupKeysRemoved(name string, count int64) {
+// AddMapBrokerCleanupRemoved adds to the map broker cleanup removed-entries counter for observability.
+func (n *Node) AddMapBrokerCleanupRemoved(name string, count int64) {
 	if n.metrics != nil {
-		n.metrics.addMapBrokerCleanupKeysRemoved(name, count)
+		n.metrics.addMapBrokerCleanupRemoved(name, count)
 	}
 }
 
@@ -879,6 +879,9 @@ func (n *Node) publish(ch string, data []byte, opts ...PublishOption) (PublishRe
 	result, err := n.getBroker(ch).Publish(ch, data, *pubOpts)
 	if err != nil {
 		return PublishResult{}, err
+	}
+	if result.Suppressed {
+		n.metrics.incBrokerPublishSuppressed(result.SuppressReason, ch)
 	}
 	return result, nil
 }
@@ -2271,7 +2274,7 @@ func (n *Node) MapPublish(ctx context.Context, ch string, key string, opts MapPu
 	n.metrics.incMessagesSent("map_publication", ch)
 	result, err := mapBroker.Publish(ctx, ch, key, opts)
 	if err == nil && result.Suppressed {
-		n.metrics.incMapPublishSuppressed(result.SuppressReason, ch)
+		n.metrics.incMapBrokerPublishSuppressed(result.SuppressReason, ch)
 	}
 	return result, err
 }
@@ -2290,7 +2293,7 @@ func (n *Node) MapRemove(ctx context.Context, ch string, key string, opts MapRem
 	n.metrics.incMessagesSent("map_removal", ch)
 	result, err := mapBroker.Remove(ctx, ch, key, opts)
 	if err == nil && result.Suppressed {
-		n.metrics.incMapPublishSuppressed(result.SuppressReason, ch)
+		n.metrics.incMapBrokerRemoveSuppressed(result.SuppressReason, ch)
 	}
 	return result, err
 }
