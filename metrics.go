@@ -143,6 +143,12 @@ type metrics struct {
 	redisBrokerPubSubDroppedMessages  *prometheus.CounterVec
 	redisBrokerPubSubBufferedMessages *prometheus.GaugeVec
 
+	// brokerPubSub and mapBrokerPubSub bundle the Redis PUB/SUB metric vectors per
+	// broker kind so the shared pub/sub loop reports under each broker's own
+	// subsystem: broker_* for RedisBroker, map_broker_* for RedisMapBroker.
+	brokerPubSub    redisPubSubMetrics
+	mapBrokerPubSub redisPubSubMetrics
+
 	// Shared poll metrics.
 	sharedPollCycleDurationHistogram     *prometheus.HistogramVec
 	sharedPollCycleWorkDurationHistogram *prometheus.HistogramVec
@@ -851,6 +857,36 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	m.redisBrokerPubSubDroppedMessages.WithLabelValues("", "control").Add(0)
 	m.redisBrokerPubSubDroppedMessages.WithLabelValues("", "client").Add(0)
 
+	m.brokerPubSub = redisPubSubMetrics{
+		errors:   m.redisBrokerPubSubErrors,
+		dropped:  m.redisBrokerPubSubDroppedMessages,
+		buffered: m.redisBrokerPubSubBufferedMessages,
+	}
+
+	// RedisMapBroker reports the same Redis PUB/SUB metrics under its own
+	// map_broker subsystem so its series never collide with the stream broker's.
+	m.mapBrokerPubSub = redisPubSubMetrics{
+		errors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace,
+			Subsystem: "map_broker",
+			Name:      "redis_pub_sub_errors",
+			Help:      "Number of times there was an error in Redis PUB/SUB connection.",
+		}, []string{"broker_name", "error"}),
+		dropped: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace,
+			Subsystem: "map_broker",
+			Name:      "redis_pub_sub_dropped_messages",
+			Help:      "Number of dropped messages on application level in Redis PUB/SUB.",
+		}, []string{"broker_name", "channel_type"}),
+		buffered: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: metricsNamespace,
+			Subsystem: "map_broker",
+			Name:      "redis_pub_sub_buffered_messages",
+			Help:      "Number of messages buffered in Redis PUB/SUB.",
+		}, []string{"broker_name", "channel_type", "pub_sub_processor"}),
+	}
+	m.mapBrokerPubSub.dropped.WithLabelValues("", "client").Add(0)
+
 	// Helper to build message labels for node-level broker message metrics
 	// These metrics don't support client labels as they track node-to-broker communication
 	buildMessageLabels := func(msgType string) []string {
@@ -941,6 +977,9 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.redisBrokerPubSubErrors,
 		m.redisBrokerPubSubDroppedMessages,
 		m.redisBrokerPubSubBufferedMessages,
+		m.mapBrokerPubSub.errors,
+		m.mapBrokerPubSub.dropped,
+		m.mapBrokerPubSub.buffered,
 		m.sharedPollCycleDurationHistogram,
 		m.sharedPollCycleWorkDurationHistogram,
 		m.sharedPollHandlerDurationHistogram,
@@ -965,6 +1004,19 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	}
 
 	return m, nil
+}
+
+// redisPubSubMetrics bundles the Redis PUB/SUB metric vectors for one broker kind
+// so the shared pub/sub loop (runPubSubLoop) reports under the calling broker's
+// own subsystem — broker_* for RedisBroker, map_broker_* for RedisMapBroker.
+type redisPubSubMetrics struct {
+	errors   *prometheus.CounterVec
+	dropped  *prometheus.CounterVec
+	buffered *prometheus.GaugeVec
+}
+
+func (p redisPubSubMetrics) incErrors(name, errType string) {
+	p.errors.WithLabelValues(name, errType).Inc()
 }
 
 func (m *metrics) incRedisBrokerPubSubErrors(name string, error string) {

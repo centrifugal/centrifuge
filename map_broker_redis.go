@@ -2803,6 +2803,7 @@ func (e *RedisMapBroker) runPubSub(s *brokerShardWrapper, logFields map[string]a
 		cb,
 		e.node,
 		e.conf.Name,
+		e.node.metrics.mapBrokerPubSub,
 		e.conf.SubscribeOnReplica,
 		e.conf.numPubSubProcessors,
 		e.conf.numResubscribeShards,
