@@ -476,18 +476,27 @@ func (t *websocketTransport) writeData(data []byte) error {
 		}
 	}
 
-	if t.opts.writeTimeout > 0 {
-		_ = t.conn.SetWriteDeadline(time.Time{})
-		if t.opts.protoMajor > 1 {
-			// For HTTP/2 connections, we need to actually clear the deadline on the underlying
-			// connection. The websocket Conn.SetWriteDeadline only sets a field, but doesn't
-			// clear the deadline that was already set on the underlying net.Conn during write.
-			// This is critical for HTTP/2 ResponseController where expired deadlines cannot be
-			// extended and will cause the stream to fail permanently.
-			_ = t.conn.NetConn().SetWriteDeadline(time.Time{})
-		}
-	}
+	t.clearWriteDeadline()
 	return nil
+}
+
+// clearWriteDeadline resets the write deadline set before a write. It must be
+// called after every write that armed a deadline (both data writes and frame
+// control writes such as pings), otherwise on HTTP/2 a lingering expired
+// deadline makes all subsequent writes fail permanently.
+func (t *websocketTransport) clearWriteDeadline() {
+	if t.opts.writeTimeout <= 0 {
+		return
+	}
+	_ = t.conn.SetWriteDeadline(time.Time{})
+	if t.opts.protoMajor > 1 {
+		// For HTTP/2 connections, we need to actually clear the deadline on the underlying
+		// connection. The websocket Conn.SetWriteDeadline only sets a field, but doesn't
+		// clear the deadline that was already set on the underlying net.Conn during write.
+		// This is critical for HTTP/2 ResponseController where expired deadlines cannot be
+		// extended and will cause the stream to fail permanently.
+		_ = t.conn.NetConn().SetWriteDeadline(time.Time{})
+	}
 }
 
 // Write data to transport.
@@ -585,6 +594,11 @@ func (t *websocketTransport) ping() {
 			_ = t.Close(DisconnectWriteError)
 			return
 		}
+		// WriteControl arms a write deadline on the underlying connection just
+		// like a data write, so it must be cleared the same way — otherwise on
+		// HTTP/2 the expired deadline cannot be extended by a later write and
+		// the stream fails permanently. See writeData for the data-path clear.
+		t.clearWriteDeadline()
 		t.addPing()
 	}
 }
