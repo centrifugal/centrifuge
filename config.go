@@ -384,13 +384,14 @@ type MetricsConfig struct {
 
 	// RegisteredClientNames is an optional list of known client names which will be allowed to be
 	// attached as labels to metrics. If client passed a name which is not in the list – then Centrifuge
-	// will use string "unregistered" as a client_name label. We need to be strict here to avoid
-	// Prometheus cardinality issues.
+	// will use string "unregistered" as a client_name label. If a client passed no name at all Centrifuge
+	// will use string "unnamed". We need to be strict here to avoid Prometheus cardinality issues.
 	RegisteredClientNames []string
 	// CheckRegisteredClientVersion is a function to check whether the version passed by a client with a
 	// particular name is valid and can be used in metric values. When function is not set or returns
-	// false Centrifuge will use "unregistered" value for a client version. Note, the name argument here
-	// is an original name of client passed to Centrifuge.
+	// false Centrifuge will use "unregistered" value for a client version. If a client passed no version
+	// at all Centrifuge will use string "unversioned". Note, the name argument here is an original name of
+	// client passed to Centrifuge.
 	CheckRegisteredClientVersion func(clientName string, clientVersion string) bool
 	// EnableRecoveredPublicationsHistogram enables histogram tracking of number of publications
 	// recovered during subscription successful recovery operations.

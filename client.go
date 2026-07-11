@@ -2615,14 +2615,19 @@ const (
 // connectCmd handles connect command from client - client must send connect
 // command immediately after establishing connection with server.
 func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
-	var metricClientName string
+	// Client name/version metric labels use fixed sentinels to keep metric
+	// cardinality bounded: a reported value is only used verbatim when it's
+	// explicitly registered, otherwise it collapses to "unregistered". A client
+	// that reports nothing at all gets "unnamed"/"unversioned" so the series stays
+	// visible and self-describing rather than carrying an empty label value.
+	metricClientName := "unnamed"
 	if req.Name != "" {
 		metricClientName = "unregistered"
 		if slices.Contains(c.node.config.Metrics.RegisteredClientNames, req.Name) {
 			metricClientName = req.Name
 		}
 	}
-	var metricClientVersion string
+	metricClientVersion := "unversioned"
 	if req.Version != "" {
 		metricClientVersion = "unregistered"
 		if c.node.config.Metrics.CheckRegisteredClientVersion != nil && c.node.config.Metrics.CheckRegisteredClientVersion(req.Name, req.Version) {
