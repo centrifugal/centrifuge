@@ -6,9 +6,11 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/queue"
 	"github.com/stretchr/testify/require"
 )
 
@@ -326,13 +328,15 @@ func TestChannelMediumNoLocalPrevPubForMapSubs(t *testing.T) {
 // channel medium teardown.
 func TestPublicationQueueCloseAndClosed(t *testing.T) {
 	t.Parallel()
-	q := newPublicationQueue(2)
+	q := queue.New(2, queuedPublicationSize)
 	require.False(t, q.Closed())
-	require.True(t, q.Add(queuedPublication{}))
+	_, ok := q.Add(queuedPublication{})
+	require.True(t, ok)
 	q.Close()
 	require.True(t, q.Closed())
 	// Adding after Close must report failure and not panic.
-	require.False(t, q.Add(queuedPublication{}))
+	_, ok = q.Add(queuedPublication{})
+	require.False(t, ok)
 	// Wait must report false on a closed queue without blocking.
 	require.False(t, q.Wait())
 }
@@ -604,4 +608,85 @@ func TestChannelMediumKeepLatestPublicationDelta(t *testing.T) {
 	require.NotNil(t, captured.first)
 	require.NotNil(t, captured.second, "second broadcast should see prior pub as localPrev")
 	require.Equal(t, []byte("first"), captured.second.Data)
+}
+
+// TestPublicationQueueSizeAccounting verifies that queuedPublicationSize
+// is wired correctly into the generic queue's Size() — including the
+// nil-pub case (insufficient-state markers contribute 0).
+func TestPublicationQueueSizeAccounting(t *testing.T) {
+	t.Parallel()
+	q := queue.New(2, queuedPublicationSize)
+	require.Equal(t, 0, q.Size())
+
+	q.Add(queuedPublication{Publication: queuedPub{pub: &Publication{Data: []byte("hello")}}})
+	q.Add(queuedPublication{Publication: queuedPub{pub: &Publication{Data: []byte("world!")}}})
+	// Insufficient-state marker has nil pub → 0 size contribution.
+	q.Add(queuedPublication{Publication: queuedPub{isInsufficientState: true}})
+	require.Equal(t, len("hello")+len("world!"), q.Size())
+	require.Equal(t, 3, q.Len())
+
+	_, _ = q.Remove()
+	require.Equal(t, len("world!"), q.Size())
+	_, _ = q.Remove()
+	require.Equal(t, 0, q.Size())
+	_, _ = q.Remove()
+	require.Equal(t, 0, q.Size())
+	require.Equal(t, 0, q.Len())
+}
+
+// TestPublicationQueueStress runs the same MPSC stress shape as the
+// internal/queue test battery, but against Queue[queuedPublication] —
+// proving the generic implementation behaves correctly for the
+// channel-medium use case under -race.
+func TestPublicationQueueStress(t *testing.T) {
+	t.Parallel()
+	const (
+		nProducers  = 8
+		perProducer = 1000
+	)
+	q := queue.New(2, queuedPublicationSize)
+
+	var consumed atomic.Int64
+	var consumedBytes atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		for {
+			if !q.Wait() {
+				close(done)
+				return
+			}
+			item, ok := q.Remove()
+			if !ok {
+				continue
+			}
+			consumed.Add(1)
+			consumedBytes.Add(int64(queuedPublicationSize(item)))
+		}
+	}()
+
+	var wg sync.WaitGroup
+	var expectedBytes atomic.Int64
+	for p := 0; p < nProducers; p++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < perProducer; i++ {
+				data := []byte("pub-" + strconv.Itoa(id*perProducer+i))
+				q.Add(queuedPublication{Publication: queuedPub{pub: &Publication{Data: data}}})
+				expectedBytes.Add(int64(len(data)))
+			}
+		}(p)
+	}
+	wg.Wait()
+
+	for _, it := range q.CloseRemaining() {
+		consumed.Add(1)
+		consumedBytes.Add(int64(queuedPublicationSize(it)))
+	}
+	<-done
+
+	require.Equal(t, int64(nProducers*perProducer), consumed.Load(),
+		"items lost or duplicated")
+	require.Equal(t, expectedBytes.Load(), consumedBytes.Load(),
+		"byte count mismatch — sizeFn wiring is wrong")
 }

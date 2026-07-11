@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"math/bits"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/queue"
@@ -19,7 +20,7 @@ type writerConfig struct {
 type writer struct {
 	mu       sync.Mutex
 	config   writerConfig
-	messages *queue.Queue
+	messages *queue.Queue[queue.Item]
 	closed   bool
 	closeCh  chan struct{}
 
@@ -30,6 +31,10 @@ type writer struct {
 	shrinkDelay        time.Duration
 	flushTimer         *time.Timer
 	timerScheduled     bool
+	// timerScheduledFlag mirrors timerScheduled (always written under mu)
+	// so enqueue can skip taking mu when a flush is already pending — the
+	// common case under many concurrent producers in timer mode.
+	timerScheduledFlag atomic.Bool
 }
 
 func newWriter(config writerConfig, queueInitialCap int) *writer {
@@ -38,7 +43,7 @@ func newWriter(config writerConfig, queueInitialCap int) *writer {
 	}
 	w := &writer{
 		config:   config,
-		messages: queue.New(queueInitialCap),
+		messages: queue.New(queueInitialCap, queue.ItemSize),
 		closeCh:  make(chan struct{}),
 	}
 	return w
@@ -164,18 +169,18 @@ func (w *writer) flush() {
 	w.mu.Lock()
 
 	w.timerScheduled = false
+	w.timerScheduledFlag.Store(false)
 
-	// Check if there are messages to flush
-	messagesLen := w.messages.Len()
-	if messagesLen == 0 {
-		w.mu.Unlock()
-		return
-	}
-
-	// Determine buffer size
+	// Determine buffer size. For a bounded frame we don't need the
+	// current length up front — RemoveManyInto reports an empty queue;
+	// only the unlimited case needs Len() to size the buffer.
 	bufSize := w.maxMessagesInFrame
 	if bufSize < 0 { // Unlimited, just use current length.
-		bufSize = messagesLen
+		bufSize = w.messages.Len()
+		if bufSize == 0 {
+			w.mu.Unlock()
+			return
+		}
 	}
 
 	// Get buffer from tiered pool
@@ -200,16 +205,18 @@ func (w *writer) flush() {
 
 	putItemBuf(itemBuf)
 
-	// If there are still messages and no error, schedule another flush
-	if writeErr == nil && w.messages.Len() > 0 && !w.closed {
-		remainingMessages := w.messages.Len()
-		// If we have more messages than max batch size (and max is not unlimited),
-		// flush immediately to keep up, otherwise we'll fall behind.
-		if w.maxMessagesInFrame > 0 && remainingMessages >= w.maxMessagesInFrame {
-			w.scheduleFlushImmediateLocked()
-		} else {
-			// Messages below threshold or unlimited batch size, use normal delay
-			w.scheduleFlushLocked()
+	// If there are still messages and no error, schedule another flush.
+	// A single Len() read drives the decision (it takes the queue mutex).
+	if writeErr == nil && !w.closed {
+		remaining := w.messages.Len()
+		if remaining > 0 {
+			// At least a full bounded frame queued -> flush immediately to
+			// keep up; otherwise wait for the normal delay.
+			if w.maxMessagesInFrame > 0 && remaining >= w.maxMessagesInFrame {
+				w.scheduleFlushImmediateLocked()
+			} else {
+				w.scheduleFlushLocked()
+			}
 		}
 	}
 
@@ -223,6 +230,7 @@ func (w *writer) scheduleFlushLocked() {
 		return
 	}
 	w.timerScheduled = true
+	w.timerScheduledFlag.Store(true)
 	if w.flushTimer == nil {
 		w.flushTimer = time.AfterFunc(w.writeDelay, w.flush)
 	} else {
@@ -236,6 +244,7 @@ func (w *writer) scheduleFlushImmediateLocked() {
 		return
 	}
 	w.timerScheduled = true
+	w.timerScheduledFlag.Store(true)
 	if w.flushTimer == nil {
 		w.flushTimer = time.AfterFunc(0, w.flush)
 	} else {
@@ -244,16 +253,18 @@ func (w *writer) scheduleFlushImmediateLocked() {
 }
 
 func (w *writer) enqueue(item queue.Item) *Disconnect {
-	ok := w.messages.Add(item)
+	size, ok := w.messages.Add(item)
 	if !ok {
 		return &DisconnectConnectionClosed
 	}
-	if w.config.MaxQueueSize > 0 && w.messages.Size() > w.config.MaxQueueSize {
+	if w.config.MaxQueueSize > 0 && size > w.config.MaxQueueSize {
 		return &DisconnectSlow
 	}
 
-	// In timer mode, schedule flush if not already scheduled
-	if w.timerMode {
+	// In timer mode, schedule flush if not already scheduled. The atomic
+	// fast path lets concurrent producers skip mu entirely while a flush
+	// is already pending (the steady-state case under load).
+	if w.timerMode && !w.timerScheduledFlag.Load() {
 		w.mu.Lock()
 		if !w.closed && !w.timerScheduled {
 			w.scheduleFlushLocked()
@@ -265,16 +276,18 @@ func (w *writer) enqueue(item queue.Item) *Disconnect {
 }
 
 func (w *writer) enqueueMany(item ...queue.Item) *Disconnect {
-	ok := w.messages.AddMany(item...)
+	size, ok := w.messages.AddMany(item...)
 	if !ok {
 		return &DisconnectConnectionClosed
 	}
-	if w.config.MaxQueueSize > 0 && w.messages.Size() > w.config.MaxQueueSize {
+	if w.config.MaxQueueSize > 0 && size > w.config.MaxQueueSize {
 		return &DisconnectSlow
 	}
 
-	// In timer mode, schedule flush if not already scheduled
-	if w.timerMode {
+	// In timer mode, schedule flush if not already scheduled. The atomic
+	// fast path lets concurrent producers skip mu entirely while a flush
+	// is already pending (the steady-state case under load).
+	if w.timerMode && !w.timerScheduledFlag.Load() {
 		w.mu.Lock()
 		if !w.closed && !w.timerScheduled {
 			w.scheduleFlushLocked()
