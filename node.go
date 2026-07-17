@@ -1667,12 +1667,15 @@ func (n *Node) getMapBroker(ch string) MapBroker {
 	return n.mapBroker
 }
 
-func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
+// history takes HistoryOptions by value so callers that build options without
+// the variadic HistoryOption closures (see streamTop) do not have to heap
+// allocate them. Broker.History takes them by value anyway.
+func (n *Node) history(ch string, opts HistoryOptions) (HistoryResult, error) {
 	if opts.Filter.Reverse && opts.Filter.Since != nil && opts.Filter.Since.Offset == 0 {
 		return HistoryResult{}, ErrorBadRequest
 	}
 
-	pubs, streamTop, err := n.getBroker(ch).History(ch, *opts)
+	pubs, streamTop, err := n.getBroker(ch).History(ch, opts)
 	if err != nil {
 		return HistoryResult{}, err
 	}
@@ -1695,35 +1698,55 @@ func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
 // History allows extracting Publications in channel.
 // The channel must belong to namespace where history is on.
 func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) {
-	n.metrics.incActionCount("history", ch)
 	historyOpts := &HistoryOptions{}
 	for _, opt := range opts {
 		opt(historyOpts)
 	}
-	if n.config.UseSingleFlight {
-		var builder strings.Builder
-		builder.WriteString("channel:")
-		builder.WriteString(ch)
-		if historyOpts.Filter.Since != nil {
-			builder.WriteString(",offset:")
-			builder.WriteString(strconv.FormatUint(historyOpts.Filter.Since.Offset, 10))
-			builder.WriteString(",epoch:")
-			builder.WriteString(historyOpts.Filter.Since.Epoch)
-		}
-		builder.WriteString(",limit:")
-		builder.WriteString(strconv.Itoa(historyOpts.Filter.Limit))
-		builder.WriteString(",reverse:")
-		builder.WriteString(strconv.FormatBool(historyOpts.Filter.Reverse))
-		builder.WriteString(",meta_ttl:")
-		builder.WriteString(historyOpts.MetaTTL.String())
-		key := builder.String()
+	return n.historyWithOptions(ch, *historyOpts)
+}
 
-		result, err, _ := historyGroup.Do(key, func() (any, error) {
-			return n.history(ch, historyOpts)
-		})
-		return result.(HistoryResult), err
+// historyWithOptions is the shared implementation behind History and streamTop.
+// It takes options by value so a caller that already has them (streamTop) can
+// avoid the heap allocation the variadic HistoryOption closures force. The
+// single flight branch lives in its own function so that its closure — which
+// must capture the options — does not make them escape on the common path.
+//
+// Side effects shared by all history callers (the action metric) belong here
+// rather than in History, so that streamTop — which bypasses History's variadic
+// options — cannot drift from it.
+func (n *Node) historyWithOptions(ch string, opts HistoryOptions) (HistoryResult, error) {
+	n.metrics.incActionCount("history", ch)
+	if n.config.UseSingleFlight {
+		return n.historySingleFlight(ch, opts)
 	}
-	return n.history(ch, historyOpts)
+	return n.history(ch, opts)
+}
+
+func (n *Node) historySingleFlight(ch string, opts HistoryOptions) (HistoryResult, error) {
+	var builder strings.Builder
+	builder.WriteString("channel:")
+	builder.WriteString(ch)
+	if opts.Filter.Since != nil {
+		builder.WriteString(",offset:")
+		builder.WriteString(strconv.FormatUint(opts.Filter.Since.Offset, 10))
+		builder.WriteString(",epoch:")
+		builder.WriteString(opts.Filter.Since.Epoch)
+	}
+	builder.WriteString(",limit:")
+	builder.WriteString(strconv.Itoa(opts.Filter.Limit))
+	builder.WriteString(",reverse:")
+	builder.WriteString(strconv.FormatBool(opts.Filter.Reverse))
+	builder.WriteString(",meta_ttl:")
+	builder.WriteString(opts.MetaTTL.String())
+	key := builder.String()
+
+	result, err, _ := historyGroup.Do(key, func() (any, error) {
+		return n.history(ch, opts)
+	})
+	// Return the result even when err != nil: history returns a populated
+	// HistoryResult together with ErrorUnrecoverablePosition, and recovery
+	// depends on the StreamPosition in it.
+	return result.(HistoryResult), err
 }
 
 // recoverHistory recovers publications since StreamPosition last seen by client.
@@ -1787,7 +1810,11 @@ func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, tf *tagsFil
 // streamTop returns current stream top StreamPosition for a channel.
 func (n *Node) streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error) {
 	n.metrics.incActionCount("history_stream_top", ch)
-	historyResult, err := n.History(ch, WithHistoryMetaTTL(historyMetaTTL))
+	// This runs for every positioned channel on every periodic position check, so
+	// build options directly instead of going through History's variadic
+	// HistoryOption closures, which force HistoryOptions to escape to the heap.
+	// historyWithOptions still reports the shared "history" action metric.
+	historyResult, err := n.historyWithOptions(ch, HistoryOptions{MetaTTL: historyMetaTTL})
 	if err != nil {
 		return StreamPosition{}, err
 	}

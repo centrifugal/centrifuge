@@ -318,6 +318,19 @@ type TimerCanceler interface {
 }
 
 // TimerScheduler is the interface for scheduling timers.
+//
+// Callbacks may block: some client periodic operations perform network calls
+// (subscription refresh via RefreshHandler, and — for schedulers that run
+// callbacks on a goroutine shared between connections — anything the
+// application does in AliveHandler). An implementation that runs several
+// connections' callbacks on one goroutine therefore lets a single slow
+// connection delay the others' pings, so it should bound how many callbacks
+// share a goroutine.
+//
+// Centrifuge does not rely on this for presence updates specifically: when a
+// TimerScheduler is set it runs the presence tick on its own goroutine, since
+// that tick calls into PresenceManager/MapBroker on every subscribed channel.
+//
 // EXPERIMENTAL API.
 type TimerScheduler interface {
 	// ScheduleTimer adds a callback for later execution. The TimerCanceler is returned.

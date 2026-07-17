@@ -275,8 +275,10 @@ func (r *ConnectRequest) toProto() *protocol.ConnectRequest {
 // Client represents client connection to server.
 type Client struct {
 	mu                     sync.RWMutex
-	connectMu              sync.Mutex // allows syncing connect with disconnect.
-	presenceMu             sync.Mutex // allows syncing presence routine with client closing.
+	connectMu              sync.Mutex  // allows syncing connect with disconnect.
+	presenceMu             sync.Mutex  // allows syncing presence routine with client closing.
+	presenceInFlight       atomic.Bool // guards against overlapping presence ticks.
+	closing                atomic.Bool // set before close blocks on presenceMu.
 	ctx                    context.Context
 	transport              Transport
 	node                   *Node
@@ -521,13 +523,47 @@ func (c *Client) onTimerOp() {
 	}
 	op := c.timerOp
 	c.mu.Unlock()
+
+	// A TimerScheduler may run callbacks on a goroutine shared with other
+	// connections (Centrifugo PRO's timer wheel runs a batch of a bucket's
+	// callbacks per goroutine). Timer ops that can block on the network must not
+	// run there, or one connection delays unrelated connections' pings:
+	//
+	//   - presence: one PresenceManager/MapBroker round trip per channel.
+	//   - expire:   RefreshHandler, which applications commonly back with an HTTP
+	//               call (Centrifugo's refresh proxy runs it inline unless
+	//               client concurrency is configured).
+	//   - stale:    close() -> unsubscribe -> presence removal round trips.
+	//
+	// Ping and pong stay inline: they only touch local state and the write queue,
+	// and they are the frequent ops a batching scheduler exists to amortize.
+	//
+	// On the default path time.AfterFunc already invokes this callback on its own
+	// goroutine, so nothing is spawned.
+	offload := c.node.timerScheduler != nil
+
 	switch op {
 	case timerOpStale:
-		c.closeStale()
+		if offload {
+			go c.closeStale()
+		} else {
+			c.closeStale()
+		}
 	case timerOpPresence:
-		c.updatePresence()
+		// presenceInFlight is only a hint here — updatePresence re-checks it with a
+		// CAS. It avoids spawning a goroutine just to discover a tick is already
+		// running, which is the common case when PresenceManager is slow.
+		if offload && !c.presenceInFlight.Load() {
+			go c.updatePresence()
+		} else {
+			c.updatePresence()
+		}
 	case timerOpExpire:
-		c.expire()
+		if offload {
+			go c.expire()
+		} else {
+			c.expire()
+		}
 	case timerOpPing:
 		c.sendPing()
 	case timerOpPong:
@@ -795,6 +831,161 @@ func (c *Client) updateChannelPresence(ch string, chCtx ChannelContext) error {
 	return nil
 }
 
+// tickDutyParams carries the values a duty needs from Config. It exists so the
+// duty runner takes no callback: a closure would capture Config, and copying
+// that struct to the heap on every tick of every connection costs more than the
+// work it dispatches.
+type tickDutyParams struct {
+	positionCheckDelay time.Duration
+}
+
+// runTickDutyOn performs a single duty for one channel. Duties are dispatched by
+// constant rather than by function value so the sequential path stays
+// allocation-free.
+func (c *Client) runTickDutyOn(duty tickDuty, item *channelTickItem, params tickDutyParams) {
+	switch duty {
+	case dutyPresence:
+		c.updateChannelPresenceItem(item)
+	case dutyPosition:
+		item.positionInvalid = !c.checkPosition(params.positionCheckDelay, item.channel, item.ctx)
+	}
+}
+
+// runTickDuty performs duty for every snapshot entry carrying it, with at most
+// concurrency of them in flight.
+//
+// With concurrency <= 1 — the default — this is a plain sequential loop: no
+// counting pass, no goroutines, no allocations. Connections with a single
+// channel carrying the duty also stay sequential, since there is nothing to
+// overlap. Each entry is only ever touched by one worker, so a duty may write to
+// its item without synchronization.
+func (c *Client) runTickDuty(snapshot []channelTickItem, duty tickDuty, concurrency int, params tickDutyParams) {
+	if concurrency <= 1 {
+		c.runTickDutySequential(snapshot, duty, params)
+		return
+	}
+
+	var count int
+	for i := range snapshot {
+		if snapshot[i].duties&duty != 0 {
+			count++
+		}
+	}
+	if count == 0 {
+		return
+	}
+	if count == 1 || concurrency > count {
+		if count == 1 {
+			c.runTickDutySequential(snapshot, duty, params)
+			return
+		}
+		concurrency = count
+	}
+
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	wg.Add(concurrency)
+	for w := 0; w < concurrency; w++ {
+		go func() {
+			defer wg.Done()
+			for {
+				i := int(next.Add(1)) - 1
+				if i >= len(snapshot) {
+					return
+				}
+				if c.closing.Load() {
+					return
+				}
+				if snapshot[i].duties&duty != 0 {
+					c.runTickDutyOn(duty, &snapshot[i], params)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func (c *Client) runTickDutySequential(snapshot []channelTickItem, duty tickDuty, params tickDutyParams) {
+	for i := range snapshot {
+		if c.closing.Load() {
+			return
+		}
+		if snapshot[i].duties&duty != 0 {
+			c.runTickDutyOn(duty, &snapshot[i], params)
+		}
+	}
+}
+
+func (c *Client) updateChannelPresenceItem(item *channelTickItem) {
+	if err := c.updateChannelPresence(item.channel, item.ctx); err != nil {
+		c.node.logger.log(newErrorLogEntry(err, "error updating presence for channel", map[string]any{
+			"channel": item.channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+		return
+	}
+	item.presenceAdded = true
+}
+
+// compensateRacedPresence undoes presence entries this tick added for channels
+// that were concurrently unsubscribed.
+//
+// unsubscribe() deletes from c.channels first and removes presence only after
+// that, and — unlike close() — it does not take presenceMu. So an add issued by
+// the tick can land after that removal and leave an entry behind until
+// PresenceTTL (60s by default). The existence check updateChannelPresence makes
+// before adding is not enough: it happens before a network call.
+//
+// The membership re-check is done once for the whole snapshot rather than per
+// channel, so a tick pays a single RLock instead of one per channel for a race
+// that almost never fires.
+func (c *Client) compensateRacedPresence(snapshot []channelTickItem) {
+	var raced bool
+	c.mu.RLock()
+	for i := range snapshot {
+		if !snapshot[i].presenceAdded {
+			continue
+		}
+		if _, ok := c.channels[snapshot[i].channel]; !ok {
+			snapshot[i].raced = true
+			raced = true
+		}
+	}
+	c.mu.RUnlock()
+	if !raced {
+		return
+	}
+	for i := range snapshot {
+		if snapshot[i].raced {
+			c.removeRacedPresence(snapshot[i].channel, snapshot[i].ctx)
+		}
+	}
+}
+
+// removeRacedPresence undoes presence entries added by a presence tick for a
+// channel that was concurrently unsubscribed. It mirrors exactly what
+// updateChannelPresence adds — no more — so it stays symmetric with
+// removeMapPresence.
+//
+// Removing twice (here and in unsubscribe) is harmless: removal is idempotent.
+// If a fast re-subscribe raced this removal the entry can be dropped while the
+// client is subscribed, but the next presence tick re-adds it, and unsubscribe's
+// own removePresence already has that same race with a re-subscribe today.
+func (c *Client) removeRacedPresence(ch string, chCtx ChannelContext) {
+	if channelHasFlag(chCtx.flags, flagEmitPresence) {
+		if err := c.node.removePresence(ch, c.uid, c.user); err != nil {
+			c.node.logger.log(newErrorLogEntry(err, "error removing raced channel presence", map[string]any{
+				"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
+		}
+	}
+	if chCtx.mapClientPresenceChannel != "" {
+		if _, err := c.node.MapRemove(context.Background(), chCtx.mapClientPresenceChannel, c.uid, MapRemoveOptions{}); err != nil {
+			c.node.logger.log(newErrorLogEntry(err, "error removing raced map client presence", map[string]any{
+				"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
+		}
+	}
+	// User presence is intentionally not removed: unsubscribe does not remove it
+	// either — it expires via TTL as a debounce for quick reconnects.
+}
+
 // Context returns client Context. This context will be canceled
 // as soon as client connection closes.
 func (c *Client) Context() context.Context {
@@ -843,8 +1034,81 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 	resultCB(true)
 }
 
+// tickDuty is a bitmask of the periodic work a channel needs on a presence tick.
+type tickDuty uint8
+
+const (
+	dutyPresence tickDuty = 1 << iota
+	dutySubExpire
+	dutyTrackExpire
+	dutyPosition
+)
+
+// channelTickItem is a channel snapshot entry used by the periodic presence tick.
+type channelTickItem struct {
+	channel string
+	ctx     ChannelContext
+	duties  tickDuty
+	// presenceAdded records that this tick issued a presence add for the channel,
+	// so a racing unsubscribe can be compensated for. See compensateRacedPresence.
+	presenceAdded bool
+	raced         bool
+	// positionInvalid records the outcome of the stream position check. The check
+	// itself may run concurrently; acting on the result (unsubscribe or
+	// disconnect) is left to the sequential pass.
+	positionInvalid bool
+}
+
+var presenceSnapshotPool = sync.Pool{
+	New: func() any {
+		s := make([]channelTickItem, 0, 16)
+		return &s
+	},
+}
+
+// channelTickDuties is the single source of truth for what the periodic tick
+// does to a channel: it decides both whether a channel is worth snapshotting
+// (duties != 0) and which steps the tick loop then runs for it. The loop must
+// key off the returned mask rather than re-deriving these conditions — deriving
+// them twice lets the two drift, and a channel silently dropped from the
+// snapshot fails no test.
+//
+// The config-dependent conditions are passed in as booleans: they are the same
+// for every channel, and Config is a large struct that must not be copied per
+// channel.
+func channelTickDuties(chCtx ChannelContext, positionCheckEnabled, sharedPollEnabled bool) tickDuty {
+	var duties tickDuty
+	if channelHasFlag(chCtx.flags, flagEmitPresence|flagMapClientPresence|flagMapUserPresence) {
+		duties |= dutyPresence
+	}
+	if chCtx.expireAt > 0 {
+		duties |= dutySubExpire
+	}
+	if channelHasFlag(chCtx.flags, flagKeyed) && sharedPollEnabled {
+		duties |= dutyTrackExpire
+	}
+	if channelHasFlag(chCtx.flags, flagPositioning) && positionCheckEnabled {
+		duties |= dutyPosition
+	}
+	return duties
+}
+
 // updatePresence used for various periodic actions we need to do with client connections.
 func (c *Client) updatePresence() {
+	// A previous tick may still be draining PresenceManager calls. Skip this one
+	// rather than queueing on presenceMu: the timer callback may run on a shared
+	// goroutine (see TimerScheduler), and blocking it would stall unrelated
+	// connections. Re-arm so ticks keep going.
+	if !c.presenceInFlight.CompareAndSwap(false, true) {
+		c.mu.Lock()
+		if c.status != statusClosed {
+			c.addPresenceUpdate(false, true)
+		}
+		c.mu.Unlock()
+		return
+	}
+	defer c.presenceInFlight.Store(false)
+
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
 	config := c.node.config
@@ -854,14 +1118,45 @@ func (c *Client) updatePresence() {
 		c.mu.Unlock()
 		return
 	}
-	channels := make(map[string]ChannelContext, len(c.channels))
+	// Re-arm before doing any work. Presence updates below call into
+	// PresenceManager/MapBroker, which may perform network round trips, and the
+	// client's single timer is shared with ping. Arming after the loop would
+	// delay the ping by the whole loop duration. Arming here also gives a fixed
+	// cadence rather than one that drifts by the loop duration each tick.
+	c.addPresenceUpdate(false, true)
+	// Snapshot channels that actually need periodic work. A snapshot is required
+	// because the loop below calls into PresenceManager/MapBroker and we must not
+	// hold c.mu across those. A pooled slice is used instead of a map: it needs
+	// no hashing and no bucket allocation, and ticks are serialized per client
+	// (presenceInFlight + presenceMu) and spread across connections, so the pool
+	// holds roughly one entry per concurrently running tick rather than one per
+	// connection.
+	positionCheckEnabled := config.ClientChannelPositionCheckDelay > 0
+	sharedPollEnabled := config.SharedPoll.GetSharedPollChannelOptions != nil
+	snapshotPtr := presenceSnapshotPool.Get().(*[]channelTickItem)
+	snapshot := (*snapshotPtr)[:0]
 	for channel, channelContext := range c.channels {
 		if !channelHasFlag(channelContext.flags, flagSubscribed) {
 			continue
 		}
-		channels[channel] = channelContext
+		duties := channelTickDuties(channelContext, positionCheckEnabled, sharedPollEnabled)
+		if duties == 0 {
+			continue
+		}
+		snapshot = append(snapshot, channelTickItem{channel: channel, ctx: channelContext, duties: duties})
 	}
 	c.mu.Unlock()
+	defer func() {
+		// Clear before pooling so the retained backing array does not keep
+		// ChannelContext strings/byte slices alive.
+		clear(snapshot)
+		*snapshotPtr = snapshot[:0]
+		presenceSnapshotPool.Put(snapshotPtr)
+	}()
+	// Runs even when the loop below bails early (client closing), otherwise a
+	// presence entry resurrected by a racing unsubscribe would survive: close()
+	// only removes presence for channels still in c.channels.
+	defer c.compensateRacedPresence(snapshot)
 
 	if unusable {
 		go c.closeStale()
@@ -872,24 +1167,40 @@ func (c *Client) updatePresence() {
 		c.eventHub.aliveHandler()
 	}
 
-	for channel, channelContext := range channels {
-		err := c.updateChannelPresence(channel, channelContext)
-		if err != nil {
-			c.node.logger.log(newErrorLogEntry(err, "error updating presence for channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+	// Presence updates and stream position checks are independent per channel and
+	// are pure network calls — one round trip each — so they may run with a
+	// bounded number in flight, which is what lets the Redis client pipeline them
+	// instead of paying channels * RTT. Their consequences are not run here:
+	// deciding what an invalid position means (unsubscribe or disconnect) happens
+	// sequentially in the loop below, together with the duties that invoke
+	// application callbacks.
+	dutyParams := tickDutyParams{positionCheckDelay: config.ClientChannelPositionCheckDelay}
+	c.runTickDuty(snapshot, dutyPresence, config.clientPresenceUpdateConcurrency, dutyParams)
+	c.runTickDuty(snapshot, dutyPosition, config.clientPositionCheckConcurrency, dutyParams)
+
+	for i := range snapshot {
+		item := &snapshot[i]
+		channel, channelContext := item.channel, item.ctx
+		// Client is closing — stop issuing work so close() does not wait for the
+		// rest of the loop to drain.
+		if c.closing.Load() {
+			return
 		}
 
-		c.checkSubscriptionExpiration(channel, channelContext, config.ClientExpiredSubCloseDelay, func(result bool) {
-			if !result {
-				serverSide := channelHasFlag(channelContext.flags, flagServerSide)
-				if c.isAsyncUnsubscribe(serverSide) {
-					go func(ch string) { c.handleAsyncUnsubscribe(ch, unsubscribeExpired) }(channel)
-				} else {
-					go func() { _ = c.close(DisconnectSubExpired) }()
+		if item.duties&dutySubExpire != 0 {
+			c.checkSubscriptionExpiration(channel, channelContext, config.ClientExpiredSubCloseDelay, func(result bool) {
+				if !result {
+					serverSide := channelHasFlag(channelContext.flags, flagServerSide)
+					if c.isAsyncUnsubscribe(serverSide) {
+						go func(ch string) { c.handleAsyncUnsubscribe(ch, unsubscribeExpired) }(channel)
+					} else {
+						go func() { _ = c.close(DisconnectSubExpired) }()
+					}
 				}
-			}
-		})
+			})
+		}
 
-		if channelHasFlag(channelContext.flags, flagKeyed) && config.SharedPoll.GetSharedPollChannelOptions != nil {
+		if item.duties&dutyTrackExpire != 0 {
 			if spOpts, ok := config.SharedPoll.GetSharedPollChannelOptions(channel); ok {
 				trackExpiredDelay := spOpts.TrackExpiredExtraDelay
 				if trackExpiredDelay <= 0 {
@@ -899,8 +1210,7 @@ func (c *Client) updatePresence() {
 			}
 		}
 
-		checkDelay := config.ClientChannelPositionCheckDelay
-		if checkDelay > 0 && !c.checkPosition(checkDelay, channel, channelContext) {
+		if item.positionInvalid {
 			serverSide := channelHasFlag(channelContext.flags, flagServerSide)
 			if c.node.logger.enabled(LogLevelDebug) {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state from periodic check", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
@@ -915,9 +1225,6 @@ func (c *Client) updatePresence() {
 			}
 		}
 	}
-	c.mu.Lock()
-	c.addPresenceUpdate(false, true)
-	c.mu.Unlock()
 }
 
 func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx ChannelContext) bool {
@@ -1170,6 +1477,11 @@ func (c *Client) Disconnect(disconnect ...Disconnect) {
 
 func (c *Client) close(disconnect Disconnect) error {
 	c.startWriter(0, 0, 0, 0, false)
+	// Signal an in-flight presence tick to stop before we block on presenceMu:
+	// that tick may be draining many PresenceManager round trips, and close
+	// would otherwise wait for all of them. presenceMu is still taken below, so
+	// the tick can not resurrect presence entries after we remove them.
+	c.closing.Store(true)
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
 	c.connectMu.Lock()
@@ -3128,6 +3440,20 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	}
 	defer c.pubSubSync.StopBuffering(channel)
 	c.mu.Lock()
+	if c.status == statusClosed {
+		// The client closed while this server-side subscribe was in flight.
+		// close() tears down only channels present in c.channels, and this one
+		// was not there yet when it snapshotted — so the hub registration that
+		// subscribeCmd added would be left behind (a routing entry pointing at a
+		// dead client, never swept on disconnect). Undo it directly: c.channels
+		// was never set for a server-side subscribe, so onSubscribeError would not
+		// remove the hub entry. This is just a status read on the same lock
+		// section that already writes c.channels — nothing added on the common
+		// path, and the external subscribe work above already ran outside the lock.
+		c.mu.Unlock()
+		_ = c.node.removeSubscription(channel, c)
+		return DisconnectServerError
+	}
 	c.channels[channel] = subCtx.channelContext
 	c.mu.Unlock()
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagSubscribe) {

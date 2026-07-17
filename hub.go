@@ -713,11 +713,11 @@ func (h *connShard) remove(c *Client) bool {
 func (h *connShard) NumClients() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	total := 0
-	for _, clientConnections := range h.users {
-		total += len(clientConnections)
-	}
-	return total
+	// clients holds exactly one entry per connection, which is the same total as
+	// summing the per-user sets. Iterating users instead would make this O(users)
+	// while holding the read lock — at a million connections that is a periodic
+	// scan (updateGauges runs every 10s) which also blocks connects/disconnects.
+	return len(h.clients)
 }
 
 // NumUsers returns a number of unique users connected.
@@ -756,7 +756,12 @@ type subInfo struct {
 type subShard struct {
 	mu sync.RWMutex
 	// registry to hold active subscriptions of clients to channels with some additional info.
-	subs            map[string]map[string]subInfo
+	subs map[string]map[string]subInfo
+	// numSubs is the total number of subscriptions across subs, maintained
+	// incrementally under mu. Summing subs on demand would be O(channels) while
+	// holding the read lock, and NumSubscriptions is read periodically by the
+	// node gauge update.
+	numSubs         int
 	maxTimeLagMilli int64
 	logger          *logger
 	metrics         *metrics
@@ -794,6 +799,9 @@ func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
 		if sub.isMap {
 			s.mapChannels[ch] = true
 		}
+	}
+	if _, exists := s.subs[ch][uid]; !exists {
+		s.numSubs++
 	}
 	s.subs[ch][uid] = sub
 
@@ -869,6 +877,7 @@ func (s *subShard) removeSub(ch string, c *Client) (bool, bool, bool) {
 
 	// actually remove subscription from hub.
 	delete(s.subs[ch], uid)
+	s.numSubs--
 
 	// clean up subs map if it's needed.
 	if len(s.subs[ch]) == 0 {
@@ -1470,11 +1479,7 @@ func (s *subShard) NumChannels() int {
 func (s *subShard) NumSubscriptions() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	total := 0
-	for _, subscriptions := range s.subs {
-		total += len(subscriptions)
-	}
-	return total
+	return s.numSubs
 }
 
 // Channels returns a slice of all active channels.
