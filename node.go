@@ -89,7 +89,11 @@ type Node struct {
 
 	emulationSurveyHandler *emulationSurveyHandler
 
-	mediums     map[string]*channelMedium
+	// mediums is sharded the same way as mediumLocks — mediums[i] is guarded by
+	// mediumLocks[i], where i = index(ch, numMediumLocks). A single map here would
+	// be accessed concurrently by operations on different channels (which take
+	// different lock shards), a data race.
+	mediums     map[int]map[string]*channelMedium
 	mediumLocks map[int]*sync.Mutex // Sharded locks for mediums map.
 
 	timerScheduler TimerScheduler
@@ -164,6 +168,10 @@ func New(c Config) (*Node, error) {
 	for i := 0; i < numMediumLocks; i++ {
 		mediumLocks[i] = &sync.Mutex{}
 	}
+	mediums := make(map[int]map[string]*channelMedium, numMediumLocks)
+	for i := 0; i < numMediumLocks; i++ {
+		mediums[i] = map[string]*channelMedium{}
+	}
 
 	if c.Name == "" {
 		hostname, err := os.Hostname()
@@ -192,7 +200,7 @@ func New(c Config) (*Node, error) {
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
 		nowTimeGetter:  nowtime.Get,
 		surveyRegistry: make(map[uint64]chan survey),
-		mediums:        map[string]*channelMedium{},
+		mediums:        mediums,
 		mediumLocks:    mediumLocks,
 		timerScheduler: c.ClientTimerScheduler,
 	}
@@ -254,6 +262,11 @@ func (n *Node) subLock(ch string) *sync.Mutex {
 
 func (n *Node) mediumLock(ch string) *sync.Mutex {
 	return n.mediumLocks[index(ch, numMediumLocks)]
+}
+
+// mediumShard returns the mediums sub-map for ch, guarded by mediumLock(ch).
+func (n *Node) mediumShard(ch string) map[string]*channelMedium {
+	return n.mediums[index(ch, numMediumLocks)]
 }
 
 // SetController allows setting Controller implementation to use.
@@ -1238,7 +1251,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 				medium.isMap = sub.isMap
 				mediumMu := n.mediumLock(ch)
 				mediumMu.Lock()
-				n.mediums[ch] = medium
+				n.mediumShard(ch)[ch] = medium
 				mediumMu.Unlock()
 			}
 		}
@@ -1253,10 +1266,10 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 					if n.config.GetChannelMediumOptions != nil {
 						mediumMu := n.mediumLock(ch)
 						mediumMu.Lock()
-						medium, ok := n.mediums[ch]
+						medium, ok := n.mediumShard(ch)[ch]
 						if ok {
 							medium.close()
-							delete(n.mediums, ch)
+							delete(n.mediumShard(ch), ch)
 						}
 						mediumMu.Unlock()
 					}
@@ -1271,10 +1284,10 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 				if n.config.GetChannelMediumOptions != nil {
 					mediumMu := n.mediumLock(ch)
 					mediumMu.Lock()
-					medium, ok := n.mediums[ch]
+					medium, ok := n.mediumShard(ch)[ch]
 					if ok {
 						medium.close()
-						delete(n.mediums, ch)
+						delete(n.mediumShard(ch), ch)
 					}
 					mediumMu.Unlock()
 				}
@@ -1332,10 +1345,10 @@ func (n *Node) removeSubscription(ch string, c *Client, subGen uint64) error {
 				if n.config.GetChannelMediumOptions != nil {
 					mediumMu := n.mediumLock(ch)
 					mediumMu.Lock()
-					medium, ok := n.mediums[ch]
+					medium, ok := n.mediumShard(ch)[ch]
 					if ok {
 						medium.close()
-						delete(n.mediums, ch)
+						delete(n.mediumShard(ch), ch)
 					}
 					mediumMu.Unlock()
 				}
@@ -1855,7 +1868,7 @@ func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMe
 	}
 	mu := n.subLock(ch)
 	mu.Lock()
-	medium, ok := n.mediums[ch]
+	medium, ok := n.mediumShard(ch)[ch]
 	mu.Unlock()
 	if ok && medium.options.SharedPositionSync {
 		validPosition := medium.CheckPosition(historyMetaTTL, clientPosition, n.config.ClientChannelPositionCheckDelay)
@@ -2116,7 +2129,7 @@ func (n *Node) HandlePublication(ch string, pub *Publication, sp StreamPosition,
 	if n.config.GetChannelMediumOptions != nil {
 		mu := n.mediumLock(ch) // Note, avoid using subLock in HandlePublication – this leads to the deadlock.
 		mu.Lock()
-		medium, ok := n.mediums[ch]
+		medium, ok := n.mediumShard(ch)[ch]
 		mu.Unlock()
 		if ok {
 			medium.broadcastPublication(pub, sp, delta, prevPub)
