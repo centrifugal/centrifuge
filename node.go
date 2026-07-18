@@ -1232,7 +1232,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 			if mediumOptions.isMediumEnabled() {
 				medium, err := newChannelMedium(ch, n, mediumOptions)
 				if err != nil {
-					_, _, _ = n.hub.removeSub(ch, sub.client)
+					_, _, _ = n.hub.removeSub(ch, sub.client, sub.subGen)
 					return 0, err
 				}
 				medium.isMap = sub.isMap
@@ -1249,7 +1249,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 				n.metrics.incActionCount("map_broker_subscribe", ch)
 				err := mapBroker.Subscribe(ch)
 				if err != nil {
-					_, _, _ = n.hub.removeSub(ch, sub.client)
+					_, _, _ = n.hub.removeSub(ch, sub.client, sub.subGen)
 					if n.config.GetChannelMediumOptions != nil {
 						mediumMu := n.mediumLock(ch)
 						mediumMu.Lock()
@@ -1267,7 +1267,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 			n.metrics.incActionCount("broker_subscribe", ch)
 			err := n.getBroker(ch).Subscribe(ch)
 			if err != nil {
-				_, _, _ = n.hub.removeSub(ch, sub.client)
+				_, _, _ = n.hub.removeSub(ch, sub.client, sub.subGen)
 				if n.config.GetChannelMediumOptions != nil {
 					mediumMu := n.mediumLock(ch)
 					mediumMu.Lock()
@@ -1287,12 +1287,12 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 
 // removeSubscription removes subscription of connection on channel
 // from Hub and Broker (or MapBroker for map channels).
-func (n *Node) removeSubscription(ch string, c *Client) error {
+func (n *Node) removeSubscription(ch string, c *Client, subGen uint64) error {
 	n.metrics.incActionCount("remove_subscription", ch)
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
-	empty, wasRemoved, wasMap := n.hub.removeSub(ch, c)
+	empty, wasRemoved, wasMap := n.hub.removeSub(ch, c, subGen)
 	if wasRemoved {
 		baseLabels := []string{c.metricName, n.metrics.getChannelNamespaceLabel(ch)}
 		n.metrics.subscriptionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Dec()

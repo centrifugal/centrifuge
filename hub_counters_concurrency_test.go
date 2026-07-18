@@ -70,7 +70,7 @@ func TestHubCounters_ConcurrentAddRemove(t *testing.T) {
 				c := clients[i]
 				for ch := 0; ch < channels; ch++ {
 					chName := "c" + strconv.Itoa((w+ch)%channels)
-					_, _, _ = h.removeSub(chName, c)
+					_, _, _ = h.removeSub(chName, c, anySubGen)
 				}
 				h.remove(c)
 			}

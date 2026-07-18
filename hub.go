@@ -226,8 +226,8 @@ func (h *Hub) addSub(ch string, sub subInfo) (int64, bool, error) {
 
 // removeSub removes connection from clientHub subscriptions registry.
 // Returns (isEmpty, wasRemoved, wasKeyed).
-func (h *Hub) removeSub(ch string, c *Client) (bool, bool, bool) {
-	return h.subShards[index(ch, numHubShards)].removeSub(ch, c)
+func (h *Hub) removeSub(ch string, c *Client, subGen uint64) (bool, bool, bool) {
+	return h.subShards[index(ch, numHubShards)].removeSub(ch, c, subGen)
 }
 
 func (h *Hub) updateServerTagsFilter(ch string, clientID string, tf *tagsFilter) (bool, bool) {
@@ -751,6 +751,12 @@ type subInfo struct {
 	tagsFilter       *tagsFilter
 	serverTagsFilter *tagsFilter
 	isMap            bool // true for map subscriptions.
+	// subGen identifies this specific subscription of the client to the channel.
+	// A resubscribe gets a fresh subGen, so a stale unsubscribe (carrying an older
+	// subGen it read from c.channels) will not remove a newer subscription's hub
+	// entry — which is how hub routing stays consistent with c.channels without
+	// holding a lock across both.
+	subGen uint64
 }
 
 type subShard struct {
@@ -861,7 +867,12 @@ func (s *subShard) removeSubID(ch string) {
 // - isEmpty: true if channel has no subscribers left
 // - wasRemoved: true if subscription was found and removed
 // - wasMap: true if the now-empty channel was a keyed subscription channel
-func (s *subShard) removeSub(ch string, c *Client) (bool, bool, bool) {
+// anySubGen removes whatever generation is currently registered (used by paths
+// that undo their own just-added subscription, where no newer generation can
+// exist). Real generations start at 1.
+const anySubGen uint64 = 0
+
+func (s *subShard) removeSub(ch string, c *Client, subGen uint64) (bool, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -871,8 +882,16 @@ func (s *subShard) removeSub(ch string, c *Client) (bool, bool, bool) {
 	if _, ok := s.subs[ch]; !ok {
 		return true, false, false
 	}
-	if _, ok := s.subs[ch][uid]; !ok {
+	sub, ok := s.subs[ch][uid]
+	if !ok {
 		return true, false, false
+	}
+	if subGen != anySubGen && sub.subGen != subGen {
+		// A newer subscription generation is registered for this client+channel —
+		// the caller is unsubscribing an older generation that a concurrent
+		// resubscribe already superseded. Leave the newer entry in place so hub
+		// routing stays consistent with c.channels. Report not-removed, not-empty.
+		return false, false, false
 	}
 
 	// actually remove subscription from hub.

@@ -159,6 +159,7 @@ type mapSubscribeState struct {
 	streamStartCaptured bool             // True after streamStart is captured (since 0 is valid offset)
 	isPresence          bool             // True if this is a presence subscription
 	subscribingCh       chan struct{}    // Closed when subscription completes (for race handling)
+	subGen              uint64           // Subscription generation, stable from this reservation through the live c.channels entry and the hub subInfo. See subInfo.subGen.
 	tagsFilter          *tagsFilter      // Client tags filter for state/stream publications
 	serverTagsFilter    *tagsFilter      // Server tags filter for state/stream publications
 }
@@ -340,6 +341,7 @@ func (c *Client) handleMapStatePhase(
 			startedAt:        time.Now().UnixNano(),
 			isPresence:       reply.Options.Type.IsMapPresence(),
 			subscribingCh:    make(chan struct{}),
+			subGen:           c.subGenCounter.Add(1),
 			tagsFilter:       tf,
 			serverTagsFilter: stf,
 		}
@@ -541,9 +543,23 @@ func (c *Client) handleMapTransitionToLive(
 ) error {
 	channel := req.Channel
 
+	// One generation per map subscription attempt, taken from the mapSubscribing
+	// reservation so it is stable from reservation through the live c.channels
+	// entry and the hub subInfo. This lets a racing unsubscribe identity-match and
+	// avoid clobbering a fresh concurrent map resubscribe (see subInfo.subGen).
+	c.mu.RLock()
+	var subGen uint64
+	if st, ok := c.mapSubscribing[channel]; ok {
+		subGen = st.subGen
+	}
+	c.mu.RUnlock()
+	if subGen == 0 {
+		subGen = c.subGenCounter.Add(1)
+	}
+
 	// Build subscription info first, validate before subscribing.
 	useID := opts.AllowChannelCompaction && req.Flag&subscriptionFlagChannelCompression != 0
-	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, isMap: true}
+	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, isMap: true, subGen: subGen}
 
 	// Process tags filter if provided.
 	if req.Tf != nil {
@@ -631,7 +647,7 @@ func (c *Client) handleMapTransitionToLive(
 		streamResult, err := c.node.MapStreamRead(c.ctx, channel, streamOpts)
 		if err != nil {
 			c.pubSubSync.StopBuffering(channel)
-			_ = c.node.removeSubscription(channel, c)
+			_ = c.node.removeSubscription(channel, c, anySubGen)
 			c.cleanupMapSubscribing(channel)
 			if errors.Is(err, ErrorUnrecoverablePosition) {
 				return ErrorUnrecoverablePosition
@@ -657,7 +673,7 @@ func (c *Client) handleMapTransitionToLive(
 		// ephemeral-mode subscribes (which have no epoch) working.
 		if (params.isRecovery || params.sincePosition.Epoch != "") && params.sincePosition.Epoch != streamPos.Epoch {
 			c.pubSubSync.StopBuffering(channel)
-			_ = c.node.removeSubscription(channel, c)
+			_ = c.node.removeSubscription(channel, c, anySubGen)
 			c.cleanupMapSubscribing(channel)
 			return ErrorUnrecoverablePosition
 		}
@@ -665,7 +681,7 @@ func (c *Client) handleMapTransitionToLive(
 		// If we got more than the limit, client is too far behind.
 		if streamLimit > 0 && len(pubs) > streamLimit {
 			c.pubSubSync.StopBuffering(channel)
-			_ = c.node.removeSubscription(channel, c)
+			_ = c.node.removeSubscription(channel, c, anySubGen)
 			c.cleanupMapSubscribing(channel)
 			return ErrorUnrecoverablePosition
 		}
@@ -684,7 +700,7 @@ func (c *Client) handleMapTransitionToLive(
 		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
 		if !okMerge {
 			c.pubSubSync.StopBuffering(channel)
-			_ = c.node.removeSubscription(channel, c)
+			_ = c.node.removeSubscription(channel, c, anySubGen)
 			c.cleanupMapSubscribing(channel)
 			return &DisconnectInsufficientState
 		}
@@ -788,7 +804,7 @@ func (c *Client) handleMapTransitionToLive(
 	protoReply, err := c.getSubscribeCommandReply(res)
 	if err != nil {
 		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c)
+		_ = c.node.removeSubscription(channel, c, anySubGen)
 		c.cleanupMapSubscribing(channel)
 		c.node.logger.log(newErrorLogEntry(err, "error encoding map subscribe reply", map[string]any{
 			"channel": channel, "user": c.user, "client": c.uid,
@@ -812,6 +828,7 @@ func (c *Client) handleMapTransitionToLive(
 		Source:                   opts.Source,
 		mapClientPresenceChannel: opts.MapClientPresenceChannel,
 		mapUserPresenceChannel:   opts.MapUserPresenceChannel,
+		subGen:                   subGen,
 	}
 
 	// Install channelContext BEFORE writing the reply so that any follow-up
@@ -830,8 +847,19 @@ func (c *Client) handleMapTransitionToLive(
 	// cleanup path. Roll back instead. Mirrors the pattern in subscribeCmd.
 	c.mu.Lock()
 	if c.status == statusClosed {
+		// Roll back the hub subscription. cleanupMapSubscribingAll may have already
+		// dropped our mapSubscribing entry, but only if it was registered before
+		// close() ran — a reservation installed after that snapshot is still here,
+		// and leaving it (with an open subscribingCh) would hang any unsubscribe
+		// waiting on it until the 5s timeout. Clean it up here too.
+		if st, ok := c.mapSubscribing[channel]; ok {
+			if st.subscribingCh != nil {
+				close(st.subscribingCh)
+			}
+			delete(c.mapSubscribing, channel)
+		}
 		c.mu.Unlock()
-		_ = c.node.removeSubscription(channel, c)
+		_ = c.node.removeSubscription(channel, c, anySubGen)
 		c.releaseSubscribeCommandReply(protoReply)
 		c.pubSubSync.StopBuffering(channel)
 		return ErrorInternal

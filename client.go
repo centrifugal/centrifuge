@@ -194,6 +194,11 @@ type ChannelContext struct {
 	flags                    uint16
 	mapClientPresenceChannel string
 	mapUserPresenceChannel   string
+	// subGen identifies this subscription generation; it matches the subGen the
+	// subscription carries in the hub. Unsubscribe reads it here and passes it to
+	// hub removal so a stale unsubscribe cannot remove a newer resubscribe's hub
+	// entry. See subInfo.subGen.
+	subGen uint64
 	// Source is a source of subscription application can set in SubscribeHandler.
 	Source uint8
 }
@@ -277,8 +282,9 @@ type Client struct {
 	mu                     sync.RWMutex
 	connectMu              sync.Mutex  // allows syncing connect with disconnect.
 	presenceMu             sync.Mutex  // allows syncing presence routine with client closing.
-	presenceInFlight       atomic.Bool // guards against overlapping presence ticks.
-	closing                atomic.Bool // set before close blocks on presenceMu.
+	presenceInFlight       atomic.Bool   // guards against overlapping presence ticks.
+	closing                atomic.Bool   // set before close blocks on presenceMu.
+	subGenCounter          atomic.Uint64 // monotonic per-subscription generation, see subInfo.subGen.
 	ctx                    context.Context
 	transport              Transport
 	node                   *Node
@@ -2166,7 +2172,7 @@ func (c *Client) onSubscribeError(channel string) {
 	delete(c.channels, channel)
 	c.mu.Unlock()
 	if ok {
-		_ = c.node.removeSubscription(channel, c)
+		_ = c.node.removeSubscription(channel, c, chCtx.subGen)
 		if subscribingCh != nil {
 			close(chCtx.subscribingCh)
 		}
@@ -3407,13 +3413,32 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 		return fmt.Errorf("channel is empty")
 	}
 	channelLimit := c.node.config.ClientChannelLimit
-	c.mu.RLock()
+
+	// Reserve the channel before doing any subscribe work. This mirrors the
+	// client-command path (validateSubscribeRequest) and gives server-side
+	// subscribes the same "one in-flight subscribe per channel" guarantee: the
+	// atomic check-and-reserve under c.mu rejects a duplicate/concurrent Subscribe
+	// for the same channel, so two subscribes can't race their hub-add and
+	// c.channels write into an inconsistent state. The reservation carries a
+	// subscribingCh (with flags==0, so flagServerSide is not yet set), which the
+	// existing unsubscribe wait-gate uses to synchronize a racing Unsubscribe.
+	c.mu.Lock()
+	if c.status == statusClosed {
+		c.mu.Unlock()
+		return nil
+	}
 	numChannels := len(c.channels)
-	c.mu.RUnlock()
 	if channelLimit > 0 && numChannels >= channelLimit {
+		c.mu.Unlock()
 		go func() { _ = c.close(DisconnectChannelLimit) }()
 		return nil
 	}
+	if _, ok := c.channels[channel]; ok {
+		c.mu.Unlock()
+		return ErrorAlreadySubscribed
+	}
+	c.channels[channel] = ChannelContext{subscribingCh: make(chan struct{}), subGen: c.subGenCounter.Add(1)}
+	c.mu.Unlock()
 
 	subCmd := &protocol.SubscribeRequest{
 		Channel: channel,
@@ -3442,20 +3467,34 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	c.mu.Lock()
 	if c.status == statusClosed {
 		// The client closed while this server-side subscribe was in flight.
-		// close() tears down only channels present in c.channels, and this one
-		// was not there yet when it snapshotted — so the hub registration that
-		// subscribeCmd added would be left behind (a routing entry pointing at a
-		// dead client, never swept on disconnect). Undo it directly: c.channels
-		// was never set for a server-side subscribe, so onSubscribeError would not
-		// remove the hub entry. This is just a status read on the same lock
-		// section that already writes c.channels — nothing added on the common
-		// path, and the external subscribe work above already ran outside the lock.
+		// close() tears down only channels present in c.channels as of its
+		// snapshot; the hub registration subscribeCmd added must be undone here or
+		// it leaks (a routing entry pointing at a dead client, never swept on
+		// disconnect). Drop the reservation and release any unsubscribe waiter too.
+		resv := c.channels[channel]
+		delete(c.channels, channel)
 		c.mu.Unlock()
-		_ = c.node.removeSubscription(channel, c)
+		if resv.subscribingCh != nil {
+			close(resv.subscribingCh)
+		}
+		_ = c.node.removeSubscription(channel, c, subCtx.channelContext.subGen)
 		return DisconnectServerError
 	}
-	c.channels[channel] = subCtx.channelContext
+	// Move the reservation's subscribingCh into the finalized context and close it
+	// so any unsubscribe waiting on the in-flight subscribe proceeds. Setting
+	// c.channels and the hub add (done in subscribeCmd) now both describe the same
+	// generation, and the reservation guaranteed no competing subscribe ran.
+	finalCtx := subCtx.channelContext
+	if resv, ok := c.channels[channel]; ok {
+		finalCtx.subscribingCh = resv.subscribingCh
+	}
+	subscribingCh := finalCtx.subscribingCh
+	finalCtx.subscribingCh = nil
+	c.channels[channel] = finalCtx
 	c.mu.Unlock()
+	if subscribingCh != nil {
+		close(subscribingCh)
+	}
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagSubscribe) {
 		return nil
 	}
@@ -3570,6 +3609,7 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 	// subscribe is performed in a separate goroutine).
 	c.channels[channel] = ChannelContext{
 		subscribingCh: make(chan struct{}),
+		subGen:        c.subGenCounter.Add(1),
 	}
 	c.mu.Unlock()
 
@@ -3697,7 +3737,21 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	}
 
 	useID := reply.Options.AllowChannelCompaction && req.Flag&subscriptionFlagChannelCompression != 0
-	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID}
+	// One generation per subscription attempt, carried into both the hub entry
+	// (subInfo.subGen) and the client channel context (ChannelContext.subGen), so
+	// unsubscribe can remove exactly the generation it saw. When the caller already
+	// reserved the channel (Client.Subscribe / validateSubscribeRequest), reuse the
+	// reservation's generation so it is stable from reservation through finalize —
+	// that lets a racing unsubscribe identity-match and avoid clobbering a fresh
+	// concurrent subscribe. Paths without a reservation (initial server-side
+	// subscribe on connect) get a fresh generation here.
+	c.mu.RLock()
+	subGen := c.channels[channel].subGen
+	c.mu.RUnlock()
+	if subGen == 0 {
+		subGen = c.subGenCounter.Add(1)
+	}
+	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, subGen: subGen}
 	if req.Tf != nil {
 		if !reply.Options.AllowTagsFilter {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "tags filter not allowed", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
@@ -4043,6 +4097,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		Source:                   reply.Options.Source,
 		mapClientPresenceChannel: reply.Options.MapClientPresenceChannel,
 		mapUserPresenceChannel:   reply.Options.MapUserPresenceChannel,
+		subGen:                   subGen,
 	}
 	if reply.Options.EnableRecovery || reply.Options.EnablePositioning {
 		channelContext.positionCheckTime = time.Now().Unix()
@@ -4060,7 +4115,11 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			c.mu.Lock()
 			defer c.mu.Unlock()
 			chCtx, ok := c.channels[channel]
-			if ok && chCtx.subscribingCh != nil {
+			// Identity-match on subGen: this runs after post-finalize network work,
+			// during which a racing unsubscribe may have removed our subscription and
+			// a fresh subscribe may have installed its own reservation. Only close our
+			// own subscribingCh — never a newer subscription's.
+			if ok && chCtx.subGen == channelContext.subGen && chCtx.subscribingCh != nil {
 				close(chCtx.subscribingCh)
 				chCtx.subscribingCh = nil
 				c.channels[channel] = chCtx
@@ -4469,6 +4528,10 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	info := c.clientInfo(channel)
 	chCtx, ok := c.channels[channel]
 	subscribingCh := chCtx.subscribingCh
+	// Identity of the subscription this unsubscribe targets. subGen is stable from
+	// reservation through finalize, so we can tear down exactly this subscription
+	// and never a fresh one that a concurrent subscribe installed in the meantime.
+	targetSubGen := chCtx.subGen
 	isSubscribed := channelHasFlag(chCtx.flags, flagSubscribed)
 	serverSide := channelHasFlag(chCtx.flags, flagServerSide)
 	// Also check for in-progress map subscriptions.
@@ -4476,6 +4539,14 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	var mapSubscribingCh chan struct{}
 	if hasKeyedState {
 		mapSubscribingCh = keyedState.subscribingCh
+		if !ok {
+			// The subscription is a map sub still loading (in mapSubscribing, not
+			// yet in c.channels). It will finalize into c.channels carrying this
+			// reservation's generation, so target that: after the wait below the
+			// delete matches the live entry, and a fresh map resubscribe with a
+			// different generation is left untouched.
+			targetSubGen = keyedState.subGen
+		}
 	}
 	c.mu.RUnlock()
 
@@ -4499,6 +4570,11 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 			c.mu.RLock()
 			chCtx, ok = c.channels[channel]
 			c.mu.RUnlock()
+			// Keep the original targetSubGen: subGen is stable from reservation
+			// through finalize, so our target still identifies the same subscription
+			// once it finalizes. If instead a fresh subscribe reserved the channel
+			// after ours was removed, its generation differs and we must not adopt
+			// it as our target and tear it down.
 			if !ok {
 				return nil
 			}
@@ -4556,12 +4632,22 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	}
 
 	c.mu.Lock()
-	// Clean up normal subscription.
+	// Clean up normal subscription. Identity-match on subGen (mirrors the
+	// mapSubscribing cleanup below): only tear down the entry if it is still the
+	// subscription this unsubscribe targeted. A concurrent subscribe may have
+	// removed our target and installed a fresh reservation with a newer generation
+	// between the wait above and this lock — deleting that would strand it in
+	// c.channels with no hub routing (and, for a gen-0 reservation, unconditionally
+	// remove its hub entry).
 	removedNow := false
-	if currentChCtx, exists := c.channels[channel]; exists {
+	var removedSubGen uint64
+	if currentChCtx, exists := c.channels[channel]; exists && currentChCtx.subGen == targetSubGen {
 		if currentChCtx.subscribingCh != nil {
 			close(currentChCtx.subscribingCh)
 		}
+		// Hub removal only affects this generation — a concurrent resubscribe has a
+		// newer generation and must not be torn down by this unsubscribe.
+		removedSubGen = currentChCtx.subGen
 		delete(c.channels, channel)
 		removedNow = true
 	}
@@ -4622,7 +4708,7 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		_ = c.node.publishLeave(channel, info)
 	}
 
-	if err := c.node.removeSubscription(channel, c); err != nil {
+	if err := c.node.removeSubscription(channel, c, removedSubGen); err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error removing subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		return err
 	}

@@ -101,13 +101,13 @@ func TestSubShardNumSubscriptionsMatchesWalk(t *testing.T) {
 	require.Equal(t, 50, h.NumSubscriptions())
 
 	// Removing a subscription that is not there must not decrement.
-	_, _, _ = h.removeSub("nosuchchan", clients[0])
+	_, _, _ = h.removeSub("nosuchchan", clients[0], anySubGen)
 	check("after removing unknown channel")
 	require.Equal(t, 50, h.NumSubscriptions())
 
 	for _, c := range clients {
 		for ch := 0; ch < 5; ch++ {
-			_, _, _ = h.removeSub("chan"+strconv.Itoa(ch), c)
+			_, _, _ = h.removeSub("chan"+strconv.Itoa(ch), c, anySubGen)
 			check("after remove")
 		}
 	}
