@@ -1260,6 +1260,7 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx Channe
 		return true
 	}
 	position := chCtx.streamPosition
+	checkedSubGen := chCtx.subGen
 	c.mu.Unlock()
 
 	isMap := channelHasFlag(chCtx.flags, flagMap)
@@ -1270,7 +1271,10 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx Channe
 	}
 	if validPosition {
 		c.mu.Lock()
-		if chContext, ok := c.channels[ch]; ok {
+		// Only stamp the generation we actually validated: a resubscribe in the
+		// window installs a new subGen with its own unvalidated position, and
+		// marking that as freshly checked would defer its first real check.
+		if chContext, ok := c.channels[ch]; ok && chContext.subGen == checkedSubGen {
 			chContext.positionCheckTime = nowUnix
 			c.channels[ch] = chContext
 		}
@@ -3717,15 +3721,20 @@ func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind res
 	c.mu.Lock()
 	var subscribingCh chan struct{}
 	switch kind {
+	case reservationChannels:
+		if resv, ok := c.channels[channel]; ok {
+			subscribingCh = resv.subscribingCh
+		}
 	case reservationMap:
 		if st, ok := c.mapSubscribing[channel]; ok {
 			subscribingCh = st.subscribingCh
 			delete(c.mapSubscribing, channel)
 		}
 	default:
-		if resv, ok := c.channels[channel]; ok {
-			subscribingCh = resv.subscribingCh
-		}
+		// Unreachable: reservationKind is internal with exactly these two values.
+		// Panic rather than silently defaulting to a store, so a future kind that
+		// forgets to extend this switch fails loudly instead of corrupting state.
+		panic("centrifuge: unknown reservationKind")
 	}
 	if c.status == statusClosed {
 		// close() snapshotted c.channels before this subscribe finalized, so the
