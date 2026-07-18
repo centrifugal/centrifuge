@@ -3747,6 +3747,13 @@ func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind res
 		if subscribingCh != nil {
 			close(subscribingCh)
 		}
+		// Release the recovery buffer before removing the hub entry. A positioned/
+		// recovering subscribe holds pubBufferMu (LockBufferAndReadBuffered) until
+		// StopBuffering, and removeSubscription takes subShard.mu; the broadcast
+		// path holds subShard.mu while taking pubBufferMu, so removing the hub entry
+		// with the buffer still locked inverts that order and deadlocks. StopBuffering
+		// is idempotent, so calling it here (and again in the caller) is safe.
+		c.pubSubSync.StopBuffering(channel)
 		_ = c.node.removeSubscription(channel, c, ctx.subGen)
 		return nil, false
 	}
