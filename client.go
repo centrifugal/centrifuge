@@ -1502,6 +1502,10 @@ func (c *Client) close(disconnect Disconnect) error {
 		return nil
 	}
 	prevStatus := c.status
+	// Capture c.user under c.mu: connectCmd writes it under c.mu, and close can
+	// race connectCmd (e.g. the stale-connection timer firing during a slow
+	// connect), so the disconnect logs below must not read it lock-free.
+	user := c.user
 	c.status = statusClosed
 
 	c.stopTimer()
@@ -1516,7 +1520,7 @@ func (c *Client) close(disconnect Disconnect) error {
 	for channel := range channels {
 		err := c.unsubscribe(channel, unsubscribeDisconnect, &disconnect)
 		if err != nil {
-			c.node.logger.log(newErrorLogEntry(err, "error unsubscribing client from channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+			c.node.logger.log(newErrorLogEntry(err, "error unsubscribing client from channel", map[string]any{"channel": channel, "user": user, "client": c.uid, "error": err.Error()}))
 		}
 	}
 
@@ -1547,7 +1551,7 @@ func (c *Client) close(disconnect Disconnect) error {
 	_ = c.transport.Close(disconnect)
 
 	if disconnect.Code != DisconnectConnectionClosed.Code {
-		c.node.logger.log(newLogEntry(LogLevelDebug, "closing client connection", map[string]any{"client": c.uid, "user": c.user, "reason": disconnect.Reason}))
+		c.node.logger.log(newLogEntry(LogLevelDebug, "closing client connection", map[string]any{"client": c.uid, "user": user, "reason": disconnect.Reason}))
 	}
 	if disconnect.Code != DisconnectConnectionClosed.Code {
 		c.node.metrics.incServerDisconnect(disconnect.Code, c)
@@ -3255,12 +3259,27 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	}
 
 	c.mu.Lock()
-	for channel, subCtx := range subCtxMap {
-		c.channels[channel] = subCtx.channelContext
+	closedDuringConnect := c.status == statusClosed
+	if !closedDuringConnect {
+		for channel, subCtx := range subCtxMap {
+			c.channels[channel] = subCtx.channelContext
+		}
 	}
 	c.mu.Unlock()
 
 	c.unlockServerSideSubscriptions(subCtxMap)
+
+	if closedDuringConnect {
+		// The client closed while connect was applying these server-side
+		// subscriptions. close() snapshotted c.channels before they were installed,
+		// so it did not tear down their hub registrations — they would leak. Roll
+		// them back here (subLocks are released above, so removeSubscription can
+		// take them). Mirrors commitSubscription's closed path.
+		for channel, subCtx := range subCtxMap {
+			_ = c.node.removeSubscription(channel, c, subCtx.channelContext.subGen)
+		}
+		return DisconnectConnectionClosed
+	}
 
 	for channel, subCtx := range subCtxMap {
 		if subCtx.clientInfo != nil {
