@@ -109,9 +109,9 @@ func runPresenceStress(t *testing.T, o stressOpts) {
 		// concurrent dutyPosition workers are exercised under churn.
 		cfg.ClientChannelPositionCheckDelay = time.Millisecond
 	}
-	var wheel *ShardedTimerWheel
+	var wheel *testSharedTimerScheduler
 	if o.useWheel {
-		wheel = NewShardedTimerWheel(4, 256, 10*time.Millisecond, 4)
+		wheel = newTestSharedTimerScheduler(4)
 		cfg.ClientTimerScheduler = wheel
 	}
 	node, err := New(cfg)
@@ -203,7 +203,7 @@ func TestPresenceStress_Runtime(t *testing.T) {
 	})
 }
 
-func TestPresenceStress_Wheel(t *testing.T) {
+func TestPresenceStress_Scheduler(t *testing.T) {
 	runPresenceStress(t, stressOpts{
 		useWheel: true, rtt: 2 * time.Millisecond,
 		numWorkers: 16, numChannels: 8, duration: 3 * time.Second,
@@ -233,7 +233,7 @@ func TestPresenceStress_UnsubscribeRace(t *testing.T) {
 	})
 }
 
-func TestPresenceStress_UnsubscribeRace_Wheel(t *testing.T) {
+func TestPresenceStress_UnsubscribeRace_Scheduler(t *testing.T) {
 	runPresenceStress(t, stressOpts{
 		useWheel: true, rtt: 2 * time.Millisecond, explicitUnsub: true,
 		numWorkers: 16, numChannels: 8, duration: 3 * time.Second,
@@ -257,14 +257,14 @@ func TestPresenceStress_Concurrent_UnsubscribeRace(t *testing.T) {
 	})
 }
 
-func TestPresenceStress_Concurrent_Wheel(t *testing.T) {
+func TestPresenceStress_Concurrent_Scheduler(t *testing.T) {
 	runPresenceStress(t, stressOpts{
 		useWheel: true, rtt: 2 * time.Millisecond, concurrency: 8, explicitUnsub: true,
 		numWorkers: 16, numChannels: 8, duration: 3 * time.Second,
 	})
 }
 
-// TestPresenceStress_KitchenSink turns on everything at once: the timer wheel
+// TestPresenceStress_KitchenSink turns on everything at once: the shared-goroutine scheduler
 // (offloaded ticks), presence + position concurrency, and an explicit
 // unsubscribe race, under churn. It is the broadest -race exercise of the tick
 // machinery: presence workers, position workers, the closing bail, and

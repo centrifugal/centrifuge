@@ -87,9 +87,9 @@ func runRuntimeStability(t *testing.T, o stabilityOpts) {
 		clientPresenceUpdateConcurrency: o.concurrency,
 		clientPositionCheckConcurrency:  o.concurrency,
 	}
-	var wheel *ShardedTimerWheel
+	var wheel *testSharedTimerScheduler
 	if o.useWheel {
-		wheel = NewShardedTimerWheel(4, 256, 10*time.Millisecond, 4)
+		wheel = newTestSharedTimerScheduler(4)
 		cfg.ClientTimerScheduler = wheel
 	}
 	node, err := New(cfg)
@@ -190,7 +190,7 @@ func TestRuntimeStability_Runtime(t *testing.T) {
 	})
 }
 
-func TestRuntimeStability_Wheel(t *testing.T) {
+func TestRuntimeStability_Scheduler(t *testing.T) {
 	runRuntimeStability(t, stabilityOpts{
 		useWheel: true, numConns: 200, numChannels: 4,
 		rtt: time.Millisecond, duration: 3 * time.Second,
@@ -207,7 +207,7 @@ func TestRuntimeStability_SlowPresenceManager(t *testing.T) {
 	})
 }
 
-func TestRuntimeStability_SlowPresenceManager_Wheel(t *testing.T) {
+func TestRuntimeStability_SlowPresenceManager_Scheduler(t *testing.T) {
 	runRuntimeStability(t, stabilityOpts{
 		useWheel: true, numConns: 50, numChannels: 8,
 		rtt: 10 * time.Millisecond, duration: 3 * time.Second,
@@ -223,7 +223,7 @@ func TestRuntimeStability_Concurrent(t *testing.T) {
 	})
 }
 
-func TestRuntimeStability_Concurrent_Wheel(t *testing.T) {
+func TestRuntimeStability_Concurrent_Scheduler(t *testing.T) {
 	runRuntimeStability(t, stabilityOpts{
 		useWheel: true, numConns: 50, numChannels: 8, concurrency: 8,
 		rtt: 10 * time.Millisecond, duration: 3 * time.Second,
@@ -244,7 +244,7 @@ func TestRuntimeStability_SlowRefreshHandler(t *testing.T) {
 	const pingInterval = 200 * time.Millisecond
 	const refreshDuration = 150 * time.Millisecond
 
-	wheel := NewShardedTimerWheel(4, 256, 10*time.Millisecond, 4)
+	wheel := newTestSharedTimerScheduler(4)
 	defer wheel.Stop()
 	node, err := New(Config{
 		LogLevel:             LogLevelError,
