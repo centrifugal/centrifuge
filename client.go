@@ -1987,15 +1987,23 @@ func (c *Client) handleConnect(req *protocol.ConnectRequest, cmd *protocol.Comma
 func (c *Client) triggerConnect() {
 	c.connectMu.Lock()
 	defer c.connectMu.Unlock()
-	if c.status != statusConnecting {
+	// c.status is guarded by c.mu, not connectMu — other code (e.g. Unsubscribe
+	// reached from a server-side Node.Unsubscribe/Disconnect) reads it under c.mu
+	// while the connecting client is already registered in the hub. Take c.mu for
+	// the status access; connectMu (held here and by close) serializes
+	// triggerConnect with close, and the connectMu -> c.mu order matches close().
+	c.mu.RLock()
+	connecting := c.status == statusConnecting
+	c.mu.RUnlock()
+	if !connecting {
 		return
 	}
-	if c.node.clientEvents.connectHandler == nil {
-		c.status = statusConnected
-		return
+	if c.node.clientEvents.connectHandler != nil {
+		c.node.clientEvents.connectHandler(c)
 	}
-	c.node.clientEvents.connectHandler(c)
+	c.mu.Lock()
 	c.status = statusConnected
+	c.mu.Unlock()
 }
 
 func (c *Client) scheduleOnConnectTimers() {
