@@ -3568,11 +3568,18 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 		c.mu.Unlock()
 		return nil, nil
 	} // TODO: it would be better to combine with normal flow, including having subscribingCh for map subs also.
-	// TODO: also, normal sub flow should look at len(c.mapSubscribing) also.
 
 	// Regular subscription validation.
 	numChannels := len(c.channels) + len(c.mapSubscribing)
 	_, ok := c.channels[channel]
+	if !ok {
+		// Also reject if a map subscribe is loading this channel: it reserves
+		// mapSubscribing (not c.channels), and letting a normal subscribe reserve
+		// c.channels in parallel breaks the one-in-flight-subscribe-per-channel
+		// invariant commitSubscription relies on — the map sub going live would
+		// overwrite the normal reservation and orphan its subscribingCh.
+		_, ok = c.mapSubscribing[channel]
+	}
 	if ok {
 		c.mu.Unlock()
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
@@ -4161,10 +4168,13 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			return ctx
 		}
 		if subscribingCh != nil {
-			// Close only after the post-finalize presence/join work below, so a
-			// racing unsubscribe cannot remove presence before this subscribe added
-			// it. This is our own captured channel, so no identity-match is needed —
-			// commitSubscription already cleared subscribingCh in c.channels.
+			// Release any unsubscribe waiting on this in-flight subscribe. Deferred
+			// to subscribeCmd's return (matching the prior behavior); by this point
+			// addPresence above has already run, so a woken unsubscribe's
+			// removePresence cannot precede this subscribe's presence add. This is
+			// our own captured channel — no identity-match is needed, and
+			// commitSubscription already cleared subscribingCh in c.channels, so a
+			// racing unsubscribe cannot double-close it.
 			defer close(subscribingCh)
 		}
 		// Stop syncing recovery and PUB/SUB.
