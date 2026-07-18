@@ -835,41 +835,18 @@ func (c *Client) handleMapTransitionToLive(
 	// commands from the SDK that arrive between the reply send and StopBuffering
 	// observe the channel as subscribed. Buffered PUB/SUB publications stay
 	// queued until StopBuffering below — they cannot reach the client yet.
-	// Move from mapSubscribing to channels. Always look up from the map under
-	// the lock to avoid closing a subscribingCh that was already closed by a
-	// concurrent disconnect handler (cleanupMapSubscribingAll).
-	//
-	// Re-check c.status under the lock — Client.close() may have run between
-	// addSubscription and here. If it has, c.channels was snapshotted before our
-	// entry existed (so close() did NOT remove our hub subscription), and
-	// cleanupMapSubscribingAll dropped the mapSubscribing entry. Writing
-	// channelContext now would leave a ghost subscription in the hub with no
-	// cleanup path. Roll back instead. Mirrors the pattern in subscribeCmd.
-	c.mu.Lock()
-	if c.status == statusClosed {
-		// Roll back the hub subscription. cleanupMapSubscribingAll may have already
-		// dropped our mapSubscribing entry, but only if it was registered before
-		// close() ran — a reservation installed after that snapshot is still here,
-		// and leaving it (with an open subscribingCh) would hang any unsubscribe
-		// waiting on it until the 5s timeout. Clean it up here too.
-		if st, ok := c.mapSubscribing[channel]; ok {
-			if st.subscribingCh != nil {
-				close(st.subscribingCh)
-			}
-			delete(c.mapSubscribing, channel)
-		}
-		c.mu.Unlock()
-		_ = c.node.removeSubscription(channel, c, anySubGen)
+	// commitSubscription moves the reservation from mapSubscribing to c.channels
+	// (or rolls back the hub entry if the client closed mid-subscribe) — the same
+	// consistency-critical commit the normal subscribe path uses.
+	subscribingCh, committed := c.commitSubscription(channel, channelContext, reservationMap)
+	if !committed {
 		c.releaseSubscribeCommandReply(protoReply)
 		c.pubSubSync.StopBuffering(channel)
 		return ErrorInternal
 	}
-	if st, ok := c.mapSubscribing[channel]; ok && st.subscribingCh != nil {
-		close(st.subscribingCh)
+	if subscribingCh != nil {
+		close(subscribingCh)
 	}
-	delete(c.mapSubscribing, channel)
-	c.channels[channel] = channelContext
-	c.mu.Unlock()
 
 	c.writeEncodedCommandReply(channel, protocol.FrameTypeSubscribe, cmd, protoReply, rw)
 	c.handleCommandFinished(cmd, protocol.FrameTypeSubscribe, nil, protoReply, started, "")

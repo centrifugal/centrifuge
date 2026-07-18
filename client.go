@@ -3464,34 +3464,14 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 		return subCtx.err
 	}
 	defer c.pubSubSync.StopBuffering(channel)
-	c.mu.Lock()
-	if c.status == statusClosed {
-		// The client closed while this server-side subscribe was in flight.
-		// close() tears down only channels present in c.channels as of its
-		// snapshot; the hub registration subscribeCmd added must be undone here or
-		// it leaks (a routing entry pointing at a dead client, never swept on
-		// disconnect). Drop the reservation and release any unsubscribe waiter too.
-		resv := c.channels[channel]
-		delete(c.channels, channel)
-		c.mu.Unlock()
-		if resv.subscribingCh != nil {
-			close(resv.subscribingCh)
-		}
-		_ = c.node.removeSubscription(channel, c, subCtx.channelContext.subGen)
+	// Commit the reservation into c.channels, or roll back the hub entry if the
+	// client closed mid-subscribe. Same commit the map path uses. The reservation
+	// guaranteed no competing subscribe ran, so c.channels and the hub entry
+	// subscribeCmd added describe the same generation.
+	subscribingCh, committed := c.commitSubscription(channel, subCtx.channelContext, reservationChannels)
+	if !committed {
 		return DisconnectServerError
 	}
-	// Move the reservation's subscribingCh into the finalized context and close it
-	// so any unsubscribe waiting on the in-flight subscribe proceeds. Setting
-	// c.channels and the hub add (done in subscribeCmd) now both describe the same
-	// generation, and the reservation guaranteed no competing subscribe ran.
-	finalCtx := subCtx.channelContext
-	if resv, ok := c.channels[channel]; ok {
-		finalCtx.subscribingCh = resv.subscribingCh
-	}
-	subscribingCh := finalCtx.subscribingCh
-	finalCtx.subscribingCh = nil
-	c.channels[channel] = finalCtx
-	c.mu.Unlock()
 	if subscribingCh != nil {
 		close(subscribingCh)
 	}
@@ -3697,6 +3677,68 @@ const (
 	subscriptionFlagChannelCompression = 1 << iota
 	subscriptionFlagRejectUnrecovered
 )
+
+// reservationKind identifies where an in-flight subscribe parked its
+// placeholder reservation so commitSubscription can release it uniformly.
+type reservationKind uint8
+
+const (
+	// reservationChannels — the reservation is the placeholder ChannelContext in
+	// c.channels (normal subscriptions).
+	reservationChannels reservationKind = iota
+	// reservationMap — the reservation is the mapSubscribeState in c.mapSubscribing
+	// (map/keyed subscriptions load through a separate two-phase pipeline).
+	reservationMap
+)
+
+// commitSubscription is the single consistency-critical commit point shared by
+// normal and map subscriptions. Under c.mu it either installs the finished
+// subscription's channel context into c.channels, or — if the client closed
+// while the subscribe was in flight — rolls it back.
+//
+// On success it returns the reservation's subscribingCh (or nil) and true. The
+// caller is responsible for closing that channel to release any unsubscribe
+// waiting on the in-flight subscribe, at the point that preserves its own
+// ordering (inline, or deferred until after presence/join work so an unsubscribe
+// cannot remove presence before this subscribe added it).
+//
+// On a closed client it drops the reservation, closes its subscribingCh, removes
+// the hub entry registered earlier in the subscribe (ctx.subGen must match), and
+// returns (nil, false); the caller adds any path-specific cleanup (reply/buffer
+// release) and returns its own error. Lock must NOT be held.
+func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind reservationKind) (chan struct{}, bool) {
+	c.mu.Lock()
+	var subscribingCh chan struct{}
+	switch kind {
+	case reservationMap:
+		if st, ok := c.mapSubscribing[channel]; ok {
+			subscribingCh = st.subscribingCh
+			delete(c.mapSubscribing, channel)
+		}
+	default:
+		if resv, ok := c.channels[channel]; ok {
+			subscribingCh = resv.subscribingCh
+		}
+	}
+	if c.status == statusClosed {
+		// close() snapshotted c.channels before this subscribe finalized, so the
+		// hub entry added earlier would leak (a routing entry to a dead client).
+		// Drop the reservation and undo the hub registration for this generation.
+		if kind == reservationChannels {
+			delete(c.channels, channel)
+		}
+		c.mu.Unlock()
+		if subscribingCh != nil {
+			close(subscribingCh)
+		}
+		_ = c.node.removeSubscription(channel, c, ctx.subGen)
+		return nil, false
+	}
+	ctx.subscribingCh = nil
+	c.channels[channel] = ctx
+	c.mu.Unlock()
+	return subscribingCh, true
+}
 
 // subscribeCmd handles subscribe command - clients send this when subscribe
 // on channel, if channel is private then we must validate provided sign here before
@@ -4105,26 +4147,26 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 	if !serverSide {
 		// In case of server-side sub this will be done later by the caller.
-		c.mu.Lock()
-		if chCtx, ok := c.channels[channel]; ok { // Move subscribingCh from existing channel context to the new one.
-			channelContext.subscribingCh = chCtx.subscribingCh
+		// Same commit as the server-side and map paths. If the client closed
+		// mid-subscribe the reservation and hub entry are rolled back and we abort
+		// so the caller runs onSubscribeError.
+		subscribingCh, committed := c.commitSubscription(channel, channelContext, reservationChannels)
+		if !committed {
+			// Client closed mid-subscribe. Release the recovery/PUB-SUB buffer
+			// StartBuffering opened above before aborting — every other return path
+			// in subscribeCmd pairs StartBuffering with StopBuffering, and the
+			// success path below does too.
+			c.pubSubSync.StopBuffering(channel)
+			ctx.disconnect = &DisconnectServerError
+			return ctx
 		}
-		c.channels[channel] = channelContext
-		c.mu.Unlock()
-		defer func() {
-			c.mu.Lock()
-			defer c.mu.Unlock()
-			chCtx, ok := c.channels[channel]
-			// Identity-match on subGen: this runs after post-finalize network work,
-			// during which a racing unsubscribe may have removed our subscription and
-			// a fresh subscribe may have installed its own reservation. Only close our
-			// own subscribingCh — never a newer subscription's.
-			if ok && chCtx.subGen == channelContext.subGen && chCtx.subscribingCh != nil {
-				close(chCtx.subscribingCh)
-				chCtx.subscribingCh = nil
-				c.channels[channel] = chCtx
-			}
-		}()
+		if subscribingCh != nil {
+			// Close only after the post-finalize presence/join work below, so a
+			// racing unsubscribe cannot remove presence before this subscribe added
+			// it. This is our own captured channel, so no identity-match is needed —
+			// commitSubscription already cleared subscribingCh in c.channels.
+			defer close(subscribingCh)
+		}
 		// Stop syncing recovery and PUB/SUB.
 		// In case of server side subscription we will do this later.
 		c.pubSubSync.StopBuffering(channel)
