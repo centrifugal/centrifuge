@@ -296,6 +296,13 @@ func (q *Queue) Size() int {
 func (q *Queue) FinishCollect(shrinkDelay time.Duration) {
 	q.mu.Lock()
 
+	if q.closed {
+		// Close stopped the shrink timer so the queue can be collected; arming
+		// (or Reset-ing) it here would retain the closed queue again.
+		q.mu.Unlock()
+		return
+	}
+
 	if shrinkDelay == 0 {
 		// Immediate shrink
 		q.doShrinkLocked()

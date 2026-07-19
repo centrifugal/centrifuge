@@ -4043,8 +4043,9 @@ func TestStreamSubscribe_MapPresencePeriodicUpdate(t *testing.T) {
 	client.mu.RLock()
 	chCtx := client.channels["test_channel"]
 	client.mu.RUnlock()
-	err := client.updateChannelPresence("test_channel", chCtx)
+	attempted, err := client.updateChannelPresence("test_channel", chCtx)
 	require.NoError(t, err)
+	require.True(t, attempted)
 }
 
 // TestSharedPollSubscribe_WithMapPresence verifies that shared poll subscribe

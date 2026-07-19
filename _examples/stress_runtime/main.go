@@ -1288,20 +1288,29 @@ func main() {
 
 // runGuarded runs a scenario, converting panics and deadline into failures so
 // one bad scenario never takes down the suite.
-func runGuarded(ctx context.Context, e *env, sc scenario) (detail string, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("PANIC: %v", r)
-		}
-	}()
-	done := make(chan struct{})
+func runGuarded(ctx context.Context, e *env, sc scenario) (string, error) {
+	type outcome struct {
+		detail string
+		err    error
+	}
+	// Buffered so a scenario finishing after the deadline abandons its result
+	// without blocking; results travel over the channel (not shared variables) so
+	// an abandoned scenario never races the already-returned caller.
+	done := make(chan outcome, 1)
 	go func() {
-		detail, err = sc.run(ctx, e)
-		close(done)
+		// recover must live on the scenario goroutine — a deferred recover in the
+		// caller cannot catch a panic from here.
+		defer func() {
+			if r := recover(); r != nil {
+				done <- outcome{err: fmt.Errorf("PANIC: %v", r)}
+			}
+		}()
+		detail, err := sc.run(ctx, e)
+		done <- outcome{detail: detail, err: err}
 	}()
 	select {
-	case <-done:
-		return detail, err
+	case out := <-done:
+		return out.detail, out.err
 	case <-ctx.Done():
 		return "", fmt.Errorf("scenario did not finish before suite deadline")
 	}

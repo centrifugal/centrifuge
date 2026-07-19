@@ -280,8 +280,8 @@ func (r *ConnectRequest) toProto() *protocol.ConnectRequest {
 // Client represents client connection to server.
 type Client struct {
 	mu                     sync.RWMutex
-	connectMu              sync.Mutex  // allows syncing connect with disconnect.
-	presenceMu             sync.Mutex  // allows syncing presence routine with client closing.
+	connectMu              sync.Mutex    // allows syncing connect with disconnect.
+	presenceMu             sync.Mutex    // allows syncing presence routine with client closing.
 	presenceInFlight       atomic.Bool   // guards against overlapping presence ticks.
 	closing                atomic.Bool   // set before close blocks on presenceMu.
 	subGenCounter          atomic.Uint64 // monotonic per-subscription generation, see subInfo.subGen.
@@ -797,19 +797,24 @@ func (c *Client) publishJoinAndPresence(channel string, chCtx ChannelContext, cl
 
 // updateChannelPresence updates client presence info for channel so it
 // won't expire until client disconnect.
-func (c *Client) updateChannelPresence(ch string, chCtx ChannelContext) error {
+//
+// attempted reports whether any presence add was issued: once true, an entry
+// may exist even when err is non-nil (the node-level add can succeed before the
+// map presence update fails, and a failed call may still have landed
+// server-side), so the caller must treat the channel as compensation-eligible.
+func (c *Client) updateChannelPresence(ch string, chCtx ChannelContext) (attempted bool, err error) {
 	// Check if any presence is enabled for this channel.
 	hasAnyPresence := channelHasFlag(chCtx.flags, flagEmitPresence) ||
 		channelHasFlag(chCtx.flags, flagMapClientPresence) ||
 		channelHasFlag(chCtx.flags, flagMapUserPresence)
 	if !hasAnyPresence {
-		return nil
+		return false, nil
 	}
 
 	c.mu.RLock()
 	if _, ok := c.channels[ch]; !ok {
 		c.mu.RUnlock()
-		return nil
+		return false, nil
 	}
 	c.mu.RUnlock()
 
@@ -823,18 +828,18 @@ func (c *Client) updateChannelPresence(ch string, chCtx ChannelContext) error {
 	if channelHasFlag(chCtx.flags, flagEmitPresence) {
 		err := c.node.addPresence(ch, c.uid, info)
 		if err != nil {
-			return err
+			return true, err
 		}
 	}
 
 	if channelHasFlag(chCtx.flags, flagMapClientPresence) || channelHasFlag(chCtx.flags, flagMapUserPresence) {
 		err := c.updateMapPresence(info, chCtx)
 		if err != nil {
-			return err
+			return true, err
 		}
 	}
 
-	return nil
+	return true, nil
 }
 
 // tickDutyParams carries the values a duty needs from Config. It exists so the
@@ -923,12 +928,15 @@ func (c *Client) runTickDutySequential(snapshot []channelTickItem, duty tickDuty
 }
 
 func (c *Client) updateChannelPresenceItem(item *channelTickItem) {
-	if err := c.updateChannelPresence(item.channel, item.ctx); err != nil {
+	attempted, err := c.updateChannelPresence(item.channel, item.ctx)
+	if err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error updating presence for channel", map[string]any{
 			"channel": item.channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-		return
 	}
-	item.presenceAdded = true
+	// Marked even on error: a partial success (node-level add landed, map
+	// presence update failed) must still be compensated if the channel was
+	// concurrently unsubscribed — removal is idempotent, so over-marking is safe.
+	item.presenceAdded = attempted
 }
 
 // compensateRacedPresence undoes presence entries this tick added for channels
@@ -2184,19 +2192,60 @@ func (c *Client) handleRefresh(req *protocol.RefreshRequest, cmd *protocol.Comma
 	return nil
 }
 
-// onSubscribeError cleans up a channel from client channels if an error during subscribe happened.
-// Channel kept in a map during subscribe request to check for duplicate subscription attempts.
-func (c *Client) onSubscribeError(channel string) {
+// onSubscribeErrorGen undoes a failed subscribe attempt's channel reservation
+// and hub entry, restricted to the generation that attempt reserved.
+//
+// The generation is required rather than optional: a subscribe whose callback is
+// asynchronous (proxy auth) can outlive its own reservation — the unsubscribe
+// wait-gate timeout drops it and a fresh subscribe may re-reserve the channel —
+// so undoing by channel name alone would delete that fresh reservation and close
+// a subscribingCh its waiters still need. Encoding "match any" as generation 0
+// was tried and removed: it silently turned a caller's zero-valued generation
+// into an unconditional delete.
+//
+// The hub entry is removed generation-matched either way, so it is cleaned up
+// even when the reservation is already gone (the subscribe may have registered
+// in the hub before stalling).
+func (c *Client) onSubscribeErrorGen(channel string, expectGen uint64) {
+	if expectGen == anySubGen {
+		// Programming error: 0 means "any generation" to the hub, so passing it
+		// here would unconditionally remove whatever subscription is registered —
+		// the exact clobber this function exists to prevent. Every subscribe path
+		// mints a non-zero generation before it can fail, so this is unreachable;
+		// refuse rather than corrupt state if a future caller gets it wrong.
+		c.node.logger.log(newLogEntry(LogLevelError, "subscribe rollback with zero generation", map[string]any{
+			"channel": channel, "user": c.user, "client": c.uid}))
+		return
+	}
 	c.mu.Lock()
 	chCtx, ok := c.channels[channel]
-	subscribingCh := chCtx.subscribingCh
-	delete(c.channels, channel)
+	owns := ok && chCtx.subGen == expectGen
+	var subscribingCh chan struct{}
+	if owns {
+		subscribingCh = chCtx.subscribingCh
+		delete(c.channels, channel)
+	}
 	c.mu.Unlock()
-	if ok {
-		_ = c.node.removeSubscription(channel, c, chCtx.subGen)
-		if subscribingCh != nil {
-			close(chCtx.subscribingCh)
-		}
+	_ = c.node.removeSubscription(channel, c, expectGen)
+	if subscribingCh != nil {
+		close(subscribingCh)
+	}
+}
+
+// rollbackConnectServerSideSubs undoes connect-time server-side subscriptions
+// when connectCmd aborts between subscribeCmd and the finalize loop. At that
+// point each channel still holds its reservation in c.channels (finalize has
+// not replaced it) plus a hub entry, and — for channels whose own subscribe
+// succeeded — a node-level presence entry. Reservation and hub entry are
+// dropped generation-matched, exactly as the finalize loop does, so an abort
+// cannot tear down a fresh subscribe that took over the channel. Presence must
+// be removed explicitly because close() snapshots c.channels only after the
+// reservations are gone; for a channel whose own subscribe failed, subscribeCmd
+// already removed its own presence on the way out.
+func (c *Client) rollbackConnectServerSideSubs(subCtxMap map[string]subscribeContext, reservedGens map[string]uint64) {
+	for channel, subCtx := range subCtxMap {
+		c.onSubscribeErrorGen(channel, reservedGens[channel])
+		c.removeSubscribePresence(channel, subCtx.channelContext.flags)
 	}
 }
 
@@ -2236,7 +2285,7 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 		}
 	}
 
-	replyError, disconnect := c.validateSubscribeRequest(req)
+	subGen, replyError, disconnect := c.validateSubscribeRequest(req)
 	if disconnect != nil || replyError != nil {
 		if disconnect != nil {
 			return *disconnect
@@ -2258,8 +2307,13 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 			defer close(reply.SubscriptionReady)
 		}
 
+		// Gen-matched cleanup: this callback may be asynchronous (proxy auth), so
+		// it can outlive its own reservation — the unsubscribe wait-gate timeout
+		// path drops it and a fresh subscribe may re-reserve the channel. Undoing
+		// by channel name alone would delete that fresh reservation and close a
+		// subscribingCh its waiters still need.
 		if err != nil {
-			c.onSubscribeError(req.Channel)
+			c.onSubscribeErrorGen(req.Channel, subGen)
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, err, started, rw)
 			return
 		}
@@ -2267,12 +2321,12 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 		// Regular subscription flow.
 		ctx := c.subscribeCmd(req, reply, cmd, false, started, rw)
 		if ctx.disconnect != nil {
-			c.onSubscribeError(req.Channel)
+			c.onSubscribeErrorGen(req.Channel, subGen)
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, ctx.disconnect, started, rw)
 			return
 		}
 		if ctx.err != nil {
-			c.onSubscribeError(req.Channel)
+			c.onSubscribeErrorGen(req.Channel, subGen)
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, ctx.err, started, rw)
 			return
 		}
@@ -3172,8 +3226,11 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	// leaking a hub entry. With the reservation that Client.Subscribe instead gets
 	// ErrorAlreadySubscribed. subscribeCmd below reuses this generation, and the
 	// finalize replaces the reservation with the live context.
+	reservedGens := make(map[string]uint64, len(subscriptions))
 	for ch := range subscriptions {
-		c.channels[ch] = ChannelContext{subscribingCh: make(chan struct{}), subGen: c.subGenCounter.Add(1)}
+		gen := c.subGenCounter.Add(1)
+		reservedGens[ch] = gen
+		c.channels[ch] = ChannelContext{subscribingCh: make(chan struct{}), subGen: gen}
 	}
 	c.mu.Unlock()
 
@@ -3233,9 +3290,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 
 		if subDisconnect != nil || subError != nil {
 			c.unlockServerSideSubscriptions(subCtxMap)
-			for channel := range subCtxMap {
-				c.onSubscribeError(channel)
-			}
+			c.rollbackConnectServerSideSubs(subCtxMap, reservedGens)
 			if subDisconnect != nil {
 				return subDisconnect
 			}
@@ -3249,6 +3304,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			protoReply, err := c.getConnectPushReply(res)
 			if err != nil {
 				c.unlockServerSideSubscriptions(subCtxMap)
+				c.rollbackConnectServerSideSubs(subCtxMap, reservedGens)
 				c.node.logger.log(newErrorLogEntry(err, "error encoding connect", map[string]any{"error": err.Error()}))
 				return DisconnectServerError
 			}
@@ -3272,6 +3328,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		protoReply, err := c.getConnectCommandReply(res)
 		if err != nil {
 			c.unlockServerSideSubscriptions(subCtxMap)
+			c.rollbackConnectServerSideSubs(subCtxMap, reservedGens)
 			c.node.logger.log(newErrorLogEntry(err, "error encoding connect", map[string]any{"error": err.Error()}))
 			return DisconnectServerError
 		}
@@ -3283,11 +3340,26 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	c.mu.Lock()
 	closedDuringConnect := c.status == statusClosed
 	var reservedSubChs []chan struct{}
+	var lostReservations map[string]bool
 	for channel, subCtx := range subCtxMap {
 		// Take over the reservation installed above: capture its subscribingCh (to
 		// release any unsubscribe waiting on the in-flight subscribe) and replace it
 		// with the live context, or drop it if the client closed mid-connect.
-		if resv, ok := c.channels[channel]; ok && resv.subscribingCh != nil {
+		// Identity-match on subGen first (mirrors commitSubscription): a subscribe
+		// stalled past the unsubscribe wait timeout can lose its reservation, and
+		// the entry now present — if any — may be a fresh client-side subscribe's
+		// reservation with a newer generation. Overwriting it (or closing its
+		// subscribingCh) would corrupt that fresh subscription; leave it alone and
+		// roll back this connect-time subscription below instead.
+		resv, ok := c.channels[channel]
+		if !ok || resv.subGen != reservedGens[channel] {
+			if lostReservations == nil {
+				lostReservations = make(map[string]bool, 1)
+			}
+			lostReservations[channel] = true
+			continue
+		}
+		if resv.subscribingCh != nil {
 			reservedSubChs = append(reservedSubChs, resv.subscribingCh)
 		}
 		if closedDuringConnect {
@@ -3304,19 +3376,37 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 
 	c.unlockServerSideSubscriptions(subCtxMap)
 
+	// Roll back connect-time subscriptions whose reservation was lost: remove the
+	// hub entry this attempt registered (gen-matched, no-op if the unsubscribe
+	// already removed it) and its pre-commit presence entry. Runs after
+	// unlockServerSideSubscriptions so buffers are released before subShard locks
+	// are taken. The connection is already being force-closed by the unsubscribe
+	// timeout path that consumed the reservation.
+	for channel := range lostReservations {
+		_ = c.node.removeSubscription(channel, c, reservedGens[channel])
+		c.removeSubscribePresence(channel, subCtxMap[channel].channelContext.flags)
+	}
+
 	if closedDuringConnect {
 		// The client closed while connect was applying these server-side
 		// subscriptions. close() snapshotted c.channels before they were installed,
 		// so it did not tear down their hub registrations — they would leak. Roll
 		// them back here (subLocks are released above, so removeSubscription can
-		// take them). Mirrors commitSubscription's closed path.
+		// take them). Mirrors commitSubscription's closed path, including the
+		// pre-commit presence entry subscribeCmd added for each channel.
 		for channel, subCtx := range subCtxMap {
-			_ = c.node.removeSubscription(channel, c, subCtx.channelContext.subGen)
+			_ = c.node.removeSubscription(channel, c, reservedGens[channel])
+			c.removeSubscribePresence(channel, subCtx.channelContext.flags)
 		}
 		return DisconnectConnectionClosed
 	}
 
 	for channel, subCtx := range subCtxMap {
+		if lostReservations[channel] {
+			// Rolled back above — publishing join / adding map presence here would
+			// resurrect state for a subscription that was never installed.
+			continue
+		}
 		if subCtx.clientInfo != nil {
 			// Synchronous: see comment on the same call in handleSubscribe.
 			// A spawned goroutine racing a disconnect's publishLeave can land
@@ -3503,7 +3593,20 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 		c.mu.Unlock()
 		return ErrorAlreadySubscribed
 	}
-	c.channels[channel] = ChannelContext{subscribingCh: make(chan struct{}), subGen: c.subGenCounter.Add(1)}
+	// Also reject while a map subscribe is loading this channel: it reserves
+	// c.mapSubscribing rather than c.channels (mirrors validateSubscribeRequest).
+	// Without this both can commit for the same channel. Nothing leaks — the hub
+	// holds one entry per (channel, client) and the later addSub overwrites it,
+	// so c.channels and the hub stay in agreement — but whichever subscription
+	// commits second silently replaces the other: its options, flags and stream
+	// position are discarded and its OnUnsubscribe never fires. Rejecting here
+	// keeps "one subscription per channel per client" true at the source.
+	if _, ok := c.mapSubscribing[channel]; ok {
+		c.mu.Unlock()
+		return ErrorAlreadySubscribed
+	}
+	subGen := c.subGenCounter.Add(1)
+	c.channels[channel] = ChannelContext{subscribingCh: make(chan struct{}), subGen: subGen}
 	c.mu.Unlock()
 
 	subCmd := &protocol.SubscribeRequest{
@@ -3521,12 +3624,13 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	subCtx := c.subscribeCmd(subCmd, SubscribeReply{
 		Options: *subscribeOpts,
 	}, nil, true, time.Time{}, nil)
+	// Gen-matched: undo only this attempt's reservation (see onSubscribeErrorGen).
 	if subCtx.disconnect != nil {
-		c.onSubscribeError(subCmd.Channel)
+		c.onSubscribeErrorGen(subCmd.Channel, subGen)
 		return subCtx.disconnect
 	}
 	if subCtx.err != nil {
-		c.onSubscribeError(subCmd.Channel)
+		c.onSubscribeErrorGen(subCmd.Channel, subGen)
 		return subCtx.err
 	}
 	defer c.pubSubSync.StopBuffering(channel)
@@ -3578,11 +3682,15 @@ func (c *Client) getSubscribePushReply(channel string, res *protocol.SubscribeRe
 	})
 }
 
-func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Error, *Disconnect) {
+// validateSubscribeRequest validates a subscribe request and, for the regular
+// (non-map) flow, installs the channel reservation. It returns the generation
+// minted for that reservation so error paths can undo exactly their own
+// attempt; map subscribes reserve c.mapSubscribing instead and get 0.
+func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (uint64, *Error, *Disconnect) {
 	channel := cmd.Channel
 	if channel == "" {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel required for subscribe", map[string]any{"user": c.user, "client": c.uid}))
-		return nil, &DisconnectBadRequest
+		return 0, nil, &DisconnectBadRequest
 	}
 
 	config := c.node.config
@@ -3591,7 +3699,7 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 
 	if channelMaxLength > 0 && len(channel) > channelMaxLength {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel too long", map[string]any{"max": channelMaxLength, "channel": channel, "user": c.user, "client": c.uid}))
-		return ErrorBadRequest, nil
+		return 0, ErrorBadRequest, nil
 	}
 
 	c.mu.Lock()
@@ -3607,21 +3715,21 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 		// Allow continuation requests (cursor set or non-state phase).
 		if inMapSubscribing && (cmd.Cursor != "" || cmd.Phase != MapPhaseState) {
 			c.mu.Unlock()
-			return nil, nil
+			return 0, nil, nil
 		}
 
 		// If already fully subscribed, reject.
 		if inChannels {
 			c.mu.Unlock()
 			c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-			return ErrorAlreadySubscribed, nil
+			return 0, ErrorAlreadySubscribed, nil
 		}
 
 		// If already in map subscribing and this is an initial request, reject.
 		if inMapSubscribing && cmd.Cursor == "" && cmd.Phase == MapPhaseState {
 			c.mu.Unlock()
 			c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribing on channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-			return ErrorAlreadySubscribed, nil
+			return 0, ErrorAlreadySubscribed, nil
 		}
 
 		// New map subscription - check channel limit.
@@ -3629,10 +3737,10 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 		if channelLimit > 0 && numChannels >= channelLimit {
 			c.mu.Unlock()
 			c.node.logger.log(newLogEntry(LogLevelInfo, "maximum limit of channels per client reached", map[string]any{"limit": channelLimit, "user": c.user, "client": c.uid}))
-			return ErrorLimitExceeded, nil
+			return 0, ErrorLimitExceeded, nil
 		}
 		c.mu.Unlock()
-		return nil, nil
+		return 0, nil, nil
 	} // TODO: it would be better to combine with normal flow, including having subscribingCh for map subs also.
 
 	// Regular subscription validation.
@@ -3649,24 +3757,25 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 	if ok {
 		c.mu.Unlock()
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-		return ErrorAlreadySubscribed, nil
+		return 0, ErrorAlreadySubscribed, nil
 	}
 	if channelLimit > 0 && numChannels >= channelLimit {
 		c.mu.Unlock()
 		c.node.logger.log(newLogEntry(LogLevelInfo, "maximum limit of channels per client reached", map[string]any{"limit": channelLimit, "user": c.user, "client": c.uid}))
-		return ErrorLimitExceeded, nil
+		return 0, ErrorLimitExceeded, nil
 	}
 	// Put channel to a map to track duplicate subscriptions. This channel should
 	// be removed from a map upon an error during subscribe. Also initialize subscribingCh
 	// which is used to sync unsubscribe requests with inflight subscriptions (useful when
 	// subscribe is performed in a separate goroutine).
+	subGen := c.subGenCounter.Add(1)
 	c.channels[channel] = ChannelContext{
 		subscribingCh: make(chan struct{}),
-		subGen:        c.subGenCounter.Add(1),
+		subGen:        subGen,
 	}
 	c.mu.Unlock()
 
-	return nil, nil
+	return subGen, nil, nil
 }
 
 func errorDisconnectContext(replyError *Error, disconnect *Disconnect) subscribeContext {
@@ -3777,6 +3886,23 @@ const (
 	reservationMap
 )
 
+// removeSubscribePresence undoes the node-level presence entry subscribeCmd
+// added before the commit point (map presence and join are only set up after a
+// successful commit, so they need no rollback there). Without this, a rolled
+// back subscribe leaves a presence entry behind until PresenceTTL: close()
+// cannot remove it because the channel never entered its snapshot — that is
+// exactly why the rollback runs. Removal is idempotent. Must be called without
+// c.mu held (network call).
+func (c *Client) removeSubscribePresence(channel string, flags uint16) {
+	if !channelHasFlag(flags, flagEmitPresence) {
+		return
+	}
+	if err := c.node.removePresence(channel, c.uid, c.user); err != nil {
+		c.node.logger.log(newErrorLogEntry(err, "error removing presence on subscribe rollback", map[string]any{
+			"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+	}
+}
+
 // commitSubscription is the single consistency-critical commit point shared by
 // normal and map subscriptions. Under c.mu it either installs the finished
 // subscription's channel context into c.channels, or — if the client closed
@@ -3792,24 +3918,67 @@ const (
 // the hub entry registered earlier in the subscribe (ctx.subGen must match), and
 // returns (nil, false); the caller adds any path-specific cleanup (reply/buffer
 // release) and returns its own error. Lock must NOT be held.
+//
+// The reservation is consumed only if it still carries this attempt's generation
+// (ctx.subGen). A subscribe stalled past the unsubscribe wait timeout can lose
+// its reservation: the timeout path nils the reservation's subscribingCh, a
+// second unsubscribe then gen-matches and deletes the entry, and a fresh
+// subscribe may reserve the channel with a new generation. Without the gen check
+// this late commit would close the fresh reservation's subscribingCh (waking its
+// waiters early), overwrite c.channels with a context that has no hub routing —
+// or, with no fresh reservation, resurrect the unsubscribed channel outright.
+// On mismatch the commit rolls back its own hub entry and reports not committed;
+// the connection is already being force-closed by the timeout path.
 func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind reservationKind) (chan struct{}, bool) {
 	c.mu.Lock()
 	var subscribingCh chan struct{}
+	reservationLost := false
 	switch kind {
 	case reservationChannels:
-		if resv, ok := c.channels[channel]; ok {
+		if resv, ok := c.channels[channel]; ok && resv.subGen == ctx.subGen {
 			subscribingCh = resv.subscribingCh
+		} else {
+			reservationLost = true
 		}
 	case reservationMap:
-		if st, ok := c.mapSubscribing[channel]; ok {
+		// Only the map reservation is identity-checked; c.channels is written
+		// unconditionally on purpose. The hub keeps exactly one entry per
+		// (channel, client) and addSub overwrites it, so this subscribe's own
+		// addSubscription already replaced whatever entry was there. Refusing to
+		// install here would leave c.channels carrying an older subscription while
+		// the hub carries this generation — and the rollback would then remove the
+		// hub entry, producing a channel that looks subscribed but receives
+		// nothing. Racing subscribes are prevented at the source instead:
+		// validateSubscribeRequest and Client.Subscribe both reject a channel that
+		// is already in c.channels or c.mapSubscribing.
+		if st, ok := c.mapSubscribing[channel]; ok && st.subGen == ctx.subGen {
 			subscribingCh = st.subscribingCh
 			delete(c.mapSubscribing, channel)
+		} else {
+			reservationLost = true
 		}
 	default:
 		// Unreachable: reservationKind is internal with exactly these two values.
 		// Panic rather than silently defaulting to a store, so a future kind that
 		// forgets to extend this switch fails loudly instead of corrupting state.
 		panic("centrifuge: unknown reservationKind")
+	}
+	if reservationLost {
+		// The entry (if any) belongs to a different subscription attempt — do not
+		// touch it or its subscribingCh. Roll back only what this attempt owns:
+		// its recovery buffer and its hub entry (gen-matched, so a no-op if the
+		// unsubscribe already removed it). StopBuffering-before-removeSubscription
+		// ordering as in the closed path below.
+		c.mu.Unlock()
+		c.pubSubSync.StopBuffering(channel)
+		_ = c.node.removeSubscription(channel, c, ctx.subGen)
+		if kind == reservationChannels {
+			// The normal path adds node-level presence before the commit; the
+			// gen-matched unsubscribe that took our reservation may have run its
+			// presence removal before that add landed, so remove it again here.
+			c.removeSubscribePresence(channel, ctx.flags)
+		}
+		return nil, false
 	}
 	if c.status == statusClosed {
 		// close() snapshotted c.channels before this subscribe finalized, so the
@@ -3830,6 +3999,12 @@ func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind res
 		// is idempotent, so calling it here (and again in the caller) is safe.
 		c.pubSubSync.StopBuffering(channel)
 		_ = c.node.removeSubscription(channel, c, ctx.subGen)
+		if kind == reservationChannels {
+			// Presence was added before the commit on the normal path, and close()
+			// snapshotted c.channels before this channel entered it — remove the
+			// entry here or it lingers until PresenceTTL.
+			c.removeSubscribePresence(channel, ctx.flags)
+		}
 		return nil, false
 	}
 	ctx.subscribingCh = nil
@@ -3842,8 +4017,23 @@ func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind res
 // on channel, if channel is private then we must validate provided sign here before
 // actually subscribe client on channel. Optionally we can send missed messages to
 // client if it provided last message id seen in channel.
-func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeReply, cmd *protocol.Command, serverSide bool, started time.Time, rw *replyWriter) subscribeContext {
+func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeReply, cmd *protocol.Command, serverSide bool, started time.Time, rw *replyWriter) (retCtx subscribeContext) {
 	ctx := subscribeContext{}
+
+	// Presence is added partway through, before the subscription is committed, so
+	// any failure after that point must undo it. Callers only clean up the
+	// reservation and the hub entry (onSubscribeErrorGen), and close() cannot help —
+	// the channel never became a committed subscription — so without this the
+	// entry lingers until PresenceTTL. Covers the failure paths that return a
+	// zero-valued channelContext (recovery/history errors, encode errors), which
+	// carry no flags for the commit-time rollback to act on. Removal is
+	// idempotent, so overlapping with commitSubscription's own rollback is safe.
+	presenceAdded := false
+	defer func() {
+		if presenceAdded && (retCtx.disconnect != nil || retCtx.err != nil) {
+			c.removeSubscribePresence(req.Channel, flagEmitPresence)
+		}
+	}()
 
 	res := &protocol.SubscribeResult{}
 
@@ -3885,12 +4075,22 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	// that lets a racing unsubscribe identity-match and avoid clobbering a fresh
 	// concurrent subscribe. Paths without a reservation (initial server-side
 	// subscribe on connect) get a fresh generation here.
-	c.mu.RLock()
+	c.mu.Lock()
 	subGen := c.channels[channel].subGen
-	c.mu.RUnlock()
 	if subGen == 0 {
+		// No generation on the reservation (or no reservation at all, for the
+		// connect-time server-side path that subscribes before reserving). Mint
+		// one and stamp it back so the commit's identity check — reservation gen
+		// == context gen — holds for this attempt. Done under the write lock
+		// because the read and the write-back must be atomic against a concurrent
+		// unsubscribe reading the same field.
 		subGen = c.subGenCounter.Add(1)
+		if resv, ok := c.channels[channel]; ok {
+			resv.subGen = subGen
+			c.channels[channel] = resv
+		}
 	}
+	c.mu.Unlock()
 	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, subGen: subGen}
 	if req.Tf != nil {
 		if !reply.Options.AllowTagsFilter {
@@ -3970,6 +4170,9 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 	if reply.Options.EmitPresence {
 		err = c.node.addPresence(channel, c.uid, info)
+		// Marked even on error: the add may have landed server-side before
+		// reporting failure, and removal is idempotent.
+		presenceAdded = true
 		if err != nil {
 			c.node.logger.log(newErrorLogEntry(err, "error adding presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			c.pubSubSync.StopBuffering(channel)
@@ -4257,7 +4460,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		// In case of server-side sub this will be done later by the caller.
 		// Same commit as the server-side and map paths. If the client closed
 		// mid-subscribe the reservation and hub entry are rolled back and we abort
-		// so the caller runs onSubscribeError.
+		// so the caller runs onSubscribeErrorGen.
 		subscribingCh, committed := c.commitSubscription(channel, channelContext, reservationChannels)
 		if !committed {
 			// Client closed mid-subscribe. Release the recovery/PUB-SUB buffer
@@ -4869,8 +5072,12 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	if channelHasFlag(chCtx.flags, flagSubscribed) {
 		if c.eventHub.unsubscribeHandler != nil {
 			c.eventHub.unsubscribeHandler(UnsubscribeEvent{
-				Channel:     channel,
-				ServerSide:  serverSide,
+				Channel: channel,
+				// Recomputed from the post-wait context: the pre-wait `serverSide`
+				// snapshot may come from a reservation with flags==0 that finalized
+				// into a server-side subscription while the wait gate was blocked —
+				// the event must describe the subscription actually torn down.
+				ServerSide:  channelHasFlag(chCtx.flags, flagServerSide),
 				Unsubscribe: unsubscribe,
 				Disconnect:  disconnect,
 			})

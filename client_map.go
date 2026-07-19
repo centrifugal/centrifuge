@@ -176,7 +176,7 @@ func (c *Client) handleMapSubscribeCommand(
 		return ErrorNotAvailable
 	}
 
-	replyError, disconnect := c.validateSubscribeRequest(req)
+	_, replyError, disconnect := c.validateSubscribeRequest(req)
 	if disconnect != nil || replyError != nil {
 		if disconnect != nil {
 			return *disconnect
@@ -237,21 +237,26 @@ func (c *Client) handleMapSubscribeCommand(
 		Type:    SubscriptionType(req.Type),
 	}
 
+	// No reservation cleanup here: map subscribes reserve c.mapSubscribing, not
+	// c.channels (validateSubscribeRequest returns before the regular install for
+	// Type >= 1), and c.channels is only written by commitSubscription — which is
+	// followed by a nil return on every path. So there is never a c.channels entry
+	// of this subscribe's to undo, and removing "the entry for this channel" could
+	// only delete a reservation belonging to a different, concurrent subscribe.
+	// The map reservation and hub entry are rolled back inside the phase handlers,
+	// identity-matched via cleanupMapSubscribingState.
 	cb := func(reply SubscribeReply, err error) {
 		if err != nil {
-			c.onSubscribeError(req.Channel)
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, err, started, rw)
 			return
 		}
 
 		if reply.Options.Type != event.Type {
-			c.onSubscribeError(req.Channel)
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, ErrorBadRequest, started, rw)
 			return
 		}
 
 		if handleErr := c.handleMapSubscribe(req, reply, cmd, started, rw); handleErr != nil {
-			c.onSubscribeError(req.Channel)
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
 		}
 	}
@@ -328,6 +333,18 @@ func (c *Client) handleMapStatePhase(
 		c.mu.Lock()
 		if c.mapSubscribing == nil {
 			c.mapSubscribing = make(map[string]*mapSubscribeState)
+		}
+		if _, exists := c.mapSubscribing[channel]; exists {
+			// A concurrent initial subscribe for this channel installed its state
+			// between validateSubscribeRequest's check and this lock (pagination
+			// spans multiple commands, so the pagination lock alone does not close
+			// that window). Overwriting would orphan the existing reservation's
+			// subscribingCh — an unsubscribe waiting on it would hit the 5s timeout
+			// and force-disconnect the client — and hand this request a generation
+			// that no longer matches the map entry. Reject the duplicate, same as
+			// the recovery-mode guard in handleMapStreamPhase.
+			c.mu.Unlock()
+			return ErrorAlreadySubscribed
 		}
 		var stf *tagsFilter
 		if reply.Options.ServerTagsFilter != nil {
@@ -526,6 +543,14 @@ type mapTransitionToLiveParams struct {
 	tagsFilterFromState       *tagsFilter    // Inherited client tags filter from prior phase
 	serverTagsFilterFromState *tagsFilter    // Inherited server tags filter from prior phase
 	metricsAction             string         // Metrics action string
+	// expectedState is the mapSubscribing reservation this transition started
+	// from, or nil for a direct-to-LIVE recovery join that never ran a
+	// STATE/STREAM phase. Non-nil: the transition proceeds only while that exact
+	// reservation is still installed (a timed-out unsubscribe may have consumed
+	// it, and a fresh subscribe may have re-reserved the channel with a new
+	// generation). Nil: a reservation is installed on entry so the commit's
+	// generation check and the unsubscribe wait-gate cover this path too.
+	expectedState *mapSubscribeState
 }
 
 // handleMapTransitionToLive implements the shared buffer-subscribe-read-merge protocol
@@ -547,14 +572,72 @@ func (c *Client) handleMapTransitionToLive(
 	// reservation so it is stable from reservation through the live c.channels
 	// entry and the hub subInfo. This lets a racing unsubscribe identity-match and
 	// avoid clobbering a fresh concurrent map resubscribe (see subInfo.subGen).
-	c.mu.RLock()
+	c.mu.Lock()
 	var subGen uint64
-	if st, ok := c.mapSubscribing[channel]; ok {
+	// ourState is the reservation this transition owns; every rollback below
+	// identity-matches against it so a stalled transition can never tear down a
+	// fresh resubscribe's reservation.
+	var ourState *mapSubscribeState
+	st, hasReservation := c.mapSubscribing[channel]
+	if params.expectedState != nil {
+		// State/stream → live: the transition must still own its reservation. A
+		// timed-out unsubscribe may have consumed it — and a fresh subscribe may
+		// have installed a new one — while this transition was in flight. Pointer
+		// identity, same check unsubscribe and cleanupMapSubscribing use.
+		if !hasReservation || st != params.expectedState {
+			c.mu.Unlock()
+			return ErrorInternal
+		}
 		subGen = st.subGen
-	}
-	c.mu.RUnlock()
-	if subGen == 0 {
+		if subGen == 0 {
+			// Reservation without a generation (hand-constructed in tests;
+			// production phases always mint one). Stamp it so the commit's
+			// identity check holds.
+			subGen = c.subGenCounter.Add(1)
+			st.subGen = subGen
+		}
+		ourState = st
+	} else if hasReservation {
+		// Direct-to-LIVE recovery join racing another subscribe that already
+		// reserved the channel — reject the duplicate, same as the guards in the
+		// state and stream phases.
+		c.mu.Unlock()
+		return ErrorAlreadySubscribed
+	} else {
+		// Direct-to-LIVE recovery join: no STATE/STREAM phase ran, so no
+		// reservation exists. Install one — it carries the generation the commit
+		// identity-checks, and its subscribingCh lets a concurrent unsubscribe
+		// wait for this transition instead of racing it. commitSubscription
+		// consumes it (and the caller closes subscribingCh) on every exit path
+		// below via cleanupMapSubscribing/commit.
+		if c.mapSubscribing == nil {
+			c.mapSubscribing = make(map[string]*mapSubscribeState)
+		}
 		subGen = c.subGenCounter.Add(1)
+		ourState = &mapSubscribeState{
+			options:          opts,
+			startedAt:        time.Now().UnixNano(),
+			isPresence:       isPresence,
+			subscribingCh:    make(chan struct{}),
+			subGen:           subGen,
+			epoch:            req.Epoch,
+			tagsFilter:       params.tagsFilterFromState,
+			serverTagsFilter: params.serverTagsFilterFromState,
+		}
+		c.mapSubscribing[channel] = ourState
+	}
+	c.mu.Unlock()
+
+	// rollback undoes everything this transition installed, in the order the
+	// rest of the file uses (buffer → hub → reservation). Identity-matched on
+	// ourState and subGen so it is a no-op for state a concurrent resubscribe
+	// owns.
+	rollback := func(stopBuffering bool) {
+		if stopBuffering {
+			c.pubSubSync.StopBuffering(channel)
+		}
+		_ = c.node.removeSubscription(channel, c, subGen)
+		c.cleanupMapSubscribingState(channel, ourState)
 	}
 
 	// Build subscription info first, validate before subscribing.
@@ -565,7 +648,8 @@ func (c *Client) handleMapTransitionToLive(
 	if req.Tf != nil {
 		tf, err := c.validateAndCreateTagsFilter(req, opts.AllowTagsFilter, channel)
 		if err != nil {
-			c.cleanupMapSubscribing(channel)
+			// Nothing added to the hub or buffered yet — only the reservation.
+			c.cleanupMapSubscribingState(channel, ourState)
 			return err
 		}
 		sub.tagsFilter = tf
@@ -593,8 +677,9 @@ func (c *Client) handleMapTransitionToLive(
 
 	chanID, err := c.node.addSubscription(channel, sub)
 	if err != nil {
+		// addSubscription failed, so there is no hub entry to remove here.
 		c.pubSubSync.StopBuffering(channel)
-		c.cleanupMapSubscribing(channel)
+		c.cleanupMapSubscribingState(channel, ourState)
 		c.node.logger.log(newErrorLogEntry(err, "error adding map subscription", map[string]any{
 			"channel": channel, "user": c.user, "client": c.uid,
 		}))
@@ -646,9 +731,7 @@ func (c *Client) handleMapTransitionToLive(
 
 		streamResult, err := c.node.MapStreamRead(c.ctx, channel, streamOpts)
 		if err != nil {
-			c.pubSubSync.StopBuffering(channel)
-			_ = c.node.removeSubscription(channel, c, anySubGen)
-			c.cleanupMapSubscribing(channel)
+			rollback(true)
 			if errors.Is(err, ErrorUnrecoverablePosition) {
 				return ErrorUnrecoverablePosition
 			}
@@ -672,17 +755,13 @@ func (c *Client) handleMapTransitionToLive(
 		// and silently lose any keys not republished. The `!= ""` guard keeps
 		// ephemeral-mode subscribes (which have no epoch) working.
 		if (params.isRecovery || params.sincePosition.Epoch != "") && params.sincePosition.Epoch != streamPos.Epoch {
-			c.pubSubSync.StopBuffering(channel)
-			_ = c.node.removeSubscription(channel, c, anySubGen)
-			c.cleanupMapSubscribing(channel)
+			rollback(true)
 			return ErrorUnrecoverablePosition
 		}
 
 		// If we got more than the limit, client is too far behind.
 		if streamLimit > 0 && len(pubs) > streamLimit {
-			c.pubSubSync.StopBuffering(channel)
-			_ = c.node.removeSubscription(channel, c, anySubGen)
-			c.cleanupMapSubscribing(channel)
+			rollback(true)
 			return ErrorUnrecoverablePosition
 		}
 
@@ -699,9 +778,7 @@ func (c *Client) handleMapTransitionToLive(
 		var okMerge bool
 		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
 		if !okMerge {
-			c.pubSubSync.StopBuffering(channel)
-			_ = c.node.removeSubscription(channel, c, anySubGen)
-			c.cleanupMapSubscribing(channel)
+			rollback(true)
 			return &DisconnectInsufficientState
 		}
 
@@ -817,9 +894,7 @@ func (c *Client) handleMapTransitionToLive(
 	// c.channels — keeps the rollback path simple.
 	protoReply, err := c.getSubscribeCommandReply(res)
 	if err != nil {
-		c.pubSubSync.StopBuffering(channel)
-		_ = c.node.removeSubscription(channel, c, anySubGen)
-		c.cleanupMapSubscribing(channel)
+		rollback(true)
 		c.node.logger.log(newErrorLogEntry(err, "error encoding map subscribe reply", map[string]any{
 			"channel": channel, "user": c.user, "client": c.uid,
 		}))
@@ -900,6 +975,7 @@ func (c *Client) handleMapStateToLive(
 		tagsFilterFromState:       state.tagsFilter,
 		serverTagsFilterFromState: state.serverTagsFilter,
 		metricsAction:             "map_subscribe_state_to_live",
+		expectedState:             state,
 	})
 }
 
@@ -1150,6 +1226,7 @@ func (c *Client) handleMapStreamToLive(
 		tagsFilterFromState:       state.tagsFilter,
 		serverTagsFilterFromState: state.serverTagsFilter,
 		metricsAction:             "map_subscribe_stream_to_live",
+		expectedState:             state,
 	})
 }
 
@@ -1168,6 +1245,21 @@ func (c *Client) handleMapLivePhase(
 		return ErrorNotAvailable
 	}
 
+	// Serialize with the STATE and STREAM phases, which take this same lock.
+	// validateSubscribeRequest deliberately lets any non-STATE subscribe through
+	// while a mapSubscribing reservation exists (pagination spans commands), so
+	// without this a second command would adopt the reservation this transition
+	// is using — two transitions sharing one reservation and therefore one
+	// subGen, where the loser's rollback removes the winner's hub entry and
+	// leaves the client live in c.channels with no routing. The transition below
+	// runs to completion under the lock; nested callers (handleMapStateToLive,
+	// handleMapStreamToLive) go straight to handleMapTransitionToLive and never
+	// re-enter here, so this cannot self-deadlock.
+	if !c.acquireMapPaginationLock(channel) {
+		return ErrorConcurrentPagination
+	}
+	defer c.releaseMapPaginationLock(channel)
+
 	// Get stored state if exists (for two-phase), or use reply options (for direct live).
 	var opts SubscribeOptions
 	var isPresence bool
@@ -1182,9 +1274,10 @@ func (c *Client) handleMapLivePhase(
 		isPresence = state.isPresence
 		tagsFilterFromState = state.tagsFilter
 		serverTagsFilterFromState = state.serverTagsFilter
-		// Validate epoch if client provided one.
+		// Validate epoch if client provided one. Identity-matched: tear down the
+		// reservation we just read, never one a concurrent resubscribe installed.
 		if req.Epoch != "" && state.epoch != "" && req.Epoch != state.epoch {
-			c.cleanupMapSubscribing(channel)
+			c.cleanupMapSubscribingState(channel, state)
 			return ErrorUnrecoverablePosition
 		}
 	} else {
@@ -1202,8 +1295,10 @@ func (c *Client) handleMapLivePhase(
 		}
 	}
 
-	// Recovery or paginated join - stream catch-up needed.
-	return c.handleMapRecoveryJoin(req, reply, opts, isPresence, tagsFilterFromState, serverTagsFilterFromState, cmd, started, rw)
+	// Recovery or paginated join - stream catch-up needed. state is nil on the
+	// direct-to-LIVE path (no STATE/STREAM phase ran) — the transition installs
+	// a fresh reservation in that case.
+	return c.handleMapRecoveryJoin(req, reply, opts, isPresence, state, tagsFilterFromState, serverTagsFilterFromState, cmd, started, rw)
 }
 
 // handleMapRecoveryJoin handles recovery or paginated join (stream catch-up only).
@@ -1212,6 +1307,7 @@ func (c *Client) handleMapRecoveryJoin(
 	reply SubscribeReply,
 	opts SubscribeOptions,
 	isPresence bool,
+	state *mapSubscribeState,
 	tagsFilterFromState *tagsFilter,
 	serverTagsFilterFromState *tagsFilter,
 	cmd *protocol.Command,
@@ -1226,6 +1322,7 @@ func (c *Client) handleMapRecoveryJoin(
 		tagsFilterFromState:       tagsFilterFromState,
 		serverTagsFilterFromState: serverTagsFilterFromState,
 		metricsAction:             "map_subscribe_recovery_join",
+		expectedState:             state,
 	})
 }
 
@@ -1437,10 +1534,31 @@ func (c *Client) sweepExpiredMapSubscribing(skipChannel string) {
 }
 
 // cleanupMapSubscribing removes map subscribing state for a channel.
+// cleanupMapSubscribing drops the channel's map subscribe reservation without
+// identity-matching it. Safe for the request-handling paths that use it: they
+// run before or under the per-channel pagination lock, which admits only one
+// transition per channel at a time, so the entry they find is the one they are
+// responsible for. Rollbacks inside a transition must use
+// cleanupMapSubscribingState instead — a transition can outlive its own
+// reservation (the unsubscribe wait-gate timeout drops it) and must not tear
+// down a fresh subscribe's.
 func (c *Client) cleanupMapSubscribing(channel string) {
+	c.cleanupMapSubscribingState(channel, nil)
+}
+
+// cleanupMapSubscribingState drops the channel's map subscribe reservation and
+// releases anyone waiting on its subscribingCh. When expected is non-nil the
+// removal is identity-matched: a caller that owns a specific reservation must
+// not tear down one a concurrent resubscribe installed after its own was
+// consumed (e.g. by the unsubscribe wait-gate timeout). Passing nil keeps the
+// unconditional behavior for callers that are the sole owner by construction.
+func (c *Client) cleanupMapSubscribingState(channel string, expected *mapSubscribeState) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if state, ok := c.mapSubscribing[channel]; ok {
+		if expected != nil && state != expected {
+			return
+		}
 		if state.subscribingCh != nil {
 			close(state.subscribingCh)
 		}

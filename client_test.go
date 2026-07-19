@@ -3059,8 +3059,9 @@ func TestClientPresenceUpdate(t *testing.T) {
 	client.mu.RUnlock()
 	require.True(t, ok)
 
-	err := client.updateChannelPresence("test", chCtx)
+	attempted, err := client.updateChannelPresence("test", chCtx)
 	require.NoError(t, err)
+	require.True(t, attempted)
 }
 
 func TestClientSubExpired(t *testing.T) {

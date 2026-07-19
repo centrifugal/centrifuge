@@ -877,9 +877,11 @@ func (s *subShard) removeSubID(ch string) {
 // - isEmpty: true if channel has no subscribers left
 // - wasRemoved: true if subscription was found and removed
 // - wasMap: true if the now-empty channel was a keyed subscription channel
-// anySubGen removes whatever generation is currently registered (used by paths
-// that undo their own just-added subscription, where no newer generation can
-// exist). Real generations start at 1.
+// anySubGen removes whatever generation is currently registered. No production
+// path passes it anymore — every rollback identity-matches its own generation
+// so a stalled attempt can never remove a fresh resubscribe's entry. Kept as
+// the named zero value so an accidental gen-0 removal is at least explicit in
+// removeSub. Real generations start at 1.
 const anySubGen uint64 = 0
 
 func (s *subShard) removeSub(ch string, c *Client, subGen uint64) (bool, bool, bool) {

@@ -1874,7 +1874,10 @@ func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMe
 			return true, nil
 		}
 	}
-	mu := n.subLock(ch)
+	// mediums[i] is guarded by mediumLocks[i] (see struct doc). Writers hold
+	// subLock+mediumLock; readers need only mediumLock. Using subLock here was
+	// race-free only because numSubLocks happens to equal numMediumLocks.
+	mu := n.mediumLock(ch)
 	mu.Lock()
 	medium, ok := n.mediumShard(ch)[ch]
 	mu.Unlock()

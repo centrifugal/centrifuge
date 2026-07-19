@@ -2231,10 +2231,11 @@ func TestValidateSubscribeRequest_RejectsNormalWhileMapLoading(t *testing.T) {
 	client.mu.Unlock()
 
 	// A concurrent normal subscribe for the same channel must be rejected.
-	replyErr, disconnect := client.validateSubscribeRequest(&protocol.SubscribeRequest{Channel: ch})
+	gotGen, replyErr, disconnect := client.validateSubscribeRequest(&protocol.SubscribeRequest{Channel: ch})
 	require.Nil(t, disconnect)
 	require.Equal(t, ErrorAlreadySubscribed, replyErr,
 		"normal subscribe must be rejected while a map subscribe is loading the same channel")
+	require.Zero(t, gotGen, "a rejected subscribe must not mint a reservation generation")
 
 	// And it must not have reserved c.channels behind the map subscribe's back.
 	client.mu.RLock()
@@ -2804,8 +2805,9 @@ func TestWebsocketTransport_PingWriteDeadlineRace(t *testing.T) {
 	defer srv.Close()
 
 	dialer := &websocket.Dialer{}
-	clientConn, _, _, err := dialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/", nil)
+	clientConn, resp, _, err := dialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/", nil)
 	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
 	defer func() { _ = clientConn.Close() }()
 	// Drain client reads so server-side control/data writes don't block.
 	go func() {
@@ -3643,7 +3645,7 @@ func TestWriterTimerMode_TimerDrainsWithoutClose(t *testing.T) {
 			producers.Add(1)
 			go func(v uint64) {
 				defer producers.Done()
-				w.enqueue(seqItem(v))
+				_ = w.enqueue(seqItem(v))
 			}(next)
 			next++
 		}
@@ -3687,7 +3689,7 @@ func TestWriterTimerMode_NoLossManyProducers(t *testing.T) {
 		go func(base uint64) {
 			defer wg.Done()
 			for i := uint64(0); i < perProducer; i++ {
-				w.enqueue(seqItem(base + i))
+				_ = w.enqueue(seqItem(base + i))
 			}
 		}(uint64(p) * perProducer)
 	}
@@ -3709,4 +3711,744 @@ func TestWriterTimerMode_NoLossManyProducers(t *testing.T) {
 	for i := uint64(0); i < total; i++ {
 		require.Equal(t, 1, got[i], "message %d written %d times (expected exactly once)", i, got[i])
 	}
+}
+
+// ===========================================================================
+// review_fixes_test.go — regressions for the post-review hardening pass
+// ===========================================================================
+
+// TestCommitSubscription_StolenReservationNotClobbered pins the generation
+// check in commitSubscription. A subscribe that stalls past the unsubscribe
+// wait-gate timeout loses its reservation: the timeout path nils the
+// reservation's subscribingCh, a second unsubscribe gen-matches and deletes the
+// entry, and a fresh subscribe re-reserves the channel with a newer generation.
+// Without the check, the stalled subscribe's late commit would close the fresh
+// reservation's subscribingCh (waking its waiters early) and overwrite
+// c.channels with a context that has no hub routing.
+func TestCommitSubscription_StolenReservationNotClobbered(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClientV2(t, node, "u")
+	connectClientV2(t, client)
+	const ch = "stolen"
+
+	// A fresh subscribe's reservation, installed after ours was consumed.
+	freshCh := make(chan struct{})
+	freshGen := client.subGenCounter.Add(1)
+	client.mu.Lock()
+	client.channels[ch] = ChannelContext{subscribingCh: freshCh, subGen: freshGen}
+	client.mu.Unlock()
+
+	// Our stalled attempt commits with an older generation.
+	staleGen := freshGen - 1
+	subscribingCh, committed := client.commitSubscription(ch, ChannelContext{
+		flags:  flagSubscribed,
+		subGen: staleGen,
+	}, reservationChannels)
+
+	require.False(t, committed, "stale commit must not take over a reservation it no longer owns")
+	require.Nil(t, subscribingCh, "stale commit must not return the fresh reservation's subscribingCh")
+
+	select {
+	case <-freshCh:
+		t.Fatal("stale commit closed the fresh reservation's subscribingCh — its waiters wake early")
+	default:
+	}
+
+	client.mu.RLock()
+	got, ok := client.channels[ch]
+	client.mu.RUnlock()
+	require.True(t, ok, "fresh reservation must survive the stale commit")
+	require.Equal(t, freshGen, got.subGen, "fresh reservation was overwritten by the stale commit")
+	require.False(t, channelHasFlag(got.flags, flagSubscribed),
+		"stale commit installed its channel context over the fresh reservation")
+
+	// Drop the synthetic reservation: leaving it would make the node shutdown's
+	// close() block on its never-closed subscribingCh for the full 5s wait gate.
+	client.mu.Lock()
+	delete(client.channels, ch)
+	client.mu.Unlock()
+}
+
+// TestCommitSubscription_StolenMapReservationNotClobbered is the map-kind twin
+// of the above: a stale map transition must not delete a fresh map
+// subscription's mapSubscribing state (which would orphan its catch-up).
+func TestCommitSubscription_StolenMapReservationNotClobbered(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClientV2(t, node, "u")
+	connectClientV2(t, client)
+	const ch = "stolen_map"
+
+	freshState := &mapSubscribeState{
+		subscribingCh: make(chan struct{}),
+		subGen:        client.subGenCounter.Add(1),
+	}
+	client.mu.Lock()
+	client.mapSubscribing = map[string]*mapSubscribeState{ch: freshState}
+	client.mu.Unlock()
+
+	subscribingCh, committed := client.commitSubscription(ch, ChannelContext{
+		flags:  flagSubscribed,
+		subGen: freshState.subGen - 1,
+	}, reservationMap)
+
+	require.False(t, committed)
+	require.Nil(t, subscribingCh)
+	select {
+	case <-freshState.subscribingCh:
+		t.Fatal("stale map commit closed the fresh reservation's subscribingCh")
+	default:
+	}
+	client.mu.RLock()
+	got, ok := client.mapSubscribing[ch]
+	client.mu.RUnlock()
+	require.True(t, ok, "stale map commit deleted the fresh mapSubscribing state")
+	require.Same(t, freshState, got)
+}
+
+// TestCommitSubscription_MatchingReservationCommits is the positive control for
+// the two tests above: the generation check must not break the happy path.
+func TestCommitSubscription_MatchingReservationCommits(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClientV2(t, node, "u")
+	connectClientV2(t, client)
+	const ch = "ok"
+
+	resvCh := make(chan struct{})
+	gen := client.subGenCounter.Add(1)
+	client.mu.Lock()
+	client.channels[ch] = ChannelContext{subscribingCh: resvCh, subGen: gen}
+	client.mu.Unlock()
+
+	subscribingCh, committed := client.commitSubscription(ch, ChannelContext{
+		flags:  flagSubscribed,
+		subGen: gen,
+	}, reservationChannels)
+
+	require.True(t, committed, "matching generation must commit")
+	require.Equal(t, resvCh, subscribingCh, "commit must hand back the reservation's subscribingCh to close")
+
+	client.mu.RLock()
+	got := client.channels[ch]
+	client.mu.RUnlock()
+	require.True(t, channelHasFlag(got.flags, flagSubscribed), "committed context must be installed")
+	require.Equal(t, gen, got.subGen)
+	require.Nil(t, got.subscribingCh, "commit must clear subscribingCh so unsubscribe cannot double-close it")
+}
+
+// TestMapStatePhase_DuplicateReservationRejected pins the guard added to the
+// map STATE phase. validateSubscribeRequest rejects a duplicate earlier, but
+// pagination spans multiple commands so two initial subscribes can both pass
+// validation before either installs. Overwriting the first reservation orphans
+// its subscribingCh — an unsubscribe waiting on it hits the 5s timeout and
+// force-disconnects the client. The phase is called directly here because the
+// earlier validation is what makes the window narrow in normal operation.
+func TestMapStatePhase_DuplicateReservationRejected(t *testing.T) {
+	node, _ := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "u")
+	const ch = "dup_state"
+
+	existing := &mapSubscribeState{subscribingCh: make(chan struct{}), subGen: client.subGenCounter.Add(1)}
+	client.mu.Lock()
+	client.mapSubscribing = map[string]*mapSubscribeState{ch: existing}
+	client.mu.Unlock()
+
+	rw := testReplyWriterWrapper()
+	err := client.handleMapStatePhase(
+		&protocol.SubscribeRequest{Channel: ch, Type: int32(SubscriptionTypeMap), Phase: MapPhaseState},
+		SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}},
+		&protocol.Command{Id: 1}, time.Now(), rw.rw,
+	)
+	require.Equal(t, ErrorAlreadySubscribed, err, "duplicate map state reservation must be rejected")
+
+	client.mu.RLock()
+	got := client.mapSubscribing[ch]
+	client.mu.RUnlock()
+	require.Same(t, existing, got, "duplicate subscribe overwrote the in-flight reservation")
+	select {
+	case <-existing.subscribingCh:
+		t.Fatal("existing reservation's subscribingCh was closed by the duplicate")
+	default:
+	}
+}
+
+// blockingPresenceManager lets a test suspend AddPresence mid-call, so a close
+// can be landed precisely inside the subscribe's presence window.
+type blockingPresenceManager struct {
+	trackingPresenceManager
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (m *blockingPresenceManager) AddPresence(ch string, clientID string, info *ClientInfo) error {
+	m.once.Do(func() {
+		close(m.entered)
+		<-m.release
+	})
+	return m.trackingPresenceManager.AddPresence(ch, clientID, info)
+}
+
+// TestSubscribeRollback_RemovesPresenceOnCloseDuringSubscribe guards the
+// presence leak on the closed-mid-subscribe rollback. subscribeCmd adds
+// node-level presence before commitSubscription; if the client closes in that
+// window, close() has already snapshotted c.channels without this channel (that
+// is why the rollback runs), so nothing else can remove the entry and it
+// lingers until PresenceTTL — 60s by default.
+func TestSubscribeRollback_RemovesPresenceOnCloseDuringSubscribe(t *testing.T) {
+	pm := &blockingPresenceManager{
+		trackingPresenceManager: trackingPresenceManager{entries: map[string]map[string]struct{}{}},
+		entered:                 make(chan struct{}),
+		release:                 make(chan struct{}),
+	}
+	node, err := New(Config{LogLevel: LogLevelError, LogHandler: func(LogEntry) {}})
+	require.NoError(t, err)
+	node.SetPresenceManager(pm)
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{EmitPresence: true}}, nil)
+		})
+	})
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClientV2(t, node, "u")
+	connectClientV2(t, client)
+	const ch = "presence_rollback"
+
+	var subDone sync.WaitGroup
+	subDone.Add(1)
+	go func() {
+		defer subDone.Done()
+		rw := testReplyWriterWrapper()
+		_ = client.handleSubscribe(&protocol.SubscribeRequest{Channel: ch}, &protocol.Command{Id: 1}, time.Now(), rw.rw)
+	}()
+
+	<-pm.entered // subscribe is inside AddPresence, past its own closed check
+
+	var closeDone sync.WaitGroup
+	closeDone.Add(1)
+	go func() {
+		defer closeDone.Done()
+		_ = client.close(DisconnectForceNoReconnect)
+	}()
+
+	// Wait until close has actually flipped the status, so the commit below is
+	// guaranteed to take the rollback path rather than committing normally.
+	require.Eventually(t, func() bool {
+		client.mu.RLock()
+		defer client.mu.RUnlock()
+		return client.status == statusClosed
+	}, 5*time.Second, time.Millisecond, "client did not reach closed status")
+
+	close(pm.release)
+	subDone.Wait()
+	closeDone.Wait()
+
+	require.Equal(t, 0, pm.liveEntries(),
+		"presence entry survived the closed-mid-subscribe rollback — leaks until PresenceTTL")
+	require.False(t, hubHasSub(node, ch, client.ID()), "hub entry survived the rollback")
+}
+
+// TestConnectServerSideSubs_ErrorRollsBackPresence covers connectCmd aborting
+// after some connect-time server-side subscriptions already succeeded. The
+// failed channel aborts the whole connect, so the succeeded channels' presence
+// entries (and reservations) must be rolled back — close() cannot do it, since
+// the connection never completed and its channels never entered a snapshot.
+func TestConnectServerSideSubs_ErrorRollsBackPresence(t *testing.T) {
+	pm := newTrackingPresenceManager(0)
+	node, err := New(Config{LogLevel: LogLevelError, LogHandler: func(LogEntry) {}})
+	require.NoError(t, err)
+	node.SetPresenceManager(pm)
+	// Connect-time server-side subscriptions bypass OnSubscribe (subscribeCmd is
+	// called directly with these options), so "bad" is failed via an already
+	// expired subscription — it aborts the connect after the others subscribed
+	// and added presence.
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{Subscriptions: map[string]SubscribeOptions{
+			"ok1": {EmitPresence: true},
+			"ok2": {EmitPresence: true},
+			"ok3": {EmitPresence: true},
+			"bad": {EmitPresence: true, ExpireAt: time.Now().Unix() - 3600},
+		}}, nil
+	})
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClientV2(t, node, "u")
+	rw := testReplyWriterWrapper()
+	connErr := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rw.rw)
+	require.NotNil(t, connErr, "connect must fail when a server-side subscription fails")
+
+	require.Equal(t, 0, pm.liveEntries(),
+		"presence entries from succeeded server-side subs leaked after connect aborted")
+	for _, ch := range []string{"ok1", "ok2", "bad", "ok3"} {
+		require.Falsef(t, hubHasSub(node, ch, client.ID()), "hub entry leaked for %s", ch)
+		present, _ := clientHasChannel(client, ch)
+		require.Falsef(t, present, "reservation leaked in c.channels for %s", ch)
+	}
+}
+
+// TestUnsubscribeEvent_ServerSideRecomputedAfterWait pins the ServerSide field
+// of UnsubscribeEvent. An unsubscribe that races an in-flight subscribe reads
+// the reservation first (flags==0, so ServerSide reads false), waits on
+// subscribingCh, then tears down whatever finalized. The event must describe
+// the subscription actually torn down, not the pre-wait reservation.
+func TestUnsubscribeEvent_ServerSideRecomputedAfterWait(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	gotServerSide := make(chan bool, 1)
+	node.OnConnect(func(c *Client) {
+		c.OnUnsubscribe(func(e UnsubscribeEvent) { gotServerSide <- e.ServerSide })
+	})
+	client := newTestClientV2(t, node, "u")
+	connectClientV2(t, client)
+	const ch = "srv_side"
+
+	// In-flight subscribe reservation: no flags yet.
+	subscribingCh := make(chan struct{})
+	gen := client.subGenCounter.Add(1)
+	client.mu.Lock()
+	client.channels[ch] = ChannelContext{subscribingCh: subscribingCh, subGen: gen}
+	client.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = client.unsubscribe(ch, unsubscribeServer, nil)
+	}()
+
+	// Let the unsubscribe reach its wait gate, then finalize the subscribe as a
+	// server-side subscription carrying the same generation.
+	require.Eventually(t, func() bool {
+		client.mu.RLock()
+		defer client.mu.RUnlock()
+		return client.channels[ch].subscribingCh != nil
+	}, time.Second, time.Millisecond)
+	client.mu.Lock()
+	client.channels[ch] = ChannelContext{flags: flagSubscribed | flagServerSide, subGen: gen}
+	client.mu.Unlock()
+	close(subscribingCh)
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("unsubscribe did not finish")
+	}
+
+	select {
+	case ss := <-gotServerSide:
+		require.True(t, ss,
+			"UnsubscribeEvent.ServerSide came from the pre-wait reservation snapshot, not the torn-down subscription")
+	case <-time.After(time.Second):
+		t.Fatal("no unsubscribe event emitted")
+	}
+}
+
+// mapReservation reports whether an in-flight map subscribe reservation exists.
+func mapReservation(c *Client, ch string) (*mapSubscribeState, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	st, ok := c.mapSubscribing[ch]
+	return st, ok
+}
+
+// unsubscribeDuration times an unsubscribe. A reservation whose subscribingCh
+// was never closed makes unsubscribe block on its 5s wait gate and then
+// force-disconnect the client, so a prompt return is the observable signal that
+// the reservation was cleaned up properly.
+func unsubscribeDuration(c *Client, ch string) time.Duration {
+	start := time.Now()
+	_ = c.unsubscribe(ch, unsubscribeClient, nil)
+	return time.Since(start)
+}
+
+// TestMapDirectLiveRecovery_SuccessLeavesNoReservation covers the reservation
+// now installed by the direct-to-LIVE recovery join (a path that previously ran
+// with no mapSubscribing entry at all, so neither the commit's generation check
+// nor the unsubscribe wait-gate covered it). On success the reservation must be
+// consumed by the commit, leaving no state behind and no unclosed subscribingCh.
+func TestMapDirectLiveRecovery_SuccessLeavesNoReservation(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+	const ch = "direct_live_ok"
+
+	var epoch string
+	for i := 0; i < 5; i++ {
+		res, err := broker.Publish(context.Background(), ch, string(rune('a'+i)), MapPublishOptions{
+			Data: []byte(`{"v":"d"}`),
+		})
+		require.NoError(t, err)
+		epoch = res.Position.Epoch
+	}
+
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "u")
+
+	res := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: ch, Type: int32(SubscriptionTypeMap), Phase: MapPhaseLive,
+		Offset: 2, Epoch: epoch, Recover: true,
+	})
+	require.Equal(t, MapPhaseLive, res.Phase)
+
+	_, hasResv := mapReservation(client, ch)
+	require.False(t, hasResv, "direct-to-LIVE reservation leaked after a successful subscribe")
+	present, subscribed := clientHasChannel(client, ch)
+	require.True(t, present && subscribed, "channel must be live after direct-to-LIVE recovery")
+	require.True(t, hubHasSub(node, ch, client.ID()), "hub entry missing after successful subscribe")
+
+	// The reservation's subscribingCh must have been closed by the commit —
+	// otherwise this blocks for the full 5s wait-gate timeout.
+	require.Less(t, unsubscribeDuration(client, ch), 2*time.Second,
+		"unsubscribe blocked on an unclosed subscribingCh from the direct-to-LIVE reservation")
+	require.False(t, hubHasSub(node, ch, client.ID()))
+}
+
+// TestMapDirectLiveRecovery_ErrorRollsBackReservationAndHub is the failure twin:
+// an epoch mismatch aborts the transition, and the rollback must remove the hub
+// entry and the reservation (closing its subscribingCh) so the channel is
+// immediately re-subscribable and a later unsubscribe cannot hang.
+func TestMapDirectLiveRecovery_ErrorRollsBackReservationAndHub(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+	const ch = "direct_live_err"
+
+	for i := 0; i < 5; i++ {
+		_, err := broker.Publish(context.Background(), ch, string(rune('a'+i)), MapPublishOptions{
+			Data: []byte(`{"v":"d"}`),
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "u")
+
+	protoErr := subscribeMapClientExpectError(t, client, &protocol.SubscribeRequest{
+		Channel: ch, Type: int32(SubscriptionTypeMap), Phase: MapPhaseLive,
+		Offset: 2, Epoch: "definitely-not-the-epoch", Recover: true,
+	})
+	require.Equal(t, ErrorUnrecoverablePosition.Code, protoErr.Code)
+
+	_, hasResv := mapReservation(client, ch)
+	require.False(t, hasResv, "reservation leaked after the direct-to-LIVE rollback")
+	present, _ := clientHasChannel(client, ch)
+	require.False(t, present, "channel context leaked after the direct-to-LIVE rollback")
+	require.False(t, hubHasSub(node, ch, client.ID()), "hub entry leaked after the direct-to-LIVE rollback")
+
+	// The channel must be immediately re-subscribable: a leaked reservation
+	// would make validateSubscribeRequest reject this with AlreadySubscribed.
+	require.Less(t, unsubscribeDuration(client, ch), 2*time.Second,
+		"unsubscribe blocked on a subscribingCh the rollback failed to close")
+}
+
+// partialFailPresenceManager records the presence entry and then reports an
+// error, modelling a manager whose write landed server-side but whose call
+// failed (or a partial multi-step update). It can also suspend mid-add so the
+// add is made to land after a concurrent unsubscribe.
+type partialFailPresenceManager struct {
+	trackingPresenceManager
+	failing atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (m *partialFailPresenceManager) AddPresence(ch string, clientID string, info *ClientInfo) error {
+	if m.failing.Load() {
+		m.once.Do(func() {
+			close(m.entered)
+			<-m.release
+		})
+	}
+	_ = m.trackingPresenceManager.AddPresence(ch, clientID, info)
+	if m.failing.Load() {
+		return fmt.Errorf("partial presence failure")
+	}
+	return nil
+}
+
+// TestPresenceTick_CompensatesAfterPartialFailure pins the `attempted` return of
+// updateChannelPresence. A presence add issued by the tick can land after a
+// concurrent unsubscribe already removed the entry, resurrecting it; that is
+// what compensateRacedPresence exists to undo. The add may also report an error
+// while still having landed server-side (partial multi-step update). Marking the
+// channel compensation-eligible only on a nil error therefore leaked exactly the
+// entry the compensation was added to remove — it must be marked whenever an add
+// was issued.
+func TestPresenceTick_CompensatesAfterPartialFailure(t *testing.T) {
+	pm := &partialFailPresenceManager{
+		trackingPresenceManager: trackingPresenceManager{entries: map[string]map[string]struct{}{}},
+		entered:                 make(chan struct{}),
+		release:                 make(chan struct{}),
+	}
+	node, err := New(Config{LogLevel: LogLevelError, LogHandler: func(LogEntry) {}})
+	require.NoError(t, err)
+	node.SetPresenceManager(pm)
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{EmitPresence: true}}, nil)
+		})
+	})
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClientV2(t, node, "u")
+	connectClientV2(t, client)
+	const ch = "partial"
+	subscribeClientV2(t, client, ch)
+	require.Equal(t, 1, pm.liveEntries(), "precondition: subscribe added presence")
+
+	// From here every add suspends once, then records the entry and reports an error.
+	pm.failing.Store(true)
+
+	client.mu.RLock()
+	chCtx := client.channels[ch]
+	client.mu.RUnlock()
+	snapshot := []channelTickItem{{channel: ch, ctx: chCtx, duties: dutyPresence}}
+
+	var tickDone sync.WaitGroup
+	tickDone.Add(1)
+	go func() {
+		defer tickDone.Done()
+		client.updateChannelPresenceItem(&snapshot[0])
+	}()
+
+	<-pm.entered // the tick passed its channel-existence check and is inside the add
+
+	// The unsubscribe removes the channel and its presence entry while the tick's
+	// add is still in flight.
+	_ = client.unsubscribe(ch, unsubscribeClient, nil)
+	require.Equal(t, 0, pm.liveEntries(), "precondition: unsubscribe removed the entry")
+
+	close(pm.release)
+	tickDone.Wait()
+
+	require.True(t, snapshot[0].presenceAdded,
+		"a presence add that errored must still be marked — the entry may exist server-side")
+	require.Equal(t, 1, pm.liveEntries(), "precondition: the raced tick add resurrected the entry")
+
+	client.compensateRacedPresence(snapshot)
+	require.Equal(t, 0, pm.liveEntries(),
+		"presence resurrected by a partially-failed tick add was not compensated — leaks until PresenceTTL")
+}
+
+// TestMapLivePhase_TakesPaginationLock pins the serialization of the direct
+// LIVE-phase command. validateSubscribeRequest deliberately lets any non-STATE
+// subscribe through while a mapSubscribing reservation exists (pagination spans
+// commands), and the STATE/STREAM phases rely on the pagination lock to keep
+// only one transition per channel in flight. The LIVE phase took no lock, so a
+// concurrent STREAM command could adopt the live transition's reservation and
+// inherit its subGen — two transitions sharing one generation, where the loser's
+// rollback removes the winner's hub entry and leaves the client live in
+// c.channels with no routing.
+func TestMapLivePhase_TakesPaginationLock(t *testing.T) {
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+	const ch = "live_pagination"
+
+	res, err := broker.Publish(context.Background(), ch, "k", MapPublishOptions{Data: []byte(`{"v":"d"}`)})
+	require.NoError(t, err)
+
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "u")
+
+	// Another pagination for this channel is in progress.
+	require.True(t, client.acquireMapPaginationLock(ch))
+
+	protoErr := subscribeMapClientExpectError(t, client, &protocol.SubscribeRequest{
+		Channel: ch, Type: int32(SubscriptionTypeMap), Phase: MapPhaseLive,
+		Offset: 0, Epoch: res.Position.Epoch, Recover: true,
+	})
+	require.Equal(t, ErrorConcurrentPagination.Code, protoErr.Code,
+		"LIVE phase must serialize with the other phases on the pagination lock")
+
+	// It must not have installed a reservation while bailing out.
+	_, hasResv := mapReservation(client, ch)
+	require.False(t, hasResv, "rejected LIVE phase left a reservation behind")
+
+	// Released lock: the same subscribe now succeeds, proving the lock is the
+	// only thing that rejected it.
+	client.releaseMapPaginationLock(ch)
+	sub := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: ch, Type: int32(SubscriptionTypeMap), Phase: MapPhaseLive,
+		Offset: 0, Epoch: res.Position.Epoch, Recover: true,
+	})
+	require.Equal(t, MapPhaseLive, sub.Phase)
+}
+
+// historyErrorBroker fails History (and therefore streamTop) on demand, so a
+// subscribe can be made to fail after it has already added presence.
+type historyErrorBroker struct {
+	*MemoryBroker
+	fail atomic.Bool
+}
+
+func (b *historyErrorBroker) History(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
+	if b.fail.Load() {
+		return nil, StreamPosition{}, fmt.Errorf("history unavailable")
+	}
+	return b.MemoryBroker.History(ch, opts)
+}
+
+// TestSubscribeCmd_RemovesPresenceWhenSubscribeFailsAfterAdd covers the presence
+// leak on subscribeCmd's own failure paths. Presence is added partway through,
+// before the subscription is committed; a later failure (here a broker error
+// resolving the stream position) returns a zero-valued channelContext, so the
+// commit-time rollback has no flags to act on and onSubscribeErrorGen only cleans
+// the reservation and the hub entry. Nothing else can remove the entry — the
+// channel never became a committed subscription — so it lingers until
+// PresenceTTL.
+func TestSubscribeCmd_RemovesPresenceWhenSubscribeFailsAfterAdd(t *testing.T) {
+	node, err := New(Config{LogLevel: LogLevelError, LogHandler: func(LogEntry) {}})
+	require.NoError(t, err)
+	mb, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	brk := &historyErrorBroker{MemoryBroker: mb}
+	node.SetBroker(brk)
+	pm := newTrackingPresenceManager(0)
+	node.SetPresenceManager(pm)
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{
+				EmitPresence:      true,
+				EnablePositioning: true, // forces the streamTop lookup below
+			}}, nil)
+		})
+	})
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClientV2(t, node, "u")
+	connectClientV2(t, client)
+	const ch = "presence_after_add"
+
+	brk.fail.Store(true)
+	rw := testReplyWriterWrapper()
+	_ = client.handleSubscribe(&protocol.SubscribeRequest{Channel: ch}, &protocol.Command{Id: 1}, time.Now(), rw.rw)
+
+	present, _ := clientHasChannel(client, ch)
+	require.False(t, present, "precondition: the subscribe must have failed")
+	require.Equal(t, 0, pm.liveEntries(),
+		"presence added before the failure was not removed — leaks until PresenceTTL")
+}
+
+// TestOnSubscribeError_GenMatchedDoesNotClobberFreshReservation covers the
+// cleanup path taken when an asynchronous OnSubscribe callback fails. That
+// callback can outlive its own reservation: if it stalls past the unsubscribe
+// wait-gate timeout, the reservation is dropped and a fresh subscribe may
+// re-reserve the channel. Undoing by channel name alone deleted that fresh
+// reservation and closed a subscribingCh its waiters still need.
+func TestOnSubscribeError_GenMatchedDoesNotClobberFreshReservation(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClientV2(t, node, "u")
+	connectClientV2(t, client)
+	const ch = "gen_cleanup"
+
+	staleGen := client.subGenCounter.Add(1)
+	freshCh := make(chan struct{})
+	freshGen := client.subGenCounter.Add(1)
+	client.mu.Lock()
+	client.channels[ch] = ChannelContext{subscribingCh: freshCh, subGen: freshGen}
+	client.mu.Unlock()
+
+	// A stalled earlier attempt cleaning up with its own (older) generation.
+	client.onSubscribeErrorGen(ch, staleGen)
+
+	client.mu.RLock()
+	got, ok := client.channels[ch]
+	client.mu.RUnlock()
+	require.True(t, ok, "stale cleanup deleted the fresh reservation")
+	require.Equal(t, freshGen, got.subGen)
+	select {
+	case <-freshCh:
+		t.Fatal("stale cleanup closed the fresh reservation's subscribingCh")
+	default:
+	}
+
+	// The owning generation still cleans up normally.
+	client.onSubscribeErrorGen(ch, freshGen)
+	client.mu.RLock()
+	_, stillThere := client.channels[ch]
+	client.mu.RUnlock()
+	require.False(t, stillThere, "matching generation must remove its own reservation")
+	select {
+	case <-freshCh:
+	default:
+		t.Fatal("matching cleanup must close the reservation's subscribingCh")
+	}
+}
+
+// TestMapCommit_InstallsOverOccupiedChannelSlot pins a subtlety that is easy to
+// "harden" into a bug. The hub keeps exactly one entry per (channel, client) and
+// addSub overwrites it, so by the time a map subscription commits, its own
+// addSubscription has already replaced whatever hub entry was there. The commit
+// must therefore install into c.channels unconditionally: refusing (because the
+// slot looks occupied by another generation) leaves c.channels carrying the older
+// subscription while the hub carries this generation, and the ensuing rollback
+// removes that hub entry — yielding a channel that looks subscribed but receives
+// nothing. Racing subscribes are prevented at the source (validateSubscribeRequest
+// and Client.Subscribe reject a channel already in c.channels or c.mapSubscribing),
+// not here.
+func TestMapCommit_InstallsOverOccupiedChannelSlot(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClientV2(t, node, "u")
+	connectClientV2(t, client)
+	const ch = "occupied"
+
+	// An older live subscription occupies the slot.
+	oldGen := client.subGenCounter.Add(1)
+	client.mu.Lock()
+	client.channels[ch] = ChannelContext{flags: flagSubscribed, subGen: oldGen}
+	client.mu.Unlock()
+
+	// A map transition that owns its reservation commits with a newer generation.
+	newGen := client.subGenCounter.Add(1)
+	state := &mapSubscribeState{subscribingCh: make(chan struct{}), subGen: newGen}
+	client.mu.Lock()
+	client.mapSubscribing = map[string]*mapSubscribeState{ch: state}
+	client.mu.Unlock()
+
+	subscribingCh, committed := client.commitSubscription(ch, ChannelContext{
+		flags:  flagSubscribed,
+		subGen: newGen,
+	}, reservationMap)
+
+	require.True(t, committed,
+		"map commit must install even when the channel slot is occupied — the hub entry was already overwritten by this subscribe")
+	require.Equal(t, state.subscribingCh, subscribingCh)
+
+	client.mu.RLock()
+	got := client.channels[ch]
+	_, resvGone := client.mapSubscribing[ch]
+	client.mu.RUnlock()
+	require.Equal(t, newGen, got.subGen,
+		"c.channels must carry the committed generation so it matches the hub entry")
+	require.False(t, resvGone, "commit must consume the map reservation")
+
+	client.mu.Lock()
+	delete(client.channels, ch)
+	client.mu.Unlock()
 }

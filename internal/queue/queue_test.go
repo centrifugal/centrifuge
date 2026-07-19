@@ -789,3 +789,56 @@ func TestQueueCloseStopsShrinkTimer(t *testing.T) {
 		t.Fatal("shrink timer was still armed after Close — closed queue held alive until it fires")
 	}
 }
+
+// TestQueueFinishCollectAfterCloseDoesNotRearm guards the companion to
+// TestQueueCloseStopsShrinkTimer: Close stops the shrink timer so the closed
+// queue can be collected, but the writer goroutine can still call FinishCollect
+// concurrently (it does not check Closed first). Without a closed check in
+// FinishCollect that call re-arms the timer via Reset, restoring exactly the
+// retention Close removed — the AfterFunc closure keeps the queue alive for up
+// to shrinkDelay.
+func TestQueueFinishCollectAfterCloseDoesNotRearm(t *testing.T) {
+	q := New(16)
+	for i := 0; i < 64; i++ {
+		q.Add(Item{Data: []byte("x")})
+	}
+	buf := make([]Item, 128)
+	q.RemoveManyInto(buf, 128)
+	q.FinishCollect(time.Hour)
+
+	q.mu.Lock()
+	timer := q.shrinkTimer
+	q.mu.Unlock()
+	if timer == nil {
+		t.Fatal("expected a scheduled shrink timer")
+	}
+
+	q.Close()
+	// A racing writer finishing its batch after Close.
+	q.FinishCollect(time.Hour)
+
+	if timer.Stop() {
+		t.Fatal("FinishCollect re-armed the shrink timer after Close — closed queue held alive until it fires")
+	}
+	q.mu.Lock()
+	rearmed := q.shrinkTimer != timer && q.shrinkTimer != nil
+	q.mu.Unlock()
+	if rearmed {
+		t.Fatal("FinishCollect installed a new shrink timer after Close")
+	}
+}
+
+// TestQueueFinishCollectAfterCloseRemovesNothing checks the closed FinishCollect
+// is inert beyond the timer: it must not touch the queue state Close reset.
+func TestQueueFinishCollectAfterCloseRemovesNothing(t *testing.T) {
+	q := New(16)
+	q.Add(Item{Data: []byte("x")})
+	q.Close()
+	q.FinishCollect(0) // immediate-shrink path
+	if q.Len() != 0 {
+		t.Fatalf("expected empty queue after close, got %d", q.Len())
+	}
+	if !q.Closed() {
+		t.Fatal("queue must remain closed")
+	}
+}
