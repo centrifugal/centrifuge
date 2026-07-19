@@ -324,12 +324,30 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 				c.keyed.minTrackExpireAt[channel] = minExpireAt
 			}
 		}
+		channelIsDelta := false
+		if cs := c.keyed.channels[channel]; cs != nil {
+			channelIsDelta = cs.deltaType != deltaTypeNone
+		}
 		c.mu.Unlock()
 
 		// Step 2: Collect cached data for items where server has newer version.
 		var cachedItems []*protocol.Publication
 		if c.node.sharedPollManager != nil {
 			cachedItems = c.node.sharedPollManager.getCachedData(channel, items)
+		}
+
+		// On a JSON delta channel the client recovers the delta base by
+		// JSON-unescaping Pub.Data, so a cached item — a full payload that seeds
+		// the base and flips deltaReady below — must be escaped just like full
+		// publications on every other base-establishing path (live keyed pubs, map
+		// state/stream). Delivering it as a raw JSON object leaves the client
+		// without a usable base and the next delta cannot be applied. getCachedData
+		// returns fresh Publications, so this only swaps each Data pointer to a new
+		// escaped slice — the cached bytes are untouched.
+		if len(cachedItems) > 0 && channelIsDelta && c.transport.Protocol().toProto() == protocol.TypeJSON {
+			for _, pub := range cachedItems {
+				pub.Data = json.Escape(convert.BytesToString(pub.Data))
+			}
 		}
 
 		// Step 3: Update per-connection versions for cached items to prevent

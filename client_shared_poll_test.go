@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/centrifugal/protocol"
+	"github.com/segmentio/encoding/json"
 	fdelta "github.com/shadowspore/fossil-delta"
 	"github.com/stretchr/testify/require"
 )
@@ -3234,6 +3236,128 @@ func TestSharedPollCachedData_DeltaReadyAfterCache(t *testing.T) {
 
 	require.True(t, deltaPub.Push.Pub.Delta, "second pub should be delta because deltaReady was set from cache")
 	require.Equal(t, "key1", deltaPub.Push.Pub.Key)
+}
+
+// TestSharedPollCachedData_DeltaReconstructsJSON is an end-to-end guard that the
+// delta delivered after a cached-data track response actually RECONSTRUCTS on a
+// JSON delta channel. deltaReady is set from the cached item, so the next live
+// publication is a delta whose base is the cached item's data. On a JSON delta
+// channel the client extracts base bytes by JSON-unescaping Pub.Data (every
+// base-establishing path — live keyed pubs, map state/stream — escapes full data
+// for exactly this reason). If the cached item is delivered as raw JSON instead
+// of an escaped string, the client cannot recover the base and the delta fails.
+//
+// This is what distinguishes it from TestSharedPollCachedData_DeltaReadyAfterCache
+// (which only checks the Delta flag) and TestSharedPollDelta_DeltaApplicable
+// (which uses Protobuf, where no escaping is involved).
+func TestSharedPollCachedData_DeltaReconstructsJSON(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:           30 * time.Second,
+		RefreshBatchSize:          100,
+		MaxKeysPerConnection:      100,
+		KeepLatestData:            true,
+		Mode:                      SharedPollModeVersioned,
+		NotificationBatchMaxSize:  50,
+		NotificationBatchMaxDelay: 50 * time.Millisecond,
+	})
+	setupSharedPollDeltaHandlers(node)
+
+	// Long shared body so fossil emits a real (small) delta, not a full fallback.
+	body := strings.Repeat("shared-body-", 12)
+	dataV1 := []byte(`{"value":"` + body + `-one"}`)
+	dataV2 := []byte(`{"value":"` + body + `-two"}`)
+
+	version := atomic.Int64{}
+	version.Store(1)
+	dataVal := atomic.Value{}
+	dataVal.Store(dataV1)
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "key1", Data: dataVal.Load().([]byte), Version: uint64(version.Load())},
+			},
+		}, nil
+	})
+
+	// Client1 (no sink) tracks key1 → populate cache at v1.
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{{Key: "key1", Version: 0}})
+	require.Eventually(t, func() bool {
+		node.sharedPollManager.mu.RLock()
+		s := node.sharedPollManager.channels["test:channel"]
+		node.sharedPollManager.mu.RUnlock()
+		if s == nil {
+			return false
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		entry := s.itemIndex["key1"]
+		return entry != nil && entry.version >= 1 && entry.data != nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Client2 (JSON, delta, sink) tracks key1 at v0 → receives cached v1 in reply.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	transport2 := newTestTransport(cancel2)
+	transport2.setProtocolVersion(ProtocolVersion2)
+	transport2.setProtocolType(ProtocolTypeJSON)
+	sink2 := make(chan []byte, 100)
+	transport2.sink = sink2
+	newCtx2 := SetCredentials(ctx2, &Credentials{UserID: "user2"})
+	client2, _ := newClient(newCtx2, node, transport2)
+	connectClientV2(t, client2)
+	subscribeSharedPollClientDelta(t, client2, "test:channel")
+	result := trackSharedPollClientWithReply(t, client2, "test:channel", []*protocol.KeyedItem{{Key: "key1", Version: 0}})
+	require.NotNil(t, result)
+	require.Len(t, result.Items, 1)
+	require.Equal(t, uint64(1), result.Items[0].Version)
+
+	// The client extracts the delta base from the cached item exactly as it does
+	// for any full pub on a JSON delta channel: JSON-unescape Pub.Data. If the
+	// cached item was delivered raw (unescaped), this fails — the base is lost.
+	var baseStr string
+	require.NoError(t, json.Unmarshal(result.Items[0].Data, &baseStr),
+		"cached item on a JSON delta channel must be an escaped JSON string so the client can extract exact base bytes; got raw %s", result.Items[0].Data)
+	base := []byte(baseStr)
+	require.Equal(t, dataV1, base, "reconstructed cache base must equal the original v1 data")
+
+	// Bump to v2 and trigger a notification cycle so client2 gets the delta.
+	version.Store(2)
+	dataVal.Store(dataV2)
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{{Key: "key_trigger", Version: 0}})
+	require.Eventually(t, func() bool {
+		client2.mu.RLock()
+		defer client2.mu.RUnlock()
+		ks := client2.keyed.trackedKeys["test:channel"]["key1"]
+		return ks != nil && ks.version >= 2
+	}, 5*time.Second, 10*time.Millisecond)
+
+	// Read the v2 publication and apply its delta against the cache-derived base.
+	var v2 *protocol.Publication
+	timeout := time.After(2 * time.Second)
+	for v2 == nil {
+		select {
+		case d := <-sink2:
+			reply := decodeReply(t, protocol.TypeJSON, d)
+			if reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 2 {
+				v2 = reply.Push.Pub
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for v2 publication")
+		}
+	}
+	require.True(t, v2.Delta, "v2 must be a real delta (deltaReady was set from cache)")
+
+	// Client unescapes the patch, then applies it against the cache-derived base.
+	var patchStr string
+	require.NoError(t, json.Unmarshal(v2.Data, &patchStr), "delta patch must be an escaped JSON string")
+	applied, err := fdelta.Apply(base, []byte(patchStr))
+	require.NoError(t, err, "v2 delta failed to apply against the cached base")
+	require.Equal(t, dataV2, applied,
+		"v2 did not reconstruct from the cached base — cached item was not delivered in the delta base format")
 }
 
 func TestSharedPollCachedData_DeltaReadyPartialKeys(t *testing.T) {
