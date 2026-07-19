@@ -5,9 +5,72 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/recovery"
+
 	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/require"
 )
+
+// TestBroadcastFiltered_MultipleKeys_NoNilBufferedPub guards a nil-pointer crash
+// on the buffered recovery path. When a broadcast produces more than one
+// prepared key among filtered subscribers (e.g. a JSON and a Protobuf client on
+// a channel with a ServerTagsFilter), the filtered-pub marker used to keep the
+// recovery buffer's offset continuity must be attached to EVERY filtered key's
+// prepared data. Previously it was attached only to the first filtered key, so a
+// subscriber on any later key buffered a nil publication, which then paniced in
+// recovery.MergePublications during the subscribe reply.
+//
+// Both subscribers are put into the buffering window before the broadcast, so
+// whichever key is iterated second is the one that would buffer nil — making the
+// assertion independent of the (randomized) subscriber map order.
+func TestBroadcastFiltered_MultipleKeys_NoNilBufferedPub(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{
+				ServerTagsFilter: &FilterNode{Key: "team", Cmp: "eq", Val: "eng"},
+			}}, nil)
+		})
+	})
+
+	const ch = "broadcast_filtered_multikey"
+
+	// Two subscribers with distinct prepared keys: JSON and Protobuf.
+	jsonTransport := newTestTransport(func() {})
+	jsonTransport.setProtocolType(ProtocolTypeJSON)
+	jsonClient := newTestConnectedClientWithTransport(t, context.Background(), node, jsonTransport, "json-user")
+	subscribeClientV2(t, jsonClient, ch)
+
+	pbTransport := newTestTransport(func() {})
+	pbTransport.setProtocolType(ProtocolTypeProtobuf)
+	pbClient := newTestConnectedClientWithTransport(t, context.Background(), node, pbTransport, "pb-user")
+	subscribeClientV2(t, pbClient, ch)
+
+	// Enter the buffering window for both so the broadcast is buffered, not sent.
+	jsonClient.pubSubSync.StartBuffering(ch)
+	pbClient.pubSubSync.StartBuffering(ch)
+
+	// Broadcast a publication excluded by the server tags filter (team=sales).
+	err := node.hub.broadcastPublication(
+		ch,
+		StreamPosition{Offset: 1, Epoch: "e"},
+		&Publication{Data: []byte(`{"n":1}`), Offset: 1, Tags: map[string]string{"team": "sales"}},
+		nil, nil, ChannelBatchConfig{},
+	)
+	require.NoError(t, err)
+
+	// Neither buffer may contain a nil publication, and merging must not panic.
+	for _, c := range []*Client{jsonClient, pbClient} {
+		buffered := c.pubSubSync.LockBufferAndReadBuffered(ch)
+		for _, p := range buffered {
+			require.NotNil(t, p, "filtered broadcast buffered a nil publication (missing filteredPub marker)")
+		}
+		_, _, ok := recovery.MergePublications(nil, buffered)
+		require.True(t, ok)
+		c.pubSubSync.StopBuffering(ch)
+	}
+}
 
 // TestClientSubscribeRecovery_ServerTagsFilterApplied guards against a filter
 // bypass on recovery. A regular (non-map) subscription with a ServerTagsFilter

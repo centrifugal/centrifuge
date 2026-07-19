@@ -1263,10 +1263,18 @@ func (s *subShard) broadcastPublication(
 				deltaSub:        key.DeltaType != deltaTypeNone,
 				wasFiltered:     wasFiltered,
 			}
-			if wasFiltered && filteredPub == nil {
-				filteredPub = &protocol.Publication{
-					Offset: fullPub.Offset,
-					Time:   -1, // Use -1 for indicating filtered publication.
+			if wasFiltered {
+				// One marker per publication is enough (same offset for all filtered
+				// keys), but it must be attached to EVERY filtered key's prepValue.
+				// Attaching it only to the first filtered key left later filtered keys
+				// (e.g. a different protocol/delta/useID combo) with a nil filteredPub,
+				// which the buffering path turns into a nil syncPub and then a nil entry
+				// in the recovery merge — a nil-pointer panic.
+				if filteredPub == nil {
+					filteredPub = &protocol.Publication{
+						Offset: fullPub.Offset,
+						Time:   -1, // Use -1 for indicating filtered publication.
+					}
 				}
 				prepValue.filteredPub = filteredPub
 			}
