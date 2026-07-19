@@ -1067,6 +1067,13 @@ func (s *subShard) broadcastPublication(
 	}
 
 	fullPub := pubToProto(pub)
+	// Deliver the channel epoch in the first publication (offset==1) so clients
+	// learn it. Stamped on this per-broadcast copy rather than on the source pub,
+	// which the MemoryBroker shares with concurrent recovery readers (see
+	// Node.HandlePublication).
+	if fullPub.Offset == 1 && sp.Epoch != "" {
+		fullPub.Epoch = sp.Epoch
+	}
 	preparedDataByKey := make(map[preparedKey]preparedData)
 
 	var filteredPub *protocol.Publication

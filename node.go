@@ -2120,12 +2120,12 @@ func (n *Node) HandlePublication(ch string, pub *Publication, sp StreamPosition,
 			return nil
 		}
 	}
-	// Deliver epoch in the first publication (offset==1) so clients learn
-	// the channel epoch. This covers first-ever publish and post-Clear
-	// scenarios. Subsequent publications omit epoch to save wire bytes.
-	if pub.Offset == 1 && sp.Epoch != "" {
-		pub.Epoch = sp.Epoch
-	}
+	// The first publication (offset==1) carries the channel epoch so clients
+	// learn it (covers first-ever publish and post-Clear scenarios); subsequent
+	// publications omit it to save wire bytes. The epoch is stamped onto the
+	// per-broadcast proto copy (connShard.broadcastPublication), not onto pub
+	// itself: with the MemoryBroker pub is the shared history object and a
+	// concurrent subscribe-time recovery reads it, so mutating it here races.
 	if n.config.GetChannelMediumOptions != nil {
 		mu := n.mediumLock(ch) // Note, avoid using subLock in HandlePublication – this leads to the deadlock.
 		mu.Lock()
