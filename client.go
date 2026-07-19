@@ -3153,6 +3153,17 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	}
 
 	c.node.addClient(c)
+	// Reserve the connect-time server-side subscription channels under the same
+	// lock as addClient. The client is now hub-registered, so a server-side
+	// Node.Subscribe can reach it; without a reservation a concurrent
+	// Client.Subscribe on one of these channels would land between the connect-time
+	// subscribe's hub-add and its c.channels write and clobber its generation,
+	// leaking a hub entry. With the reservation that Client.Subscribe instead gets
+	// ErrorAlreadySubscribed. subscribeCmd below reuses this generation, and the
+	// finalize replaces the reservation with the live context.
+	for ch := range subscriptions {
+		c.channels[ch] = ChannelContext{subscribingCh: make(chan struct{}), subGen: c.subGenCounter.Add(1)}
+	}
 	c.mu.Unlock()
 
 	if !clientSideRefresh {
@@ -3260,12 +3271,25 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 
 	c.mu.Lock()
 	closedDuringConnect := c.status == statusClosed
-	if !closedDuringConnect {
-		for channel, subCtx := range subCtxMap {
+	var reservedSubChs []chan struct{}
+	for channel, subCtx := range subCtxMap {
+		// Take over the reservation installed above: capture its subscribingCh (to
+		// release any unsubscribe waiting on the in-flight subscribe) and replace it
+		// with the live context, or drop it if the client closed mid-connect.
+		if resv, ok := c.channels[channel]; ok && resv.subscribingCh != nil {
+			reservedSubChs = append(reservedSubChs, resv.subscribingCh)
+		}
+		if closedDuringConnect {
+			delete(c.channels, channel)
+		} else {
 			c.channels[channel] = subCtx.channelContext
 		}
 	}
 	c.mu.Unlock()
+
+	for _, sc := range reservedSubChs {
+		close(sc)
+	}
 
 	c.unlockServerSideSubscriptions(subCtxMap)
 
