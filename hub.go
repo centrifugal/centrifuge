@@ -125,13 +125,15 @@ func (h *Hub) shutdown(ctx context.Context) error {
 }
 
 // Add connection into clientHub connections registry.
-func (h *Hub) add(c *Client) {
+// add registers connection in clientHub. Returns true if this is a new
+// registration (uid not previously present).
+func (h *Hub) add(c *Client) bool {
 	h.sessionsMu.Lock()
 	if c.sessionID() != "" {
 		h.sessions[c.sessionID()] = c
 	}
 	h.sessionsMu.Unlock()
-	h.connShards[index(c.UserID(), numHubShards)].add(c)
+	return h.connShards[index(c.UserID(), numHubShards)].add(c)
 }
 
 // Remove connection from clientHub connections registry.
@@ -664,23 +666,31 @@ func (h *connShard) userConnections(userID string) map[string]*Client {
 }
 
 // Add connection into clientHub connections registry.
-func (h *connShard) add(c *Client) {
+// add registers a client connection. Returns true if this was a new
+// registration (the uid was not already present), so callers can keep the
+// connectionsInflight gauge in lockstep with the clients map.
+func (h *connShard) add(c *Client) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	uid := c.ID()
 	user := c.UserID()
 
+	_, existed := h.clients[uid]
 	h.clients[uid] = c
 
 	if _, ok := h.users[user]; !ok {
 		h.users[user] = make(map[string]struct{})
 	}
 	h.users[user][uid] = struct{}{}
+	return !existed
 }
 
 // Remove connection from clientHub connections registry.
 // Returns true if found and really removed from registry.
+// remove deregisters a client connection. Returns true if the uid was present
+// in the clients map — the same condition add() reports as new — so the
+// connectionsInflight Dec pairs exactly with its Inc regardless of the users map.
 func (h *connShard) remove(c *Client) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -688,25 +698,18 @@ func (h *connShard) remove(c *Client) bool {
 	uid := c.ID()
 	user := c.UserID()
 
+	_, existed := h.clients[uid]
 	delete(h.clients, uid)
 
-	// try to find connection to delete, return early if not found.
-	if _, ok := h.users[user]; !ok {
-		return false
-	}
-	if _, ok := h.users[user][uid]; !ok {
-		return false
-	}
-
-	// actually remove connection from hub.
-	delete(h.users[user], uid)
-
-	// clean up users map if it's needed.
-	if len(h.users[user]) == 0 {
-		delete(h.users, user)
+	// Clean up the user grouping if present.
+	if userConns, ok := h.users[user]; ok {
+		delete(userConns, uid)
+		if len(userConns) == 0 {
+			delete(h.users, user)
+		}
 	}
 
-	return true
+	return existed
 }
 
 // NumClients returns total number of client connections.

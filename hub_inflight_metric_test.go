@@ -64,3 +64,51 @@ func TestSubscriptionsInflight_NoDriftOnResubscribeOverwrite(t *testing.T) {
 	require.NoError(t, node.removeSubscription(ch, client, 7))
 	require.Equal(t, float64(0), inflight())
 }
+
+// TestConnectionsInflight_NoDriftOnDuplicateAddOrDoubleRemove guards the
+// connections_inflight gauge against drift. It must track the hub clients map
+// exactly: incremented only when hub.add registers a genuinely new connection,
+// decremented only when hub.remove actually removes one. A duplicate add for an
+// already-registered uid adds no new connection, and a double remove removes
+// nothing — so the gauge must not move for either.
+func TestConnectionsInflight_NoDriftOnDuplicateAddOrDoubleRemove(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	node, err := New(Config{
+		LogLevel:   LogLevelError,
+		LogHandler: func(LogEntry) {},
+		Metrics:    MetricsConfig{RegistererGatherer: registry},
+	})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClientV2(t, node, "u")
+
+	inflight := func() float64 {
+		mfs, gErr := registry.Gather()
+		require.NoError(t, gErr)
+		var sum float64
+		for _, mf := range mfs {
+			if strings.Contains(mf.GetName(), "connections_inflight") {
+				for _, m := range mf.GetMetric() {
+					sum += m.GetGauge().GetValue()
+				}
+			}
+		}
+		return sum
+	}
+
+	node.addClient(client)
+	require.Equal(t, float64(1), inflight())
+
+	// Duplicate add of the same uid — no new connection; must stay 1.
+	node.addClient(client)
+	require.Equal(t, float64(1), inflight(), "connections_inflight drifted on duplicate add")
+
+	node.removeClient(client)
+	require.Equal(t, float64(0), inflight())
+
+	// Double remove — nothing to remove; must stay 0 (not go negative).
+	node.removeClient(client)
+	require.Equal(t, float64(0), inflight(), "connections_inflight drifted on double remove")
+}

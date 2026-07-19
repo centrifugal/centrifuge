@@ -1208,8 +1208,14 @@ func (n *Node) addClient(c *Client) {
 	baseLabels := []string{c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion}
 
 	n.metrics.connectionsAccepted.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Inc()
-	n.metrics.connectionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Inc()
-	n.hub.add(c)
+	// Inc inflight only when hub.add registers a genuinely new connection, so the
+	// gauge stays in lockstep with the clients map (the Dec in removeClient is
+	// likewise gated on the removal actually happening). addClient runs under
+	// c.mu and close() sets statusClosed under c.mu before its removeClient, so
+	// the Inc here and that Dec never interleave.
+	if n.hub.add(c) {
+		n.metrics.connectionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Inc()
+	}
 }
 
 // removeClient removes client connection from connection registry.
