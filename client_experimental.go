@@ -136,9 +136,13 @@ type ChannelBatchConfig struct {
 // channelWriter buffers queue.Item objects and flushes them after a fixed delay
 // or when a specific batch size is reached.
 type channelWriter struct {
-	mu         sync.Mutex
-	buffer     []queue.Item
-	timer      *time.Timer
+	mu     sync.Mutex
+	buffer []queue.Item
+	timer  *time.Timer
+	// timerStop is closed to release the waitTimer goroutine when its timer is
+	// cancelled. waitTimer blocks on the timer channel, which a stopped timer
+	// never delivers, so stopping the timer alone would leak the goroutine.
+	timerStop  chan struct{}
 	flushFn    func([]queue.Item) error
 	latestOnly bool
 	// latestPubs tracks the latest publication per key for FlushLatestPublication mode.
@@ -152,13 +156,21 @@ func newChannelWriter(flushFn func([]queue.Item) error) *channelWriter {
 	return &channelWriter{flushFn: flushFn}
 }
 
+// stopTimerLocked cancels a pending flush timer, releasing its waitTimer
+// goroutine. Caller must hold the lock.
+func (w *channelWriter) stopTimerLocked() {
+	if w.timer == nil {
+		return
+	}
+	w.timer = nil
+	close(w.timerStop)
+	w.timerStop = nil
+}
+
 // close stops the timer and optionally flushes remaining items.
 func (w *channelWriter) close(flushRemaining bool) {
 	w.mu.Lock()
-	if w.timer != nil {
-		w.timer.Stop()
-		w.timer = nil
-	}
+	w.stopTimerLocked()
 	if flushRemaining && (len(w.buffer) > 0 || len(w.latestPubs) > 0) {
 		w.flushLocked()
 	}
@@ -197,37 +209,40 @@ func (w *channelWriter) Add(item queue.Item, config ChannelBatchConfig) {
 	// Start timer on first item.
 	if config.MaxDelay > 0 && totalCount == 1 && w.timer == nil {
 		w.timer = timers.AcquireTimer(config.MaxDelay)
-		go w.waitTimer(w.timer)
+		w.timerStop = make(chan struct{})
+		go w.waitTimer(w.timer, w.timerStop)
 	}
 
 	// Flush immediately if batch size is reached.
 	if config.MaxSize > 0 && int64(totalCount) >= config.MaxSize {
-		if w.timer != nil {
-			w.timer.Stop()
-			w.timer = nil // Set timer to nil so waitTimer knows it was cancelled.
-		}
+		w.stopTimerLocked()
 		w.flushLocked()
 	}
 }
 
-// waitTimer waits for the timer to fire, then flushes the batch.
-func (w *channelWriter) waitTimer(tm *time.Timer) {
-	<-tm.C // Wait for the timer to fire.
-	timers.ReleaseTimer(tm)
-	w.mu.Lock()
-
-	// If timer was stopped, do nothing.
-	if w.timer == nil {
+// waitTimer waits for the timer to fire (or to be cancelled via stop) and then
+// flushes the batch. It always returns the timer to the pool exactly once.
+func (w *channelWriter) waitTimer(tm *time.Timer, stop <-chan struct{}) {
+	select {
+	case <-tm.C:
+		w.mu.Lock()
+		// Only act if this is still the active timer — a size-triggered flush or
+		// close may have cancelled it (and possibly armed a new one) in the race
+		// with the fire. timerStop is a fresh channel per timer, so it uniquely
+		// identifies this one.
+		if w.timerStop == stop {
+			if len(w.buffer) > 0 || len(w.latestPubs) > 0 {
+				w.flushLocked()
+			}
+			w.timer = nil
+			w.timerStop = nil
+		}
 		w.mu.Unlock()
-		return
+		timers.ReleaseTimer(tm)
+	case <-stop:
+		// Cancelled by stopTimerLocked; return the timer to the pool.
+		timers.ReleaseTimer(tm)
 	}
-
-	// Flush if any items exist.
-	if len(w.buffer) > 0 || len(w.latestPubs) > 0 {
-		w.flushLocked()
-	}
-	w.timer = nil // Mark the timer as no longer active.
-	w.mu.Unlock()
 }
 
 // flushLocked flushes the current batch. Caller must hold the lock.
