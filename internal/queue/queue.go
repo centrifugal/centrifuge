@@ -128,6 +128,12 @@ func (q *Queue) Close() {
 	q.cnt = 0
 	q.nodes = nil
 	q.size = 0
+	// Stop any pending delayed-shrink timer: its AfterFunc closure retains the
+	// Queue, so leaving it armed keeps a closed connection's queue alive until it
+	// fires (up to QueueShrinkDelay). Stopping it lets the queue be collected now.
+	if q.shrinkTimer != nil {
+		q.shrinkTimer.Stop()
+	}
 	q.cond.Broadcast()
 }
 
@@ -150,6 +156,10 @@ func (q *Queue) CloseRemaining() []Item {
 	q.cnt = 0
 	q.nodes = nil
 	q.size = 0
+	// See Close: stop the delayed-shrink timer so the closed queue is collectable.
+	if q.shrinkTimer != nil {
+		q.shrinkTimer.Stop()
+	}
 	q.cond.Broadcast()
 	return rem
 }

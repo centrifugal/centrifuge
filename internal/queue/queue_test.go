@@ -764,3 +764,28 @@ func TestQueueShrinkWithItemsRemaining(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "msg", string(item.Data))
 }
+
+func TestQueueCloseStopsShrinkTimer(t *testing.T) {
+	q := New(16)
+	// Grow the ring, then drain, then schedule a delayed shrink far in the future.
+	for i := 0; i < 64; i++ {
+		q.Add(Item{Data: []byte("x")})
+	}
+	buf := make([]Item, 128)
+	q.RemoveManyInto(buf, 128)
+	q.FinishCollect(time.Hour)
+	q.mu.Lock()
+	timer := q.shrinkTimer
+	q.mu.Unlock()
+	if timer == nil {
+		t.Fatal("expected a scheduled shrink timer")
+	}
+
+	q.Close()
+
+	// Close must have stopped the timer: Stop returns false when it was already
+	// stopped/fired. If Close left it armed, Stop returns true here.
+	if timer.Stop() {
+		t.Fatal("shrink timer was still armed after Close — closed queue held alive until it fires")
+	}
+}
