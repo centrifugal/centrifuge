@@ -921,11 +921,18 @@ func (c *Client) handleMapStreamPhase(
 		}
 		// Recovery mode: create subscription state on the fly.
 		// Client is reconnecting with offset/epoch, skip state phase.
+		//
+		// subGen must be assigned here (as in handleMapStatePhase), not left 0.
+		// A 0 generation makes handleMapTransitionToLive mint a fresh one at
+		// go-live time, which no longer matches the targetSubGen an unsubscribe
+		// captured from this state while it was still loading — the unsubscribe
+		// would then fail its identity check and leak the subscription.
 		state = &mapSubscribeState{
 			options:       reply.Options,
 			startedAt:     time.Now().UnixNano(),
 			isPresence:    reply.Options.Type.IsMapPresence(),
 			subscribingCh: make(chan struct{}),
+			subGen:        c.subGenCounter.Add(1),
 			epoch:         req.Epoch,
 		}
 		tf, err := c.validateAndCreateTagsFilter(req, reply.Options.AllowTagsFilter, channel)
