@@ -1230,8 +1230,9 @@ func (n *Node) removeClient(c *Client) {
 // Hub and Broker.
 func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 	n.metrics.incActionCount("add_subscription", ch)
-	baseLabels := []string{sub.client.metricName, n.metrics.getChannelNamespaceLabel(ch)}
-	n.metrics.subscriptionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, sub.client)...).Inc()
+	// subscriptionsInflight is maintained inside hub.addSub/removeSub (co-located
+	// with numSubs) so Inc/Dec stay symmetric across resubscribe overwrites and
+	// broker-error rollbacks.
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
@@ -1305,11 +1306,8 @@ func (n *Node) removeSubscription(ch string, c *Client, subGen uint64) error {
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
-	empty, wasRemoved, wasMap := n.hub.removeSub(ch, c, subGen)
-	if wasRemoved {
-		baseLabels := []string{c.metricName, n.metrics.getChannelNamespaceLabel(ch)}
-		n.metrics.subscriptionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Dec()
-	}
+	// subscriptionsInflight is Dec'd inside hub.removeSub (co-located with numSubs).
+	empty, _, wasMap := n.hub.removeSub(ch, c, subGen)
 	if empty {
 		submittedAt := time.Now()
 		_ = n.subDissolver.Submit(func() error {

@@ -808,6 +808,13 @@ func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
 	}
 	if _, exists := s.subs[ch][uid]; !exists {
 		s.numSubs++
+		// Inflight is co-located with numSubs (same condition) so the two stay in
+		// lockstep. Doing it here, rather than unconditionally in addSubscription,
+		// avoids over-counting when a resubscribe overwrites an existing
+		// client+channel entry (no new subscription) — its stale generation's
+		// removeSub is a no-op that never Dec's, which would otherwise drift.
+		baseLabels := []string{sub.client.metricName, s.metrics.getChannelNamespaceLabel(ch)}
+		s.metrics.subscriptionsInflight.WithLabelValues(s.metrics.appendClientLabels(baseLabels, sub.client)...).Inc()
 	}
 	s.subs[ch][uid] = sub
 
@@ -897,6 +904,10 @@ func (s *subShard) removeSub(ch string, c *Client, subGen uint64) (bool, bool, b
 	// actually remove subscription from hub.
 	delete(s.subs[ch], uid)
 	s.numSubs--
+	// Mirror of the Inc in addSub — only when a subscription is actually removed
+	// (matched generation), so a stale-generation removeSub does not Dec.
+	baseLabels := []string{c.metricName, s.metrics.getChannelNamespaceLabel(ch)}
+	s.metrics.subscriptionsInflight.WithLabelValues(s.metrics.appendClientLabels(baseLabels, c)...).Dec()
 
 	// clean up subs map if it's needed.
 	if len(s.subs[ch]) == 0 {
