@@ -749,7 +749,21 @@ func (c *Client) handleMapTransitionToLive(
 		bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
 		recoveredPubs = bufferedPubs
 
-		// Apply tags filter to buffered publications.
+		// Apply server tags filter to buffered publications. Buffered live pubs are
+		// captured before per-subscriber filtering, so the server filter must be
+		// applied here (AND semantics) or streamless recovery leaks server-filtered
+		// publications.
+		if sub.serverTagsFilter != nil {
+			filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
+			for _, pub := range recoveredPubs {
+				match, _ := filter.Match(sub.serverTagsFilter.filter, pub.Tags)
+				if match {
+					filteredPubs = append(filteredPubs, pub)
+				}
+			}
+			recoveredPubs = filteredPubs
+		}
+		// Apply client tags filter to buffered publications.
 		if sub.tagsFilter != nil {
 			filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
 			for _, pub := range recoveredPubs {
@@ -1046,7 +1060,20 @@ func (c *Client) handleMapStreamPhase(
 		responseOffset = pubs[len(pubs)-1].Offset
 	}
 
-	// Apply tags filter to stream publications.
+	// Apply server tags filter to stream publications. Must run alongside the
+	// client filter (AND semantics) so intermediate catch-up pages never leak a
+	// publication the server filter excludes.
+	if state.serverTagsFilter != nil {
+		filteredPubs := make([]*Publication, 0, len(pubs))
+		for _, pub := range pubs {
+			match, _ := filter.Match(state.serverTagsFilter.filter, pub.Tags)
+			if match {
+				filteredPubs = append(filteredPubs, pub)
+			}
+		}
+		pubs = filteredPubs
+	}
+	// Apply client tags filter to stream publications.
 	if state.tagsFilter != nil {
 		filteredPubs := make([]*Publication, 0, len(pubs))
 		for _, pub := range pubs {

@@ -1781,9 +1781,9 @@ func (n *Node) recoverHistory(ch string, since StreamPosition, historyMetaTTL ti
 }
 
 // recoverCache recovers last publication in channel.
-func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, tf *tagsFilter) (*Publication, *Publication, StreamPosition, error) {
+func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, tf *tagsFilter, serverTf *tagsFilter) (*Publication, *Publication, StreamPosition, error) {
 	n.metrics.incActionCount("history_recover_cache", ch)
-	if tf == nil {
+	if tf == nil && serverTf == nil {
 		hr, err := n.History(ch, WithHistoryFilter(HistoryFilter{
 			Limit:   1,
 			Reverse: true,
@@ -1815,11 +1815,15 @@ func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, tf *tagsFil
 	if len(hr.Publications) > 0 {
 		latestPublication = hr.Publications[0]
 	}
+	// Deliver the newest publication that passes BOTH the server-enforced and the
+	// client-requested tags filters (AND semantics), matching the live broadcast
+	// path. Applying only the client filter here would leak a server-filtered
+	// latest publication on cache recovery.
 	for _, pub := range hr.Publications {
-		match, _ := filter.Match(tf.filter, pub.Tags)
-		if match {
-			return latestPublication, pub, hr.StreamPosition, nil
+		if publicationFiltered(pub.Tags, serverTf) || publicationFiltered(pub.Tags, tf) {
+			continue
 		}
+		return latestPublication, pub, hr.StreamPosition, nil
 	}
 	return nil, nil, hr.StreamPosition, nil
 }

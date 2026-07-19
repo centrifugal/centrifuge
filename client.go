@@ -4026,7 +4026,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 				var latestPub *Publication
 				var recoveredPub *Publication
 				var currentSP StreamPosition
-				latestPub, recoveredPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, sub.tagsFilter)
+				latestPub, recoveredPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, sub.tagsFilter, sub.serverTagsFilter)
 				if err != nil {
 					c.node.logger.log(newErrorLogEntry(err, "error on cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 					return handleErr(err)
@@ -4044,7 +4044,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					}
 					if cacheReply.Populated && !recovered {
 						// One more chance to recover in case we know cache was populated.
-						latestPub, recoveredPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, sub.tagsFilter)
+						latestPub, recoveredPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, sub.tagsFilter, sub.serverTagsFilter)
 						if err != nil {
 							c.node.logger.log(newErrorLogEntry(err, "error on populated cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 							return handleErr(err)

@@ -5596,6 +5596,67 @@ func TestMapSubscribe_StreamPhase_TagsFilter_IntermediatePage(t *testing.T) {
 	}
 }
 
+// TestMapSubscribe_StreamPhase_ServerTagsFilter_IntermediatePage guards a
+// server-side filter bypass on intermediate STREAM catch-up pages. The page read
+// applied only the client tags filter, so a subscription with a ServerTagsFilter
+// (and no client filter) received publications the server filter should exclude.
+func TestMapSubscribe_StreamPhase_ServerTagsFilter_IntermediatePage(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_stream_server_tags_intermediate"
+	ctx := context.Background()
+
+	res, err := broker.Publish(ctx, channel, "seed", MapPublishOptions{
+		Data: []byte(`{"v":"seed"}`),
+		Tags: map[string]string{"role": "viewer"},
+	})
+	require.NoError(t, err)
+	startEpoch := res.Position.Epoch
+	startOffset := res.Position.Offset
+
+	for i := 0; i < 50; i++ {
+		role := "admin"
+		if i%2 == 0 {
+			role = "viewer"
+		}
+		_, err := broker.Publish(ctx, channel, "key"+string(rune('A'+(i%26)))+string(rune('0'+(i/26))), MapPublishOptions{
+			Data: []byte(`{"v":"x"}`),
+			Tags: map[string]string{"role": role},
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:             SubscriptionTypeMap,
+					ServerTagsFilter: &FilterNode{Cmp: "eq", Key: "role", Val: "admin"},
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseStream,
+		Offset:  startOffset,
+		Epoch:   startEpoch,
+		Limit:   5,
+		Recover: true,
+	})
+	require.Equal(t, MapPhaseStream, result.Phase)
+	for _, pub := range result.Publications {
+		require.Equal(t, "admin", pub.Tags["role"],
+			"intermediate STREAM page leaked a publication excluded by the server tags filter")
+	}
+}
+
 // TestMapSubscribe_DirectLiveRecovery_ServerTagsFilter is a regression test for
 // a server-side filter bypass on the direct phase=LIVE + recover=true path.
 // On clean reconnect (no in-progress STATE/STREAM state on the server),
