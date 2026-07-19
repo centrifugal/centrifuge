@@ -1022,7 +1022,12 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 				return
 			}
 			c.mu.Lock()
-			if ctx, ok := c.channels[channel]; ok {
+			// Gen-match the write-back: subRefreshHandler is async, so an
+			// unsubscribe+resubscribe in the window installs a fresh subGen. This
+			// refresh was validated against channelContext.subGen — applying its
+			// expireAt/info to a newer subscription would corrupt one its token never
+			// validated (mirrors handleSubRefresh and checkPosition).
+			if ctx, ok := c.channels[channel]; ok && ctx.subGen == channelContext.subGen {
 				if len(reply.Info) > 0 {
 					ctx.info = reply.Info
 				}
@@ -2363,15 +2368,21 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 
 		c.mu.Lock()
 		channelContext, okChan := c.channels[channel]
-		if okChan && channelHasFlag(channelContext.flags, flagSubscribed) {
+		// Gen-match the write-back (mirrors checkPosition): the SubRefreshHandler is
+		// async, so an unsubscribe+resubscribe in the window installs a fresh subGen.
+		// This refresh was validated against ctx.subGen — applying its expireAt/info
+		// (or the tags filter below) to a different (newer) subscription would corrupt
+		// a subscription its token never validated.
+		sameSub := okChan && channelHasFlag(channelContext.flags, flagSubscribed) && channelContext.subGen == ctx.subGen
+		if sameSub {
 			channelContext.info = reply.Info
 			channelContext.expireAt = expireAt
 			c.channels[channel] = channelContext
 		}
-		isMapSub := okChan && channelHasFlag(channelContext.flags, flagMap)
+		isMapSub := sameSub && channelHasFlag(channelContext.flags, flagMap)
 		c.mu.Unlock()
 
-		if reply.ServerTagsFilter != nil {
+		if sameSub && reply.ServerTagsFilter != nil {
 			newTf := &tagsFilter{
 				filter: reply.ServerTagsFilter,
 				hash:   filter.Hash(reply.ServerTagsFilter),
