@@ -4097,9 +4097,19 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 						return errorDisconnectContext(ErrorUnrecoverablePosition, nil)
 					}
 					res.Recovered = recovered
-					c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
+					// isStreamRecovered marks filtered publications with Time == -1
+					// (stripped later by MergePublications). Exclude those markers from
+					// the recovery metrics so the recovered-publications histogram and
+					// the has-publications flag reflect what is actually delivered.
+					realRecovered := 0
+					for _, p := range recoveredPubs {
+						if p.Time != -1 {
+							realRecovered++
+						}
+					}
+					c.node.metrics.incRecover(res.Recovered, channel, realRecovered > 0)
 					if res.Recovered {
-						c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
+						c.node.metrics.observeRecoveredPublications(realRecovered, channel)
 					}
 				}
 			}
