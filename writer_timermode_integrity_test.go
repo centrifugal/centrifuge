@@ -110,8 +110,12 @@ func TestWriterTimerMode_TimerDrainsWithoutClose(t *testing.T) {
 			defer rec.mu.Unlock()
 			return len(rec.seen) == want
 		}, 3*time.Second, time.Millisecond,
-			"round %d: timer left the queue stuck (%d of %d written) — lost flush wakeup",
-			round, len(rec.seen), want)
+			// Do not read len(rec.seen) here: require.Eventually evaluates the
+			// message args eagerly on the caller goroutine while the flush timer is
+			// still appending under rec.mu — that would be a data race (and the
+			// pre-poll count is stale anyway).
+			"round %d: timer left the queue stuck (want %d written) — lost flush wakeup",
+			round, want)
 	}
 }
 
