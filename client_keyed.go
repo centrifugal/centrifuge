@@ -112,6 +112,14 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 	// keys appearing in inlineUntrackSet, since Step 8 removes them and frees
 	// slots. Re-checked under write lock.
 	c.mu.RLock()
+	// Capture the identity of the keyed subscription this track targets. The
+	// OnTrack handler may be async; if the channel is unsubscribed (or
+	// unsubscribed and resubscribed as a fresh keyed sub) before the commit
+	// below, the captured generation no longer matches and the commit is rolled
+	// back instead of re-creating orphaned keyed state.
+	trackCtx, trackSubscribed := c.channels[channel]
+	trackSubscribed = trackSubscribed && channelHasFlag(trackCtx.flags, flagKeyed) && channelHasFlag(trackCtx.flags, flagSubscribed)
+	trackSubGen := trackCtx.subGen
 	var currentCount, newKeyCountOpt, inlineRemovedExistingOpt int
 	if c.keyed != nil {
 		chanKeys := c.keyed.trackedKeys[channel]
@@ -136,6 +144,12 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		}
 	}
 	c.mu.RUnlock()
+
+	if !trackSubscribed {
+		// Channel was torn down between handleSubRefresh's subscription check and
+		// here — nothing to track.
+		return ErrorPermissionDenied
+	}
 
 	maxTracked := c.node.keyedManager.maxTrackedPerConnection(channel)
 	if currentCount-inlineRemovedExistingOpt+newKeyCountOpt > maxTracked {
@@ -235,6 +249,19 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		// top all converge here and only the first to fit wins. On failure we
 		// roll back the server-side track from Step 1.
 		c.mu.Lock()
+		// If the channel was unsubscribed while the (async) OnTrack handler ran —
+		// or unsubscribed and resubscribed as a fresh keyed sub — committing here
+		// would re-create trackedKeys[channel] and orphan the server-side track
+		// reservation (close only cleans keyed channels still in c.channels), or
+		// attach keys to a subscription the client never tracked on. Gen-match the
+		// captured subscription identity and roll back on mismatch.
+		if cc, ok := c.channels[channel]; !ok || !channelHasFlag(cc.flags, flagSubscribed) ||
+			!channelHasFlag(cc.flags, flagKeyed) || cc.subGen != trackSubGen {
+			c.mu.Unlock()
+			releaseTrackReservation()
+			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, ErrorPermissionDenied, started, rw)
+			return
+		}
 		if c.keyed == nil {
 			c.keyed = &keyedState{
 				channels:    make(map[string]*keyedChannelDeltaState),
