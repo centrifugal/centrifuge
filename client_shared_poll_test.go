@@ -76,14 +76,6 @@ func setupSharedPollHandlers(node *Node) {
 }
 
 func subscribeSharedPollClient(t testing.TB, client *Client, channel string) *protocol.SubscribeResult {
-	// Pre-create the channel entry so subscribe has something to check.
-	client.mu.Lock()
-	if client.channels == nil {
-		client.channels = make(map[string]ChannelContext)
-	}
-	client.channels[channel] = ChannelContext{}
-	client.mu.Unlock()
-
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
@@ -1800,13 +1792,6 @@ func TestSharedPollChannelShutdown_Delay(t *testing.T) {
 // --- Delta compression tests ---
 
 func subscribeSharedPollClientDelta(t testing.TB, client *Client, channel string) *protocol.SubscribeResult {
-	client.mu.Lock()
-	if client.channels == nil {
-		client.channels = make(map[string]ChannelContext)
-	}
-	client.channels[channel] = ChannelContext{}
-	client.mu.Unlock()
-
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
