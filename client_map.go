@@ -950,6 +950,20 @@ func (c *Client) handleMapStreamPhase(
 		if c.mapSubscribing == nil {
 			c.mapSubscribing = make(map[string]*mapSubscribeState)
 		}
+		if _, exists := c.mapSubscribing[channel]; exists {
+			// A concurrent recovery subscribe for this channel installed its state
+			// between the lock-free hasState check above and this lock. Do not
+			// overwrite it: that would leave this goroutine paginating a local
+			// `state` that is no longer the one in the map (go-live and unsubscribe
+			// identity follow the map entry), and orphan our just-built state.
+			// Reject the duplicate cleanly — our state was never published, so it
+			// has no waiters and is safe to drop. The pagination lock below would
+			// reject one of the two racers anyway; this rejects earlier, at the
+			// reservation, mirroring validateSubscribeRequest. It's a single map
+			// lookup under the lock already held — no measurable overhead.
+			c.mu.Unlock()
+			return ErrorAlreadySubscribed
+		}
 		c.mapSubscribing[channel] = state
 		c.mu.Unlock()
 	}
