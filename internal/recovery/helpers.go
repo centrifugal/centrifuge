@@ -41,9 +41,12 @@ func MergePublications(recoveredPubs []*protocol.Publication, bufferedPubs []*pr
 	sort.Slice(recoveredPubs, func(i, j int) bool {
 		return recoveredPubs[i].Offset < recoveredPubs[j].Offset
 	})
+	// Always strip filtered (Time == -1) publications and record their offsets:
+	// both the recovered set (server/client tags filter) and the buffered set may
+	// contain filtered markers, and the returned set must never carry a marker.
+	var skippedOffsets []uint64
+	recoveredPubs, maxSeenOffset, skippedOffsets = uniqueNonFilteredPublications(recoveredPubs)
 	if len(bufferedPubs) > 0 {
-		var skippedOffsets []uint64
-		recoveredPubs, maxSeenOffset, skippedOffsets = uniqueNonFilteredPublications(recoveredPubs)
 		if len(recoveredPubs) > 1 {
 			prevOffset := recoveredPubs[0].Offset
 			for _, p := range recoveredPubs[1:] {

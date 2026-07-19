@@ -3687,8 +3687,18 @@ type subscribeContext struct {
 	channelContext ChannelContext
 }
 
+// publicationFiltered reports whether a publication with the given tags is
+// excluded by the filter. A nil filter never excludes.
+func publicationFiltered(tags map[string]string, tf *tagsFilter) bool {
+	if tf == nil {
+		return false
+	}
+	match, _ := filter.Match(tf.filter, tags)
+	return !match
+}
+
 func isStreamRecovered(
-	historyResult HistoryResult, cmdOffset uint64, cmdEpoch string, tf *tagsFilter,
+	historyResult HistoryResult, cmdOffset uint64, cmdEpoch string, tf *tagsFilter, serverTf *tagsFilter,
 ) ([]*protocol.Publication, bool) {
 	latestOffset := historyResult.Offset
 	latestEpoch := historyResult.Epoch
@@ -3712,14 +3722,17 @@ func isStreamRecovered(
 
 	recoveredPubs := make([]*protocol.Publication, 0, len(historyResult.Publications))
 	for _, pub := range historyResult.Publications {
-		if tf != nil {
-			match, _ := filter.Match(tf.filter, pub.Tags)
-			if !match {
-				continue
-			}
+		// Apply BOTH the server-enforced and the client-requested tags filters,
+		// matching the live broadcast (hub.broadcastPublication). A publication
+		// excluded by either is marked (Time == -1, offset only) rather than
+		// dropped, so MergePublications can account for the missing offset in its
+		// gap check instead of treating it as lost — again mirroring how the live
+		// path buffers filtered publications.
+		if publicationFiltered(pub.Tags, serverTf) || publicationFiltered(pub.Tags, tf) {
+			recoveredPubs = append(recoveredPubs, &protocol.Publication{Offset: pub.Offset, Time: -1})
+			continue
 		}
-		protoPub := pubToProto(pub)
-		recoveredPubs = append(recoveredPubs, protoPub)
+		recoveredPubs = append(recoveredPubs, pubToProto(pub))
 	}
 
 	return recoveredPubs, recovered
@@ -4078,7 +4091,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					latestOffset = historyResult.Offset
 					latestEpoch = historyResult.Epoch
 					var recovered bool
-					recoveredPubs, recovered = isStreamRecovered(historyResult, cmdOffset, cmdEpoch, sub.tagsFilter)
+					recoveredPubs, recovered = isStreamRecovered(historyResult, cmdOffset, cmdEpoch, sub.tagsFilter, sub.serverTagsFilter)
 					if !recovered && req.Flag&subscriptionFlagRejectUnrecovered != 0 {
 						c.pubSubSync.StopBuffering(channel)
 						return errorDisconnectContext(ErrorUnrecoverablePosition, nil)

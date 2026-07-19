@@ -30,7 +30,11 @@ func TestMergePublicationsNoBuffered(t *testing.T) {
 	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, nil)
 	require.True(t, ok)
 	require.Len(t, pubs, 2)
-	require.Equal(t, uint64(0), maxSeenOffset)
+	// maxSeenOffset is now the max offset seen even without buffered pubs (the
+	// filtered-pub stripping runs unconditionally). Callers gate on
+	// maxSeenOffset > latestOffset, and recovered offsets never exceed the stream
+	// top, so this does not change caller behavior.
+	require.Equal(t, uint64(2), maxSeenOffset)
 }
 
 func TestMergePublicationsBuffered(t *testing.T) {
