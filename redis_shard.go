@@ -222,6 +222,15 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		AlwaysPipelining: true,
 		AlwaysRESP2:      conf.ForceRESP2,
 		MaxFlushDelay:    100 * time.Microsecond,
+		// Centrifuge issues Redis commands without per-request context
+		// deadlines and relies on IOTimeout to bound every call. rueidis
+		// retries read-only commands on network errors until the context is
+		// done — which, without a deadline, means a read command issued
+		// during a Redis outage never returns instead of failing within the
+		// IOTimeout envelope like writes do. Disable client-level retries
+		// entirely: Centrifuge surfaces errors to its callers, and reads and
+		// writes should fail the same way.
+		DisableRetry: true,
 		Dialer: net.Dialer{
 			Timeout: conf.ConnectTimeout,
 		},
