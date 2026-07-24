@@ -123,7 +123,10 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Pub
 		if skip {
 			return PublishResult{StreamPosition: streamTop, Suppressed: true, SuppressReason: SuppressReasonVersion}, nil
 		}
-		pub.Offset = streamTop.Offset
+		// pub.Offset is already set by historyHub.add under the history lock, and
+		// pub is shared with concurrent History readers (subscribe-time recovery),
+		// so setting it again here — outside the lock — is a redundant write that
+		// races those reads. streamTop.Offset equals what add stamped.
 		if opts.IdempotencyKey != "" {
 			resultExpireSeconds := int64(defaultIdempotentResultExpireSeconds)
 			if opts.IdempotentResultTTL != 0 {

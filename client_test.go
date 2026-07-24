@@ -1745,6 +1745,137 @@ func TestFossilRecoveredPubs(t *testing.T) {
 	require.Equal(t, []byte("This is a message to test Fossil: I just subscribed to channel"), data2)
 }
 
+// readSinkPublication drains the transport sink until it finds a pushed
+// publication with the given offset, decoding each frame as a bare Protobuf
+// Reply (matches how the client writer encodes single pushes).
+func readSinkPublication(t *testing.T, sink chan []byte, offset uint64) *protocol.Publication {
+	t.Helper()
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case data := <-sink:
+			reply := &protocol.Reply{}
+			if err := reply.UnmarshalVT(data); err != nil {
+				continue
+			}
+			if reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Offset == offset {
+				return reply.Push.Pub
+			}
+		case <-timeout:
+			t.Fatalf("timeout waiting for pushed publication at offset %d", offset)
+			return nil
+		}
+	}
+}
+
+// TestClientSubscribeDeltaRecoveryToLiveBoundary is an end-to-end guard for the
+// recovery→live delta base handoff. It reconstructs the delta chain delivered by
+// stream recovery exactly as an SDK would, then verifies that the FIRST live
+// publication's delta applies cleanly against that reconstructed base — i.e. the
+// data the client holds at the last recovered offset equals the base the broker
+// uses (prevPub) for the next live publication. If that invariant ever breaks,
+// the live delta would reconstruct into garbage and this test fails.
+func TestClientSubscribeDeltaRecoveryToLiveBoundary(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{
+				EnableRecovery:    true,
+				EnablePositioning: true,
+				RecoveryMode:      RecoveryModeStream,
+				AllowedDeltaTypes: []DeltaType{DeltaTypeFossil},
+			}}, nil)
+		})
+	})
+
+	const ch = "delta_recovery_live_boundary"
+	// Each payload = a distinct 5-byte prefix + a long shared body. The shared
+	// body guarantees fossil emits a real (small) delta rather than falling back
+	// to full, so the delta-application path is genuinely exercised. The live
+	// payload deliberately shares its prefix + body with payloads[0], NOT with its
+	// true base payloads[2]: so if a regression ever fed the live delta the wrong
+	// base, fossil would copy the wrong prefix bytes and its checksum would reject
+	// the apply — see the base-divergence check verified alongside this test.
+	body := strings.Repeat("shared-body-", 12) // ~144 bytes, identical across versions.
+	payloads := [][]byte{
+		[]byte("AAAA-" + body),
+		[]byte("CCCC-" + body),
+		[]byte("BBBB-" + body),
+	}
+	for _, p := range payloads {
+		_, err := node.Publish(ch, p, WithHistory(10, time.Minute))
+		require.NoError(t, err)
+	}
+	hr, err := node.History(ch)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), hr.Offset)
+	epoch := hr.Epoch
+
+	// Protobuf client so payload bytes are compared raw (no JSON escaping layer).
+	ctx, cancelFn := context.WithCancel(context.Background())
+	defer cancelFn()
+	transport := newTestTransport(cancelFn)
+	transport.sink = make(chan []byte, 100)
+	transport.setProtocolType(ProtocolTypeProtobuf)
+	transport.setProtocolVersion(ProtocolVersion2)
+	client := newTestConnectedClientWithTransport(t, ctx, node, transport, "42")
+
+	// Subscribe with recovery from the very beginning + fossil delta.
+	rw := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: ch,
+		Recover: true,
+		Offset:  0,
+		Epoch:   "",
+		Delta:   string(DeltaTypeFossil),
+	}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+	res := rw.replies[0].Subscribe
+	require.NotNil(t, res)
+	require.True(t, res.Recovered, "expected successful stream recovery")
+	require.Len(t, res.Publications, 3)
+
+	// Reconstruct the recovered delta chain like an SDK would; every version must
+	// match the original payload. The last reconstructed value is the base the
+	// first live publication's delta must apply against.
+	recPubs := res.Publications
+	require.False(t, recPubs[0].Delta, "first recovered pub must be full to seed the base")
+	require.True(t, recPubs[1].Delta && recPubs[2].Delta,
+		"recovered pubs after the first must be real deltas (test would be vacuous otherwise)")
+	base := append([]byte(nil), recPubs[0].Data...)
+	require.Equal(t, payloads[0], base)
+	for i := 1; i < len(recPubs); i++ {
+		applied, aerr := fdelta.Apply(base, recPubs[i].Data)
+		require.NoError(t, aerr, "recovered delta %d failed to apply", i)
+		base = applied
+		require.Equal(t, payloads[i], base, "recovered version %d mismatch", i)
+	}
+	// base == payloads[2] == the data the client holds at offset 3.
+
+	// Broadcast the next live publication (offset 4) exactly as the broker would:
+	// its delta base is prevPub = the stream publication at offset 3 (payloads[2]).
+	livePayload := []byte("AAAA-" + body + "-live")
+	require.NoError(t, node.hub.broadcastPublication(
+		ch,
+		StreamPosition{Offset: 4, Epoch: epoch},
+		&Publication{Offset: 4, Data: livePayload},
+		&Publication{Offset: 3, Data: payloads[2]}, // prevPub — the handoff base.
+		nil,
+		ChannelBatchConfig{},
+	))
+
+	// Read the live publication off the wire and apply its delta against the base
+	// reconstructed from recovery. Correct boundary → exactly the live payload.
+	livePub := readSinkPublication(t, transport.sink, 4)
+	require.True(t, livePub.Delta,
+		"live pub must be a real delta (test would be vacuous otherwise)")
+	liveResult, aerr := fdelta.Apply(base, livePub.Data)
+	require.NoError(t, aerr, "first live delta failed to apply against the recovery base")
+	require.Equal(t, livePayload, liveResult,
+		"live publication after recovery did not reconstruct against the recovered base")
+}
+
 func TestFossilRecoveredMapPubs(t *testing.T) {
 	t.Parallel()
 	node := defaultNodeNoHandlers()
@@ -2928,8 +3059,9 @@ func TestClientPresenceUpdate(t *testing.T) {
 	client.mu.RUnlock()
 	require.True(t, ok)
 
-	err := client.updateChannelPresence("test", chCtx)
+	attempted, err := client.updateChannelPresence("test", chCtx)
 	require.NoError(t, err)
+	require.True(t, attempted)
 }
 
 func TestClientSubExpired(t *testing.T) {

@@ -125,13 +125,15 @@ func (h *Hub) shutdown(ctx context.Context) error {
 }
 
 // Add connection into clientHub connections registry.
-func (h *Hub) add(c *Client) {
+// add registers connection in clientHub. Returns true if this is a new
+// registration (uid not previously present).
+func (h *Hub) add(c *Client) bool {
 	h.sessionsMu.Lock()
 	if c.sessionID() != "" {
 		h.sessions[c.sessionID()] = c
 	}
 	h.sessionsMu.Unlock()
-	h.connShards[index(c.UserID(), numHubShards)].add(c)
+	return h.connShards[index(c.UserID(), numHubShards)].add(c)
 }
 
 // Remove connection from clientHub connections registry.
@@ -226,8 +228,8 @@ func (h *Hub) addSub(ch string, sub subInfo) (int64, bool, error) {
 
 // removeSub removes connection from clientHub subscriptions registry.
 // Returns (isEmpty, wasRemoved, wasKeyed).
-func (h *Hub) removeSub(ch string, c *Client) (bool, bool, bool) {
-	return h.subShards[index(ch, numHubShards)].removeSub(ch, c)
+func (h *Hub) removeSub(ch string, c *Client, subGen uint64) (bool, bool, bool) {
+	return h.subShards[index(ch, numHubShards)].removeSub(ch, c, subGen)
 }
 
 func (h *Hub) updateServerTagsFilter(ch string, clientID string, tf *tagsFilter) (bool, bool) {
@@ -664,23 +666,31 @@ func (h *connShard) userConnections(userID string) map[string]*Client {
 }
 
 // Add connection into clientHub connections registry.
-func (h *connShard) add(c *Client) {
+// add registers a client connection. Returns true if this was a new
+// registration (the uid was not already present), so callers can keep the
+// connectionsInflight gauge in lockstep with the clients map.
+func (h *connShard) add(c *Client) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	uid := c.ID()
 	user := c.UserID()
 
+	_, existed := h.clients[uid]
 	h.clients[uid] = c
 
 	if _, ok := h.users[user]; !ok {
 		h.users[user] = make(map[string]struct{})
 	}
 	h.users[user][uid] = struct{}{}
+	return !existed
 }
 
 // Remove connection from clientHub connections registry.
 // Returns true if found and really removed from registry.
+// remove deregisters a client connection. Returns true if the uid was present
+// in the clients map — the same condition add() reports as new — so the
+// connectionsInflight Dec pairs exactly with its Inc regardless of the users map.
 func (h *connShard) remove(c *Client) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -688,36 +698,29 @@ func (h *connShard) remove(c *Client) bool {
 	uid := c.ID()
 	user := c.UserID()
 
+	_, existed := h.clients[uid]
 	delete(h.clients, uid)
 
-	// try to find connection to delete, return early if not found.
-	if _, ok := h.users[user]; !ok {
-		return false
-	}
-	if _, ok := h.users[user][uid]; !ok {
-		return false
-	}
-
-	// actually remove connection from hub.
-	delete(h.users[user], uid)
-
-	// clean up users map if it's needed.
-	if len(h.users[user]) == 0 {
-		delete(h.users, user)
+	// Clean up the user grouping if present.
+	if userConns, ok := h.users[user]; ok {
+		delete(userConns, uid)
+		if len(userConns) == 0 {
+			delete(h.users, user)
+		}
 	}
 
-	return true
+	return existed
 }
 
 // NumClients returns total number of client connections.
 func (h *connShard) NumClients() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	total := 0
-	for _, clientConnections := range h.users {
-		total += len(clientConnections)
-	}
-	return total
+	// clients holds exactly one entry per connection, which is the same total as
+	// summing the per-user sets. Iterating users instead would make this O(users)
+	// while holding the read lock — at a million connections that is a periodic
+	// scan (updateGauges runs every 10s) which also blocks connects/disconnects.
+	return len(h.clients)
 }
 
 // NumUsers returns a number of unique users connected.
@@ -751,12 +754,23 @@ type subInfo struct {
 	tagsFilter       *tagsFilter
 	serverTagsFilter *tagsFilter
 	isMap            bool // true for map subscriptions.
+	// subGen identifies this specific subscription of the client to the channel.
+	// A resubscribe gets a fresh subGen, so a stale unsubscribe (carrying an older
+	// subGen it read from c.channels) will not remove a newer subscription's hub
+	// entry — which is how hub routing stays consistent with c.channels without
+	// holding a lock across both.
+	subGen uint64
 }
 
 type subShard struct {
 	mu sync.RWMutex
 	// registry to hold active subscriptions of clients to channels with some additional info.
-	subs            map[string]map[string]subInfo
+	subs map[string]map[string]subInfo
+	// numSubs is the total number of subscriptions across subs, maintained
+	// incrementally under mu. Summing subs on demand would be O(channels) while
+	// holding the read lock, and NumSubscriptions is read periodically by the
+	// node gauge update.
+	numSubs         int
 	maxTimeLagMilli int64
 	logger          *logger
 	metrics         *metrics
@@ -794,6 +808,16 @@ func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
 		if sub.isMap {
 			s.mapChannels[ch] = true
 		}
+	}
+	if _, exists := s.subs[ch][uid]; !exists {
+		s.numSubs++
+		// Inflight is co-located with numSubs (same condition) so the two stay in
+		// lockstep. Doing it here, rather than unconditionally in addSubscription,
+		// avoids over-counting when a resubscribe overwrites an existing
+		// client+channel entry (no new subscription) — its stale generation's
+		// removeSub is a no-op that never Dec's, which would otherwise drift.
+		baseLabels := []string{sub.client.metricName, s.metrics.getChannelNamespaceLabel(ch)}
+		s.metrics.subscriptionsInflight.WithLabelValues(s.metrics.appendClientLabels(baseLabels, sub.client)...).Inc()
 	}
 	s.subs[ch][uid] = sub
 
@@ -853,7 +877,14 @@ func (s *subShard) removeSubID(ch string) {
 // - isEmpty: true if channel has no subscribers left
 // - wasRemoved: true if subscription was found and removed
 // - wasMap: true if the now-empty channel was a keyed subscription channel
-func (s *subShard) removeSub(ch string, c *Client) (bool, bool, bool) {
+// anySubGen removes whatever generation is currently registered. No production
+// path passes it anymore — every rollback identity-matches its own generation
+// so a stalled attempt can never remove a fresh resubscribe's entry. Kept as
+// the named zero value so an accidental gen-0 removal is at least explicit in
+// removeSub. Real generations start at 1.
+const anySubGen uint64 = 0
+
+func (s *subShard) removeSub(ch string, c *Client, subGen uint64) (bool, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -863,12 +894,25 @@ func (s *subShard) removeSub(ch string, c *Client) (bool, bool, bool) {
 	if _, ok := s.subs[ch]; !ok {
 		return true, false, false
 	}
-	if _, ok := s.subs[ch][uid]; !ok {
+	sub, ok := s.subs[ch][uid]
+	if !ok {
 		return true, false, false
+	}
+	if subGen != anySubGen && sub.subGen != subGen {
+		// A newer subscription generation is registered for this client+channel —
+		// the caller is unsubscribing an older generation that a concurrent
+		// resubscribe already superseded. Leave the newer entry in place so hub
+		// routing stays consistent with c.channels. Report not-removed, not-empty.
+		return false, false, false
 	}
 
 	// actually remove subscription from hub.
 	delete(s.subs[ch], uid)
+	s.numSubs--
+	// Mirror of the Inc in addSub — only when a subscription is actually removed
+	// (matched generation), so a stale-generation removeSub does not Dec.
+	baseLabels := []string{c.metricName, s.metrics.getChannelNamespaceLabel(ch)}
+	s.metrics.subscriptionsInflight.WithLabelValues(s.metrics.appendClientLabels(baseLabels, c)...).Dec()
 
 	// clean up subs map if it's needed.
 	if len(s.subs[ch]) == 0 {
@@ -1039,6 +1083,13 @@ func (s *subShard) broadcastPublication(
 	}
 
 	fullPub := pubToProto(pub)
+	// Deliver the channel epoch in the first publication (offset==1) so clients
+	// learn it. Stamped on this per-broadcast copy rather than on the source pub,
+	// which the MemoryBroker shares with concurrent recovery readers (see
+	// Node.HandlePublication).
+	if fullPub.Offset == 1 && sp.Epoch != "" {
+		fullPub.Epoch = sp.Epoch
+	}
 	preparedDataByKey := make(map[preparedKey]preparedData)
 
 	var filteredPub *protocol.Publication
@@ -1214,10 +1265,18 @@ func (s *subShard) broadcastPublication(
 				deltaSub:        key.DeltaType != deltaTypeNone,
 				wasFiltered:     wasFiltered,
 			}
-			if wasFiltered && filteredPub == nil {
-				filteredPub = &protocol.Publication{
-					Offset: fullPub.Offset,
-					Time:   -1, // Use -1 for indicating filtered publication.
+			if wasFiltered {
+				// One marker per publication is enough (same offset for all filtered
+				// keys), but it must be attached to EVERY filtered key's prepValue.
+				// Attaching it only to the first filtered key left later filtered keys
+				// (e.g. a different protocol/delta/useID combo) with a nil filteredPub,
+				// which the buffering path turns into a nil syncPub and then a nil entry
+				// in the recovery merge — a nil-pointer panic.
+				if filteredPub == nil {
+					filteredPub = &protocol.Publication{
+						Offset: fullPub.Offset,
+						Time:   -1, // Use -1 for indicating filtered publication.
+					}
 				}
 				prepValue.filteredPub = filteredPub
 			}
@@ -1470,11 +1529,7 @@ func (s *subShard) NumChannels() int {
 func (s *subShard) NumSubscriptions() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	total := 0
-	for _, subscriptions := range s.subs {
-		total += len(subscriptions)
-	}
-	return total
+	return s.numSubs
 }
 
 // Channels returns a slice of all active channels.

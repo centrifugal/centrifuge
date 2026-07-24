@@ -89,7 +89,11 @@ type Node struct {
 
 	emulationSurveyHandler *emulationSurveyHandler
 
-	mediums     map[string]*channelMedium
+	// mediums is sharded the same way as mediumLocks — mediums[i] is guarded by
+	// mediumLocks[i], where i = index(ch, numMediumLocks). A single map here would
+	// be accessed concurrently by operations on different channels (which take
+	// different lock shards), a data race.
+	mediums     map[int]map[string]*channelMedium
 	mediumLocks map[int]*sync.Mutex // Sharded locks for mediums map.
 
 	timerScheduler TimerScheduler
@@ -164,6 +168,10 @@ func New(c Config) (*Node, error) {
 	for i := 0; i < numMediumLocks; i++ {
 		mediumLocks[i] = &sync.Mutex{}
 	}
+	mediums := make(map[int]map[string]*channelMedium, numMediumLocks)
+	for i := 0; i < numMediumLocks; i++ {
+		mediums[i] = map[string]*channelMedium{}
+	}
 
 	if c.Name == "" {
 		hostname, err := os.Hostname()
@@ -192,7 +200,7 @@ func New(c Config) (*Node, error) {
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
 		nowTimeGetter:  nowtime.Get,
 		surveyRegistry: make(map[uint64]chan survey),
-		mediums:        map[string]*channelMedium{},
+		mediums:        mediums,
 		mediumLocks:    mediumLocks,
 		timerScheduler: c.ClientTimerScheduler,
 	}
@@ -254,6 +262,11 @@ func (n *Node) subLock(ch string) *sync.Mutex {
 
 func (n *Node) mediumLock(ch string) *sync.Mutex {
 	return n.mediumLocks[index(ch, numMediumLocks)]
+}
+
+// mediumShard returns the mediums sub-map for ch, guarded by mediumLock(ch).
+func (n *Node) mediumShard(ch string) map[string]*channelMedium {
+	return n.mediums[index(ch, numMediumLocks)]
 }
 
 // SetController allows setting Controller implementation to use.
@@ -1195,8 +1208,14 @@ func (n *Node) addClient(c *Client) {
 	baseLabels := []string{c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion}
 
 	n.metrics.connectionsAccepted.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Inc()
-	n.metrics.connectionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Inc()
-	n.hub.add(c)
+	// Inc inflight only when hub.add registers a genuinely new connection, so the
+	// gauge stays in lockstep with the clients map (the Dec in removeClient is
+	// likewise gated on the removal actually happening). addClient runs under
+	// c.mu and close() sets statusClosed under c.mu before its removeClient, so
+	// the Inc here and that Dec never interleave.
+	if n.hub.add(c) {
+		n.metrics.connectionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Inc()
+	}
 }
 
 // removeClient removes client connection from connection registry.
@@ -1217,8 +1236,9 @@ func (n *Node) removeClient(c *Client) {
 // Hub and Broker.
 func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 	n.metrics.incActionCount("add_subscription", ch)
-	baseLabels := []string{sub.client.metricName, n.metrics.getChannelNamespaceLabel(ch)}
-	n.metrics.subscriptionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, sub.client)...).Inc()
+	// subscriptionsInflight is maintained inside hub.addSub/removeSub (co-located
+	// with numSubs) so Inc/Dec stay symmetric across resubscribe overwrites and
+	// broker-error rollbacks.
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
@@ -1232,13 +1252,13 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 			if mediumOptions.isMediumEnabled() {
 				medium, err := newChannelMedium(ch, n, mediumOptions)
 				if err != nil {
-					_, _, _ = n.hub.removeSub(ch, sub.client)
+					_, _, _ = n.hub.removeSub(ch, sub.client, sub.subGen)
 					return 0, err
 				}
 				medium.isMap = sub.isMap
 				mediumMu := n.mediumLock(ch)
 				mediumMu.Lock()
-				n.mediums[ch] = medium
+				n.mediumShard(ch)[ch] = medium
 				mediumMu.Unlock()
 			}
 		}
@@ -1249,14 +1269,14 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 				n.metrics.incActionCount("map_broker_subscribe", ch)
 				err := mapBroker.Subscribe(ch)
 				if err != nil {
-					_, _, _ = n.hub.removeSub(ch, sub.client)
+					_, _, _ = n.hub.removeSub(ch, sub.client, sub.subGen)
 					if n.config.GetChannelMediumOptions != nil {
 						mediumMu := n.mediumLock(ch)
 						mediumMu.Lock()
-						medium, ok := n.mediums[ch]
+						medium, ok := n.mediumShard(ch)[ch]
 						if ok {
 							medium.close()
-							delete(n.mediums, ch)
+							delete(n.mediumShard(ch), ch)
 						}
 						mediumMu.Unlock()
 					}
@@ -1267,14 +1287,14 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 			n.metrics.incActionCount("broker_subscribe", ch)
 			err := n.getBroker(ch).Subscribe(ch)
 			if err != nil {
-				_, _, _ = n.hub.removeSub(ch, sub.client)
+				_, _, _ = n.hub.removeSub(ch, sub.client, sub.subGen)
 				if n.config.GetChannelMediumOptions != nil {
 					mediumMu := n.mediumLock(ch)
 					mediumMu.Lock()
-					medium, ok := n.mediums[ch]
+					medium, ok := n.mediumShard(ch)[ch]
 					if ok {
 						medium.close()
-						delete(n.mediums, ch)
+						delete(n.mediumShard(ch), ch)
 					}
 					mediumMu.Unlock()
 				}
@@ -1287,16 +1307,13 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 
 // removeSubscription removes subscription of connection on channel
 // from Hub and Broker (or MapBroker for map channels).
-func (n *Node) removeSubscription(ch string, c *Client) error {
+func (n *Node) removeSubscription(ch string, c *Client, subGen uint64) error {
 	n.metrics.incActionCount("remove_subscription", ch)
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
-	empty, wasRemoved, wasMap := n.hub.removeSub(ch, c)
-	if wasRemoved {
-		baseLabels := []string{c.metricName, n.metrics.getChannelNamespaceLabel(ch)}
-		n.metrics.subscriptionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Dec()
-	}
+	// subscriptionsInflight is Dec'd inside hub.removeSub (co-located with numSubs).
+	empty, _, wasMap := n.hub.removeSub(ch, c, subGen)
 	if empty {
 		submittedAt := time.Now()
 		_ = n.subDissolver.Submit(func() error {
@@ -1332,10 +1349,10 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 				if n.config.GetChannelMediumOptions != nil {
 					mediumMu := n.mediumLock(ch)
 					mediumMu.Lock()
-					medium, ok := n.mediums[ch]
+					medium, ok := n.mediumShard(ch)[ch]
 					if ok {
 						medium.close()
-						delete(n.mediums, ch)
+						delete(n.mediumShard(ch), ch)
 					}
 					mediumMu.Unlock()
 				}
@@ -1667,12 +1684,15 @@ func (n *Node) getMapBroker(ch string) MapBroker {
 	return n.mapBroker
 }
 
-func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
+// history takes HistoryOptions by value so callers that build options without
+// the variadic HistoryOption closures (see streamTop) do not have to heap
+// allocate them. Broker.History takes them by value anyway.
+func (n *Node) history(ch string, opts HistoryOptions) (HistoryResult, error) {
 	if opts.Filter.Reverse && opts.Filter.Since != nil && opts.Filter.Since.Offset == 0 {
 		return HistoryResult{}, ErrorBadRequest
 	}
 
-	pubs, streamTop, err := n.getBroker(ch).History(ch, *opts)
+	pubs, streamTop, err := n.getBroker(ch).History(ch, opts)
 	if err != nil {
 		return HistoryResult{}, err
 	}
@@ -1695,35 +1715,55 @@ func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
 // History allows extracting Publications in channel.
 // The channel must belong to namespace where history is on.
 func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) {
-	n.metrics.incActionCount("history", ch)
 	historyOpts := &HistoryOptions{}
 	for _, opt := range opts {
 		opt(historyOpts)
 	}
-	if n.config.UseSingleFlight {
-		var builder strings.Builder
-		builder.WriteString("channel:")
-		builder.WriteString(ch)
-		if historyOpts.Filter.Since != nil {
-			builder.WriteString(",offset:")
-			builder.WriteString(strconv.FormatUint(historyOpts.Filter.Since.Offset, 10))
-			builder.WriteString(",epoch:")
-			builder.WriteString(historyOpts.Filter.Since.Epoch)
-		}
-		builder.WriteString(",limit:")
-		builder.WriteString(strconv.Itoa(historyOpts.Filter.Limit))
-		builder.WriteString(",reverse:")
-		builder.WriteString(strconv.FormatBool(historyOpts.Filter.Reverse))
-		builder.WriteString(",meta_ttl:")
-		builder.WriteString(historyOpts.MetaTTL.String())
-		key := builder.String()
+	return n.historyWithOptions(ch, *historyOpts)
+}
 
-		result, err, _ := historyGroup.Do(key, func() (any, error) {
-			return n.history(ch, historyOpts)
-		})
-		return result.(HistoryResult), err
+// historyWithOptions is the shared implementation behind History and streamTop.
+// It takes options by value so a caller that already has them (streamTop) can
+// avoid the heap allocation the variadic HistoryOption closures force. The
+// single flight branch lives in its own function so that its closure — which
+// must capture the options — does not make them escape on the common path.
+//
+// Side effects shared by all history callers (the action metric) belong here
+// rather than in History, so that streamTop — which bypasses History's variadic
+// options — cannot drift from it.
+func (n *Node) historyWithOptions(ch string, opts HistoryOptions) (HistoryResult, error) {
+	n.metrics.incActionCount("history", ch)
+	if n.config.UseSingleFlight {
+		return n.historySingleFlight(ch, opts)
 	}
-	return n.history(ch, historyOpts)
+	return n.history(ch, opts)
+}
+
+func (n *Node) historySingleFlight(ch string, opts HistoryOptions) (HistoryResult, error) {
+	var builder strings.Builder
+	builder.WriteString("channel:")
+	builder.WriteString(ch)
+	if opts.Filter.Since != nil {
+		builder.WriteString(",offset:")
+		builder.WriteString(strconv.FormatUint(opts.Filter.Since.Offset, 10))
+		builder.WriteString(",epoch:")
+		builder.WriteString(opts.Filter.Since.Epoch)
+	}
+	builder.WriteString(",limit:")
+	builder.WriteString(strconv.Itoa(opts.Filter.Limit))
+	builder.WriteString(",reverse:")
+	builder.WriteString(strconv.FormatBool(opts.Filter.Reverse))
+	builder.WriteString(",meta_ttl:")
+	builder.WriteString(opts.MetaTTL.String())
+	key := builder.String()
+
+	result, err, _ := historyGroup.Do(key, func() (any, error) {
+		return n.history(ch, opts)
+	})
+	// Return the result even when err != nil: history returns a populated
+	// HistoryResult together with ErrorUnrecoverablePosition, and recovery
+	// depends on the StreamPosition in it.
+	return result.(HistoryResult), err
 }
 
 // recoverHistory recovers publications since StreamPosition last seen by client.
@@ -1741,9 +1781,9 @@ func (n *Node) recoverHistory(ch string, since StreamPosition, historyMetaTTL ti
 }
 
 // recoverCache recovers last publication in channel.
-func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, tf *tagsFilter) (*Publication, *Publication, StreamPosition, error) {
+func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, tf *tagsFilter, serverTf *tagsFilter) (*Publication, *Publication, StreamPosition, error) {
 	n.metrics.incActionCount("history_recover_cache", ch)
-	if tf == nil {
+	if tf == nil && serverTf == nil {
 		hr, err := n.History(ch, WithHistoryFilter(HistoryFilter{
 			Limit:   1,
 			Reverse: true,
@@ -1775,11 +1815,15 @@ func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, tf *tagsFil
 	if len(hr.Publications) > 0 {
 		latestPublication = hr.Publications[0]
 	}
+	// Deliver the newest publication that passes BOTH the server-enforced and the
+	// client-requested tags filters (AND semantics), matching the live broadcast
+	// path. Applying only the client filter here would leak a server-filtered
+	// latest publication on cache recovery.
 	for _, pub := range hr.Publications {
-		match, _ := filter.Match(tf.filter, pub.Tags)
-		if match {
-			return latestPublication, pub, hr.StreamPosition, nil
+		if publicationFiltered(pub.Tags, serverTf) || publicationFiltered(pub.Tags, tf) {
+			continue
 		}
+		return latestPublication, pub, hr.StreamPosition, nil
 	}
 	return nil, nil, hr.StreamPosition, nil
 }
@@ -1787,7 +1831,11 @@ func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, tf *tagsFil
 // streamTop returns current stream top StreamPosition for a channel.
 func (n *Node) streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error) {
 	n.metrics.incActionCount("history_stream_top", ch)
-	historyResult, err := n.History(ch, WithHistoryMetaTTL(historyMetaTTL))
+	// This runs for every positioned channel on every periodic position check, so
+	// build options directly instead of going through History's variadic
+	// HistoryOption closures, which force HistoryOptions to escape to the heap.
+	// historyWithOptions still reports the shared "history" action metric.
+	historyResult, err := n.historyWithOptions(ch, HistoryOptions{MetaTTL: historyMetaTTL})
 	if err != nil {
 		return StreamPosition{}, err
 	}
@@ -1826,9 +1874,12 @@ func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMe
 			return true, nil
 		}
 	}
-	mu := n.subLock(ch)
+	// mediums[i] is guarded by mediumLocks[i] (see struct doc). Writers hold
+	// subLock+mediumLock; readers need only mediumLock. Using subLock here was
+	// race-free only because numSubLocks happens to equal numMediumLocks.
+	mu := n.mediumLock(ch)
 	mu.Lock()
-	medium, ok := n.mediums[ch]
+	medium, ok := n.mediumShard(ch)[ch]
 	mu.Unlock()
 	if ok && medium.options.SharedPositionSync {
 		validPosition := medium.CheckPosition(historyMetaTTL, clientPosition, n.config.ClientChannelPositionCheckDelay)
@@ -2080,16 +2131,16 @@ func (n *Node) HandlePublication(ch string, pub *Publication, sp StreamPosition,
 			return nil
 		}
 	}
-	// Deliver epoch in the first publication (offset==1) so clients learn
-	// the channel epoch. This covers first-ever publish and post-Clear
-	// scenarios. Subsequent publications omit epoch to save wire bytes.
-	if pub.Offset == 1 && sp.Epoch != "" {
-		pub.Epoch = sp.Epoch
-	}
+	// The first publication (offset==1) carries the channel epoch so clients
+	// learn it (covers first-ever publish and post-Clear scenarios); subsequent
+	// publications omit it to save wire bytes. The epoch is stamped onto the
+	// per-broadcast proto copy (connShard.broadcastPublication), not onto pub
+	// itself: with the MemoryBroker pub is the shared history object and a
+	// concurrent subscribe-time recovery reads it, so mutating it here races.
 	if n.config.GetChannelMediumOptions != nil {
 		mu := n.mediumLock(ch) // Note, avoid using subLock in HandlePublication – this leads to the deadlock.
 		mu.Lock()
-		medium, ok := n.mediums[ch]
+		medium, ok := n.mediumShard(ch)[ch]
 		mu.Unlock()
 		if ok {
 			medium.broadcastPublication(pub, sp, delta, prevPub)

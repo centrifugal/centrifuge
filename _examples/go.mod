@@ -6,7 +6,7 @@ replace github.com/centrifugal/centrifuge => ../
 
 require (
 	github.com/centrifugal/centrifuge v0.38.0
-	github.com/centrifugal/centrifuge-go v0.10.12
+	github.com/centrifugal/centrifuge-go v0.12.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/cristalhq/jwt/v5 v5.4.0
@@ -70,7 +70,7 @@ require (
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
-	github.com/mailru/easyjson v0.7.7 // indirect
+	github.com/mailru/easyjson v0.9.2 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
 	github.com/mattn/go-runewidth v0.0.24 // indirect

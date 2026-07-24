@@ -104,6 +104,28 @@ type Config struct {
 	// clients update presence information.
 	// Zero value means 25 * time.Second.
 	ClientPresenceUpdateInterval time.Duration
+	// clientPresenceUpdateConcurrency sets how many presence updates a single
+	// connection may have in flight concurrently on each periodic tick.
+	//
+	// A connection refreshes presence for every channel it is subscribed to with
+	// presence enabled, and PresenceManager implementations generally perform one
+	// network round trip per call. Done one by one a tick takes channels * RTT,
+	// which for connections with many channels can exceed the presence TTL or
+	// simply keep a connection busy for a long time. Allowing a few updates in
+	// flight lets the Redis client pipeline them, cutting the tick to roughly
+	// channels / concurrency * RTT.
+	//
+	// clientPositionCheckConcurrency does the same for the periodic stream
+	// position check, which has the same one-round-trip-per-channel shape.
+	//
+	// Values <= 1 keep the operations strictly sequential and cost nothing, which
+	// is the default. They have no effect for connections with a single channel.
+	//
+	// Both are unexported for now: the mechanism is in place and tested, but the
+	// right default is not settled yet. Export them (capitalize, no other change)
+	// once we are confident about the values to recommend.
+	clientPresenceUpdateConcurrency int
+	clientPositionCheckConcurrency  int
 	// ClientExpiredCloseDelay is an extra time given to client to refresh
 	// its connection in the end of connection TTL. At moment only used for
 	// a client-side refresh workflow.

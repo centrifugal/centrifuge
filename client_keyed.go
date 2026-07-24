@@ -112,6 +112,14 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 	// keys appearing in inlineUntrackSet, since Step 8 removes them and frees
 	// slots. Re-checked under write lock.
 	c.mu.RLock()
+	// Capture the identity of the keyed subscription this track targets. The
+	// OnTrack handler may be async; if the channel is unsubscribed (or
+	// unsubscribed and resubscribed as a fresh keyed sub) before the commit
+	// below, the captured generation no longer matches and the commit is rolled
+	// back instead of re-creating orphaned keyed state.
+	trackCtx, trackSubscribed := c.channels[channel]
+	trackSubscribed = trackSubscribed && channelHasFlag(trackCtx.flags, flagKeyed) && channelHasFlag(trackCtx.flags, flagSubscribed)
+	trackSubGen := trackCtx.subGen
 	var currentCount, newKeyCountOpt, inlineRemovedExistingOpt int
 	if c.keyed != nil {
 		chanKeys := c.keyed.trackedKeys[channel]
@@ -136,6 +144,12 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		}
 	}
 	c.mu.RUnlock()
+
+	if !trackSubscribed {
+		// Channel was torn down between handleSubRefresh's subscription check and
+		// here — nothing to track.
+		return ErrorPermissionDenied
+	}
 
 	maxTracked := c.node.keyedManager.maxTrackedPerConnection(channel)
 	if currentCount-inlineRemovedExistingOpt+newKeyCountOpt > maxTracked {
@@ -235,6 +249,19 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		// top all converge here and only the first to fit wins. On failure we
 		// roll back the server-side track from Step 1.
 		c.mu.Lock()
+		// If the channel was unsubscribed while the (async) OnTrack handler ran —
+		// or unsubscribed and resubscribed as a fresh keyed sub — committing here
+		// would re-create trackedKeys[channel] and orphan the server-side track
+		// reservation (close only cleans keyed channels still in c.channels), or
+		// attach keys to a subscription the client never tracked on. Gen-match the
+		// captured subscription identity and roll back on mismatch.
+		if cc, ok := c.channels[channel]; !ok || !channelHasFlag(cc.flags, flagSubscribed) ||
+			!channelHasFlag(cc.flags, flagKeyed) || cc.subGen != trackSubGen {
+			c.mu.Unlock()
+			releaseTrackReservation()
+			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, ErrorPermissionDenied, started, rw)
+			return
+		}
 		if c.keyed == nil {
 			c.keyed = &keyedState{
 				channels:    make(map[string]*keyedChannelDeltaState),
@@ -297,12 +324,30 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 				c.keyed.minTrackExpireAt[channel] = minExpireAt
 			}
 		}
+		channelIsDelta := false
+		if cs := c.keyed.channels[channel]; cs != nil {
+			channelIsDelta = cs.deltaType != deltaTypeNone
+		}
 		c.mu.Unlock()
 
 		// Step 2: Collect cached data for items where server has newer version.
 		var cachedItems []*protocol.Publication
 		if c.node.sharedPollManager != nil {
 			cachedItems = c.node.sharedPollManager.getCachedData(channel, items)
+		}
+
+		// On a JSON delta channel the client recovers the delta base by
+		// JSON-unescaping Pub.Data, so a cached item — a full payload that seeds
+		// the base and flips deltaReady below — must be escaped just like full
+		// publications on every other base-establishing path (live keyed pubs, map
+		// state/stream). Delivering it as a raw JSON object leaves the client
+		// without a usable base and the next delta cannot be applied. getCachedData
+		// returns fresh Publications, so this only swaps each Data pointer to a new
+		// escaped slice — the cached bytes are untouched.
+		if len(cachedItems) > 0 && channelIsDelta && c.transport.Protocol().toProto() == protocol.TypeJSON {
+			for _, pub := range cachedItems {
+				pub.Data = json.Escape(convert.BytesToString(pub.Data))
+			}
 		}
 
 		// Step 3: Update per-connection versions for cached items to prevent

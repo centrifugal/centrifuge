@@ -429,13 +429,14 @@ func TestMemoryHistoryHubMetaTTL(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, pubs, 2)
 
-	time.Sleep(2 * time.Second)
-
-	// test that stream cleaned up by periodic task
-	h.RLock()
-	require.Equal(t, 0, len(h.streams))
-	require.Equal(t, int64(0), h.nextRemoveCheck)
-	h.RUnlock()
+	// Stream cleaned up by the periodic task. Its interval can stretch well past
+	// the TTL under load (e.g. the full -race suite), so poll rather than asserting
+	// once after a fixed sleep.
+	require.Eventually(t, func() bool {
+		h.RLock()
+		defer h.RUnlock()
+		return len(h.streams) == 0 && h.nextRemoveCheck == 0
+	}, 10*time.Second, 50*time.Millisecond, "history streams should be cleaned up by the periodic task after TTL")
 }
 
 func TestMemoryHistoryHubMetaTTLPerChannel(t *testing.T) {
@@ -470,13 +471,14 @@ func TestMemoryHistoryHubMetaTTLPerChannel(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, pubs, 2)
 
-	time.Sleep(2 * time.Second)
-
-	// test that stream cleaned up by periodic task
-	h.RLock()
-	require.Equal(t, 0, len(h.streams))
-	require.Equal(t, int64(0), h.nextRemoveCheck)
-	h.RUnlock()
+	// Stream cleaned up by the periodic task. Its interval can stretch well past
+	// the TTL under load (e.g. the full -race suite), so poll rather than asserting
+	// once after a fixed sleep.
+	require.Eventually(t, func() bool {
+		h.RLock()
+		defer h.RUnlock()
+		return len(h.streams) == 0 && h.nextRemoveCheck == 0
+	}, 10*time.Second, 50*time.Millisecond, "history streams should be cleaned up by the periodic task after TTL")
 }
 
 func TestMemoryBrokerRecover(t *testing.T) {

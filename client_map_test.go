@@ -4043,8 +4043,9 @@ func TestStreamSubscribe_MapPresencePeriodicUpdate(t *testing.T) {
 	client.mu.RLock()
 	chCtx := client.channels["test_channel"]
 	client.mu.RUnlock()
-	err := client.updateChannelPresence("test_channel", chCtx)
+	attempted, err := client.updateChannelPresence("test_channel", chCtx)
 	require.NoError(t, err)
+	require.True(t, attempted)
 }
 
 // TestSharedPollSubscribe_WithMapPresence verifies that shared poll subscribe
@@ -5593,6 +5594,67 @@ func TestMapSubscribe_StreamPhase_TagsFilter_IntermediatePage(t *testing.T) {
 	require.Equal(t, MapPhaseStream, result.Phase)
 	for _, pub := range result.Publications {
 		require.Equal(t, "admin", pub.Tags["role"])
+	}
+}
+
+// TestMapSubscribe_StreamPhase_ServerTagsFilter_IntermediatePage guards a
+// server-side filter bypass on intermediate STREAM catch-up pages. The page read
+// applied only the client tags filter, so a subscription with a ServerTagsFilter
+// (and no client filter) received publications the server filter should exclude.
+func TestMapSubscribe_StreamPhase_ServerTagsFilter_IntermediatePage(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_stream_server_tags_intermediate"
+	ctx := context.Background()
+
+	res, err := broker.Publish(ctx, channel, "seed", MapPublishOptions{
+		Data: []byte(`{"v":"seed"}`),
+		Tags: map[string]string{"role": "viewer"},
+	})
+	require.NoError(t, err)
+	startEpoch := res.Position.Epoch
+	startOffset := res.Position.Offset
+
+	for i := 0; i < 50; i++ {
+		role := "admin"
+		if i%2 == 0 {
+			role = "viewer"
+		}
+		_, err := broker.Publish(ctx, channel, "key"+string(rune('A'+(i%26)))+string(rune('0'+(i/26))), MapPublishOptions{
+			Data: []byte(`{"v":"x"}`),
+			Tags: map[string]string{"role": role},
+		})
+		require.NoError(t, err)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:             SubscriptionTypeMap,
+					ServerTagsFilter: &FilterNode{Cmp: "eq", Key: "role", Val: "admin"},
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseStream,
+		Offset:  startOffset,
+		Epoch:   startEpoch,
+		Limit:   5,
+		Recover: true,
+	})
+	require.Equal(t, MapPhaseStream, result.Phase)
+	for _, pub := range result.Publications {
+		require.Equal(t, "admin", pub.Tags["role"],
+			"intermediate STREAM page leaked a publication excluded by the server tags filter")
 	}
 }
 

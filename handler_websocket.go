@@ -594,11 +594,18 @@ func (t *websocketTransport) ping() {
 			_ = t.Close(DisconnectWriteError)
 			return
 		}
-		// WriteControl arms a write deadline on the underlying connection just
-		// like a data write, so it must be cleared the same way — otherwise on
-		// HTTP/2 the expired deadline cannot be extended by a later write and
-		// the stream fails permanently. See writeData for the data-path clear.
-		t.clearWriteDeadline()
+		// WriteControl arms a write deadline directly on the underlying connection
+		// (not on the gorilla writeDeadline field that conn.SetWriteDeadline writes).
+		// On HTTP/2 that lingering deadline must be cleared, otherwise once expired
+		// it cannot be extended by a later write and the stream fails permanently.
+		// Clear only the underlying deadline here: calling conn.SetWriteDeadline
+		// (as the shared clearWriteDeadline does) would write the gorilla
+		// writeDeadline field concurrently with the writer goroutine, which is a
+		// data race — that field is not safe for concurrent use. On HTTP/1 the next
+		// data write re-arms the deadline, so nothing needs clearing.
+		if t.opts.writeTimeout > 0 && t.opts.protoMajor > 1 {
+			_ = t.conn.NetConn().SetWriteDeadline(time.Time{})
+		}
 		t.addPing()
 	}
 }

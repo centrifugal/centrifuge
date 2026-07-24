@@ -959,25 +959,25 @@ func TestHubSubscriptions(t *testing.T) {
 	require.NotZero(t, h.NumSubscribers("test2"))
 
 	// Not exited sub.
-	empty, wasRemoved, _ := h.removeSub("not_existed", c)
+	empty, wasRemoved, _ := h.removeSub("not_existed", c, anySubGen)
 	require.True(t, empty)
 	require.False(t, wasRemoved)
 
 	// Exited sub with invalid uid.
 	validUID := c.uid
 	c.uid = "invalid"
-	empty, wasRemoved, _ = h.removeSub("test1", c)
+	empty, wasRemoved, _ = h.removeSub("test1", c, anySubGen)
 	require.True(t, empty)
 	require.False(t, wasRemoved)
 	c.uid = validUID
 
 	// Exited sub.
-	empty, wasRemoved, _ = h.removeSub("test1", c)
+	empty, wasRemoved, _ = h.removeSub("test1", c, anySubGen)
 	require.True(t, empty)
 	require.True(t, wasRemoved)
 
 	// Exited sub.
-	empty, wasRemoved, _ = h.removeSub("test2", c)
+	empty, wasRemoved, _ = h.removeSub("test2", c, anySubGen)
 	require.True(t, empty)
 	require.True(t, wasRemoved)
 
@@ -1536,8 +1536,8 @@ func TestCompressedChannelBroadcast(t *testing.T) {
 	channel := "test_compressed_channel"
 
 	// Remove existing subs and add with our desired settings
-	n.hub.removeSub(channel, clientWithID)
-	n.hub.removeSub(channel, clientWithoutID)
+	n.hub.removeSub(channel, clientWithID, anySubGen)
+	n.hub.removeSub(channel, clientWithoutID, anySubGen)
 
 	// Add subscription with useID=true
 	subIDWithID, isNewWithID, err := n.hub.addSub(channel, subInfo{
@@ -1608,8 +1608,8 @@ func TestUseIDSubscribersSameMessages(t *testing.T) {
 	clientWithID := newTestSubscribedClientWithTransport(t, ctx, n, transportWithID, "user2", channel)
 
 	// Remove existing subscriptions and add with our specific settings
-	n.hub.removeSub(channel, clientWithoutID)
-	n.hub.removeSub(channel, clientWithID)
+	n.hub.removeSub(channel, clientWithoutID, anySubGen)
+	n.hub.removeSub(channel, clientWithID, anySubGen)
 
 	// Add subscription WITHOUT useID
 	_, isNew1, err := n.hub.addSub(channel, subInfo{
@@ -1697,8 +1697,8 @@ func TestUseIDSubscribersDifferentMessages(t *testing.T) {
 	clientWithID := newTestSubscribedClientWithTransport(t, ctx, n, transportWithID, "user2", channel)
 
 	// Remove existing subscriptions and add with our specific settings
-	n.hub.removeSub(channel, clientWithoutID)
-	n.hub.removeSub(channel, clientWithID)
+	n.hub.removeSub(channel, clientWithoutID, anySubGen)
+	n.hub.removeSub(channel, clientWithID, anySubGen)
 
 	// Add subscription WITHOUT useID
 	_, isNew1, err := n.hub.addSub(channel, subInfo{
@@ -1787,8 +1787,8 @@ func TestDeltaPublicationsWithCompressedChannels(t *testing.T) {
 	clientWithID := newTestSubscribedClientWithTransport(t, ctx, n, transportWithID, "user2", channel)
 
 	// Remove existing subscriptions and add with our specific settings including delta
-	n.hub.removeSub(channel, clientWithoutID)
-	n.hub.removeSub(channel, clientWithID)
+	n.hub.removeSub(channel, clientWithoutID, anySubGen)
+	n.hub.removeSub(channel, clientWithID, anySubGen)
 
 	// Add subscription WITHOUT useID but WITH delta
 	_, isNew1, err := n.hub.addSub(channel, subInfo{
@@ -2143,8 +2143,8 @@ func TestCompressedJoinMessages(t *testing.T) {
 	channel := "test_join_channel"
 
 	// Remove existing subscriptions and add with our specific settings
-	n.hub.removeSub(channel, clientWithoutID)
-	n.hub.removeSub(channel, clientWithID)
+	n.hub.removeSub(channel, clientWithoutID, anySubGen)
+	n.hub.removeSub(channel, clientWithID, anySubGen)
 
 	// Add subscription WITHOUT useID
 	_, isNew1, err := n.hub.addSub(channel, subInfo{
@@ -2258,8 +2258,8 @@ func TestCompressedLeaveMessages(t *testing.T) {
 	channel := "test_leave_channel"
 
 	// Remove existing subscriptions and add with our specific settings
-	n.hub.removeSub(channel, clientWithoutID)
-	n.hub.removeSub(channel, clientWithID)
+	n.hub.removeSub(channel, clientWithoutID, anySubGen)
+	n.hub.removeSub(channel, clientWithID, anySubGen)
 
 	// Add subscription WITHOUT useID
 	_, isNew1, err := n.hub.addSub(channel, subInfo{
