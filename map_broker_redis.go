@@ -137,6 +137,11 @@ type RedisMapBrokerConfig struct {
 	// SkipPubSub enables mode when broker only works with data structures, without
 	// publishing to channels and using PUB/SUB.
 	SkipPubSub bool
+	// PubSubProbeInterval configures how often the broker verifies that its
+	// PUB/SUB connections still deliver messages. See the field with the same
+	// name in RedisBrokerConfig for the details.
+	// Zero value means 30 seconds. Set to a negative value to disable probing.
+	PubSubProbeInterval time.Duration
 	// NumShardedPubSubPartitions when greater than zero allows turning on a mode in which
 	// broker will use Redis Cluster with sharded PUB/SUB feature available in
 	// Redis >= 7: https://redis.io/docs/manual/pubsub/#sharded-pubsub
@@ -202,6 +207,9 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 	}
 	if conf.numResubscribeShards == 0 {
 		conf.numResubscribeShards = 16
+	}
+	if conf.PubSubProbeInterval == 0 {
+		conf.PubSubProbeInterval = defaultPubSubProbeInterval
 	}
 	if conf.numPubSubProcessors == 0 {
 		conf.numPubSubProcessors = runtime.NumCPU() / conf.numSubscribeShards
@@ -2805,6 +2813,7 @@ func (e *RedisMapBroker) runPubSub(s *brokerShardWrapper, logFields map[string]a
 		e.conf.Name,
 		e.node.metrics.mapBrokerPubSub,
 		e.conf.SubscribeOnReplica,
+		e.conf.PubSubProbeInterval,
 		e.conf.numPubSubProcessors,
 		e.conf.numResubscribeShards,
 		e.conf.numSubscribeShards,

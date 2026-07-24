@@ -27,10 +27,14 @@ services:
       - -c
       - |
         redis-server --save "" --appendonly no --port 6380 &
+        redis-server --save "" --appendonly no --port 6381 --replicaof 127.0.0.1 6380 &
+        redis-server --save "" --appendonly no --port 6382 --replicaof 127.0.0.1 6380 &
         echo "sentinel monitor mymaster 127.0.0.1 6380 2\n" > sentinel.conf
         redis-server sentinel.conf --sentinel
     ports:
       - "6380:6380"
+      - "6381:6381"
+      - "6382:6382"
       - "26379:26379"
   valkey:
     image: valkey/valkey:${VALKEY_VERSION:-8}-alpine

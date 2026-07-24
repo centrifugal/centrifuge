@@ -135,6 +135,19 @@ type RedisBrokerConfig struct {
 	// publishing to channels and using PUB/SUB.
 	SkipPubSub bool
 
+	// PubSubProbeInterval configures how often the broker verifies that its
+	// PUB/SUB connections still deliver messages. A connection that received
+	// nothing for this interval gets a small probe published to its service
+	// channel through the regular publish path; if a further interval passes
+	// without receiving anything, the connection is considered stale and
+	// re-established. This protects from the state where a connection
+	// remains healthy on the TCP level but is attached to a Redis node which
+	// no longer receives published traffic — possible after a failover (see
+	// centrifugal/centrifugo#1189). Probes are only sent on idle connections,
+	// so the mechanism costs nothing under regular message flow.
+	// Zero value means 30 seconds. Set to a negative value to disable probing.
+	PubSubProbeInterval time.Duration
+
 	// Name of broker, for observability purposes – i.e. becomes part of metrics/logs.
 	// By default, empty string is used.
 	Name string
@@ -231,6 +244,10 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 
 	if config.numResubscribeShards == 0 {
 		config.numResubscribeShards = 16
+	}
+
+	if config.PubSubProbeInterval == 0 {
+		config.PubSubProbeInterval = defaultPubSubProbeInterval
 	}
 
 	if config.numPubSubProcessors == 0 {
@@ -537,6 +554,10 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, logFields map[string]any, 
 
 	controlChannel := b.controlChannel
 	nodeChannel := b.nodeChannel
+	// probeChannel is a per-node service channel used only by liveness
+	// probes. The node channel itself carries real control commands, so
+	// probes get their own channel and are recognized by channel name.
+	probeChannel := nodeChannel + ".probe"
 
 	done := make(chan struct{})
 	var doneOnce sync.Once
@@ -590,8 +611,18 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, logFields map[string]any, 
 		}
 	}()
 
+	// receivedCount counts messages delivered by this connection, feeding the
+	// liveness probing below. See the PubSubProbeInterval option docs.
+	var receivedCount atomic.Uint64
+
 	wait := conn.SetPubSubHooks(rueidis.PubSubHooks{
 		OnMessage: func(msg rueidis.PubSubMessage) {
+			receivedCount.Add(1)
+			if msg.Channel == probeChannel {
+				// Liveness probe: consumed right here by updating
+				// receivedCount, must not reach the control handler.
+				return
+			}
 			select {
 			case workCh <- msg:
 			case <-done:
@@ -606,7 +637,7 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, logFields map[string]any, 
 		},
 	})
 
-	err := conn.Do(context.Background(), conn.B().Subscribe().Channel(controlChannel, nodeChannel).Build()).Error()
+	err := conn.Do(context.Background(), conn.B().Subscribe().Channel(controlChannel, nodeChannel, probeChannel).Build()).Error()
 	if err != nil {
 		startOnce(err)
 		b.node.metrics.incRedisBrokerPubSubErrors(b.config.Name, "subscribe_control_channel")
@@ -616,14 +647,64 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, logFields map[string]any, 
 
 	startOnce(nil)
 
-	select {
-	case err := <-wait:
-		if err != nil {
-			b.node.metrics.incRedisBrokerPubSubErrors(b.config.Name, "control_connection")
-			b.node.logger.log(newErrorLogEntry(err, "control pub/sub connection error", logFields))
+	// Same liveness probing as in runPubSubLoop: a control connection that
+	// received nothing for a full interval gets a probe published to its
+	// per-node probe channel through the regular publish path; a further
+	// silent interval means the connection is attached to a node that does
+	// not deliver published traffic — restart it. A stale control connection
+	// is as harmful as a stale client one: the node stops receiving control
+	// commands and other nodes' pings, silently.
+	//
+	// In a running node this machinery is dormant: every node publishes node
+	// info to the control channel each nodeInfoPublishInterval, that traffic
+	// keeps the connection non-idle, and probes are never sent. Probing only
+	// activates when the pings are absent (connection stopped delivering, or
+	// a broker used without Node.Run) — the check stays valid without
+	// depending on the ping schedule.
+	probeInterval := b.config.PubSubProbeInterval
+	var probeTickerCh <-chan time.Time
+	if probeInterval > 0 {
+		probeTicker := time.NewTicker(probeInterval)
+		defer probeTicker.Stop()
+		probeTickerCh = probeTicker.C
+	}
+	var seenCount uint64
+	var probeOutstanding bool
+	for {
+		select {
+		case err := <-wait:
+			if err != nil {
+				b.node.metrics.incRedisBrokerPubSubErrors(b.config.Name, "control_connection")
+				b.node.logger.log(newErrorLogEntry(err, "control pub/sub connection error", logFields))
+			}
+			return
+		case <-done:
+			return
+		case <-s.closeCh:
+			return
+		case <-probeTickerCh:
+			cur := receivedCount.Load()
+			if cur != seenCount {
+				seenCount = cur
+				probeOutstanding = false
+				continue
+			}
+			if probeOutstanding {
+				b.node.metrics.incRedisBrokerPubSubErrors(b.config.Name, "control_probe_timeout")
+				b.node.logger.log(newLogEntry(LogLevelWarn, "no control PUB/SUB message received since liveness probe was sent, restarting control PUB/SUB connection", logFields))
+				return
+			}
+			probeOutstanding = true
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), probeInterval)
+				defer cancel()
+				cmd := s.client.B().Publish().Channel(probeChannel).Message(pubSubProbeMessage).Build()
+				if pubErr := s.client.Do(ctx, cmd).Error(); pubErr != nil {
+					b.node.metrics.incRedisBrokerPubSubErrors(b.config.Name, "control_probe_publish")
+					b.node.logger.log(newErrorLogEntry(pubErr, "error publishing control PUB/SUB probe", logFields))
+				}
+			}()
 		}
-	case <-done:
-	case <-s.closeCh:
 	}
 }
 
@@ -664,6 +745,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, logFields map[string]any, event
 		b.config.Name,
 		b.node.metrics.brokerPubSub,
 		b.config.SubscribeOnReplica,
+		b.config.PubSubProbeInterval,
 		b.config.numPubSubProcessors,
 		b.config.numResubscribeShards,
 		b.config.numSubscribeShards,

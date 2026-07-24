@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
@@ -13,7 +14,39 @@ import (
 
 const (
 	pubSubProcessorBufferSize = 4096
+
+	// defaultPubSubProbeInterval is the default idle interval after which a
+	// PUB/SUB connection gets a liveness probe.
+	defaultPubSubProbeInterval = 30 * time.Second
 )
+
+// pubSubProbeMessage is the payload of PUB/SUB liveness probes. Probes are
+// recognized by the channel they arrive on (the shard service channel), not
+// by payload — the payload only helps when inspecting traffic by hand.
+const pubSubProbeMessage = "probe"
+
+// publishPubSubProbe publishes a liveness probe to the shard service channel
+// through the regular publish path. The publish always goes through the main
+// shard client (the master), even when the PUB/SUB loop subscribes on a
+// replica — in that mode a delivered probe additionally verifies the
+// replication link.
+func publishPubSubProbe(shard *RedisShard, node *Node, psm redisPubSubMetrics, name, shardChannel string, useShardedPubSub bool, timeout time.Duration, logFields map[string]any) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var cmd rueidis.Completed
+	if useShardedPubSub {
+		cmd = shard.client.B().Spublish().Channel(shardChannel).Message(pubSubProbeMessage).Build()
+	} else {
+		cmd = shard.client.B().Publish().Channel(shardChannel).Message(pubSubProbeMessage).Build()
+	}
+	if err := shard.client.Do(ctx, cmd).Error(); err != nil {
+		// A failed publish becomes a failed probe on the next tick. Still
+		// worth logging separately: it means the publish path is broken too,
+		// so restarting the PUB/SUB connection alone may not help.
+		psm.incErrors(name, "probe_publish")
+		node.logger.log(newErrorLogEntry(err, "error publishing PUB/SUB probe", logFields))
+	}
+}
 
 // pubSubCallbacks carries the type-varying behavior as function pointers.
 // Both RedisBroker and RedisMapBroker provide their own callbacks.
@@ -60,6 +93,7 @@ func runPubSubLoop(
 	name string,
 	psm redisPubSubMetrics,
 	subscribeOnReplica bool,
+	probeInterval time.Duration,
 	numProcessors, numResubscribeShards, numSubscribeShards, numPartitions int,
 	logFields map[string]any,
 	eventHandler BrokerEventHandler,
@@ -146,8 +180,22 @@ func runPubSubLoop(
 	defer cancel()
 	defer conn.Close()
 
+	// receivedCount counts messages delivered by this connection. It feeds
+	// the liveness probing below: a connection that received anything since
+	// the previous check is alive and is not probed. A counter increment is
+	// the only per-message cost of probing.
+	var receivedCount atomic.Uint64
+
 	wait := conn.SetPubSubHooks(rueidis.PubSubHooks{
 		OnMessage: func(msg rueidis.PubSubMessage) {
+			receivedCount.Add(1)
+			if msg.Channel == shardChannel {
+				// The shard channel is a service channel: nothing publishes
+				// real traffic to it, only liveness probes arrive here. The
+				// probe did its job by updating receivedCount — don't pass it
+				// to message processors.
+				return
+			}
 			select {
 			case processors[index(msg.Channel, numProcessors)] <- msg:
 			case <-done:
@@ -280,15 +328,64 @@ func runPubSubLoop(
 		<-done
 	}()
 
-	select {
-	case err = <-wait:
-		startOnce(err)
-		if err != nil {
-			psm.incErrors(name, "connection")
-			node.logger.log(newErrorLogEntry(err, "pub/sub connection error", logFields))
+	// The loop below parks until the connection errors, the loop is asked to
+	// stop, or the shard closes. A healthy-looking connection is not enough
+	// to park on forever: after a Redis failover the connection may end up
+	// attached to a node that answers keepalive pings and accepts commands
+	// but never receives the published traffic — a demoted master, a node
+	// outside the replication chain, or an unrelated Redis on a reused IP
+	// (see centrifugal/centrifugo#1189). No connection error ever fires in
+	// that state, so subscribers starve silently until process restart.
+	//
+	// The probe ticker breaks that: when nothing has been received for a
+	// full interval, publish a small probe to the shard service channel
+	// through the regular publish path and expect it back on this
+	// connection. If a probe was sent and a whole further interval passed
+	// without receiving ANYTHING (not even the probe), the connection is
+	// considered stale and the loop restarts, re-resolving the topology.
+	// Under regular traffic the probe never fires, so the steady-state cost
+	// is one atomic load per interval.
+	var probeTickerCh <-chan time.Time
+	if probeInterval > 0 {
+		probeTicker := time.NewTicker(probeInterval)
+		defer probeTicker.Stop()
+		probeTickerCh = probeTicker.C
+	}
+	var seenCount uint64
+	var probeOutstanding bool
+	for {
+		select {
+		case err = <-wait:
+			startOnce(err)
+			if err != nil {
+				psm.incErrors(name, "connection")
+				node.logger.log(newErrorLogEntry(err, "pub/sub connection error", logFields))
+			}
+			return
+		case <-done:
+			return
+		case <-shard.closeCh:
+			return
+		case <-probeTickerCh:
+			cur := receivedCount.Load()
+			if cur != seenCount {
+				// The connection delivered something during the last
+				// interval (possibly a previous probe) — alive.
+				seenCount = cur
+				probeOutstanding = false
+				continue
+			}
+			if probeOutstanding {
+				// A probe was published a full interval ago and nothing at
+				// all has been received since — the connection is attached
+				// to a node that does not deliver published traffic.
+				psm.incErrors(name, "probe_timeout")
+				node.logger.log(newLogEntry(LogLevelWarn, "no PUB/SUB message received since liveness probe was sent, restarting PUB/SUB connection", logFields))
+				return
+			}
+			probeOutstanding = true
+			go publishPubSubProbe(shard, node, psm, name, shardChannel, useShardedPubSub, probeInterval, logFields)
 		}
-	case <-done:
-	case <-shard.closeCh:
 	}
 }
 
