@@ -59,6 +59,10 @@ type pubSubCallbacks struct {
 	messageChannelID func(ch string) string
 	// shardForChannel returns the RedisShard for a given channel (for filtering during resubscribe).
 	shardForChannel func(ch string) *RedisShard
+	// extraResubscribeChannels returns broker-level channel subscriptions that
+	// must survive PUB/SUB reconnects but are not tracked in the Hub (shared
+	// poll key channels). May be nil.
+	extraResubscribeChannels func() []string
 }
 
 func getPubSubStartLogFields(s *RedisShard, logFields map[string]any) map[string]any {
@@ -234,6 +238,11 @@ func runPubSubLoop(
 	}
 
 	channels := node.Hub().Channels()
+	if cb.extraResubscribeChannels != nil {
+		// Broker-level subscriptions not tracked in the Hub (shared poll key
+		// channels) go through the same per-shard/partition filters below.
+		channels = append(channels, cb.extraResubscribeChannels()...)
+	}
 
 	var wg sync.WaitGroup
 	started := time.Now()

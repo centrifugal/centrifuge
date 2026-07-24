@@ -727,6 +727,9 @@ func (b *RedisBroker) makePubSubCallbacks(s *shardWrapper) pubSubCallbacks {
 		shardForChannel: func(ch string) *RedisShard {
 			return b.getShard(ch).shard
 		},
+		extraResubscribeChannels: func() []string {
+			return b.node.extraBrokerPubSubChannels(b)
+		},
 	}
 }
 

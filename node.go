@@ -1675,6 +1675,19 @@ func (n *Node) getBroker(ch string) Broker {
 	return n.broker
 }
 
+// extraBrokerPubSubChannels returns channels subscribed at the given broker
+// outside the Hub. The Hub is not the complete registry of broker-level
+// subscriptions: shared poll subscribes per-key channels directly and tracks
+// them itself. PUB/SUB reconnect paths must restore these together with
+// Hub().Channels(), otherwise key channels are silently lost on every
+// reconnect and key events stop flowing until keys are re-tracked.
+func (n *Node) extraBrokerPubSubChannels(b Broker) []string {
+	if n.sharedPollManager == nil {
+		return nil
+	}
+	return n.sharedPollManager.brokerChannelsSnapshot(b)
+}
+
 func (n *Node) getMapBroker(ch string) MapBroker {
 	if n.config.Map.GetMapBroker != nil {
 		if broker, ok := n.config.Map.GetMapBroker(ch); ok {

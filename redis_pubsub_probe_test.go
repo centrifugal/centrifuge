@@ -704,3 +704,107 @@ func TestRedisMapBrokerPubSubProbeIdle(t *testing.T) {
 	}
 }
 
+// TestRedisBrokerPubSubRestartRestoresSharedPollKeyChannels is a regression
+// test for shared poll key channels being lost on PUB/SUB reconnect.
+//
+// Shared poll subscribes per-key channels at broker level and tracks them in
+// its own registry — they are not in the Hub. The PUB/SUB loop used to
+// resubscribe only Hub().Channels() after re-establishing a connection, so
+// every reconnect (connection error, failover, probe restart) silently
+// dropped all key channels at Redis while shared poll still believed they
+// were subscribed. Key events then never arrived again on this node until
+// each key was untracked and re-tracked — live-query push latency degraded
+// to poll cadence, permanently, with no error anywhere.
+//
+// The test drives the real subscription path (subscribeToBrokerKeys — the
+// exact function shared poll uses when a key starts being tracked), kills
+// the PUB/SUB connections through Redis (CLIENT KILL, the same connection
+// error a Redis restart produces), and requires the key channel to be
+// subscribed and delivering again after the loop reconnects. Fails against
+// the Hub-only resubscribe: the shard service channel comes back, the key
+// channel never does.
+func TestRedisBrokerPubSubRestartRestoresSharedPollKeyChannels(t *testing.T) {
+	name := "sp-keys-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	node := testNode(t)
+	s, err := NewRedisShard(node, testSingleRedisConf(6379))
+	require.NoError(t, err)
+	b, err := NewRedisBroker(node, RedisBrokerConfig{
+		Prefix: getUniquePrefix(),
+		Name:   name,
+		Shards: []*RedisShard{s},
+	})
+	require.NoError(t, err)
+	node.SetBroker(b)
+	// The manager is normally created by Node.Run when shared poll is
+	// configured; construct it directly to keep the test at broker level.
+	node.sharedPollManager = newSharedPollManager(node)
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+		stopRedisBroker(b)
+	})
+
+	received := make(chan string, 128)
+	handler := &testBrokerEventHandler{
+		HandleControlFunc: func([]byte) error { return nil },
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			received <- ch
+			return nil
+		},
+	}
+	require.NoError(t, b.RegisterBrokerEventHandler(handler))
+
+	// Subscribe a key channel through the real shared poll path.
+	channel := "sp-channel"
+	require.NoError(t, node.sharedPollManager.subscribeToBrokerKeys(channel, []string{"k1"}))
+	keyChannel := sharedPollKeyChannel(channel, "k1")
+	redisKeyChannel := string(b.messageChannelID(s, keyChannel))
+	redisShardChannel := string(b.pubSubShardChannelID(0, 0, false))
+
+	subscribedAtRedis := func(redisChannel string) bool {
+		chans, err := probeTestRedisDo(t, "127.0.0.1:6379", "PUBSUB", "CHANNELS", redisChannel).ToArray()
+		return err == nil && len(chans) > 0
+	}
+	require.Eventually(t, func() bool { return subscribedAtRedis(redisKeyChannel) },
+		5*time.Second, 50*time.Millisecond, "key channel must be subscribed at Redis after subscribeToBrokerKeys")
+
+	// Sanity: key channel delivers.
+	_, err = b.Publish(keyChannel, []byte("v1"), PublishOptions{})
+	require.NoError(t, err)
+	select {
+	case ch := <-received:
+		require.Equal(t, keyChannel, ch)
+	case <-time.After(5 * time.Second):
+		t.Fatal("key channel publication not delivered before reconnect")
+	}
+
+	// Kill all PUB/SUB connections — the same connection error a Redis
+	// restart or failover produces. The loop restarts and resubscribes.
+	require.NoError(t, probeTestRedisDo(t, "127.0.0.1:6379", "CLIENT", "KILL", "TYPE", "pubsub").Error())
+
+	// The loop is back once its shard service channel is subscribed again.
+	require.Eventually(t, func() bool { return subscribedAtRedis(redisShardChannel) },
+		10*time.Second, 50*time.Millisecond, "PUB/SUB loop did not come back after CLIENT KILL")
+
+	// Regression assertion: the key channel must come back too. Against the
+	// Hub-only resubscribe it never does.
+	require.Eventually(t, func() bool { return subscribedAtRedis(redisKeyChannel) },
+		10*time.Second, 50*time.Millisecond,
+		"shared poll key channel was not restored after PUB/SUB reconnect")
+
+	// And it must actually deliver again.
+	drainReceived(received)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, err = b.Publish(keyChannel, []byte("v2"), PublishOptions{})
+		require.NoError(t, err)
+		select {
+		case ch := <-received:
+			require.Equal(t, keyChannel, ch)
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("key channel publication not delivered after reconnect")
+		}
+	}
+}

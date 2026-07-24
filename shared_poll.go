@@ -994,6 +994,24 @@ func (s *sharedPollChannelState) flipEpochAndCollectClients(hub *keyedHub, newEp
 	return hub.collectAllClients()
 }
 
+// brokerChannelsSnapshot returns the key channels currently subscribed at the
+// given broker. Key channels are subscribed at broker level and tracked only
+// here — not in the Hub — so a PUB/SUB reconnect would silently drop them:
+// the reconnect resubscribes Hub().Channels() and nothing else. The Redis
+// PUB/SUB loops call this (via Node) to restore key channels together with
+// Hub channels after re-establishing a connection.
+func (m *SharedPollManager) brokerChannelsSnapshot(b Broker) []string {
+	m.brokerSubMu.Lock()
+	defer m.brokerSubMu.Unlock()
+	var channels []string
+	for kc, broker := range m.brokerSubChans {
+		if broker == b {
+			channels = append(channels, kc)
+		}
+	}
+	return channels
+}
+
 // close stops all refresh workers and waits for them to finish.
 func (m *SharedPollManager) close() {
 	close(m.shutdownCh)
