@@ -877,10 +877,22 @@ func TestPositionTick_PositionCheckTimeAdvances(t *testing.T) {
 // client_presence_issue_test.go
 // ===========================================================================
 
-// slowPresenceManager simulates a Redis PresenceManager with a fixed RTT.
+// slowPresenceManager simulates a Redis PresenceManager with a fixed RTT. The
+// RTT is atomic so a test can add latency only after the setup phase (each
+// subscribe with EmitPresence pays one AddPresence too).
 type slowPresenceManager struct {
-	rtt   time.Duration
-	calls atomic.Int64
+	rttNanos atomic.Int64
+	calls    atomic.Int64
+}
+
+func newSlowPresenceManager(rtt time.Duration) *slowPresenceManager {
+	m := &slowPresenceManager{}
+	m.setRTT(rtt)
+	return m
+}
+
+func (m *slowPresenceManager) setRTT(rtt time.Duration) {
+	m.rttNanos.Store(int64(rtt))
 }
 
 func (m *slowPresenceManager) Presence(_ string) (map[string]*ClientInfo, error) {
@@ -891,7 +903,9 @@ func (m *slowPresenceManager) PresenceStats(_ string) (PresenceStats, error) {
 }
 func (m *slowPresenceManager) AddPresence(_ string, _ string, _ *ClientInfo) error {
 	m.calls.Add(1)
-	time.Sleep(m.rtt)
+	if rtt := m.rttNanos.Load(); rtt > 0 {
+		time.Sleep(time.Duration(rtt))
+	}
 	return nil
 }
 func (m *slowPresenceManager) RemovePresence(_ string, _ string, _ string) error { return nil }
@@ -922,7 +936,7 @@ func TestPresenceLoop_DelaysOwnPing(t *testing.T) {
 	const rtt = 2 * time.Millisecond
 	const pingInterval = 300 * time.Millisecond
 
-	pm := &slowPresenceManager{rtt: rtt}
+	pm := newSlowPresenceManager(rtt)
 	node := newSlowPresenceNode(t, pm, 400*time.Millisecond)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -968,13 +982,17 @@ loop:
 		"ping was delayed by the serial presence loop")
 }
 
-// TestPresenceLoop_BlocksClose proves close() waits for the whole presence loop
-// because both take presenceMu, delaying connection cleanup by N*RTT.
+// TestPresenceLoop_BlocksClose proves close() no longer waits for the whole
+// presence loop: without the closing signal both take presenceMu, delaying
+// connection cleanup by N*RTT.
 func TestPresenceLoop_BlocksClose(t *testing.T) {
 	const numChannels = 200
-	const rtt = 2 * time.Millisecond
+	const rtt = 10 * time.Millisecond
+	// Serial drain of the presence loop — what close() used to wait for.
+	const serialDrain = numChannels * rtt // 2s
 
-	pm := &slowPresenceManager{rtt: rtt}
+	// No latency while subscribing — only the presence tick below should pay RTT.
+	pm := newSlowPresenceManager(0)
 	node := newSlowPresenceNode(t, pm, 25*time.Second)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -982,6 +1000,8 @@ func TestPresenceLoop_BlocksClose(t *testing.T) {
 	for i := 0; i < numChannels; i++ {
 		subscribeClientV2(t, client, "ch"+strconv.Itoa(i))
 	}
+	pm.setRTT(rtt)
+	callsBefore := pm.calls.Load()
 
 	closeBlocked := make(chan time.Duration, 1)
 	go func() {
@@ -994,9 +1014,20 @@ func TestPresenceLoop_BlocksClose(t *testing.T) {
 	client.updatePresence()
 	loopDuration := time.Since(loopStart)
 	blocked := <-closeBlocked
+	calls := pm.calls.Load() - callsBefore
 
-	t.Logf("presence loop took %v; close() blocked for %v", loopDuration, blocked)
-	require.Less(t, blocked, 50*time.Millisecond,
+	t.Logf("presence loop took %v; close() blocked for %v; %d/%d presence calls issued",
+		loopDuration, blocked, calls, numChannels)
+
+	// Primary, timing-independent check: close() cut the loop short, so most
+	// channels never got their presence call.
+	require.Less(t, calls, int64(numChannels/2),
+		"presence loop kept issuing updates after close() started")
+	// Coarse timing guard. The threshold is deliberately loose: close() also does
+	// its own O(channels) unsubscribe work, which on a loaded CI runner under
+	// -race takes >100ms on its own and has nothing to do with presenceMu. Only
+	// a regression back to draining the whole loop (serialDrain) must trip this.
+	require.Less(t, blocked, serialDrain/4,
 		"close() was blocked waiting for the presence loop to drain")
 }
 
@@ -1359,7 +1390,7 @@ func TestPresenceTick_SkipsChannelWithNoWork(t *testing.T) {
 // must still be refreshed repeatedly rather than once.
 func TestPresenceTick_KeepsRefreshingPresence(t *testing.T) {
 	t.Parallel()
-	pm := &slowPresenceManager{rtt: 0}
+	pm := newSlowPresenceManager(0)
 	node, err := New(Config{
 		LogLevel:                     LogLevelError,
 		LogHandler:                   func(entry LogEntry) {},
