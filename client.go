@@ -1519,6 +1519,7 @@ func (c *Client) close(disconnect Disconnect) error {
 	// race connectCmd (e.g. the stale-connection timer firing during a slow
 	// connect), so the disconnect logs below must not read it lock-free.
 	user := c.user
+	authenticated := c.authenticated
 	c.status = statusClosed
 
 	c.stopTimer()
@@ -1529,21 +1530,14 @@ func (c *Client) close(disconnect Disconnect) error {
 	}
 	c.mu.Unlock()
 
-	// Unsubscribe from all channels (handles both normal and map subscriptions).
-	for channel := range channels {
-		err := c.unsubscribe(channel, unsubscribeDisconnect, &disconnect)
-		if err != nil {
-			c.node.logger.log(newErrorLogEntry(err, "error unsubscribing client from channel", map[string]any{"channel": channel, "user": user, "client": c.uid, "error": err.Error()}))
-		}
-	}
-
-	// Clean up any in-progress map subscriptions that aren't in channels yet.
-	c.cleanupMapSubscribingAll()
-
-	c.mu.RLock()
-	authenticated := c.authenticated
-	c.mu.RUnlock()
-
+	// Tear the transport down FIRST, before the per-channel cleanup below.
+	// Presence removal and leave publishing (in the unsubscribe loop) are
+	// synchronous PresenceManager/Broker round trips; under load they can be
+	// slow, and if the socket were closed only after them the connection would
+	// linger on the server while a reconnecting client that already gave up
+	// opens a new one - producing several concurrent connections per client
+	// (centrifuge-js #371). None of the cleanup below writes to the transport,
+	// so closing it here is safe and keeps teardown off the Redis-bound path.
 	if authenticated {
 		c.node.removeClient(c)
 	}
@@ -1562,6 +1556,21 @@ func (c *Client) close(disconnect Disconnect) error {
 	_ = c.messageWriter.close(flushRemaining)
 
 	_ = c.transport.Close(disconnect)
+
+	// Transport is closed; do the (potentially slow) channel cleanup now, off
+	// the connection's critical path. This still runs under presenceMu with
+	// c.closing set, so an in-flight presence tick can not resurrect presence
+	// entries after we remove them.
+	// Unsubscribe from all channels (handles both normal and map subscriptions).
+	for channel := range channels {
+		err := c.unsubscribe(channel, unsubscribeDisconnect, &disconnect)
+		if err != nil {
+			c.node.logger.log(newErrorLogEntry(err, "error unsubscribing client from channel", map[string]any{"channel": channel, "user": user, "client": c.uid, "error": err.Error()}))
+		}
+	}
+
+	// Clean up any in-progress map subscriptions that aren't in channels yet.
+	c.cleanupMapSubscribingAll()
 
 	if disconnect.Code != DisconnectConnectionClosed.Code {
 		c.node.logger.log(newLogEntry(LogLevelDebug, "closing client connection", map[string]any{"client": c.uid, "user": user, "reason": disconnect.Reason}))
