@@ -4483,3 +4483,262 @@ func TestMapCommit_InstallsOverOccupiedChannelSlot(t *testing.T) {
 	delete(client.channels, ch)
 	client.mu.Unlock()
 }
+
+// ===========================================================================
+// client_close_teardown_test.go
+// ===========================================================================
+
+// gatedPresenceManager tracks which (channel, clientID) pairs are present and
+// lets a test block exactly one AddPresence or RemovePresence call to hold the
+// connection's close path open at a chosen point.
+type gatedPresenceManager struct {
+	mu      sync.Mutex
+	present map[string]map[string]bool
+
+	// Armed by the test via addArmed/removeArmed. The first call after arming
+	// reports itself on <op>Entered and then blocks until <op>Release is closed.
+	addArmed      atomic.Bool
+	addEntered    chan string
+	addRelease    chan struct{}
+	removeArmed   atomic.Bool
+	removeEntered chan string
+	removeRelease chan struct{}
+}
+
+func newGatedPresenceManager() *gatedPresenceManager {
+	return &gatedPresenceManager{
+		present:       map[string]map[string]bool{},
+		addEntered:    make(chan string, 1),
+		addRelease:    make(chan struct{}),
+		removeEntered: make(chan string, 1),
+		removeRelease: make(chan struct{}),
+	}
+}
+
+func (m *gatedPresenceManager) Presence(ch string) (map[string]*ClientInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	res := map[string]*ClientInfo{}
+	for clientID := range m.present[ch] {
+		res[clientID] = &ClientInfo{ClientID: clientID}
+	}
+	return res, nil
+}
+
+func (m *gatedPresenceManager) PresenceStats(_ string) (PresenceStats, error) {
+	return PresenceStats{}, nil
+}
+
+func (m *gatedPresenceManager) AddPresence(ch string, clientID string, _ *ClientInfo) error {
+	if m.addArmed.CompareAndSwap(true, false) {
+		m.addEntered <- ch
+		<-m.addRelease
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.present[ch] == nil {
+		m.present[ch] = map[string]bool{}
+	}
+	m.present[ch][clientID] = true
+	return nil
+}
+
+func (m *gatedPresenceManager) RemovePresence(ch string, clientID string, _ string) error {
+	if m.removeArmed.CompareAndSwap(true, false) {
+		m.removeEntered <- ch
+		<-m.removeRelease
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.present[ch], clientID)
+	if len(m.present[ch]) == 0 {
+		delete(m.present, ch)
+	}
+	return nil
+}
+
+func (m *gatedPresenceManager) numPresent() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, clients := range m.present {
+		n += len(clients)
+	}
+	return n
+}
+
+// countGoroutinesRunning returns how many goroutine stacks currently contain
+// needle.
+func countGoroutinesRunning(needle string) int {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return strings.Count(string(buf[:n]), needle)
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+}
+
+const clientCloseStackFrame = "centrifuge.(*Client).close("
+
+// TestClose_BroadcastDuringCleanupSpawnsNoExtraCloses guards the broadcast path
+// against a goroutine storm while a connection is closing.
+//
+// close() tears the transport (and the writer) down before running the
+// per-channel cleanup, so that a slow PresenceManager can not hold the socket
+// open. But the connection stays registered in the hub's subscription shards
+// until the cleanup loop reaches each channel, so publications keep being routed
+// to it in the meantime. Every one of them fails to enqueue on the closed writer,
+// and writeEncodedPushData used to answer that by spawning `go c.close(...)` -
+// one goroutine per message, each of which only blocks until the in-flight close
+// finishes. The storm is worst exactly when Redis is slow, which is when the
+// cleanup is slow.
+func TestClose_BroadcastDuringCleanupSpawnsNoExtraCloses(t *testing.T) {
+	const chA, chB = "close_cleanup_a", "close_cleanup_b"
+	const numPublications = 300
+
+	pm := newGatedPresenceManager()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.SetPresenceManager(pm)
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{EmitPresence: true}}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "42")
+	subscribeClientV2(t, client, chA)
+	subscribeClientV2(t, client, chB)
+	require.Equal(t, 2, pm.numPresent())
+
+	// Block the first RemovePresence of the cleanup loop. The loop walks channels
+	// in map order, so we learn which one it took and publish into the other -
+	// that one is still in c.channels and still in the hub, i.e. still a live
+	// broadcast target with a dead writer.
+	pm.removeArmed.Store(true)
+
+	closeDone := make(chan struct{})
+	go func() {
+		_ = client.close(DisconnectConnectionClosed)
+		close(closeDone)
+	}()
+
+	var gatedChannel string
+	select {
+	case gatedChannel = <-pm.removeEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cleanup loop never reached RemovePresence")
+	}
+	openChannel := chA
+	if gatedChannel == chA {
+		openChannel = chB
+	}
+
+	// Precondition: the closing connection is still a broadcast target on the
+	// channel the cleanup has not reached yet. Without this the test would pass
+	// trivially.
+	require.Equal(t, 1, node.hub.NumSubscribers(openChannel),
+		"connection must still be subscribed while cleanup is in flight")
+
+	before := countGoroutinesRunning(clientCloseStackFrame)
+	for i := 0; i < numPublications; i++ {
+		_, err := node.Publish(openChannel, []byte(`{"n":`+strconv.Itoa(i)+`}`))
+		require.NoError(t, err)
+	}
+	// Give any goroutine the broadcast path spawned time to be scheduled and show
+	// up in the stack dump.
+	time.Sleep(100 * time.Millisecond)
+	during := countGoroutinesRunning(clientCloseStackFrame)
+
+	// `before` is 1: the close() we started above, parked in RemovePresence.
+	require.LessOrEqual(t, during, before+1,
+		"broadcasts to a closing connection must not spawn a close goroutine per message "+
+			"(before=%d during=%d after %d publications)", before, during, numPublications)
+
+	close(pm.removeRelease)
+	select {
+	case <-closeDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("close did not finish")
+	}
+
+	require.Zero(t, pm.numPresent(), "cleanup must still remove presence for every channel")
+	require.Zero(t, node.hub.NumSubscribers(chA))
+	require.Zero(t, node.hub.NumSubscribers(chB))
+	require.Empty(t, node.hub.UserConnections("42"))
+}
+
+// TestClose_TransportTeardownNotGatedByInFlightPresenceTick guards the socket
+// teardown against an in-flight presence tick.
+//
+// The tick holds presenceMu across its PresenceManager round trips. close() also
+// needs presenceMu - the cleanup removes presence entries and must not overlap a
+// tick that is still adding them - but it only needs it for that cleanup. Taking
+// it up front put a whole Redis round trip (or its timeout) in front of
+// transport.Close, so a hung PresenceManager kept the socket, the hub entry and
+// the inflight-connections gauge alive for the duration - the same lingering
+// connection this ordering exists to prevent.
+func TestClose_TransportTeardownNotGatedByInFlightPresenceTick(t *testing.T) {
+	const channel = "close_tick_channel"
+
+	pm := newGatedPresenceManager()
+	node, err := New(Config{
+		LogLevel:                     LogLevelError,
+		LogHandler:                   func(entry LogEntry) {},
+		ClientPresenceUpdateInterval: 50 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	node.SetPresenceManager(pm)
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{EmitPresence: true}}, nil)
+		})
+	})
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := newTestTransport(cancel)
+	client := newTestSubscribedClientWithTransport(t, ctx, node, transport, "42", channel)
+
+	// Arm only now: the subscribe above already paid one AddPresence.
+	pm.addArmed.Store(true)
+	select {
+	case <-pm.addEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("presence tick never reached AddPresence")
+	}
+	// The tick is parked inside AddPresence holding presenceMu.
+
+	closeDone := make(chan struct{})
+	go func() {
+		_ = client.close(DisconnectConnectionClosed)
+		close(closeDone)
+	}()
+
+	select {
+	case <-transport.closeCh:
+	case <-time.After(2 * time.Second):
+		close(pm.addRelease)
+		t.Fatal("transport was not closed while a presence tick was in flight")
+	}
+	require.Empty(t, node.hub.UserConnections("42"),
+		"connection must leave the hub without waiting for the presence tick")
+
+	// close() is now parked on presenceMu waiting for the tick, as it must be:
+	// releasing the tick lets it finish adding presence, and only then does the
+	// cleanup remove it.
+	close(pm.addRelease)
+	select {
+	case <-closeDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("close did not finish")
+	}
+
+	require.Zero(t, pm.numPresent(),
+		"presence added by the in-flight tick must still be removed by the cleanup")
+	require.Zero(t, node.hub.NumSubscribers(channel))
+}

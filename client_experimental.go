@@ -110,7 +110,7 @@ func (c *Client) writeQueueItems(items []queue.Item) error {
 	disconnect := c.messageWriter.enqueueMany(items...)
 	if disconnect != nil {
 		// close in goroutine to not block message broadcast.
-		go func() { _ = c.close(*disconnect) }()
+		c.spawnCloseUnlessClosing(*disconnect)
 		return io.EOF
 	}
 	return nil

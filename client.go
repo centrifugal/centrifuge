@@ -767,10 +767,27 @@ func (c *Client) writeEncodedPushData(data []byte, ch string, key string, frameT
 	disconnect := c.messageWriter.enqueue(item)
 	if disconnect != nil {
 		// close in goroutine to not block message broadcast.
-		go func() { _ = c.close(*disconnect) }()
+		c.spawnCloseUnlessClosing(*disconnect)
 		return io.EOF
 	}
 	return nil
+}
+
+// spawnCloseUnlessClosing starts close() in a goroutine for a broadcast-path
+// write failure, unless a close is already running. The guard matters because a
+// closing connection stays in the hub's subscription shards until close() gets
+// to the per-channel cleanup - and that cleanup makes PresenceManager/Broker
+// round trips, so under slow Redis the window is long. Every publication landing
+// in it fails to enqueue (the writer is already closed) and would otherwise
+// spawn a goroutine that just blocks on presenceMu until the in-flight close
+// finishes: one goroutine per message per closing connection, worst exactly when
+// Redis is slowest. The in-flight close already performs the teardown, so there
+// is nothing for these to do.
+func (c *Client) spawnCloseUnlessClosing(disconnect Disconnect) {
+	if c.closing.Load() {
+		return
+	}
+	go func() { _ = c.close(disconnect) }()
 }
 
 // publishJoinAndPresence publishes join notification and sets up map presence
@@ -1500,13 +1517,16 @@ func (c *Client) Disconnect(disconnect ...Disconnect) {
 
 func (c *Client) close(disconnect Disconnect) error {
 	c.startWriter(0, 0, 0, 0, false)
-	// Signal an in-flight presence tick to stop before we block on presenceMu:
-	// that tick may be draining many PresenceManager round trips, and close
-	// would otherwise wait for all of them. presenceMu is still taken below, so
-	// the tick can not resurrect presence entries after we remove them.
+	// Signal an in-flight presence tick to stop: that tick may be draining many
+	// PresenceManager round trips, and the cleanup below waits for all of them
+	// on presenceMu.
 	c.closing.Store(true)
-	c.presenceMu.Lock()
-	defer c.presenceMu.Unlock()
+	// presenceMu is deliberately NOT taken here - it is taken further down, once
+	// the transport is closed. Taking it up front would put an in-flight presence
+	// tick's Redis round trip (or, worse, its timeout) in front of the socket
+	// teardown, which is what we are trying to keep the teardown clear of. Only
+	// close() takes both mutexes, so this connectMu -> presenceMu order cannot
+	// invert against anything else.
 	c.connectMu.Lock()
 	defer c.connectMu.Unlock()
 	c.mu.Lock()
@@ -1557,10 +1577,14 @@ func (c *Client) close(disconnect Disconnect) error {
 
 	_ = c.transport.Close(disconnect)
 
-	// Transport is closed; do the (potentially slow) channel cleanup now, off
-	// the connection's critical path. This still runs under presenceMu with
-	// c.closing set, so an in-flight presence tick can not resurrect presence
-	// entries after we remove them.
+	// Transport is closed; do the (potentially slow) channel cleanup now, off the
+	// connection's critical path. Only now do we block on presenceMu: the cleanup
+	// removes presence entries, so it must not overlap an in-flight tick that is
+	// still adding them. c.closing is already set, so that tick stops at its next
+	// per-channel check instead of draining every round trip.
+	c.presenceMu.Lock()
+	defer c.presenceMu.Unlock()
+
 	// Unsubscribe from all channels (handles both normal and map subscriptions).
 	for channel := range channels {
 		err := c.unsubscribe(channel, unsubscribeDisconnect, &disconnect)
@@ -3470,9 +3494,9 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 					}
 					disconnect, ok := disconnectFromError(err)
 					if ok {
-						go func() { _ = c.close(*disconnect) }()
+						c.spawnCloseUnlessClosing(*disconnect)
 					} else {
-						go func() { _ = c.close(DisconnectWriteError) }()
+						c.spawnCloseUnlessClosing(DisconnectWriteError)
 					}
 					return err
 				}
@@ -3540,9 +3564,9 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 					}
 					disconnect, ok := disconnectFromError(err)
 					if ok {
-						go func() { _ = c.close(*disconnect) }()
+						c.spawnCloseUnlessClosing(*disconnect)
 					} else {
-						go func() { _ = c.close(DisconnectWriteError) }()
+						c.spawnCloseUnlessClosing(DisconnectWriteError)
 					}
 					return err
 				}
