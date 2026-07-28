@@ -1781,14 +1781,22 @@ func (t *pingTrackingTransport) WriteMany(data ...[]byte) error {
 // exceeds a tight threshold and makes a leak check flaky. Taking the minimum
 // across samples filters the transients out while still growing if goroutines
 // actually leak.
+//
+// The sampling must be DENSE to work: a sample only sees the resident floor if
+// it lands in a moment where no tick is in flight anywhere, and with a hundred
+// connections ticking those windows are short. Sampling every 10ms (with a
+// runtime.GC per sample, which NumGoroutine does not need and which itself takes
+// longer than such a window) missed them often enough that two calls made under
+// an identical, unchanging connection population disagreed by up to 27
+// goroutines — enough to trip the leak check below on its own. At 1ms and no GC
+// the same measurement repeats to within a few goroutines.
 func steadyGoroutines() int {
 	minN := math.MaxInt
-	for i := 0; i < 25; i++ {
-		runtime.GC()
+	for i := 0; i < 250; i++ {
 		if n := runtime.NumGoroutine(); n < minN {
 			minN = n
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(time.Millisecond)
 	}
 	return minN
 }
@@ -1902,10 +1910,13 @@ func runRuntimeStability(t *testing.T, o stabilityOpts) {
 		"presence entries missing for live connections")
 
 	// 5. No goroutine leak. A leaked tick goroutine would accumulate once per
-	// tick — hundreds over this window — so resident growth is what matters, not
-	// the transient workers in flight at any instant.
+	// tick — numConns * duration/ClientPresenceUpdateInterval of them, i.e. over
+	// a thousand here — so resident growth is what matters, not the transient
+	// workers in flight at any instant. The allowance is numConns rather than a
+	// tight bound because steadyGoroutines still carries a few goroutines of
+	// slack; it is two orders of magnitude below what any per-tick leak produces.
 	goroutinesAfter := steadyGoroutines()
-	require.Less(t, goroutinesAfter, goroutinesBefore+o.numConns/2,
+	require.Less(t, goroutinesAfter, goroutinesBefore+o.numConns,
 		"resident goroutine count grew from %d to %d during steady state", goroutinesBefore, goroutinesAfter)
 
 	t.Logf("wheel=%v conns=%d ch=%d rtt=%v: worst ping gap %v (interval %v), presence adds %d, position checks %d, goroutines %d->%d",

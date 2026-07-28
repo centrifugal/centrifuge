@@ -419,6 +419,11 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	if n.sharedPollManager != nil {
 		n.sharedPollManager.close()
 	}
+	// The metrics aggregator runs its own goroutine which does not watch
+	// shutdownCh, so without this it outlives the Node.
+	if n.metricsExporter != nil {
+		_ = n.metricsExporter.Close()
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(2)
