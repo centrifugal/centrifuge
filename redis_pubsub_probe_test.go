@@ -119,7 +119,7 @@ func newProbeTestSentinelBroker(tb testing.TB, probeInterval time.Duration, name
 		Name:                name,
 		Shards:              []*RedisShard{s},
 		SubscribeOnReplica:  true,
-		PubSubProbeInterval: probeInterval,
+		pubSubProbeInterval: probeInterval,
 	})
 	require.NoError(tb, err)
 	node.SetBroker(b)
@@ -311,7 +311,7 @@ func TestRedisBrokerPubSubProbeIdleConnection(t *testing.T) {
 		Prefix:              getUniquePrefix(),
 		Name:                name,
 		Shards:              []*RedisShard{s},
-		PubSubProbeInterval: 150 * time.Millisecond,
+		pubSubProbeInterval: 150 * time.Millisecond,
 	})
 	require.NoError(t, err)
 	node.SetBroker(b)
@@ -432,7 +432,7 @@ func TestRedisBrokerControlPubSubProbeIdle(t *testing.T) {
 		Prefix:              getUniquePrefix(),
 		Name:                name,
 		Shards:              []*RedisShard{s},
-		PubSubProbeInterval: 150 * time.Millisecond,
+		pubSubProbeInterval: 150 * time.Millisecond,
 	})
 	require.NoError(t, err)
 	node.SetBroker(b)
@@ -567,7 +567,7 @@ func TestRedisBrokerPubSubProbeShardedIdle(t *testing.T) {
 		Name:                       name,
 		Shards:                     []*RedisShard{s},
 		NumShardedPubSubPartitions: numPartitions,
-		PubSubProbeInterval:        150 * time.Millisecond,
+		pubSubProbeInterval:        150 * time.Millisecond,
 	})
 	require.NoError(t, err)
 	node.SetBroker(b)
@@ -652,7 +652,7 @@ func TestRedisMapBrokerPubSubProbeIdle(t *testing.T) {
 	e := redisMapBrokerFactory{}.makeCustom(t, node, handler, func(c *RedisMapBrokerConfig) {
 		c.Prefix = prefix
 		c.Name = name
-		c.PubSubProbeInterval = 150 * time.Millisecond
+		c.pubSubProbeInterval = 150 * time.Millisecond
 	})
 
 	shardChannel := e.pubSubShardChannelID(0, 0, false)

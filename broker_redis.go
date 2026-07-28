@@ -135,19 +135,6 @@ type RedisBrokerConfig struct {
 	// publishing to channels and using PUB/SUB.
 	SkipPubSub bool
 
-	// PubSubProbeInterval configures how often the broker verifies that its
-	// PUB/SUB connections still deliver messages. A connection that received
-	// nothing for this interval gets a small probe published to its service
-	// channel through the regular publish path; if a further interval passes
-	// without receiving anything, the connection is considered stale and
-	// re-established. This protects from the state where a connection
-	// remains healthy on the TCP level but is attached to a Redis node which
-	// no longer receives published traffic — possible after a failover (see
-	// centrifugal/centrifugo#1189). Probes are only sent on idle connections,
-	// so the mechanism costs nothing under regular message flow.
-	// Zero value means 30 seconds. Set to a negative value to disable probing.
-	PubSubProbeInterval time.Duration
-
 	// Name of broker, for observability purposes – i.e. becomes part of metrics/logs.
 	// By default, empty string is used.
 	Name string
@@ -205,6 +192,23 @@ type RedisBrokerConfig struct {
 	// Centrifuge to use 16 subscriber goroutines per subscribe shard.
 	numResubscribeShards int
 
+	// pubSubProbeInterval configures how often the broker verifies that its
+	// PUB/SUB connections still deliver messages — both the client ones and
+	// the control connection. A connection that received nothing for this
+	// interval gets a small probe published to its service channel through
+	// the regular publish path; if a further interval passes without
+	// receiving anything, the connection is considered stale and
+	// re-established. This protects from the state where a connection
+	// remains healthy on the TCP level but is attached to a Redis node which
+	// no longer receives published traffic — possible after a failover (see
+	// centrifugal/centrifugo#1189). Probes are only sent on idle connections,
+	// so the mechanism costs nothing under regular message flow.
+	// Zero value means defaultPubSubProbeInterval, values below
+	// minPubSubProbeInterval are raised to it, a negative value disables
+	// probing. Not exported: the default is expected to work everywhere, the
+	// knob only exists for tests.
+	pubSubProbeInterval time.Duration
+
 	// numPubSubProcessors allows configuring number of workers which will process
 	// messages coming from Redis PUB/SUB. Zero value tells Centrifuge to use the
 	// number calculated as:
@@ -246,9 +250,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		config.numResubscribeShards = 16
 	}
 
-	if config.PubSubProbeInterval == 0 {
-		config.PubSubProbeInterval = defaultPubSubProbeInterval
-	}
+	config.pubSubProbeInterval = normalizePubSubProbeInterval(config.pubSubProbeInterval)
 
 	if config.numPubSubProcessors == 0 {
 		config.numPubSubProcessors = runtime.NumCPU() / config.numSubscribeShards
@@ -374,13 +376,16 @@ func (r *defaultBrokerPubSubRunner) run(s *shardWrapper, h BrokerEventHandler) e
 			pubSubShardIndex := j
 			logFields := getBaseLogFields(s)
 			logFields["pub_sub_shard"] = pubSubShardIndex
+			// Allocated outside runForever: probe state must survive loop
+			// restarts, that is the whole point of it.
+			probeState := &pubSubProbeState{}
 			go b.runForever(func() {
 				select {
 				case <-b.closeCh:
 					return
 				default:
 				}
-				b.runPubSub(s, logFields, h, clusterShardIndex, pubSubShardIndex, b.useShardedPubSub(s.shard), func(err error) {
+				b.runPubSub(s, logFields, h, clusterShardIndex, pubSubShardIndex, b.useShardedPubSub(s.shard), probeState, func(err error) {
 					s.pubSubStartChannels[clusterShardIndex][pubSubShardIndex].once.Do(func() {
 						s.pubSubStartChannels[clusterShardIndex][pubSubShardIndex].errCh <- err
 					})
@@ -612,7 +617,7 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, logFields map[string]any, 
 	}()
 
 	// receivedCount counts messages delivered by this connection, feeding the
-	// liveness probing below. See the PubSubProbeInterval option docs.
+	// liveness probing below. See the pubSubProbeInterval option docs.
 	var receivedCount atomic.Uint64
 
 	wait := conn.SetPubSubHooks(rueidis.PubSubHooks{
@@ -661,7 +666,7 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, logFields map[string]any, 
 	// activates when the pings are absent (connection stopped delivering, or
 	// a broker used without Node.Run) — the check stays valid without
 	// depending on the ping schedule.
-	probeInterval := b.config.PubSubProbeInterval
+	probeInterval := b.config.pubSubProbeInterval
 	var probeTickerCh <-chan time.Time
 	if probeInterval > 0 {
 		probeTicker := time.NewTicker(probeInterval)
@@ -669,7 +674,15 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, logFields map[string]any, 
 		probeTickerCh = probeTicker.C
 	}
 	var seenCount uint64
-	var probeOutstanding bool
+	// probeSent is non-nil while a probe attempt is outstanding and becomes
+	// true once Redis has accepted that PUBLISH — see the same pattern in
+	// runPubSubLoop.
+	//
+	// No restart backoff here, unlike the client loop: restarting the control
+	// connection resubscribes three fixed channels, so even a restart loop
+	// against a wedged node costs nothing, while delaying restarts would
+	// prolong control starvation.
+	var probeSent *atomic.Bool
 	for {
 		select {
 		case err := <-wait:
@@ -686,15 +699,19 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, logFields map[string]any, 
 			cur := receivedCount.Load()
 			if cur != seenCount {
 				seenCount = cur
-				probeOutstanding = false
+				probeSent = nil
 				continue
 			}
-			if probeOutstanding {
+			if probeSent != nil && probeSent.Load() {
 				b.node.metrics.incRedisBrokerPubSubErrors(b.config.Name, "control_probe_timeout")
 				b.node.logger.log(newLogEntry(LogLevelWarn, "no control PUB/SUB message received since liveness probe was sent, restarting control PUB/SUB connection", logFields))
 				return
 			}
-			probeOutstanding = true
+			// The outstanding probe (if any) never reached Redis: the publish
+			// path is broken, which says nothing about the receive path.
+			// Start a fresh attempt instead of restarting the connection.
+			sent := &atomic.Bool{}
+			probeSent = sent
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), probeInterval)
 				defer cancel()
@@ -702,7 +719,9 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, logFields map[string]any, 
 				if pubErr := s.client.Do(ctx, cmd).Error(); pubErr != nil {
 					b.node.metrics.incRedisBrokerPubSubErrors(b.config.Name, "control_probe_publish")
 					b.node.logger.log(newErrorLogEntry(pubErr, "error publishing control PUB/SUB probe", logFields))
+					return
 				}
+				sent.Store(true)
 			}()
 		}
 	}
@@ -733,7 +752,7 @@ func (b *RedisBroker) makePubSubCallbacks(s *shardWrapper) pubSubCallbacks {
 	}
 }
 
-func (b *RedisBroker) runPubSub(s *shardWrapper, logFields map[string]any, eventHandler BrokerEventHandler, clusterShardIndex, psShardIndex int, useShardedPubSub bool, startOnce func(error)) {
+func (b *RedisBroker) runPubSub(s *shardWrapper, logFields map[string]any, eventHandler BrokerEventHandler, clusterShardIndex, psShardIndex int, useShardedPubSub bool, probeState *pubSubProbeState, startOnce func(error)) {
 	cb := b.makePubSubCallbacks(s)
 	numPartitions := b.config.NumShardedPubSubPartitions
 	if numPartitions == 0 {
@@ -748,7 +767,8 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, logFields map[string]any, event
 		b.config.Name,
 		b.node.metrics.brokerPubSub,
 		b.config.SubscribeOnReplica,
-		b.config.PubSubProbeInterval,
+		b.config.pubSubProbeInterval,
+		probeState,
 		b.config.numPubSubProcessors,
 		b.config.numResubscribeShards,
 		b.config.numSubscribeShards,

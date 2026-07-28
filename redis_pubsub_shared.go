@@ -18,7 +18,25 @@ const (
 	// defaultPubSubProbeInterval is the default idle interval after which a
 	// PUB/SUB connection gets a liveness probe.
 	defaultPubSubProbeInterval = 30 * time.Second
+
+	// minPubSubProbeInterval is the floor for a configured probe interval.
+	// Probing below this makes no sense: the interval is also the deadline
+	// for the probe round trip, and shorter values turn ordinary Redis
+	// latency into connection restarts.
+	minPubSubProbeInterval = 100 * time.Millisecond
 )
+
+// normalizePubSubProbeInterval normalizes a configured probe interval: zero
+// means default, negative disables probing, positive is clamped to the floor.
+func normalizePubSubProbeInterval(configured time.Duration) time.Duration {
+	if configured == 0 {
+		return defaultPubSubProbeInterval
+	}
+	if configured > 0 && configured < minPubSubProbeInterval {
+		return minPubSubProbeInterval
+	}
+	return configured
+}
 
 // pubSubProbeMessage is the payload of PUB/SUB liveness probes. Probes are
 // recognized by the channel they arrive on (the shard service channel), not
@@ -30,7 +48,12 @@ const pubSubProbeMessage = "probe"
 // shard client (the master), even when the PUB/SUB loop subscribes on a
 // replica — in that mode a delivered probe additionally verifies the
 // replication link.
-func publishPubSubProbe(shard *RedisShard, node *Node, psm redisPubSubMetrics, name, shardChannel string, useShardedPubSub bool, timeout time.Duration, logFields map[string]any) {
+//
+// Returns true when Redis accepted the PUBLISH. Only a probe that was really
+// sent can prove anything about the receive path — see the probe branch of
+// runPubSubLoop. The timeout callers pass is the probe interval itself: an
+// attempt that takes longer than that is superseded by the next one anyway.
+func publishPubSubProbe(shard *RedisShard, node *Node, psm redisPubSubMetrics, name, shardChannel string, useShardedPubSub bool, timeout time.Duration, logFields map[string]any) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	var cmd rueidis.Completed
@@ -40,12 +63,47 @@ func publishPubSubProbe(shard *RedisShard, node *Node, psm redisPubSubMetrics, n
 		cmd = shard.client.B().Publish().Channel(shardChannel).Message(pubSubProbeMessage).Build()
 	}
 	if err := shard.client.Do(ctx, cmd).Error(); err != nil {
-		// A failed publish becomes a failed probe on the next tick. Still
-		// worth logging separately: it means the publish path is broken too,
-		// so restarting the PUB/SUB connection alone may not help.
 		psm.incErrors(name, "probe_publish")
 		node.logger.log(newErrorLogEntry(err, "error publishing PUB/SUB probe", logFields))
+		return false
 	}
+	return true
+}
+
+// pubSubProbeState is the part of the liveness probing state that must
+// survive a loop restart. It is created once per PUB/SUB loop identity by the
+// broker starting the loop, and is only ever touched by that single loop
+// goroutine (runForever runs one loop instance at a time), so it needs no
+// synchronization.
+type pubSubProbeState struct {
+	// consecutiveRestarts counts loop restarts caused by failed liveness
+	// probes since the last time the connection delivered something. Reset
+	// as soon as any message arrives.
+	consecutiveRestarts int
+}
+
+// pubSubProbeRestartBackoff spaces out repeated probe-triggered restarts.
+//
+// Restarting only helps if the new connection lands on a node that actually
+// delivers. When it does not — the underlying client keeps resolving to the
+// same wedged node — unbounded restarts would resubscribe every channel of
+// this node every couple of intervals, which is expensive precisely when
+// Redis is least able to take it. The first restart is immediate (the common
+// case, where reconnecting fixes it), each further one doubles the wait, and
+// the wait is capped at ten intervals.
+func pubSubProbeRestartBackoff(interval time.Duration, consecutiveRestarts int) time.Duration {
+	if consecutiveRestarts <= 1 {
+		return 0
+	}
+	maxBackoff := 10 * interval
+	backoff := interval
+	for i := 2; i < consecutiveRestarts; i++ {
+		backoff *= 2
+		if backoff >= maxBackoff {
+			return maxBackoff
+		}
+	}
+	return backoff
 }
 
 // pubSubCallbacks carries the type-varying behavior as function pointers.
@@ -98,6 +156,7 @@ func runPubSubLoop(
 	psm redisPubSubMetrics,
 	subscribeOnReplica bool,
 	probeInterval time.Duration,
+	probeState *pubSubProbeState,
 	numProcessors, numResubscribeShards, numSubscribeShards, numPartitions int,
 	logFields map[string]any,
 	eventHandler BrokerEventHandler,
@@ -349,9 +408,9 @@ func runPubSubLoop(
 	// The probe ticker breaks that: when nothing has been received for a
 	// full interval, publish a small probe to the shard service channel
 	// through the regular publish path and expect it back on this
-	// connection. If a probe was sent and a whole further interval passed
-	// without receiving ANYTHING (not even the probe), the connection is
-	// considered stale and the loop restarts, re-resolving the topology.
+	// connection. If a probe was really sent and a whole further interval
+	// passed without receiving ANYTHING (not even the probe), the connection
+	// is considered stale and the loop restarts, re-resolving the topology.
 	// Under regular traffic the probe never fires, so the steady-state cost
 	// is one atomic load per interval.
 	var probeTickerCh <-chan time.Time
@@ -361,7 +420,10 @@ func runPubSubLoop(
 		probeTickerCh = probeTicker.C
 	}
 	var seenCount uint64
-	var probeOutstanding bool
+	// probeSent is non-nil while a probe attempt is outstanding and becomes
+	// true once Redis has accepted that PUBLISH. Publishing happens off this
+	// goroutine, so the loop learns the outcome through the flag.
+	var probeSent *atomic.Bool
 	for {
 		select {
 		case err = <-wait:
@@ -381,19 +443,50 @@ func runPubSubLoop(
 				// The connection delivered something during the last
 				// interval (possibly a previous probe) — alive.
 				seenCount = cur
-				probeOutstanding = false
+				probeSent = nil
+				probeState.consecutiveRestarts = 0
 				continue
 			}
-			if probeOutstanding {
+			if probeSent != nil && probeSent.Load() {
 				// A probe was published a full interval ago and nothing at
 				// all has been received since — the connection is attached
 				// to a node that does not deliver published traffic.
 				psm.incErrors(name, "probe_timeout")
-				node.logger.log(newLogEntry(LogLevelWarn, "no PUB/SUB message received since liveness probe was sent, restarting PUB/SUB connection", logFields))
+				probeState.consecutiveRestarts++
+				backoff := pubSubProbeRestartBackoff(probeInterval, probeState.consecutiveRestarts)
+				restartLogFields := make(map[string]any, len(logFields)+2)
+				for k, v := range logFields {
+					restartLogFields[k] = v
+				}
+				restartLogFields["consecutive_probe_restarts"] = probeState.consecutiveRestarts
+				restartLogFields["restart_delay"] = backoff.String()
+				node.logger.log(newLogEntry(LogLevelWarn, "no PUB/SUB message received since liveness probe was sent, restarting PUB/SUB connection", restartLogFields))
+				if backoff > 0 {
+					// Keep the connection in place while waiting: it is stale,
+					// not broken, so subscriptions issued meanwhile still
+					// succeed and are restored by the resubscribe on restart.
+					select {
+					case <-time.After(backoff):
+					case <-done:
+					case <-shard.closeCh:
+					}
+				}
 				return
 			}
-			probeOutstanding = true
-			go publishPubSubProbe(shard, node, psm, name, shardChannel, useShardedPubSub, probeInterval, logFields)
+			// Either no probe was outstanding, or the outstanding one never
+			// reached Redis — the publish failed or is still in flight. A
+			// probe that was not sent says nothing about the receive path:
+			// it is the publish path that is broken (a failing over master,
+			// a READONLY pin), and restarting the PUB/SUB connection would
+			// not fix that while resubscribing every channel of this node.
+			// Start a fresh attempt instead.
+			sent := &atomic.Bool{}
+			probeSent = sent
+			go func() {
+				if publishPubSubProbe(shard, node, psm, name, shardChannel, useShardedPubSub, probeInterval, logFields) {
+					sent.Store(true)
+				}
+			}()
 		}
 	}
 }
