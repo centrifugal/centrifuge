@@ -265,8 +265,12 @@ func TestHubDisconnect(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no data in sink")
 	}
-	require.Len(t, n.hub.UserConnections("42"), 0)
-	require.Equal(t, 0, n.hub.NumSubscribers("test_channel"))
+	// close() now tears the transport down (which signals closeCh) before the
+	// per-channel cleanup, so hub subscription state converges shortly after the
+	// close signal rather than strictly before it.
+	require.Eventually(t, func() bool {
+		return len(n.hub.UserConnections("42")) == 0 && n.hub.NumSubscribers("test_channel") == 0
+	}, 2*time.Second, 10*time.Millisecond)
 
 	// Disconnect subscribed user with reconnect.
 	err = n.hub.disconnect("24", DisconnectForceReconnect, "", "", nil, nil)
@@ -276,8 +280,9 @@ func TestHubDisconnect(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no data in sink")
 	}
-	require.Len(t, n.hub.UserConnections("24"), 0)
-	require.Equal(t, 0, n.hub.NumSubscribers("test_channel_reconnect"))
+	require.Eventually(t, func() bool {
+		return len(n.hub.UserConnections("24")) == 0 && n.hub.NumSubscribers("test_channel_reconnect") == 0
+	}, 2*time.Second, 10*time.Millisecond)
 
 	wg.Wait()
 
