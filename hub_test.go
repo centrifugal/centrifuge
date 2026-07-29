@@ -818,6 +818,64 @@ func TestHubBroadcastPublicationDeltaAtMostOnceNoOffset(t *testing.T) {
 	}
 }
 
+// TestHubBroadcastDeltaInvalidJSONDisconnectsClient covers two defects on the
+// delta broadcast path.
+//
+// broadcastPublication declares `var jsonEncodeErr *encodeError` (nil) and
+// passed it BY VALUE to getDeltaData, which on a JSON encode failure did
+// `*jsonEncodeErr = encodeError{...}`:
+//
+//  1. that dereferences nil, panicking the broadcasting goroutine — in a real
+//     node this is the PUB/SUB consumer, so the panic is process-fatal; and
+//  2. even without the panic it wrote to the pointee rather than rebinding the
+//     caller's variable, so the caller's `jsonEncodeErr != nil` check could
+//     never fire and the offending client would never be disconnected.
+//
+// Reaching it needs a JSON encode failure on the delta path. Publication.Data
+// is always json.Escape'd for JSON+Fossil so it cannot be the trigger, but
+// ClientInfo.ConnInfo is embedded raw and the encoder validates the whole
+// assembled document (isValidJSON), so invalid ConnInfo fails the encode.
+//
+// The non-delta paths correctly do `jsonEncodeErr = &encodeError{...}` and
+// already disconnected such clients; this asserts delta behaves the same.
+func TestHubBroadcastDeltaInvalidJSONDisconnectsClient(t *testing.T) {
+	t.Parallel()
+	n := deltaTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := newTestTransport(cancel)
+	transport.setProtocolType(ProtocolTypeJSON)
+	const channel = "test-delta-invalid-json"
+	client := newTestSubscribedClientWithTransportDelta(
+		t, ctx, n, transport, "user-delta", channel, DeltaTypeFossil)
+	require.NotNil(t, client)
+
+	pub := &Publication{
+		Data:   []byte(`{"input":"hello"}`),
+		Offset: 1,
+		Info:   &ClientInfo{ClientID: "cid", UserID: "user-delta", ConnInfo: []byte(`{"broken":`)},
+	}
+	prevPub := &Publication{Data: []byte(`{"input":"hell"}`)}
+
+	require.NotPanics(t, func() {
+		_ = n.hub.broadcastPublication(
+			channel, StreamPosition{Offset: 1, Epoch: "test"},
+			pub, prevPub, prevPub, ChannelBatchConfig{},
+		)
+	}, "broadcast must not panic when a delta publication fails JSON encoding")
+
+	// The encode error must reach the caller, which disconnects the client —
+	// this is what silently never happened when the pointer was passed by value.
+	select {
+	case <-transport.closeCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("client was not disconnected: the delta JSON encode error did not propagate to broadcastPublication")
+	}
+	require.Equal(t, DisconnectInappropriateProtocol.Code, transport.disconnect.Code)
+}
+
 func TestHubBroadcastJoin(t *testing.T) {
 	t.Parallel()
 	tcs := []struct {
