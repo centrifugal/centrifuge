@@ -109,21 +109,45 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 		return true
 	}
 
-	// No batching - use RemoveMany which handles shrinking automatically.
+	// No batching. Drain into a pooled buffer rather than letting the queue
+	// allocate a fresh []Item per drain (RemoveMany does), which on the
+	// broadcast path is an allocation per drain per connection. Shrink stays
+	// inline in the same critical section, so timing and lock traffic match
+	// RemoveMany exactly: shrinkDelay is deliberately NOT consulted here —
+	// QueueShrinkDelay is documented to apply only when WriteDelay > 0, and
+	// routing this path through FinishCollect would both start honouring it and
+	// arm/Reset a timer on every drain.
 	w.mu.Lock()
-	defer w.mu.Unlock()
 
-	items, ok := w.messages.RemoveMany(maxMessagesInFrame)
+	bufSize := maxMessagesInFrame
+	if bufSize < 0 { // Unlimited, just use current length.
+		bufSize = w.messages.Len()
+		if bufSize == 0 {
+			w.mu.Unlock()
+			return !w.messages.Closed()
+		}
+	}
+
+	itemBuf := getItemBuf(bufSize)
+	buf := itemBuf.B
+
+	n, ok := w.messages.RemoveManyIntoShrink(buf, bufSize)
 	if !ok {
+		putItemBuf(itemBuf)
+		w.mu.Unlock()
 		return !w.messages.Closed()
 	}
 
+	items := buf[:n]
 	var writeErr error
-	if len(items) == 1 {
+	if n == 1 {
 		writeErr = w.config.WriteFn(items[0])
 	} else {
 		writeErr = w.config.WriteManyFn(items...)
 	}
+
+	putItemBuf(itemBuf)
+	w.mu.Unlock()
 
 	if writeErr != nil {
 		// Write failed, transport must close itself, here we just return from routine.

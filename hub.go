@@ -754,6 +754,13 @@ type subInfo struct {
 	tagsFilter       *tagsFilter
 	serverTagsFilter *tagsFilter
 	isMap            bool // true for map subscriptions.
+	// protoType and unidirectional mirror the client's transport. Both are fixed
+	// for the connection's lifetime, but reading them goes through two interface
+	// dispatches — a cost paid once per subscriber per broadcast. Snapshotting
+	// them at addSub time turns the broadcast loop's per-subscriber protocol
+	// dispatch into plain field loads. Set by addSub, not by callers.
+	protoType      protocol.Type
+	unidirectional bool
 	// subGen identifies this specific subscription of the client to the channel.
 	// A resubscribe gets a fresh subGen, so a stale unsubscribe (carrying an older
 	// subGen it read from c.channels) will not remove a newer subscription's hub
@@ -796,6 +803,11 @@ func newSubShard(logger *logger, metrics *metrics, maxTimeLagMilli int64, shardI
 // addSub adds connection into clientHub subscriptions registry.
 // Returns (chanID, isFirst, error) where isFirst is true if this is the first subscriber.
 func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
+	// Snapshot the transport's immutable protocol properties so the broadcast
+	// loop reads fields instead of making interface calls per subscriber.
+	sub.protoType = sub.client.transport.Protocol().toProto()
+	sub.unidirectional = sub.client.transport.Unidirectional()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1090,7 +1102,18 @@ func (s *subShard) broadcastPublication(
 	if fullPub.Offset == 1 && sp.Epoch != "" {
 		fullPub.Epoch = sp.Epoch
 	}
-	preparedDataByKey := make(map[preparedKey]preparedData)
+	// Encoded payloads are shared by all subscribers with the same
+	// protocol/delta/useID/filtered combination. Nearly every channel has just
+	// one such combination, so a single-entry front cache serves every
+	// subscriber after the first and the map — whose key hashing showed up as a
+	// per-subscriber cost, preparedKey holding a string — is only built when a
+	// channel really does mix combinations.
+	var (
+		lastKey           preparedKey
+		lastData          preparedData
+		haveLast          bool
+		preparedDataByKey map[preparedKey]preparedData
+	)
 
 	var filteredPub *protocol.Publication
 
@@ -1134,13 +1157,21 @@ func (s *subShard) broadcastPublication(
 		}
 
 		key := preparedKey{
-			ProtocolType:   sub.client.Transport().Protocol().toProto(),
-			Unidirectional: sub.client.transport.Unidirectional(),
+			ProtocolType:   sub.protoType,
+			Unidirectional: sub.unidirectional,
 			DeltaType:      sub.deltaType,
 			UseID:          useChannelID,
 			WasFiltered:    wasFiltered,
 		}
-		prepValue, prepDataFound := preparedDataByKey[key]
+		var (
+			prepValue     preparedData
+			prepDataFound bool
+		)
+		if haveLast && lastKey == key {
+			prepValue, prepDataFound = lastData, true
+		} else if preparedDataByKey != nil {
+			prepValue, prepDataFound = preparedDataByKey[key]
+		}
 		if !prepDataFound {
 			var brokerDeltaPub *protocol.Publication
 			if fullPub.Offset > 0 {
@@ -1280,9 +1311,20 @@ func (s *subShard) broadcastPublication(
 				}
 				prepValue.filteredPub = filteredPub
 			}
-			preparedDataByKey[key] = prepValue
+			// Promote to the front cache. Only once a second distinct key shows up
+			// is the map created, seeded with the entry the front cache is about to
+			// evict, so an alternating pattern still hits the map rather than
+			// re-encoding.
+			if haveLast {
+				if preparedDataByKey == nil {
+					preparedDataByKey = make(map[preparedKey]preparedData, 4)
+				}
+				preparedDataByKey[lastKey] = lastData
+				preparedDataByKey[key] = prepValue
+			}
+			lastKey, lastData, haveLast = key, prepValue, true
 		}
-		if sub.client.transport.Protocol() == ProtocolTypeJSON {
+		if sub.protoType == protocol.TypeJSON {
 			if jsonEncodeErr != nil {
 				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 				continue
@@ -1327,18 +1369,32 @@ func (s *subShard) broadcastJoin(channel string, join *protocol.Join, batchConfi
 	// Get subID for this channel if it exists
 	channelSubID, hasSubID := s.chanIDs[channel]
 
-	preparedDataByKey := make(map[preparedKey][]byte)
+	// See broadcastPublication: single-entry front cache, map only on mixed keys.
+	var (
+		lastKey           preparedKey
+		lastData          []byte
+		haveLast          bool
+		preparedDataByKey map[preparedKey][]byte
+	)
 
 	for _, sub := range channelSubscribers {
 		useChannelID := sub.useID && hasSubID
 		key := preparedKey{
-			ProtocolType:   sub.client.Transport().Protocol().toProto(),
-			Unidirectional: sub.client.transport.Unidirectional(),
+			ProtocolType:   sub.protoType,
+			Unidirectional: sub.unidirectional,
 			DeltaType:      deltaTypeNone, // Join messages don't use delta
 			UseID:          useChannelID,
 		}
 
-		prepValue, prepDataFound := preparedDataByKey[key]
+		var (
+			prepValue     []byte
+			prepDataFound bool
+		)
+		if haveLast && lastKey == key {
+			prepValue, prepDataFound = lastData, true
+		} else if preparedDataByKey != nil {
+			prepValue, prepDataFound = preparedDataByKey[key]
+		}
 		if !prepDataFound {
 			var data []byte
 
@@ -1390,11 +1446,18 @@ func (s *subShard) broadcastJoin(channel string, join *protocol.Join, batchConfi
 				}
 			}
 
-			preparedDataByKey[key] = data
 			prepValue = data
+			if haveLast {
+				if preparedDataByKey == nil {
+					preparedDataByKey = make(map[preparedKey][]byte, 4)
+				}
+				preparedDataByKey[lastKey] = lastData
+				preparedDataByKey[key] = data
+			}
+			lastKey, lastData, haveLast = key, data, true
 		}
 
-		if sub.client.transport.Protocol() == ProtocolTypeJSON && jsonEncodeErr != nil {
+		if sub.protoType == protocol.TypeJSON && jsonEncodeErr != nil {
 			go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 			continue
 		}
@@ -1431,18 +1494,32 @@ func (s *subShard) broadcastLeave(channel string, leave *protocol.Leave, batchCo
 	// Get subID for this channel if it exists
 	channelSubID, hasSubID := s.chanIDs[channel]
 
-	preparedDataByKey := make(map[preparedKey][]byte)
+	// See broadcastPublication: single-entry front cache, map only on mixed keys.
+	var (
+		lastKey           preparedKey
+		lastData          []byte
+		haveLast          bool
+		preparedDataByKey map[preparedKey][]byte
+	)
 
 	for _, sub := range channelSubscribers {
 		useChannelID := sub.useID && hasSubID
 		key := preparedKey{
-			ProtocolType:   sub.client.Transport().Protocol().toProto(),
-			Unidirectional: sub.client.transport.Unidirectional(),
+			ProtocolType:   sub.protoType,
+			Unidirectional: sub.unidirectional,
 			DeltaType:      deltaTypeNone, // Leave messages don't use delta
 			UseID:          useChannelID,
 		}
 
-		prepValue, prepDataFound := preparedDataByKey[key]
+		var (
+			prepValue     []byte
+			prepDataFound bool
+		)
+		if haveLast && lastKey == key {
+			prepValue, prepDataFound = lastData, true
+		} else if preparedDataByKey != nil {
+			prepValue, prepDataFound = preparedDataByKey[key]
+		}
 		if !prepDataFound {
 			var data []byte
 
@@ -1494,11 +1571,18 @@ func (s *subShard) broadcastLeave(channel string, leave *protocol.Leave, batchCo
 				}
 			}
 
-			preparedDataByKey[key] = data
 			prepValue = data
+			if haveLast {
+				if preparedDataByKey == nil {
+					preparedDataByKey = make(map[preparedKey][]byte, 4)
+				}
+				preparedDataByKey[lastKey] = lastData
+				preparedDataByKey[key] = data
+			}
+			lastKey, lastData, haveLast = key, data, true
 		}
 
-		if sub.client.transport.Protocol() == ProtocolTypeJSON && jsonEncodeErr != nil {
+		if sub.protoType == protocol.TypeJSON && jsonEncodeErr != nil {
 			go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 			continue
 		}

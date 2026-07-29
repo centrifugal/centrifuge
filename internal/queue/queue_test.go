@@ -842,3 +842,57 @@ func TestQueueFinishCollectAfterCloseRemovesNothing(t *testing.T) {
 		t.Fatal("queue must remain closed")
 	}
 }
+
+// TestQueueRemoveManyIntoShrinkMatchesRemoveMany pins the equivalence the
+// writer's no-write-delay path depends on: draining via RemoveManyIntoShrink
+// must leave the queue in the same observable state (length, size, capacity)
+// as the RemoveMany call it replaced, so swapping them cannot change when a
+// grown queue shrinks back.
+func TestQueueRemoveManyIntoShrinkMatchesRemoveMany(t *testing.T) {
+	fill := func(q *Queue, n int) {
+		for i := 0; i < n; i++ {
+			require.True(t, q.Add(Item{Data: []byte("message-payload"), Channel: "ch"}))
+		}
+	}
+
+	for _, tc := range []struct{ initCap, added, drain int }{
+		{2, 1, 16}, {2, 64, 16}, {2, 64, -1}, {8, 100, 16}, {8, 9, -1}, {4, 4, 4},
+	} {
+		qa, qb := New(tc.initCap), New(tc.initCap)
+		fill(qa, tc.added)
+		fill(qb, tc.added)
+
+		removed, okA := qa.RemoveMany(tc.drain)
+
+		bufSize := tc.drain
+		if bufSize < 0 {
+			bufSize = qb.Len()
+		}
+		buf := make([]Item, bufSize)
+		n, okB := qb.RemoveManyIntoShrink(buf, tc.drain)
+
+		require.Equal(t, okA, okB, "ok mismatch for %+v", tc)
+		require.Equal(t, len(removed), n, "count mismatch for %+v", tc)
+		require.Equal(t, qa.Len(), qb.Len(), "length mismatch for %+v", tc)
+		require.Equal(t, qa.Size(), qb.Size(), "size mismatch for %+v", tc)
+		require.Equal(t, qa.Cap(), qb.Cap(), "capacity (shrink) mismatch for %+v", tc)
+
+		// Drained items must be intact and in FIFO order.
+		for i := 0; i < n; i++ {
+			require.Equal(t, removed[i].Data, buf[i].Data, "payload mismatch for %+v", tc)
+		}
+
+		// Both must remain usable afterwards.
+		fill(qa, 3)
+		fill(qb, 3)
+		require.Equal(t, qa.Len(), qb.Len(), "post-refill length mismatch for %+v", tc)
+	}
+}
+
+func TestQueueRemoveManyIntoShrinkEmpty(t *testing.T) {
+	q := New(2)
+	buf := make([]Item, 4)
+	n, ok := q.RemoveManyIntoShrink(buf, 4)
+	require.False(t, ok)
+	require.Equal(t, 0, n)
+}
