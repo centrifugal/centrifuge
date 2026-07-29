@@ -992,7 +992,13 @@ func getDeltaPub(prevPub *Publication, fullPub *protocol.Publication, key prepar
 	return deltaPub
 }
 
-func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protocol.Publication, channelSubID int64, jsonEncodeErr *encodeError) ([]byte, error) {
+// jsonEncodeErr is a **encodeError, not *encodeError, deliberately: the caller
+// holds a nil *encodeError and needs it REPLACED on failure. Taking it by value
+// meant this function dereferenced nil (panicking the whole broadcast) and,
+// had it not panicked, would have written to the pointee rather than the
+// caller's variable — so the caller's `jsonEncodeErr != nil` check could never
+// fire. Matches how the non-delta paths do `jsonEncodeErr = &encodeError{...}`.
+func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protocol.Publication, channelSubID int64, jsonEncodeErr **encodeError) ([]byte, error) {
 	var deltaData []byte
 	if key.ProtocolType == protocol.TypeJSON {
 		if sub.client.transport.Unidirectional() {
@@ -1007,7 +1013,7 @@ func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protoc
 			deltaData, err = protocol.DefaultJsonPushEncoder.Encode(push)
 			putPush(push)
 			if err != nil {
-				*jsonEncodeErr = encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+				*jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 			}
 		} else {
 			push := getPush()
@@ -1024,7 +1030,7 @@ func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protoc
 			putReply(reply)
 			putPush(push)
 			if err != nil {
-				*jsonEncodeErr = encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+				*jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 			}
 		}
 	} else if key.ProtocolType == protocol.TypeProtobuf {
@@ -1152,11 +1158,11 @@ func (s *subShard) broadcastPublication(
 			var localDeltaData []byte
 			if key.DeltaType != deltaTypeNone {
 				var err error
-				brokerDeltaData, err = getDeltaData(sub, key, channel, brokerDeltaPub, channelSubID, jsonEncodeErr)
+				brokerDeltaData, err = getDeltaData(sub, key, channel, brokerDeltaPub, channelSubID, &jsonEncodeErr)
 				if err != nil {
 					return err
 				}
-				localDeltaData, err = getDeltaData(sub, key, channel, localDeltaPub, channelSubID, jsonEncodeErr)
+				localDeltaData, err = getDeltaData(sub, key, channel, localDeltaPub, channelSubID, &jsonEncodeErr)
 				if err != nil {
 					return err
 				}
