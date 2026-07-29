@@ -845,6 +845,58 @@ func BenchmarkSharedPollResultCached(b *testing.B) {
 	})
 }
 
+// TestMetrics_NoSummariesExposed pins the removal of the two deprecated Summary
+// metrics. They were previously exposed by default and only suppressed when
+// EnableNativeHistograms was set, so the default path is the one that needs
+// guarding. Their _histogram companions must still carry the observations.
+//
+// Beyond the metric surface, this also keeps the command path off
+// prometheus.(*summary).Observe, which serializes every observation on a
+// per-metric mutex shared by all connections on the node.
+func TestMetrics_NoSummariesExposed(t *testing.T) {
+	t.Parallel()
+	reg := prometheus.NewRegistry()
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:   "test_nosum",
+		RegistererGatherer: reg,
+	})
+	require.NoError(t, err)
+
+	m.observeCommandDuration(protocol.FrameTypePublish, 5*time.Millisecond, "", nil)
+	m.observeSurveyDuration("test_op", 5*time.Millisecond)
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	seen := map[string]dto.MetricType{}
+	for _, mf := range families {
+		seen[mf.GetName()] = mf.GetType()
+	}
+
+	for _, name := range []string{
+		"test_nosum_client_command_duration_seconds",
+		"test_nosum_node_survey_duration_seconds",
+	} {
+		_, exists := seen[name]
+		require.False(t, exists, "deprecated Summary %s must no longer be exposed", name)
+	}
+
+	for _, name := range []string{
+		"test_nosum_client_command_duration_seconds_histogram",
+		"test_nosum_node_survey_duration_seconds_histogram",
+	} {
+		typ, exists := seen[name]
+		require.True(t, exists, "histogram %s must still be exposed", name)
+		require.Equal(t, dto.MetricType_HISTOGRAM, typ, "%s should be a histogram", name)
+	}
+
+	// No Summary instrument should remain anywhere in the registry.
+	for name, typ := range seen {
+		require.NotEqual(t, dto.MetricType_SUMMARY, typ,
+			"unexpected Summary metric %s — summaries were removed", name)
+	}
+}
+
 func TestMetrics_EnableNativeHistograms(t *testing.T) {
 	t.Parallel()
 	reg := prometheus.NewRegistry()
@@ -866,9 +918,8 @@ func TestMetrics_EnableNativeHistograms(t *testing.T) {
 	families, err := reg.Gather()
 	require.NoError(t, err)
 
-	// With EnableNativeHistograms on, the legacy Summary metrics must not
-	// be exposed; their _histogram companions carry the observations in
-	// native (sparse, exponential) form.
+	// The removed Summary metrics must not be exposed; their _histogram
+	// companions carry the observations in native (sparse, exponential) form.
 	mustNotExist := map[string]bool{
 		"test_nh_client_command_duration_seconds": true,
 		"test_nh_node_survey_duration_seconds":    true,
