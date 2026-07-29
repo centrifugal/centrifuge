@@ -11,13 +11,12 @@ Centrifuge metrics (native histograms)
     → stdoutmetric exporter (prints OTel JSON)
 ```
 
-Centrifuge exposes both a Summary and a Histogram for the two duration
-metrics that have historically been Summaries — `command_duration_seconds`
-and `survey_duration_seconds`. When `EnableNativeHistograms` is on:
+The two duration metrics that were historically Summaries —
+`command_duration_seconds` and `survey_duration_seconds` — are now exposed
+only as Histograms, under their `_histogram` names. When
+`EnableNativeHistograms` is on:
 
-- The Summaries are no longer exposed (no-op internally; absent from output).
-- The companion `_histogram` metrics switch to native (sparse, exponential)
-  schema.
+- Those `_histogram` metrics switch to native (sparse, exponential) schema.
 - The bridge translates native histograms to OTel `ExponentialHistogram` —
   the high-fidelity form most OTel-native backends prefer.
 

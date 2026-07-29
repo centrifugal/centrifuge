@@ -80,30 +80,24 @@ var (
 )
 
 type metrics struct {
-	messagesSentCount           *prometheus.CounterVec
-	messagesReceivedCount       *prometheus.CounterVec
-	actionCount                 *prometheus.CounterVec
-	buildInfoGauge              *prometheus.GaugeVec
-	numClientsGauge             prometheus.Gauge
-	numUsersGauge               prometheus.Gauge
-	numSubsGauge                prometheus.Gauge
-	numChannelsGauge            prometheus.Gauge
-	numNodesGauge               prometheus.Gauge
-	replyErrorCount             *prometheus.CounterVec
-	connectionsAccepted         *prometheus.CounterVec
-	connectionsInflight         *prometheus.GaugeVec
-	subscriptionsAccepted       *prometheus.CounterVec
-	subscriptionsInflight       *prometheus.GaugeVec
-	serverUnsubscribeCount      *prometheus.CounterVec
-	serverDisconnectCount       *prometheus.CounterVec
-	transportOutgoingCloseCount *prometheus.CounterVec
-	// commandDurationSummary holds the legacy Summary by default; when
-	// EnableNativeHistograms is true it is a no-op (the Summary is not
-	// exposed). The companion commandDurationHistogram below always carries
-	// the real observations, with native schema when the flag is on.
-	commandDurationSummary        prometheus.ObserverVec
+	messagesSentCount             *prometheus.CounterVec
+	messagesReceivedCount         *prometheus.CounterVec
+	actionCount                   *prometheus.CounterVec
+	buildInfoGauge                *prometheus.GaugeVec
+	numClientsGauge               prometheus.Gauge
+	numUsersGauge                 prometheus.Gauge
+	numSubsGauge                  prometheus.Gauge
+	numChannelsGauge              prometheus.Gauge
+	numNodesGauge                 prometheus.Gauge
+	replyErrorCount               *prometheus.CounterVec
+	connectionsAccepted           *prometheus.CounterVec
+	connectionsInflight           *prometheus.GaugeVec
+	subscriptionsAccepted         *prometheus.CounterVec
+	subscriptionsInflight         *prometheus.GaugeVec
+	serverUnsubscribeCount        *prometheus.CounterVec
+	serverDisconnectCount         *prometheus.CounterVec
+	transportOutgoingCloseCount   *prometheus.CounterVec
 	commandDurationHistogram      *prometheus.HistogramVec
-	surveyDurationSummary         prometheus.ObserverVec
 	surveyDurationHistogram       *prometheus.HistogramVec
 	recoverCount                  *prometheus.CounterVec
 	recoveredPublications         *prometheus.HistogramVec
@@ -375,50 +369,6 @@ func buildClientLabelsCacheKeyFromMap(labelNames []string, labelsMap map[string]
 	return b.String()
 }
 
-// dualObserver fans observations out to both a Summary and a Histogram
-// observer. Used when a metric is exposed as both instrument types — the
-// Summary preserves existing {quantile="..."} dashboards while the Histogram
-// supplies the histogram_quantile()- and OpenTelemetry-friendly form. When
-// EnableNativeHistograms is true the Summary side is a no-op, so only the
-// Histogram records data.
-type dualObserver struct {
-	summary, histogram prometheus.Observer
-}
-
-func (d dualObserver) Observe(v float64) {
-	d.summary.Observe(v)
-	d.histogram.Observe(v)
-}
-
-// noopObserverVec implements prometheus.ObserverVec with all no-op methods.
-// Assigned to a Summary accessor when EnableNativeHistograms is true so the
-// Summary side of a dual-instrument metric is not exposed and contributes no
-// observation cost. Callers that cache observers via WithLabelValues do not
-// need nil-checks — they get a noopObserver that silently drops Observe()
-// calls.
-type noopObserverVec struct{}
-
-func (noopObserverVec) Describe(chan<- *prometheus.Desc)              {}
-func (noopObserverVec) Collect(chan<- prometheus.Metric)              {}
-func (noopObserverVec) WithLabelValues(...string) prometheus.Observer { return noopObserver{} }
-func (noopObserverVec) With(prometheus.Labels) prometheus.Observer    { return noopObserver{} }
-func (noopObserverVec) GetMetricWith(prometheus.Labels) (prometheus.Observer, error) {
-	return noopObserver{}, nil
-}
-func (noopObserverVec) GetMetricWithLabelValues(...string) (prometheus.Observer, error) {
-	return noopObserver{}, nil
-}
-func (noopObserverVec) CurryWith(prometheus.Labels) (prometheus.ObserverVec, error) {
-	return noopObserverVec{}, nil
-}
-func (noopObserverVec) MustCurryWith(prometheus.Labels) prometheus.ObserverVec {
-	return noopObserverVec{}
-}
-
-type noopObserver struct{}
-
-func (noopObserver) Observe(float64) {}
-
 // nativeHistogramOpts returns opts unchanged when native is false. When true,
 // it enables Prometheus native histogram schema with no explicit buckets —
 // the metric exposes only _count, _sum, and the native histogram chunk.
@@ -527,17 +477,6 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "Number of channels with one or more subscribers.",
 	})
 
-	if config.EnableNativeHistograms {
-		m.surveyDurationSummary = noopObserverVec{}
-	} else {
-		m.surveyDurationSummary = prometheus.NewSummaryVec(prometheus.SummaryOpts{
-			Namespace:  metricsNamespace,
-			Subsystem:  "node",
-			Name:       "survey_duration_seconds",
-			Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
-			Help:       "DEPRECATED — use survey_duration_seconds_histogram. Will be removed in future releases. Survey duration summary.",
-		}, []string{"op"})
-	}
 	m.surveyDurationHistogram = prometheus.NewHistogramVec(nativeHistogramOpts(prometheus.HistogramOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
@@ -563,17 +502,6 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "Number of messages received from broker.",
 	}, []string{"type", "channel_namespace"})
 
-	if config.EnableNativeHistograms {
-		m.commandDurationSummary = noopObserverVec{}
-	} else {
-		m.commandDurationSummary = prometheus.NewSummaryVec(prometheus.SummaryOpts{
-			Namespace:  metricsNamespace,
-			Subsystem:  metricClientCommandDuration.Subsystem,
-			Name:       metricClientCommandDuration.Name,
-			Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
-			Help:       "DEPRECATED — use command_duration_seconds_histogram. Will be removed in future releases. Client command duration summary.",
-		}, m.buildMetricLabels([]string{"method", "channel_namespace"}))
-	}
 	m.commandDurationHistogram = prometheus.NewHistogramVec(nativeHistogramOpts(prometheus.HistogramOpts{
 		Namespace: metricsNamespace,
 		Subsystem: metricClientCommandDuration.Subsystem,
@@ -955,10 +883,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 
 	makeCommandObserver := func(method string) prometheus.Observer {
 		labels := buildCommandLabels(method)
-		return dualObserver{
-			summary:   m.commandDurationSummary.WithLabelValues(labels...),
-			histogram: m.commandDurationHistogram.WithLabelValues(labels...),
-		}
+		return m.commandDurationHistogram.WithLabelValues(labels...)
 	}
 	m.commandDurationConnect = makeCommandObserver(labelForMethod(protocol.FrameTypeConnect))
 	m.commandDurationSubscribe = makeCommandObserver(labelForMethod(protocol.FrameTypeSubscribe))
@@ -984,7 +909,6 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.numSubsGauge,
 		m.numChannelsGauge,
 		m.numNodesGauge,
-		m.commandDurationSummary,
 		m.commandDurationHistogram,
 		m.replyErrorCount,
 		m.connectionsAccepted,
@@ -1002,7 +926,6 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.transportMessagesReceivedSize,
 		m.tagsFilterDroppedCount,
 		m.buildInfoGauge,
-		m.surveyDurationSummary,
 		m.surveyDurationHistogram,
 		m.pubSubLagHistogram,
 		m.broadcastDurationHistogram,
@@ -1098,10 +1021,7 @@ func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Du
 		if !ok {
 			baseLabels := []string{frameType.String(), channelNamespace}
 			labelValues := m.appendClientLabels(baseLabels, c)
-			observer = dualObserver{
-				summary:   m.commandDurationSummary.WithLabelValues(labelValues...),
-				histogram: m.commandDurationHistogram.WithLabelValues(labelValues...),
-			}
+			observer = m.commandDurationHistogram.WithLabelValues(labelValues...)
 			m.commandDurationCache.Store(labels, observer)
 		}
 		observer.(prometheus.Observer).Observe(d.Seconds())
@@ -1506,9 +1426,7 @@ func (m *metrics) incActionCount(action string, ch string) {
 }
 
 func (m *metrics) observeSurveyDuration(op string, d time.Duration) {
-	seconds := d.Seconds()
-	m.surveyDurationSummary.WithLabelValues(op).Observe(seconds)
-	m.surveyDurationHistogram.WithLabelValues(op).Observe(seconds)
+	m.surveyDurationHistogram.WithLabelValues(op).Observe(d.Seconds())
 }
 
 type tagsFilterDroppedLabels struct {
