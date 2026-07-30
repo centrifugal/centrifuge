@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"sync/atomic"
@@ -579,4 +580,54 @@ func TestWriter_ScheduleFlushLocked_AlreadyScheduled(t *testing.T) {
 	w.scheduleFlushLocked()
 	w.scheduleFlushImmediateLocked()
 	w.mu.Unlock()
+}
+
+func TestEffectiveShrinkDelay(t *testing.T) {
+	// Zero means "unset" and gets the default: shrinking straight after a drain
+	// discards the ring the writer just filled, which is never what a caller
+	// wants. A negative value is the explicit opt-in to that behaviour.
+	require.Equal(t, defaultQueueShrinkDelay, effectiveShrinkDelay(0))
+	require.Equal(t, time.Duration(0), effectiveShrinkDelay(-1))
+	require.Equal(t, time.Duration(0), effectiveShrinkDelay(-time.Second))
+	require.Equal(t, 5*time.Second, effectiveShrinkDelay(5*time.Second))
+}
+
+// TestQueueReclaimsCapacityWhenIdle pins the property the shrink delay exists
+// for: a batching connection holds its ring while it is busy, and gives it back
+// once it goes quiet. Without the deferral the ring would instead be discarded
+// after every single frame and rebuilt by doubling.
+func TestQueueReclaimsCapacityWhenIdle(t *testing.T) {
+	const ch = "reclaim"
+	n, err := New(Config{LogLevel: LogLevelError, LogHandler: func(LogEntry) {}})
+	require.NoError(t, err)
+	n.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		// QueueShrinkDelay deliberately left unset - the case this covers.
+		return ConnectReply{WriteDelay: 100 * time.Microsecond, MaxMessagesInFrame: 16}, nil
+	})
+	n.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) { cb(SubscribeReply{}, nil) })
+	})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tr := newTestTransport(func() {})
+	tr.sink = nil
+	c := newTestConnectedClientWithTransport(t, ctx, n, tr, "u1")
+	subscribeClientV2(t, c, ch)
+
+	sp := StreamPosition{Epoch: "test"}
+	for i := 0; i < 512; i++ {
+		require.NoError(t, n.hub.broadcastPublication(
+			ch, sp, &Publication{Data: []byte(`{"a":1}`)}, nil, nil, ChannelBatchConfig{}))
+	}
+	time.Sleep(300 * time.Millisecond)
+	require.Greater(t, c.messageWriter.messages.Cap(), 2,
+		"a busy connection should hold its ring rather than rebuild it every frame")
+
+	require.Eventually(t, func() bool {
+		return c.messageWriter.messages.Cap() <= 2
+	}, defaultQueueShrinkDelay+3*time.Second, 100*time.Millisecond,
+		"ring must be reclaimed once the connection goes quiet")
 }

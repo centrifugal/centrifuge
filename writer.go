@@ -46,7 +46,30 @@ func newWriter(config writerConfig, queueInitialCap int) *writer {
 
 const (
 	defaultMaxMessagesInFrame = 16
+
+	// defaultQueueShrinkDelay is used when a batching writer does not specify
+	// QueueShrinkDelay. Shrink is evaluated straight after a drain, when the
+	// queue is empty by construction, so shrinking on the spot discards the ring
+	// the writer had just filled and the next frame rebuilds it by doubling.
+	// Deferring the decision lets it settle: under load the timer keeps
+	// resetting, and once the connection goes quiet it fires and the capacity is
+	// released in full. Callers wanting the old immediate behaviour pass a
+	// negative QueueShrinkDelay.
+	defaultQueueShrinkDelay = time.Second
 )
+
+// effectiveShrinkDelay resolves the configured QueueShrinkDelay. Zero means
+// "unset" and gets defaultQueueShrinkDelay; a negative value means the caller
+// explicitly wants the queue shrunk immediately after every drain.
+func effectiveShrinkDelay(configured time.Duration) time.Duration {
+	if configured == 0 {
+		return defaultQueueShrinkDelay
+	}
+	if configured < 0 {
+		return 0
+	}
+	return configured
+}
 
 func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duration, shrinkDelay time.Duration) bool {
 	// Wait for message from the queue.
@@ -163,6 +186,7 @@ func (w *writer) run(writeDelay time.Duration, maxMessagesInFrame int, shrinkDel
 	if maxMessagesInFrame == 0 {
 		maxMessagesInFrame = defaultMaxMessagesInFrame
 	}
+	shrinkDelay = effectiveShrinkDelay(shrinkDelay)
 
 	// Timer-driven mode for writeDelay > 0 and useWriteTimer: non-blocking, triggered by enqueue.
 	if writeDelay > 0 && useWriteTimer {
