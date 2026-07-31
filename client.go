@@ -2563,17 +2563,16 @@ func (c *Client) handlePublish(req *protocol.PublishRequest, cmd *protocol.Comma
 		}
 
 		if reply.Result == nil {
-			publishOpts := []PublishOption{
-				WithHistory(reply.Options.HistorySize, reply.Options.HistoryTTL, reply.Options.HistoryMetaTTL),
-				WithClientInfo(reply.Options.ClientInfo),
-			}
-			if reply.Options.Key != "" {
-				publishOpts = append(publishOpts, WithKey(reply.Options.Key))
-			}
-			_, err := c.node.Publish(
-				event.Channel, event.Data,
-				publishOpts...,
-			)
+			// Forward exactly the options the closure-based form used to set -
+			// history, client info and key - and nothing else, so the rest of
+			// PublishReply.Options stays as unforwarded as it has always been.
+			_, err := c.node.publishWithOptions(event.Channel, event.Data, PublishOptions{
+				HistorySize:    reply.Options.HistorySize,
+				HistoryTTL:     reply.Options.HistoryTTL,
+				HistoryMetaTTL: reply.Options.HistoryMetaTTL,
+				ClientInfo:     reply.Options.ClientInfo,
+				Key:            reply.Options.Key,
+			})
 			if err != nil {
 				c.logWriteInternalErrorFlush(channel, protocol.FrameTypePublish, cmd, err, "error publish", started, rw)
 				return

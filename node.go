@@ -905,8 +905,17 @@ func (n *Node) publish(ch string, data []byte, opts ...PublishOption) (PublishRe
 	for _, opt := range opts {
 		opt(pubOpts)
 	}
+	return n.publishWithOptions(ch, data, *pubOpts)
+}
+
+// publishWithOptions is the publish path once options are resolved. Callers
+// that already hold a PublishOptions - the client publish command handler gets
+// one straight out of PublishReply - go here directly instead of wrapping each
+// field in a PublishOption closure only for Node.publish to unwrap it again.
+// Every one of those closures is a heap allocation on a per-publication path.
+func (n *Node) publishWithOptions(ch string, data []byte, pubOpts PublishOptions) (PublishResult, error) {
 	n.metrics.incMessagesSent("publication", ch)
-	result, err := n.getBroker(ch).Publish(ch, data, *pubOpts)
+	result, err := n.getBroker(ch).Publish(ch, data, pubOpts)
 	if err != nil {
 		return PublishResult{}, err
 	}
