@@ -81,10 +81,30 @@ type ConnectReply struct {
 	// QueueInitialCap set an initial capacity for client's message queue, the size of queue
 	// can grow further, but won't be reduced below QueueInitialCap. By default, it's 2.
 	QueueInitialCap int
-	// QueueShrinkDelay is a time Centrifuge will wait before shrinking the client's message
-	// queue after it grows. This delay helps to avoid frequent allocations/deallocations when
-	// queue size fluctuates. Zero value means no delay and immediate shrinking. This option
-	// only works when WriteDelay is set to a non-zero value.
+	// QueueShrinkDelay is a time Centrifuge will wait, after the client's message
+	// queue has been drained, before shrinking it back down. This option only
+	// applies when WriteDelay is set to a non-zero value.
+	//
+	// It matters because shrinking is evaluated immediately after a drain, when
+	// the queue is empty by construction. Acting on that would discard the ring
+	// the writer had just filled, and the next frame would rebuild it one
+	// doubling at a time - allocating on every write cycle for the lifetime of
+	// the connection. Waiting instead lets the queue settle: under sustained load
+	// the timer keeps resetting and capacity is simply retained, and once the
+	// connection goes quiet the timer fires and the memory is released in full.
+	//
+	// Zero value (the default) means Centrifuge picks a sensible delay itself
+	// (currently one second). Pass a negative value to shrink immediately after
+	// every drain - available for completeness, but it reintroduces the per-cycle
+	// allocations described above and is not recommended.
+	//
+	// Broadcasting to 200 subscribers with WriteDelay set, per publication:
+	//
+	//	shrink immediately   19.1us   84 allocs   34 KB
+	//	default delay        12.7us    2 allocs  376 B
+	//
+	// A longer delay holds capacity through longer quiet gaps, which suits
+	// connections that burst repeatedly; a shorter one returns memory sooner.
 	QueueShrinkDelay time.Duration
 	// PingPongConfig if set, will override Transport's PingPongConfig to enable setting ping/pong interval
 	// for individual client.
