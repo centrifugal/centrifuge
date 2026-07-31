@@ -130,15 +130,15 @@ type metrics struct {
 	commandDurationSubRefresh    prometheus.Observer
 	commandDurationUnknown       prometheus.Observer
 
-	broadcastDurationHistogram  *prometheus.HistogramVec
-	pubSubLagHistogram          *prometheus.HistogramVec
-	pingPongDurationHistogram   *prometheus.HistogramVec
+	broadcastDurationHistogram      *prometheus.HistogramVec
+	pubSubLagHistogram              *prometheus.HistogramVec
+	pingPongDurationHistogram       *prometheus.HistogramVec
 	brokerPublishSuppressedCount    *prometheus.CounterVec
 	mapBrokerPublishSuppressedCount *prometheus.CounterVec
 	mapBrokerRemoveSuppressedCount  *prometheus.CounterVec
-	mapBrokerCleanupLag      *prometheus.GaugeVec
-	mapBrokerCleanupRemoved  *prometheus.CounterVec
-	mapBrokerCleanupErrors   *prometheus.CounterVec
+	mapBrokerCleanupLag             *prometheus.GaugeVec
+	mapBrokerCleanupRemoved         *prometheus.CounterVec
+	mapBrokerCleanupErrors          *prometheus.CounterVec
 
 	redisBrokerPubSubErrors           *prometheus.CounterVec
 	redisBrokerPubSubDroppedMessages  *prometheus.CounterVec
@@ -165,27 +165,27 @@ type metrics struct {
 
 	config MetricsConfig
 
-	transportMessagesSentCache     sync.Map
-	transportMessagesReceivedCache sync.Map
-	commandDurationCache           sync.Map
-	replyErrorCache                sync.Map
-	actionCache                    sync.Map
-	recoverCache                   sync.Map
-	unsubscribeCache               sync.Map
-	disconnectCache                sync.Map
-	messagesSentCache              sync.Map
-	messagesReceivedCache          sync.Map
-	tagsFilterDroppedCache         sync.Map
+	transportMessagesSentCache      sync.Map
+	transportMessagesReceivedCache  sync.Map
+	commandDurationCache            sync.Map
+	replyErrorCache                 sync.Map
+	actionCache                     sync.Map
+	recoverCache                    sync.Map
+	unsubscribeCache                sync.Map
+	disconnectCache                 sync.Map
+	messagesSentCache               sync.Map
+	messagesReceivedCache           sync.Map
+	tagsFilterDroppedCache          sync.Map
 	brokerPublishSuppressedCache    sync.Map
 	mapBrokerPublishSuppressedCache sync.Map
 	mapBrokerRemoveSuppressedCache  sync.Map
-	pubSubLagCache                 sync.Map
-	sharedPollHandlerCache         sync.Map
-	sharedPollResultCache          sync.Map
-	sharedPollChannelCache         sync.Map
-	sharedPollPublishCache         sync.Map
-	nsCache                        *otter.Cache[string, string]
-	codeStrings                    map[uint32]string
+	pubSubLagCache                  sync.Map
+	sharedPollHandlerCache          sync.Map
+	sharedPollResultCache           sync.Map
+	sharedPollChannelCache          sync.Map
+	sharedPollPublishCache          sync.Map
+	nsCache                         *otter.Cache[string, string]
+	codeStrings                     map[uint32]string
 
 	// Cache for client label combinations: maps cache key -> {labelValues, cacheKey}
 	// This allows sharing pre-computed label data across all clients with the same label values
@@ -482,8 +482,12 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Subsystem: "node",
 		Name:      "survey_duration_seconds_histogram",
 		Help:      "Survey duration histogram. Use for histogram_quantile() and OpenTelemetry export.",
+		// Surveys are node-to-node round trips, so millisecond resolution is
+		// the right scale, but the 1ms..5ms step had the same 5x gap as the
+		// command histogram and is filled in for the same reason. Additive
+		// only - existing boundaries are unchanged.
 		Buckets: []float64{
-			0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500,
+			0.001, 0.002, 0.003, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500,
 			1.0, 2.5, 5.0, 10.0,
 		},
 	}, config.EnableNativeHistograms), []string{"op"})
@@ -507,9 +511,16 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Subsystem: metricClientCommandDuration.Subsystem,
 		Name:      metricClientCommandDuration.Name + "_histogram",
 		Help:      "Client command duration histogram. Use for histogram_quantile() and OpenTelemetry export.",
+		// Centrifuge command latencies live in the microsecond range - a couple
+		// of hundred microseconds is normal - so the ladder starts at 25us
+		// rather than 100us, and the 1ms..5ms step is filled in. Without the
+		// former the median is interpolated from zero on a fast node; without
+		// the latter p99 lands in a 5x-wide bucket and reads far high. Every
+		// boundary that existed before is still here, so le= queries and
+		// recording rules keep working.
 		Buckets: []float64{
-			0.000100, 0.000250, 0.000500,
-			0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500,
+			0.000025, 0.000050, 0.000100, 0.000250, 0.000500,
+			0.001, 0.002, 0.003, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500,
 			1.0, 2.5, 5.0, 10.0,
 		},
 	}, config.EnableNativeHistograms), m.buildMetricLabels([]string{"method", "channel_namespace"}))
