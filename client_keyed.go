@@ -958,5 +958,5 @@ func (c *Client) keyedWriteRemoval(channel string, key string, pub *protocol.Pub
 	if c.node.config.GetChannelBatchConfig != nil {
 		batchConfig = c.node.config.GetChannelBatchConfig(channel)
 	}
-	_ = c.writePublication(channel, pub, preparedData{fullData: data}, StreamPosition{}, false, batchConfig)
+	_ = c.writePublication(channel, pub, preparedData{fullData: data}, StreamPosition{}, false, batchConfig, 0)
 }

@@ -4673,7 +4673,7 @@ func (c *Client) handleAsyncUnsubscribe(ch string, unsub Unsubscribe) {
 
 func (c *Client) writePublicationUpdatePosition(
 	ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool,
-	batchConfig ChannelBatchConfig,
+	batchConfig ChannelBatchConfig, nowUnix int64,
 ) error {
 	c.mu.Lock()
 	channelContext, ok := c.channels[ch]
@@ -4774,7 +4774,10 @@ func (c *Client) writePublicationUpdatePosition(
 		c.mu.Unlock()
 		return nil
 	}
-	channelContext.positionCheckTime = time.Now().Unix()
+	if nowUnix == 0 {
+		nowUnix = time.Now().Unix()
+	}
+	channelContext.positionCheckTime = nowUnix
 	channelContext.streamPosition.Offset = pub.Offset
 	c.channels[ch] = channelContext
 	c.mu.Unlock()
@@ -4812,10 +4815,15 @@ func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, d
 		ch, pub, preparedData{
 			fullData: data, brokerDeltaData: nil, localDeltaData: nil, deltaSub: false, wasFiltered: false,
 		},
-		sp, false, batchConfig)
+		sp, false, batchConfig, 0)
 }
 
-func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool, batchConfig ChannelBatchConfig) error {
+// writePublication delivers one publication to this connection. nowUnix is the
+// wall clock the caller already read, in Unix seconds; a fan-out reads it once
+// per publication and passes it to every subscriber rather than having each of
+// them read the clock again for a value that only has second granularity. Pass
+// 0 when the caller has no clock reading at hand.
+func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool, batchConfig ChannelBatchConfig, nowUnix int64) error {
 	if pub.Offset == 0 {
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			return nil
@@ -4864,7 +4872,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 		syncPub = prep.filteredPub
 	}
 	c.pubSubSync.SyncPublication(ch, syncPub, func() {
-		_ = c.writePublicationUpdatePosition(ch, pub, prep, sp, maxLagExceeded, batchConfig)
+		_ = c.writePublicationUpdatePosition(ch, pub, prep, sp, maxLagExceeded, batchConfig, nowUnix)
 	})
 	return nil
 }
