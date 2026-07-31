@@ -266,6 +266,44 @@ func (q *Queue) RemoveMany(maxItems int) ([]Item, bool) {
 	return messages, true
 }
 
+// RemoveManyIntoShrink is RemoveManyInto plus the immediate shrink that
+// RemoveMany performs, both in one critical section. It exists so the
+// no-write-delay writer path can drop RemoveMany's per-drain slice allocation
+// without either changing shrink timing or taking mu a second time via
+// FinishCollect — this mutex is contended by every broadcast producer, so an
+// extra acquisition per drain is not free.
+func (q *Queue) RemoveManyIntoShrink(buf []Item, maxItems int) (int, bool) {
+	q.mu.Lock()
+
+	if q.cnt == 0 {
+		q.mu.Unlock()
+		return 0, false
+	}
+
+	var count int
+	if maxItems == -1 || q.cnt < maxItems {
+		count = q.cnt
+	} else {
+		count = maxItems
+	}
+	if count > len(buf) {
+		count = len(buf)
+	}
+
+	for i := 0; i < count; i++ {
+		buf[i] = q.nodes[q.head]
+		q.nodes[q.head] = Item{}
+		q.head = (q.head + 1) % len(q.nodes)
+		q.cnt--
+		q.size -= len(buf[i].Data)
+	}
+
+	q.doShrinkLocked()
+
+	q.mu.Unlock()
+	return count, true
+}
+
 // Cap returns the capacity (without allocations)
 func (q *Queue) Cap() int {
 	q.mu.RLock()

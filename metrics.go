@@ -186,6 +186,7 @@ type metrics struct {
 	mapBrokerPublishSuppressedCache sync.Map
 	mapBrokerRemoveSuppressedCache  sync.Map
 	pubSubLagCache                 sync.Map
+	broadcastDurationCache         sync.Map
 	sharedPollHandlerCache         sync.Map
 	sharedPollResultCache          sync.Map
 	sharedPollChannelCache         sync.Map
@@ -1152,12 +1153,26 @@ func (m *metrics) observePubSubDeliveryLag(lagTimeMilli int64, ch string) {
 	observer.(prometheus.Observer).Observe(float64(lagTimeMilli) / 1000)
 }
 
+type broadcastDurationLabels struct {
+	Type             string
+	ChannelNamespace string
+}
+
 func (m *metrics) observeBroadcastDuration(started time.Time, ch string) {
-	if m.config.GetChannelNamespaceLabel != nil {
-		m.broadcastDurationHistogram.WithLabelValues("publication", m.getChannelNamespaceLabel(ch)).Observe(time.Since(started).Seconds())
-		return
+	// Runs once per broadcast, so resolve the histogram child once per label set
+	// and cache it — WithLabelValues hashes the label values on every call. The
+	// cache key must carry BOTH labels the vector declares: keying on the
+	// namespace alone would hand back the wrong child the moment a second call
+	// site passes a different type.
+	const broadcastType = "publication"
+	channelNamespace := m.getChannelNamespaceLabel(ch)
+	labels := broadcastDurationLabels{Type: broadcastType, ChannelNamespace: channelNamespace}
+	observer, ok := m.broadcastDurationCache.Load(labels)
+	if !ok {
+		observer = m.broadcastDurationHistogram.WithLabelValues(broadcastType, channelNamespace)
+		m.broadcastDurationCache.Store(labels, observer)
 	}
-	m.broadcastDurationHistogram.WithLabelValues("publication", m.getChannelNamespaceLabel(ch)).Observe(time.Since(started).Seconds())
+	observer.(prometheus.Observer).Observe(time.Since(started).Seconds())
 }
 
 func (m *metrics) observePingPongDuration(duration time.Duration, transport string) {
