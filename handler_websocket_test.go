@@ -794,6 +794,9 @@ func BenchmarkWsPubSub(b *testing.B) {
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+		// These clients never answer a server ping, so let no ping fire: otherwise a
+		// run lasting longer than the ping interval loses its connections mid-measurement.
+		PingPongConfig:  PingPongConfig{PingInterval: time.Hour, PongTimeout: time.Minute},
 		WriteBufferSize: 0,
 		ReadBufferSize:  0,
 	})))
@@ -917,6 +920,9 @@ func BenchmarkWsBroadcastCompressionCache(b *testing.B) {
 
 			mux := http.NewServeMux()
 			mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+				// These clients never answer a server ping, so let no ping fire: otherwise a
+				// run lasting longer than the ping interval loses its connections mid-measurement.
+				PingPongConfig:                      PingPongConfig{PingInterval: time.Hour, PongTimeout: time.Minute},
 				Compression:                         true,
 				CompressionPreparedMessageCacheSize: bm.cacheSizeMB * 1024 * 1024,
 			})))
@@ -967,6 +973,9 @@ func BenchmarkWsCommandReplyV2(b *testing.B) {
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+		// These clients never answer a server ping, so let no ping fire: otherwise a
+		// run lasting longer than the ping interval loses its connections mid-measurement.
+		PingPongConfig:  PingPongConfig{PingInterval: time.Hour, PongTimeout: time.Minute},
 		WriteBufferSize: 0,
 		ReadBufferSize:  0,
 	})))
@@ -1044,6 +1053,9 @@ func BenchmarkWsCommandReplyV2Multiple(b *testing.B) {
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+		// These clients never answer a server ping, so let no ping fire: otherwise a
+		// run lasting longer than the ping interval loses its connections mid-measurement.
+		PingPongConfig:  PingPongConfig{PingInterval: time.Hour, PongTimeout: time.Minute},
 		WriteBufferSize: 0,
 		ReadBufferSize:  0,
 	})))
@@ -1149,6 +1161,9 @@ func BenchmarkWsCommandReplyV2MultipleParallel(b *testing.B) {
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+		// These clients never answer a server ping, so let no ping fire: otherwise a
+		// run lasting longer than the ping interval loses its connections mid-measurement.
+		PingPongConfig:  PingPongConfig{PingInterval: time.Hour, PongTimeout: time.Minute},
 		WriteBufferSize: 0,
 		ReadBufferSize:  0,
 	})))
