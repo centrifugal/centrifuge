@@ -994,6 +994,29 @@ func (s *sharedPollChannelState) flipEpochAndCollectClients(hub *keyedHub, newEp
 	return hub.collectAllClients()
 }
 
+// brokerChannelsSnapshot returns the key channels currently subscribed at the
+// given broker. Key channels are subscribed at broker level and tracked only
+// here — not in the Hub — so a PUB/SUB reconnect would silently drop them:
+// the reconnect resubscribes Hub().Channels() and nothing else. The Redis
+// PUB/SUB loops call this (via Node) to restore key channels together with
+// Hub channels after re-establishing a connection.
+//
+// Brokers are matched by interface equality. That is well defined for every
+// built-in broker (all pointer types); a Broker implemented as a
+// non-comparable value type — a struct with a map or slice field, used by
+// value — would panic on the comparison below.
+func (m *SharedPollManager) brokerChannelsSnapshot(b Broker) []string {
+	m.brokerSubMu.RLock()
+	defer m.brokerSubMu.RUnlock()
+	channels := make([]string, 0, len(m.brokerSubChans))
+	for kc, broker := range m.brokerSubChans {
+		if broker == b {
+			channels = append(channels, kc)
+		}
+	}
+	return channels
+}
+
 // close stops all refresh workers and waits for them to finish.
 func (m *SharedPollManager) close() {
 	close(m.shutdownCh)

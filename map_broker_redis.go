@@ -162,6 +162,12 @@ type RedisMapBrokerConfig struct {
 	// numResubscribeShards defines how many subscriber goroutines will be used for
 	// resubscribing process for each subscribe shard.
 	numResubscribeShards int
+	// pubSubProbeInterval configures how often the broker verifies that its
+	// PUB/SUB connections still deliver messages. See the field with the same
+	// name in RedisBrokerConfig for the details. Not exported: the default is
+	// expected to work everywhere, the knob only exists for tests.
+	pubSubProbeInterval time.Duration
+
 	// numPubSubProcessors allows configuring number of workers which will process
 	// messages coming from Redis PUB/SUB.
 	numPubSubProcessors int
@@ -203,6 +209,7 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 	if conf.numResubscribeShards == 0 {
 		conf.numResubscribeShards = 16
 	}
+	conf.pubSubProbeInterval = normalizePubSubProbeInterval(conf.pubSubProbeInterval)
 	if conf.numPubSubProcessors == 0 {
 		conf.numPubSubProcessors = runtime.NumCPU() / conf.numSubscribeShards
 		if conf.NumShardedPubSubPartitions > 0 {
@@ -2347,13 +2354,16 @@ func (r *defaultMapBrokerPubSubRunner) run(s *brokerShardWrapper, h BrokerEventH
 				"cluster_shards": len(s.subClients),
 				"pub_sub_shards": len(s.subClients[i]),
 			}
+			// Allocated outside runForever: probe state must survive loop
+			// restarts, that is the whole point of it.
+			probeState := &pubSubProbeState{}
 			go e.runForever(func() {
 				select {
 				case <-e.closeCh:
 					return
 				default:
 				}
-				e.runPubSub(s, logFields, h, clusterShardIndex, pubSubShardIndex, e.useShardedPubSub(s.shard), func(err error) {
+				e.runPubSub(s, logFields, h, clusterShardIndex, pubSubShardIndex, e.useShardedPubSub(s.shard), probeState, func(err error) {
 					s.pubSubStartChannels[clusterShardIndex][pubSubShardIndex].once.Do(func() {
 						s.pubSubStartChannels[clusterShardIndex][pubSubShardIndex].errCh <- err
 					})
@@ -2787,10 +2797,13 @@ func (e *RedisMapBroker) makePubSubCallbacks(s *brokerShardWrapper) pubSubCallba
 		shardForChannel: func(ch string) *RedisShard {
 			return e.getShard(ch).shard
 		},
+		// extraResubscribeChannels is not set: shared poll key channels are
+		// subscribed via node.getBroker which returns Broker implementations
+		// only — RedisMapBroker is not one, so no key channels can live here.
 	}
 }
 
-func (e *RedisMapBroker) runPubSub(s *brokerShardWrapper, logFields map[string]any, eventHandler BrokerEventHandler, clusterShardIndex, psShardIndex int, useShardedPubSub bool, startOnce func(error)) {
+func (e *RedisMapBroker) runPubSub(s *brokerShardWrapper, logFields map[string]any, eventHandler BrokerEventHandler, clusterShardIndex, psShardIndex int, useShardedPubSub bool, probeState *pubSubProbeState, startOnce func(error)) {
 	cb := e.makePubSubCallbacks(s)
 	numPartitions := e.conf.NumShardedPubSubPartitions
 	if numPartitions == 0 {
@@ -2805,6 +2818,8 @@ func (e *RedisMapBroker) runPubSub(s *brokerShardWrapper, logFields map[string]a
 		e.conf.Name,
 		e.node.metrics.mapBrokerPubSub,
 		e.conf.SubscribeOnReplica,
+		e.conf.pubSubProbeInterval,
+		probeState,
 		e.conf.numPubSubProcessors,
 		e.conf.numResubscribeShards,
 		e.conf.numSubscribeShards,
