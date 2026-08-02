@@ -98,6 +98,34 @@ type WebsocketConfig struct {
 	// must be true, otherwise no connections will be accepted).
 	DisableHTTP1Upgrade bool
 
+	// ProcessCommandsOffReadLoop makes each connection's read loop hand every
+	// frame to a short-lived goroutine and wait for it, instead of processing the
+	// frame itself.
+	//
+	// It exists to keep the read loop's goroutine stack small. Command
+	// processing runs the whole dispatch chain - handlers, publish, broker,
+	// broadcast fan-out - and a goroutine's stack only ever grows to the deepest
+	// call it makes and is not given back while the goroutine lives. A read loop
+	// that has processed one command therefore keeps that peak stack for as long
+	// as the connection is open, even while completely idle. Moving the work to a
+	// goroutine that exits afterwards returns the deep stack to the runtime's
+	// stack cache, where connections reuse it instead of each owning one.
+	//
+	// The trade is one goroutine start and two scheduler handoffs per frame.
+	// That is a latency cost, not a throughput one: it is visible on a
+	// connection that sends a command and waits for the reply with nothing else
+	// going on, and it disappears once many connections are busy at the same
+	// time, where the handoff overlaps with other work. Under that kind of load
+	// per-connection memory is lower as well, because only the connections
+	// actually mid-frame hold a deep stack rather than every one of them.
+	//
+	// Ordering is unaffected: the read loop waits for each frame to finish
+	// before reading the next.
+	//
+	// Off by default. It suits large pools of mostly-idle connections, where it
+	// roughly halves the read loop's stack.
+	ProcessCommandsOffReadLoop bool
+
 	PingPongConfig
 }
 
@@ -276,6 +304,13 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			}(time.Now())
 		}
 
+		// Allocated once per connection when enabled, so handing a frame off
+		// costs a goroutine but no allocation. See ProcessCommandsOffReadLoop.
+		var handoff *frameHandoff
+		if s.config.ProcessCommandsOffReadLoop {
+			handoff = newFrameHandoff(c)
+		}
+
 		for {
 			_, r, err := conn.NextReader()
 			if err != nil {
@@ -284,7 +319,12 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 				}
 				break
 			}
-			proceed := HandleReadFrame(c, r)
+			var proceed bool
+			if handoff != nil {
+				proceed = handoff.handle(r)
+			} else {
+				proceed = HandleReadFrame(c, r)
+			}
 			if !proceed {
 				break
 			}
@@ -310,6 +350,43 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		// HTTP/2 and above - execute directly, otherwise underlying stream is being closed.
 		handleConn()
 	}
+}
+
+// frameHandoff runs HandleReadFrame on a goroutine other than the one that owns
+// the connection's read loop, one goroutine per frame, and lets the read loop
+// wait for the result.
+//
+// It is a struct with a method rather than a closure so that handing off costs
+// nothing beyond the goroutine itself: the reader and the result channel live
+// here for the lifetime of the connection, and `go h.run()` on an
+// already-heap-allocated receiver allocates no closure per frame.
+//
+// Only the read loop writes r, and it does so before starting run and does not
+// touch it again until run has sent on done, so the two goroutines never race.
+type frameHandoff struct {
+	c    *Client
+	r    io.Reader
+	done chan bool
+}
+
+func newFrameHandoff(c *Client) *frameHandoff {
+	return &frameHandoff{c: c, done: make(chan bool, 1)}
+}
+
+func (h *frameHandoff) run() {
+	h.done <- HandleReadFrame(h.c, h.r)
+}
+
+// handle processes one frame off the read loop and reports whether the
+// connection should keep reading.
+func (h *frameHandoff) handle(r io.Reader) bool {
+	h.r = r
+	go h.run()
+	proceed := <-h.done
+	// Drop the reader: it is only valid until the next NextReader call, and
+	// holding it would keep the frame's buffers reachable while idle.
+	h.r = nil
+	return proceed
 }
 
 // HandleReadFrame is a helper to read Centrifuge commands from frame-based io.Reader and

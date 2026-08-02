@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1422,4 +1423,294 @@ func TestWebsocketHandlerCompressedHeadroom(t *testing.T) {
 	require.Error(t, err) // invalid command -> disconnect, but...
 	require.Falsef(t, websocket.IsCloseError(err, websocket.CloseMessageTooBig),
 		"frame within decompressed limit must not be rejected as too big, got %v", err)
+}
+
+// Tests for WebsocketConfig.ProcessCommandsOffReadLoop. The option moves frame
+// processing to a goroutine per frame, so the properties worth pinning are that
+// the connection still processes commands strictly in order and that the extra
+// goroutines really do go away.
+
+// newOffReadLoopServer starts a node and websocket handler. writeWithTimer
+// removes the per-connection writer goroutine, which lets a goroutine-count
+// assertion be about the read loop alone.
+func newOffReadLoopServer(t *testing.T, offReadLoop bool, writeWithTimer bool) (*Node, string) {
+	t.Helper()
+	n, err := New(Config{LogLevel: LogLevelError})
+	require.NoError(t, err)
+	n.OnConnecting(func(_ context.Context, _ ConnectEvent) (ConnectReply, error) {
+		reply := ConnectReply{Credentials: &Credentials{UserID: "test"}}
+		if writeWithTimer {
+			reply.WriteDelay = time.Millisecond
+			reply.WriteWithTimer = true
+		}
+		return reply, nil
+	})
+	n.OnConnect(func(client *Client) {
+		client.OnRPC(func(e RPCEvent, cb RPCCallback) {
+			// Echo the request back so the reply can be tied to its command.
+			cb(RPCReply{Data: e.Data}, nil)
+		})
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+	})
+	require.NoError(t, n.Run())
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
+		PingPongConfig:             PingPongConfig{PingInterval: time.Hour, PongTimeout: time.Minute},
+		ProcessCommandsOffReadLoop: offReadLoop,
+	}))
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { _ = n.Shutdown(context.Background()) })
+	return n, "ws" + server.URL[4:]
+}
+
+func dialAndConnect(t *testing.T, url string) *websocket.Conn {
+	t.Helper()
+	dialer := &websocket.Dialer{}
+	conn, resp, _, err := dialer.Dial(url+"/connection/websocket", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	cmd, err := json.Marshal(&protocol.Command{Id: 1, Connect: &protocol.ConnectRequest{}})
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cmd))
+	_, _, err = conn.ReadMessage()
+	require.NoError(t, err)
+	return conn
+}
+
+// readReplyIDs reads until it has collected want reply ids, in arrival order.
+func readReplyIDs(t *testing.T, conn *websocket.Conn, want int) []uint32 {
+	t.Helper()
+	ids := make([]uint32, 0, want)
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(20*time.Second)))
+	for len(ids) < want {
+		_, data, err := conn.ReadMessage()
+		require.NoError(t, err)
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			if line == "" {
+				continue
+			}
+			var reply struct {
+				ID uint32 `json:"id"`
+				// Checked, not just collected: a command that was rejected still
+				// produces a reply carrying its id, so ignoring the error field
+				// lets a test sail past a subscribe that never took effect.
+				Error json.RawMessage `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(line), &reply))
+			require.Empty(t, reply.Error, "command %d failed", reply.ID)
+			if reply.ID != 0 {
+				ids = append(ids, reply.ID)
+			}
+		}
+	}
+	return ids
+}
+
+// TestProcessCommandsOffReadLoopPreservesOrder pipelines commands without
+// waiting for replies. Handing each frame to its own goroutine must not let
+// frames overtake one another: the read loop waits for each before reading the
+// next, and these replies must come back in the order the commands were sent.
+func TestProcessCommandsOffReadLoopPreservesOrder(t *testing.T) {
+	t.Parallel()
+	for _, offReadLoop := range []bool{false, true} {
+		offReadLoop := offReadLoop
+		name := "inline"
+		if offReadLoop {
+			name = "off_read_loop"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, url := newOffReadLoopServer(t, offReadLoop, false)
+			conn := dialAndConnect(t, url)
+			defer func() { _ = conn.Close() }()
+
+			const numCommands = 200
+			for i := 0; i < numCommands; i++ {
+				cmd, err := json.Marshal(&protocol.Command{
+					Id:  uint32(2 + i),
+					Rpc: &protocol.RPCRequest{Method: "echo", Data: []byte(`{}`)},
+				})
+				require.NoError(t, err)
+				require.NoError(t, conn.WriteMessage(websocket.TextMessage, cmd))
+			}
+
+			ids := readReplyIDs(t, conn, numCommands)
+			require.Len(t, ids, numCommands)
+			for i, id := range ids {
+				require.Equal(t, uint32(2+i), id, "reply %d out of order", i)
+			}
+		})
+	}
+}
+
+// TestProcessCommandsOffReadLoopMultipleCommandsPerFrame puts several commands
+// in one frame, which the stream decoder splits. The whole frame is handled by
+// a single handoff, so this checks the batching path is unaffected.
+func TestProcessCommandsOffReadLoopMultipleCommandsPerFrame(t *testing.T) {
+	t.Parallel()
+	_, url := newOffReadLoopServer(t, true, false)
+	conn := dialAndConnect(t, url)
+	defer func() { _ = conn.Close() }()
+
+	const perFrame = 10
+	var frame strings.Builder
+	for i := 0; i < perFrame; i++ {
+		cmd, err := json.Marshal(&protocol.Command{
+			Id:  uint32(2 + i),
+			Rpc: &protocol.RPCRequest{Method: "echo", Data: []byte(`{}`)},
+		})
+		require.NoError(t, err)
+		frame.Write(cmd)
+		frame.WriteString("\n")
+	}
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(frame.String())))
+
+	ids := readReplyIDs(t, conn, perFrame)
+	require.Len(t, ids, perFrame)
+	for i, id := range ids {
+		require.Equal(t, uint32(2+i), id)
+	}
+}
+
+// TestProcessCommandsOffReadLoopNoGoroutineLeak checks the per-frame goroutines
+// are transient and that closing the connections releases the read loops. A
+// leak here would turn the option from a stack saving into a goroutine leak.
+func TestProcessCommandsOffReadLoopNoGoroutineLeak(t *testing.T) {
+	// The timer-driven writer leaves the read loop as the only lasting
+	// per-connection goroutine, so the count below is a direct statement about
+	// the per-frame handoff goroutines being transient.
+	_, url := newOffReadLoopServer(t, true, true)
+
+	settleGoroutines := func() int {
+		last, stable := -1, 0
+		for i := 0; i < 200; i++ {
+			runtime.GC()
+			n := runtime.NumGoroutine()
+			if n == last {
+				if stable++; stable >= 3 {
+					return n
+				}
+			} else {
+				stable, last = 0, n
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		return runtime.NumGoroutine()
+	}
+
+	before := settleGoroutines()
+
+	const numConns = 20
+	conns := make([]*websocket.Conn, 0, numConns)
+	for i := 0; i < numConns; i++ {
+		conn := dialAndConnect(t, url)
+		for j := 0; j < 5; j++ {
+			cmd, err := json.Marshal(&protocol.Command{
+				Id:  uint32(2 + j),
+				Rpc: &protocol.RPCRequest{Method: "echo", Data: []byte(`{}`)},
+			})
+			require.NoError(t, err)
+			require.NoError(t, conn.WriteMessage(websocket.TextMessage, cmd))
+		}
+		readReplyIDs(t, conn, 5)
+		conns = append(conns, conn)
+	}
+
+	// While connected, each connection should hold its read loop and nothing
+	// more: the per-frame goroutines have all exited by now.
+	live := settleGoroutines()
+	require.LessOrEqual(t, live-before, numConns+5,
+		"expected about one goroutine per connection (the read loop), got %d extra for %d connections",
+		live-before, numConns)
+
+	for _, c := range conns {
+		_ = c.Close()
+	}
+	after := settleGoroutines()
+	require.LessOrEqual(t, after-before, 5, "goroutines leaked after disconnect: %d extra", after-before)
+}
+
+// TestProcessCommandsOffReadLoopInterleavedWithPushes is the messiest realistic
+// shape: a client pipelining commands while the server pushes into a channel it
+// is subscribed to. Replies and pushes are produced by different goroutines and
+// interleave in the connection's write queue, while command processing itself
+// has moved to a goroutine per frame.
+//
+// Replies must still come back in command order, every command must be
+// answered, and no push may be lost. Run with -race this also exercises the
+// handoff's synchronisation against the broadcast path.
+func TestProcessCommandsOffReadLoopInterleavedWithPushes(t *testing.T) {
+	t.Parallel()
+	n, url := newOffReadLoopServer(t, true, false)
+	conn := dialAndConnect(t, url)
+	defer func() { _ = conn.Close() }()
+
+	const channel = "interleave"
+	sub, err := json.Marshal(&protocol.Command{
+		Id: 2, Subscribe: &protocol.SubscribeRequest{Channel: channel},
+	})
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, sub))
+	require.Equal(t, []uint32{2}, readReplyIDs(t, conn, 1))
+
+	const numCommands = 150
+	const numPushes = 150
+
+	// Push from the server while the client pipelines commands, so the two
+	// streams are produced concurrently rather than in phases.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < numPushes; i++ {
+			_, pErr := n.Publish(channel, []byte(`{"push":1}`))
+			require.NoError(t, pErr)
+		}
+	}()
+
+	for i := 0; i < numCommands; i++ {
+		cmd, mErr := json.Marshal(&protocol.Command{
+			Id:  uint32(3 + i),
+			Rpc: &protocol.RPCRequest{Method: "echo", Data: []byte(`{}`)},
+		})
+		require.NoError(t, mErr)
+		require.NoError(t, conn.WriteMessage(websocket.TextMessage, cmd))
+	}
+	wg.Wait()
+
+	// Collect until every reply and every push has arrived.
+	var replyIDs []uint32
+	pushes := 0
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(30*time.Second)))
+	for len(replyIDs) < numCommands || pushes < numPushes {
+		_, data, rErr := conn.ReadMessage()
+		require.NoError(t, rErr, "got %d/%d replies and %d/%d pushes",
+			len(replyIDs), numCommands, pushes, numPushes)
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			if line == "" {
+				continue
+			}
+			var msg struct {
+				ID   uint32          `json:"id"`
+				Push json.RawMessage `json:"push"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(line), &msg))
+			switch {
+			case msg.ID != 0:
+				replyIDs = append(replyIDs, msg.ID)
+			case len(msg.Push) > 0:
+				pushes++
+			}
+		}
+	}
+
+	require.Len(t, replyIDs, numCommands)
+	for i, id := range replyIDs {
+		require.Equal(t, uint32(3+i), id, "reply %d out of order", i)
+	}
+	require.Equal(t, numPushes, pushes)
 }
