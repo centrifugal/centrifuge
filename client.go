@@ -3947,10 +3947,11 @@ func (c *Client) removeSubscribePresence(channel string, flags uint16) {
 // ordering (inline, or deferred until after presence/join work so an unsubscribe
 // cannot remove presence before this subscribe added it).
 //
-// On a closed client it drops the reservation, closes its subscribingCh, removes
-// the hub entry registered earlier in the subscribe (ctx.subGen must match), and
-// returns (nil, false); the caller adds any path-specific cleanup (reply/buffer
-// release) and returns its own error. Lock must NOT be held.
+// On a closed client it drops the reservation, removes the hub entry registered
+// earlier in the subscribe (ctx.subGen must match), closes its subscribingCh —
+// in that order, so a woken waiter never observes a half-rolled-back attempt —
+// and returns (nil, false); the caller adds any path-specific cleanup
+// (reply/buffer release) and returns its own error. Lock must NOT be held.
 //
 // The reservation is consumed only if it still carries this attempt's generation
 // (ctx.subGen). A subscribe stalled past the unsubscribe wait timeout can lose
@@ -4021,9 +4022,6 @@ func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind res
 			delete(c.channels, channel)
 		}
 		c.mu.Unlock()
-		if subscribingCh != nil {
-			close(subscribingCh)
-		}
 		// Release the recovery buffer before removing the hub entry. A positioned/
 		// recovering subscribe holds pubBufferMu (LockBufferAndReadBuffered) until
 		// StopBuffering, and removeSubscription takes subShard.mu; the broadcast
@@ -4037,6 +4035,14 @@ func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind res
 			// snapshotted c.channels before this channel entered it — remove the
 			// entry here or it lingers until PresenceTTL.
 			c.removeSubscribePresence(channel, ctx.flags)
+		}
+		// Wake any waiter only after this attempt's rollback is complete (same
+		// ordering as onSubscribeErrorGen). The waiter is typically the unsubscribe
+		// loop inside close(), and close() fires OnDisconnect right after it — so
+		// closing this first would let a caller observe a "fully disconnected"
+		// client while the hub entry we are about to remove is still registered.
+		if subscribingCh != nil {
+			close(subscribingCh)
 		}
 		return nil, false
 	}
