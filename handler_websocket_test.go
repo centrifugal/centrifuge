@@ -1449,7 +1449,14 @@ func newOffReadLoopServer(t *testing.T, offReadLoop bool, writeWithTimer bool) (
 	})
 	n.OnConnect(func(client *Client) {
 		client.OnRPC(func(e RPCEvent, cb RPCCallback) {
-			// Echo the request back so the reply can be tied to its command.
+			// "disconnect" lets a test close the connection from inside command
+			// processing, which under the handoff runs on a different goroutine
+			// than the read loop. Anything else echoes, so the reply can be tied
+			// to its command.
+			if e.Method == "disconnect" {
+				client.Disconnect(DisconnectForceNoReconnect)
+				return
+			}
 			cb(RPCReply{Data: e.Data}, nil)
 		})
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
@@ -1715,6 +1722,91 @@ func TestProcessCommandsOffReadLoopInterleavedWithPushes(t *testing.T) {
 		require.Equal(t, uint32(3+i), id, "reply %d out of order", i)
 	}
 	require.Equal(t, numPushes, pushes)
+}
+
+// TestProcessCommandsOffReadLoopServerDisconnect covers teardown started by the
+// server rather than by the peer. The read loop is parked waiting for the
+// handoff or for the next frame, so what has to hold is that closing the
+// transport still unblocks it and drains the connection.
+func TestProcessCommandsOffReadLoopServerDisconnect(t *testing.T) {
+	t.Parallel()
+	for _, offReadLoop := range []bool{false, true} {
+		offReadLoop := offReadLoop
+		name := "inline"
+		if offReadLoop {
+			name = "off_read_loop"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			n, url := newOffReadLoopServer(t, offReadLoop, false)
+			conn := dialAndConnect(t, url)
+			defer func() { _ = conn.Close() }()
+
+			cmd, err := json.Marshal(&protocol.Command{
+				Id: 2, Rpc: &protocol.RPCRequest{Method: "echo", Data: []byte(`{}`)},
+			})
+			require.NoError(t, err)
+			require.NoError(t, conn.WriteMessage(websocket.TextMessage, cmd))
+			require.Equal(t, []uint32{2}, readReplyIDs(t, conn, 1))
+			require.Equal(t, 1, n.Hub().NumClients())
+
+			for _, c := range n.Hub().Connections() {
+				c.Disconnect(DisconnectForceNoReconnect)
+			}
+
+			require.Eventually(t, func() bool { return n.Hub().NumClients() == 0 },
+				10*time.Second, 20*time.Millisecond,
+				"server-side disconnect did not complete")
+
+			// And the peer must actually see the connection end.
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(10*time.Second)))
+			for {
+				if _, _, rErr := conn.ReadMessage(); rErr != nil {
+					break
+				}
+			}
+		})
+	}
+}
+
+// TestProcessCommandsOffReadLoopDisconnectDuringCommand closes the connection
+// from inside command processing. That is the one case the handoff genuinely
+// changes: the close runs on the handoff goroutine while the read loop sits in
+// the channel receive waiting for that same frame to finish. Teardown must still
+// complete, and must not deadlock against the close handshake the read loop is
+// the one to drain.
+func TestProcessCommandsOffReadLoopDisconnectDuringCommand(t *testing.T) {
+	t.Parallel()
+	for _, offReadLoop := range []bool{false, true} {
+		offReadLoop := offReadLoop
+		name := "inline"
+		if offReadLoop {
+			name = "off_read_loop"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			n, url := newOffReadLoopServer(t, offReadLoop, false)
+			conn := dialAndConnect(t, url)
+			defer func() { _ = conn.Close() }()
+
+			cmd, err := json.Marshal(&protocol.Command{
+				Id: 2, Rpc: &protocol.RPCRequest{Method: "disconnect", Data: []byte(`{}`)},
+			})
+			require.NoError(t, err)
+			require.NoError(t, conn.WriteMessage(websocket.TextMessage, cmd))
+
+			require.Eventually(t, func() bool { return n.Hub().NumClients() == 0 },
+				15*time.Second, 20*time.Millisecond,
+				"disconnect issued from command processing did not complete")
+
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(10*time.Second)))
+			for {
+				if _, _, rErr := conn.ReadMessage(); rErr != nil {
+					break
+				}
+			}
+		})
+	}
 }
 
 // What a connection costs while it is doing nothing is what caps connection
