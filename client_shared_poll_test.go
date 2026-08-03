@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -603,15 +604,14 @@ func TestSharedPollRefresh_BasicCycle(t *testing.T) {
 		{Key: "key1", Version: 0},
 	})
 
-	// Wait for at least one refresh cycle.
+	// Wait for at least one refresh cycle. Assert on the captured items inside
+	// the condition: the poll counter is incremented before items are recorded,
+	// so waiting on the counter alone may observe pollItems still empty.
 	require.Eventually(t, func() bool {
-		return pollCalled.Load() > 0
-	}, 2*time.Second, 10*time.Millisecond)
-
-	pollMu.Lock()
-	require.Len(t, pollItems, 1)
-	require.Equal(t, "key1", pollItems[0].Key)
-	pollMu.Unlock()
+		pollMu.Lock()
+		defer pollMu.Unlock()
+		return len(pollItems) == 1 && pollItems[0].Key == "key1"
+	}, 2*time.Second, 10*time.Millisecond, "expected refresh cycle to poll key1")
 }
 
 func TestSharedPollRefresh_VersionIncreased(t *testing.T) {
@@ -972,16 +972,15 @@ func TestSharedPollVersionedMode_VersionsInRequest(t *testing.T) {
 		{Key: "key1", Version: 0},
 	})
 
-	// Wait for at least 2 calls.
+	// Wait for the second call to record its items. Assert inside the condition:
+	// callCount is incremented before pollItems is written, so waiting on the
+	// counter alone may observe pollItems still empty.
 	require.Eventually(t, func() bool {
-		return callCount.Load() >= 2
-	}, 2*time.Second, 10*time.Millisecond)
-
-	pollMu.Lock()
-	require.Len(t, pollItems, 1)
-	require.Equal(t, "key1", pollItems[0].Key)
-	require.Equal(t, uint64(5), pollItems[0].Version) // Should include version from itemIndex.
-	pollMu.Unlock()
+		pollMu.Lock()
+		defer pollMu.Unlock()
+		// Version should include version from itemIndex.
+		return len(pollItems) == 1 && pollItems[0].Key == "key1" && pollItems[0].Version == 5
+	}, 2*time.Second, 10*time.Millisecond, "expected second poll to carry key1 with version 5")
 }
 
 func TestSharedPollVersionedMode_AlwaysSendsVersions(t *testing.T) {
@@ -1025,14 +1024,14 @@ func TestSharedPollVersionedMode_AlwaysSendsVersions(t *testing.T) {
 		{Key: "key1", Version: 0},
 	})
 
+	// Assert inside the condition: callCount is incremented before pollItems is
+	// written, so waiting on the counter alone may observe pollItems still empty.
 	require.Eventually(t, func() bool {
-		return callCount.Load() >= 2
-	}, 2*time.Second, 10*time.Millisecond)
-
-	pollMu.Lock()
-	require.Len(t, pollItems, 1)
-	require.Equal(t, uint64(5), pollItems[0].Version) // Versioned mode always sends versions.
-	pollMu.Unlock()
+		pollMu.Lock()
+		defer pollMu.Unlock()
+		// Versioned mode always sends versions.
+		return len(pollItems) == 1 && pollItems[0].Version == 5
+	}, 2*time.Second, 10*time.Millisecond, "expected second poll to carry version 5")
 }
 
 // 1.8 Connection Lifecycle Tests
@@ -2911,13 +2910,13 @@ func TestSharedPollAutoNotify_ColdKey(t *testing.T) {
 	})
 
 	// Verify OnSharedPoll is called with the cold key within ~200ms (not 10s).
+	// Assert inside the condition: pollCalled is incremented before pollKeys is
+	// appended to, so waiting on the counter alone may observe pollKeys empty.
 	require.Eventually(t, func() bool {
-		return pollCalled.Load() > 0
-	}, 500*time.Millisecond, 10*time.Millisecond)
-
-	pollMu.Lock()
-	require.Contains(t, pollKeys, "cold_key")
-	pollMu.Unlock()
+		pollMu.Lock()
+		defer pollMu.Unlock()
+		return slices.Contains(pollKeys, "cold_key")
+	}, 500*time.Millisecond, 10*time.Millisecond, "expected auto-notify to poll cold_key")
 }
 
 func TestSharedPollAutoNotify_ExistingKeyNoNotify(t *testing.T) {
