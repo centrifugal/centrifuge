@@ -180,6 +180,11 @@ const (
 	flagMapUserPresence      // Emit to {channel}:users, key=userId, no info
 	flagCleanupOnUnsubscribe // Clean up keys by client_id when subscription ends
 	flagKeyed                // Channel uses keyed subscription (shared poll track/untrack)
+	// flagServerTagsFilter marks a subscription narrowed by a server-controlled
+	// tags filter. Such a subscriber must not be offered the channel's compression
+	// dictionary: the filter withholds publications from them, but the dictionary
+	// is built from all of them.
+	flagServerTagsFilter
 )
 
 // ChannelContext contains extra context for channel connection subscribed to.
@@ -3066,6 +3071,30 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			metricClientVersion = req.Version
 		}
 	}
+	// Codec negotiation belongs to the engine: it is handed the client's
+	// advertised capability flags and returns nil when it has nothing that client
+	// can decode. That keeps adding a codec a change in one place rather than
+	// here, and leaves every pre-feature client uncompressed.
+	var acceptedFlags int64
+	if engine := c.node.config.DictionaryCompression; engine != nil {
+		if ca, ok := c.transport.(compressionAware); ok {
+			params := ConnectionParams{
+				ProtocolType: c.transport.Protocol(),
+				ClientFlags:  req.Flag,
+			}
+			if st := req.GetState(); st != nil {
+				// Dictionaries this client kept from an earlier connection. Ids are
+				// content hashes, so anything the engine recognises can be activated
+				// by name rather than re-sent; anything it does not is ignored.
+				params.HeldDictionaryIDs = st.GetDictionaryIds()
+			}
+			if cc := engine.NewConnection(params); cc != nil {
+				ca.setConnectionCompression(cc)
+				acceptedFlags |= ConnectionFlagDictionaryCompression
+			}
+		}
+	}
+
 	c.mu.RLock()
 	authenticated := c.authenticated
 	closed := c.status == statusClosed
@@ -3214,6 +3243,10 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	res.Version = version
 	res.Expires = expires
 	res.Ttl = ttl
+	// Tell the client which of the features it advertised were actually enabled.
+	// Advertising one is not enough: the node may have it turned off, or the
+	// engine may decline this particular connection.
+	res.Flag = acceptedFlags
 
 	if c.pingInterval > 0 {
 		res.Ping = uint32(c.pingInterval.Seconds())
@@ -4049,6 +4082,14 @@ func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind res
 	ctx.subscribingCh = nil
 	c.channels[channel] = ctx
 	c.mu.Unlock()
+	// Let the compression engine see what this connection is subscribed to. A
+	// connection may only use a dictionary built from a channel it can read, so
+	// this is what keeps dictionary content inside its trust boundary.
+	if ca, ok := c.transport.(compressionAware); ok {
+		if cc := ca.connectionCompression(); cc != nil {
+			cc.OnSubscribe(channel)
+		}
+	}
 	return subscribingCh, true
 }
 
@@ -4151,6 +4192,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			hash:   filter.Hash(reply.Options.ServerTagsFilter),
 		}
 	}
+	hasServerTagsFilter := reply.Options.ServerTagsFilter != nil
 
 	needPubSubSync := reply.Options.EnablePositioning || reply.Options.EnableRecovery
 	if needPubSubSync {
@@ -4475,6 +4517,9 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	}
 	if reply.Options.MapUserPresenceChannel != "" {
 		channelFlags |= flagMapUserPresence
+	}
+	if hasServerTagsFilter {
+		channelFlags |= flagServerTagsFilter
 	}
 
 	channelContext := ChannelContext{
@@ -4919,6 +4964,14 @@ func (c *Client) writeLeave(ch string, leave *protocol.Leave, data []byte, batch
 
 // Lock must be held outside.
 func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect *Disconnect) error {
+	// Tell the compression engine first. A dictionary is built over time, so one
+	// handed out after this point could carry content published after the
+	// connection lost access - including when an admin revoked it.
+	if ca, ok := c.transport.(compressionAware); ok {
+		if cc := ca.connectionCompression(); cc != nil {
+			cc.OnUnsubscribe(channel)
+		}
+	}
 	c.mu.RLock()
 	info := c.clientInfo(channel)
 	chCtx, ok := c.channels[channel]

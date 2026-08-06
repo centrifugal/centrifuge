@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/cancelctx"
@@ -440,6 +441,25 @@ type websocketTransport struct {
 	opts            websocketTransportOptions
 	nativePingTimer *time.Timer
 	closed          bool
+	// compression encodes outgoing frames once a connection has negotiated
+	// dictionary compression. Installed by Client after the connect command, so
+	// it is read atomically on the write path.
+	compression atomic.Pointer[ConnectionCompression]
+}
+
+// setConnectionCompression installs the engine's per-connection encoder.
+// Implements compressionAware.
+func (t *websocketTransport) setConnectionCompression(cc ConnectionCompression) {
+	t.compression.Store(&cc)
+}
+
+// connectionCompression returns the installed encoder, or nil. Implements
+// compressionAware.
+func (t *websocketTransport) connectionCompression() ConnectionCompression {
+	if p := t.compression.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 type websocketTransportOptions struct {
@@ -514,14 +534,36 @@ func (t *websocketTransport) PingPongConfig() PingPongConfig {
 }
 
 func (t *websocketTransport) writeData(data []byte) error {
+	if ccp := t.compression.Load(); ccp != nil {
+		// A "before" frame is written first on this same goroutine, so a
+		// compressed frame can never overtake the dictionary that decodes it.
+		before, beforeBinary, out, binary := (*ccp).Encode(data)
+		if before != nil {
+			if err := t.writeFrame(before, beforeBinary); err != nil {
+				return err
+			}
+		}
+		// Compressed output makes permessage-deflate pointless, and writeFrame
+		// bypasses it for binary frames.
+		return t.writeFrame(out, binary)
+	}
+	return t.writeFrame(data, false)
+}
+
+// writeFrame puts one frame on the wire. binary forces a binary WebSocket
+// message, which compressed frames need even on a JSON connection.
+func (t *websocketTransport) writeFrame(data []byte, binary bool) error {
 	usePreparedMessage := t.conn.IsCompressionNegotiated()
-	if t.opts.compressionMinSize > 0 {
+	if binary {
+		usePreparedMessage = false
+		t.conn.EnableWriteCompression(false)
+	} else if t.opts.compressionMinSize > 0 {
 		enableCompression := len(data) > t.opts.compressionMinSize
 		usePreparedMessage = enableCompression
 		t.conn.EnableWriteCompression(enableCompression)
 	}
 	var messageType = websocket.TextMessage
-	if t.Protocol() == ProtocolTypeProtobuf {
+	if binary || t.Protocol() == ProtocolTypeProtobuf {
 		messageType = websocket.BinaryMessage
 	}
 	if t.opts.writeTimeout > 0 {

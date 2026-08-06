@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Centrifuge — dictionary compression</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #262b36; --text: #e6e9ef;
+    --dim: #8b93a7; --good: #4ade80; --bad: #f87171; --accent: #60a5fa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 28px 20px 60px; }
+  h1 { font-size: 20px; margin: 0 0 4px; font-weight: 650; }
+  .sub { color: var(--dim); margin-bottom: 22px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  .bar-top { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-end; margin-bottom: 20px; }
+  .ctl label { display: block; font-size: 11px; text-transform: uppercase;
+               letter-spacing: .06em; color: var(--dim); margin-bottom: 6px; }
+  select, button {
+    background: #1f242e; color: var(--text); border: 1px solid var(--line);
+    border-radius: 7px; padding: 8px 12px; font: inherit; cursor: pointer;
+  }
+  button:hover, select:hover { border-color: #3a4152; }
+  .grow { flex: 1; }
+  .note { color: var(--dim); font-size: 13px; }
+  .note.err { color: var(--bad); }
+
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 11px 10px; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); font-weight: 600; }
+  tbody tr:last-child td { border-bottom: none; }
+  tr.hero td { background: #16241c; }
+  tr.hero td:first-child { box-shadow: inset 3px 0 0 var(--good); }
+  .mode { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
+  .dot.on { background: var(--good); }
+  .dot.off { background: var(--bad); }
+  .big { font-size: 17px; font-weight: 650; }
+  .win { color: var(--good); font-weight: 650; }
+  .lose { color: var(--bad); }
+  .meter { height: 6px; background: #1f242e; border-radius: 3px; overflow: hidden; margin-top: 6px; min-width: 90px; }
+  .meter > i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+  .tag { font-size: 11px; color: var(--dim); }
+  tr.hero .tag { color: var(--good); }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 22px 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px; }
+  .card .k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
+  .card .v { font-size: 24px; font-weight: 650; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .card .v.good { color: var(--good); }
+  .card .n { font-size: 12px; color: var(--dim); margin-top: 2px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em;
+       color: var(--dim); margin: 26px 0 10px; font-weight: 600; }
+  pre { margin: 0; color: var(--dim); font-size: 12px; overflow-x: auto; }
+  p { margin: 0 0 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Dictionary compression</h1>
+  <div class="sub">
+    Three connections to the same live odds feed, one per server mode, running at
+    the same time — the identical traffic compared three ways, not three separate
+    runs.
+  </div>
+
+  <div class="bar-top">
+    <div class="ctl">
+      <label for="proto">Protocol</label>
+      <select id="proto">
+        <option value="json" selected>JSON</option>
+        <option value="protobuf">Protobuf</option>
+      </select>
+    </div>
+    <div class="ctl"><button id="restart">Restart</button></div>
+    <div class="ctl grow"><div class="note" id="note">connecting…</div></div>
+  </div>
+
+  <div class="panel">
+    <table>
+      <thead>
+        <tr>
+          <th>Server mode</th><th>Messages</th><th>Wire bytes<span class="tag"> (server-measured)</span></th>
+          <th>Bytes / message</th><th>vs no compression</th><th>Saved</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="k">Steady-state ratio</div><div class="v good" id="ratio">waiting</div>
+      <div class="n" id="frames">no compressed frames yet</div>
+    </div>
+    <div class="card">
+      <div class="k">Net saved</div><div class="v good" id="saved">waiting</div>
+      <div class="n" id="savedNote">dictionary not sent yet</div>
+      <div class="meter"><i id="payMeter" style="width:0%"></i></div>
+    </div>
+    <div class="card">
+      <div class="k">Dictionary</div><div class="v" id="dictSize">—</div>
+      <div class="n" id="dictId">not sent yet</div>
+    </div>
+    <div class="card">
+      <div class="k">Server cache hits</div><div class="v" id="sRate">—</div>
+      <div class="n" id="sCounts">one compression reused across subscribers</div>
+    </div>
+  </div>
+
+  <h2>Latest publication</h2>
+  <div class="panel"><pre id="last">—</pre></div>
+
+  <h2>What you are looking at</h2>
+  <div class="panel note">
+    <p>
+      The dictionary row starts level with the others and drops after a few
+      seconds. That is deliberate: the dictionary costs its own size in bytes, so
+      the server withholds it until a connection has carried enough traffic to
+      earn it back. Before that point the connection uses the built-in
+      dictionary, which both sides compile in and which costs nothing to
+      deliver, which is why
+      the whole-session <em>bytes / message</em> stays above the steady-state
+      ratio shown in the card.
+    </p>
+    <p>
+      permessage-deflate runs here at <code>CompressionLevel: 6</code>. The
+      default is <code>0</code>, which is <code>flate.NoCompression</code> &mdash;
+      the connection negotiates the extension and then stores instead of
+      compressing, measuring slightly <em>worse</em> than no compression. It is an
+      easy default to leave in place, and it makes any comparison meaningless.
+    </p>
+    <p>
+      <strong>Wire bytes are measured on the server</strong>, at the socket, after
+      compression. They have to be: a browser cannot see permessage-deflate at
+      all, because the WebSocket API inflates those frames before JavaScript gets
+      them. Counting in the page would report deflate as saving exactly nothing,
+      which would be an artefact of the measurement rather than a result. Counts
+      are per mode across all tabs, so bytes ÷ messages stays right however many
+      you open.
+    </p>
+    <p style="margin-bottom:0">
+      Server cache hits need real fan-out to show — measured 0% at 3 subscribers,
+      68% at 30, 99% at 2000. A few browser tabs will sit near zero, and that is
+      fine: with three subscribers there is almost nothing to share.
+    </p>
+  </div>
+</div>
+
+<script>
+const SDK_BASE = 'http://localhost:2000';
+const MODES = [
+  { key: 'none',    label: 'no compression',         path: '/connection/websocket' },
+  { key: 'deflate', label: 'permessage-deflate',     path: '/connection/websocket/deflate' },
+  { key: 'dict',    label: 'dictionary compression', path: '/connection/websocket/compressed' },
+];
+const el = id => document.getElementById(id);
+const fmt = n => n < 1024 ? n.toFixed(0) + ' B'
+  : n < 1048576 ? (n / 1024).toFixed(1) + ' KB'
+  : (n / 1048576).toFixed(2) + ' MB';
+
+const ctors = {};  // proto -> constructor
+const conns = {};  // mode key -> { client, sub, msgs, state }
+
+// Both browser bundles assign globalThis.Centrifuge, and the Protobuf one is a
+// subclass that forces its codec regardless of options. Capture each right after
+// its script loads, or switching protocol would silently keep the previous one.
+function loadSDK(proto) {
+  if (ctors[proto]) return Promise.resolve(ctors[proto]);
+  const file = proto === 'protobuf' ? 'centrifuge.protobuf.js' : 'centrifuge.js';
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = SDK_BASE + '/' + file;
+    s.onload = () => { ctors[proto] = globalThis.Centrifuge; resolve(ctors[proto]); };
+    s.onerror = () => reject(new Error('Could not load ' + s.src +
+      ' — run `yarn dev` in the centrifuge-js checkout.'));
+    document.head.appendChild(s);
+  });
+}
+
+function teardown() {
+  for (const k of Object.keys(conns)) {
+    try { conns[k].client.disconnect(); } catch (e) { /* already gone */ }
+    delete conns[k];
+  }
+}
+
+async function start() {
+  teardown();
+  renderRows();
+  const proto = el('proto').value;
+
+  let Ctor;
+  try { Ctor = await loadSDK(proto); }
+  catch (e) { el('note').textContent = e.message; el('note').className = 'note err'; return; }
+  el('note').className = 'note';
+  el('note').textContent = 'three connections open on ' + proto + ' — same feed, same window';
+
+  for (const m of MODES) {
+    // The bundle picks the protocol, not an option.
+    const client = new Ctor('ws://' + location.host + m.path, {});
+    const rec = { client, msgs: 0, state: 'connecting' };
+    conns[m.key] = rec;
+
+    client.on('connected', () => { rec.state = 'connected'; });
+    client.on('disconnected', () => { rec.state = 'disconnected'; });
+    client.on('error', e => console.warn(m.key, 'error', e));
+
+    const sub = client.newSubscription('odds:board');
+    sub.on('publication', ctx => {
+      rec.msgs++;
+      // Only the uncompressed connection renders the payload, so the preview is
+      // not fought over by three sources.
+      if (m.key === 'none' && rec.msgs % 15 === 0) {
+        const d = (ctx.data instanceof Uint8Array)
+          ? JSON.parse(new TextDecoder().decode(ctx.data))
+          : ctx.data;
+        el('last').textContent = JSON.stringify(d, null, 2);
+      }
+    });
+    sub.subscribe();
+    client.connect();
+    rec.sub = sub;
+  }
+}
+
+// Wire bytes come from the SERVER, not from the page.
+//
+// A browser cannot measure permessage-deflate: the WebSocket API inflates those
+// frames before JavaScript sees them, so an in-page byte count would report it
+// as saving nothing at all - which is exactly the wrong answer. The server
+// counts bytes at the socket, after compression, for every mode alike.
+function sample(key) {
+  const rec = conns[key];
+  if (!rec) return null;
+  const s = rec.client.compressionStats ? rec.client.compressionStats() : null;
+  const srv = serverModes[key];
+  const wire = srv ? srv.bytes : 0;
+  const srvMsgs = srv ? srv.msgs : 0;
+  return { rec, s, wire, msgs: rec.msgs, srvMsgs, bpm: srvMsgs > 0 ? wire / srvMsgs : 0 };
+}
+
+function renderRows() {
+  const base = sample('none');
+  el('rows').innerHTML = MODES.map(m => {
+    const x = sample(m.key);
+    if (!x) {
+      return '<tr><td><span class="mode"><span class="dot"></span>' + m.label + '</span></td>' +
+             '<td colspan="5" class="tag">connecting…</td></tr>';
+    }
+    const dotCls = x.rec.state === 'connected' ? 'on' : x.rec.state === 'disconnected' ? 'off' : '';
+    let vs = '—', saved = '—', cls = '';
+    if (base && base.bpm > 0 && x.bpm > 0) {
+      const f = base.bpm / x.bpm;
+      vs = f.toFixed(2) + '×';
+      cls = m.key === 'none' ? '' : (f > 1.05 ? 'win' : f < 0.98 ? 'lose' : '');
+      if (m.key !== 'none') {
+        const savedBytes = (base.bpm - x.bpm) * x.srvMsgs;
+        saved = (savedBytes < 0 ? '−' : '') + fmt(Math.abs(savedBytes));
+      }
+    }
+    const active = x.s && x.s.active;
+    // Two dictionaries can be in use. The built-in one both sides compile in
+    // costs nothing and starts immediately; the learned one is built from this
+    // channel's traffic and has to be earned. Saying "compressing" for both
+    // hides the whole point of the demo.
+    const builtin = active && x.s.dictionaryId === 'builtin-v1';
+    const pct = base && base.bpm > 0 ? Math.min(100, 100 * x.bpm / base.bpm) : 100;
+    // The dot already says whether the connection is up. This line describes
+    // what the mode is doing to frames, which is the thing that differs.
+    // Two separate things gate the dictionary, and it is worth saying which one
+    // you are waiting on: the node has to build one at all, and then this
+    // connection has to carry enough traffic to be worth sending it to.
+    let pending;
+    if (!dictReady) {
+      pending = 'server still sampling traffic to build a dictionary';
+    } else {
+      const carried = x.s ? x.s.transportBytesReceived : 0;
+      pending = breakEven > 0
+        ? 'earning the dictionary — ' + fmt(carried) + ' of ~' + fmt(breakEven) + ' carried'
+        : 'waiting for this connection to earn the dictionary';
+    }
+    const tag = m.key === 'none' ? 'frames sent as-is'
+      : m.key === 'deflate' ? 'deflated per message, dictionary reset each time'
+      : builtin ? 'built-in dictionary (free, immediate) — ' + pending
+      : active ? 'compressing against this channel\'s learned dictionary'
+      : pending;
+    const subLabel = '<div class="tag">' + tag + '</div>';
+    return '<tr class="' + (m.key === 'dict' && active && !builtin ? 'hero' : '') + '">' +
+      '<td><span class="mode"><span class="dot ' + dotCls + '"></span>' + m.label + '</span>' + subLabel + '</td>' +
+      '<td>' + x.msgs.toLocaleString() + '</td>' +
+      '<td>' + fmt(x.wire) + '</td>' +
+      '<td><span class="big">' + (x.bpm > 0 ? x.bpm.toFixed(1) : '—') + '</span>' +
+      '<div class="meter"><i style="width:' + pct + '%"></i></div></td>' +
+      '<td class="' + cls + '">' + (m.key === 'none' ? '<span class="tag">baseline</span>' : vs) + '</td>' +
+      '<td class="' + cls + '">' + (m.key === 'none' ? '—' : saved) + '</td>' +
+      '</tr>';
+  }).join('');
+
+  // Detail cards track the dictionary connection. Until the dictionary arrives
+  // these have genuinely nothing to report - there are no compressed frames yet
+  // - so they say why rather than showing a bare dash.
+  const d = sample('dict');
+  if (d && d.s) {
+    if (d.s.active) {
+      el('ratio').textContent = d.s.ratio.toFixed(2) + '×';
+      el('frames').textContent = d.s.frames.toLocaleString() + ' compressed frames';
+      el('saved').textContent = fmt(d.s.bytesSaved);
+      el('savedNote').textContent = 'after paying ' + fmt(d.s.dictionaryBytes) + ' for the dictionary';
+      el('payMeter').style.width = '100%';
+      el('dictSize').textContent = fmt(d.s.dictionaryBytes);
+      el('dictId').textContent = d.s.dictionaryId;
+    } else {
+      el('ratio').textContent = 'waiting';
+      el('frames').textContent = 'no compressed frames yet';
+      el('saved').textContent = 'waiting';
+      el('savedNote').textContent = !dictReady
+        ? 'server still sampling traffic to build a dictionary'
+        : fmt(d.s ? d.s.transportBytesReceived : 0) + ' of ~' + fmt(breakEven)
+          + ' carried — the dictionary is withheld until this connection has paid for it';
+      // breakEven comes from the server so the page does not guess at the
+      // engine's rule; it is only a progress hint.
+      const carried = d.s ? d.s.transportBytesReceived : 0;
+      el('payMeter').style.width = breakEven > 0
+        ? Math.min(100, 100 * carried / breakEven) + '%' : '0%';
+      el('dictSize').textContent = '—';
+      el('dictId').textContent = d.s.accepted ? 'accepted, not sent yet' : 'not accepted';
+    }
+  }
+}
+
+let breakEven = 0;
+let dictReady = false;
+let serverModes = {};
+
+async function pollServer() {
+  try {
+    const s = await (await fetch('/stats')).json();
+    breakEven = s.breakEvenBytes || 0;
+    dictReady = !!s.dictionaryReady;
+    serverModes = s.modes || {};
+    const total = (s.frameCompressions || 0) + (s.frameCacheHits || 0);
+    el('sRate').textContent = total > 0 ? (100 * s.frameCacheHits / total).toFixed(1) + '%' : '—';
+    el('sCounts').textContent = total > 0
+      ? s.frameCompressions.toLocaleString() + ' compressed, ' + s.frameCacheHits.toLocaleString() + ' reused'
+      : 'one compression reused across subscribers';
+  } catch (e) { /* server may be restarting */ }
+}
+
+el('restart').onclick = start;
+el('proto').onchange = start;
+setInterval(renderRows, 250);
+setInterval(pollServer, 1000);
+start();
+</script>
+</body>
+</html>

@@ -53,6 +53,7 @@ type Node struct {
 	nodes *nodeRegistry
 	// metrics registry.
 	metrics *metrics
+
 	// shutdown is a flag which is only true when node is going to shut down.
 	shutdown bool
 	// shutdownCh is a channel which is closed when node shutdown initiated.
@@ -213,7 +214,13 @@ func New(c Config) (*Node, error) {
 	}
 	n.metrics = m
 
-	n.hub = newHub(lg, n.metrics, c.ClientChannelPositionMaxTimeLag.Milliseconds())
+	var sampleDict func(string, protocol.Type, []byte, int)
+	if e, ok := c.DictionaryCompression.(*DictionaryCompressionEngine); ok {
+		sampleDict = func(channel string, proto protocol.Type, data []byte, subscribers int) {
+			e.observe(e.dictionaryChannel(channel), proto, data, subscribers)
+		}
+	}
+	n.hub = newHub(lg, n.metrics, c.ClientChannelPositionMaxTimeLag.Milliseconds(), sampleDict)
 
 	b, err := NewMemoryBroker(n, MemoryBrokerConfig{})
 	if err != nil {

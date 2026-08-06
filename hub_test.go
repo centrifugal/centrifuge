@@ -165,7 +165,7 @@ func TestHub(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	h := newHub(nil, m, 0)
+	h := newHub(nil, m, 0, nil)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	c.user = "test"
@@ -986,10 +986,10 @@ func TestHubShutdown(t *testing.T) {
 		MetricsNamespace: "test",
 	})
 	require.NoError(t, err)
-	h := newHub(nil, m, 0)
+	h := newHub(nil, m, 0, nil)
 	err = h.shutdown(context.Background())
 	require.NoError(t, err)
-	h = newHub(nil, m, 0)
+	h = newHub(nil, m, 0, nil)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	h.add(c)
@@ -1009,7 +1009,7 @@ func TestHubSubscriptions(t *testing.T) {
 		MetricsNamespace: "test",
 	})
 	require.NoError(t, err)
-	h := newHub(nil, m, 0)
+	h := newHub(nil, m, 0, nil)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 
@@ -1055,7 +1055,7 @@ func TestUserConnections(t *testing.T) {
 		MetricsNamespace: "test",
 	})
 	require.NoError(t, err)
-	h := newHub(nil, m, 0)
+	h := newHub(nil, m, 0, nil)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	h.add(c)
@@ -1447,7 +1447,7 @@ func TestSubIDUniquenessAcrossShards(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	h := newHub(nil, m, 0)
+	h := newHub(nil, m, 0, nil)
 
 	// Create test clients for different shards
 	clients := make([]*Client, 0)
@@ -1530,7 +1530,7 @@ func TestSubIDShardDistribution(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	h := newHub(nil, m, 0)
+	h := newHub(nil, m, 0, nil)
 
 	// Create channels that hash to specific shards to test the distribution
 	// We'll create enough channels to test multiple IDs per shard

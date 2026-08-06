@@ -229,6 +229,15 @@ type Config struct {
 	// not set then no batching is used on per-channel level. This function may be called in the hot
 	// broadcast path, so must be fast. This is an EXPERIMENTAL feature.
 	GetChannelBatchConfig func(channel string) ChannelBatchConfig
+	// DictionaryCompression enables connection-level frame compression against a
+	// shared dictionary. Nil (the default) disables it. Use
+	// NewDictionaryCompressionEngine for the built-in engine, or supply your own
+	// implementation to control dictionary selection and encoding.
+	//
+	// It only applies to connections whose client advertised support, so it is
+	// safe to enable for a mixed fleet of old and new clients. This is an
+	// EXPERIMENTAL feature.
+	DictionaryCompression DictionaryCompression
 	// ClientTimerScheduler if set will be used for scheduling client timers.
 	// This is an EXPERIMENTAL API.
 	ClientTimerScheduler TimerScheduler
