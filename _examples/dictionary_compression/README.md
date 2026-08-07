@@ -54,8 +54,13 @@ path, but the server does not currently use it.
   stores rather than compresses, measuring ~0.99x. Comparing against that default
   overstates dictionary compression by roughly 5x, so do not do it.
 - The `built-in` column is the engine enabled with nothing trained for this
-  profile, so connections fall back to the protocol structure dictionary, which
-  contains no application data. It is the floor a connection gets when no
-  dictionary exists for it, and it lands close to a properly configured
+  profile, so connections fall back to the envelope-only dictionary for their
+  protocol, which contains no application data. It is the floor a connection gets
+  when no dictionary exists for it, and it lands close to a properly configured
   permessage-deflate - the difference between the two is CPU, not bytes (see
   `dictionary_compression_cpu`).
+- Every dictionary is trained **per protocol**, from real encoded frames rather
+  than from payloads. A frame is envelope plus payload and the two protocols
+  share no envelope, so a JSON-trained dictionary covers nothing of a Protobuf
+  frame's envelope. Measured on held-out frames, training this way is worth about
+  25% over training on payloads alone.

@@ -28,7 +28,6 @@ import (
 	"github.com/centrifugal/centrifuge"
 	"github.com/centrifugal/centrifuge/_examples/dictionaryengine"
 	centrifugego "github.com/centrifugal/centrifuge-go"
-	"github.com/centrifugal/protocol"
 )
 
 // countingConn counts bytes arriving from the server. Measuring at the socket
@@ -160,23 +159,32 @@ const dictionarySize = 4096
 // trainDictionary builds the dictionary a scenario's connections are served.
 //
 // It is the offline half of the design in one function: take frames of the kind
-// this profile carries, keep the most recent up to a size cap, and put the
-// protocol structure dictionary underneath so the result covers the envelope as
-// well as the payload. A real trainer does this from captured traffic that has
-// been anonymised and reviewed - the part an example cannot stand in for - but
-// the shape of the artifact is the same.
+// this profile carries and keep the most recent up to a size cap. A real trainer
+// does this from captured traffic that has been anonymised and reviewed - the
+// part an example cannot stand in for - but the shape of the artifact is the
+// same.
+//
+// One per protocol. A dictionary is matched against frames, and a frame is
+// envelope plus payload; the envelopes are nothing alike, so a JSON-trained
+// dictionary covers no part of a Protobuf connection's envelope.
 //
 // The corpus uses a different seed from the measured run, so the dictionary is
 // built from traffic of the same kind rather than from the very frames it is
 // later scored against.
-func trainDictionary(sh shape) []byte {
+func trainDictionary(sh shape, proto centrifuge.ProtocolType) []byte {
 	rng := rand.New(rand.NewSource(7))
 	samples := make([][]byte, 0, 256)
 	for i := 0; i < 256; i++ {
-		samples = append(samples, sh.gen(i, rng))
+		samples = append(samples, dictionaryengine.Frame(proto, testChannel, sh.gen(i, rng)))
 	}
-	dict := append([]byte{}, protocol.StructureDictionary...)
-	return append(dict, dictionaryengine.Train(samples, dictionarySize)...)
+	return dictionaryengine.Train(samples, dictionarySize)
+}
+
+func protoType(useProtobuf bool) centrifuge.ProtocolType {
+	if useProtobuf {
+		return centrifuge.ProtocolTypeProtobuf
+	}
+	return centrifuge.ProtocolTypeJSON
 }
 
 func newNode(m mode, sh shape, useProtobuf bool) *centrifuge.Node {
@@ -184,20 +192,18 @@ func newNode(m mode, sh shape, useProtobuf bool) *centrifuge.Node {
 		LogLevel:   centrifuge.LogLevelError,
 		LogHandler: func(e centrifuge.LogEntry) {},
 	}
+	proto := protoType(useProtobuf)
 	switch m {
 	case modeBuiltin:
 		// No dictionary for this profile, so every connection falls back to the
-		// structure dictionary.
+		// envelope-only dictionary for its protocol.
 		cfg.DictionaryCompression = dictionaryengine.New(dictionaryengine.Options{
+			Fallback:       map[centrifuge.ProtocolType][]byte{proto: dictionaryengine.StructureDictionary(proto)},
 			FrameCacheSize: 4096,
 		})
 	case modeDictionary:
-		proto := centrifuge.ProtocolTypeJSON
-		if useProtobuf {
-			proto = centrifuge.ProtocolTypeProtobuf
-		}
 		cfg.DictionaryCompression = dictionaryengine.New(dictionaryengine.Options{
-			Dictionaries:   map[dictionaryengine.Key][]byte{{Protocol: proto}: trainDictionary(sh)},
+			Dictionaries:   map[dictionaryengine.Key][]byte{{Protocol: proto}: trainDictionary(sh, proto)},
 			FrameCacheSize: 4096,
 		})
 	}
@@ -411,7 +417,8 @@ func main() {
 	fmt.Println("Bytes are counted at the client socket and include WebSocket framing.")
 	fmt.Println("Every received payload is compared against what was published; any mismatch aborts.")
 	fmt.Println("\n\"built-in\" is the engine enabled with nothing trained for this profile, so")
-	fmt.Println("connections fall back to the protocol structure dictionary, which holds no")
-	fmt.Println("application data. It is the floor: what a connection gets when no dictionary")
-	fmt.Println("exists for it.")
+	fmt.Println("connections fall back to the envelope-only dictionary for their protocol. It")
+	fmt.Println("holds no application data and is the floor a connection gets when nothing was")
+	fmt.Println("trained for it. On Protobuf that floor is nearly the baseline: the tier works")
+	fmt.Println("by remembering repeated key strings, and a Protobuf envelope has none.")
 }

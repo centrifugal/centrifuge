@@ -39,10 +39,17 @@ endpoint, so switching mode compares like with like:
 | profile dictionary | `/connection/websocket/compressed` |
 
 The last two are the same feature at its two tiers. `structure` runs an engine
-with nothing trained for any profile, so connections fall back to the protocol
-structure dictionary — no application data in it, no review, nothing for an
-operator to decide. `compressed` serves a dictionary trained from this feed. The
-gap between those two rows is what training is worth.
+with nothing trained for any profile, so connections fall back to an envelope-only
+dictionary — no application data in it, no review, nothing for an operator to
+decide. `compressed` serves a dictionary trained from this feed. The gap between
+those two rows is what training is worth.
+
+Every dictionary here is **per protocol**. A dictionary is matched against frames,
+and a frame is envelope plus payload; the payload is JSON either way in this demo,
+but the envelopes share nothing. Watch the structure row when you flip to
+Protobuf: it barely moves off the baseline, because that tier works by remembering
+repeated key strings and a Protobuf envelope is field tags. The trained row holds
+up on both.
 
 The feed is a live odds board: ~20 small JSON messages a second, which is the
 shape where this helps most.

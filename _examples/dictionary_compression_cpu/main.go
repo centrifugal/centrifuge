@@ -41,7 +41,6 @@ import (
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/centrifugal/centrifuge/_examples/dictionaryengine"
-	"github.com/centrifugal/protocol"
 	"github.com/gorilla/websocket"
 )
 
@@ -112,10 +111,12 @@ func trainDictionary() []byte {
 	gen := newPayloadFn()
 	samples := make([][]byte, 0, 512)
 	for i := 0; i < 512; i++ {
-		samples = append(samples, gen(i))
+		// Frames, not payloads: a dictionary is matched against what goes on the
+		// wire, which is envelope plus payload. This side is JSON only.
+		samples = append(samples,
+			dictionaryengine.Frame(centrifuge.ProtocolTypeJSON, sharedChannel(i%*pool), gen(i)))
 	}
-	dict := append([]byte{}, protocol.StructureDictionary...)
-	return append(dict, dictionaryengine.Train(samples, 4096)...)
+	return dictionaryengine.Train(samples, 4096)
 }
 
 // ---------------------------------------------------------------------------

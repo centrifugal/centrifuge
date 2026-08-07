@@ -41,7 +41,6 @@ import (
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/centrifugal/centrifuge/_examples/dictionaryengine"
-	"github.com/centrifugal/protocol"
 )
 
 // The page is embedded rather than read from disk so the demo runs the same
@@ -62,21 +61,27 @@ const feedProfile = "odds-board"
 // range: bigger keeps helping, with falling returns and a rising cost to deliver.
 const demoDictionarySize = 2048
 
-// oddsDictionary is the artifact a trainer would produce for this profile: a
-// sample of the traffic it carries, with the protocol structure dictionary
-// underneath so it covers the envelope as well as the payload.
+// oddsDictionary is the artifact a trainer would produce for this profile on
+// this protocol: a sample of the frames it carries.
 //
-// Here it is generated from the same feed the demo publishes, using a separate
-// seed. A real trainer builds it from captured traffic that has been anonymised
-// and reviewed before anything is written into a dictionary handed to clients.
-func oddsDictionary() []byte {
+// One per protocol, because a dictionary is matched against frames and a frame
+// is envelope plus payload. The payload here is JSON either way, but the
+// envelope is not - JSON repeats long key names, Protobuf writes field tags -
+// so a JSON-trained dictionary leaves a Protobuf connection's envelope
+// uncovered. Measured on held-out frames, training per protocol is worth about
+// 25% against training on payloads alone.
+//
+// Generated here from the same feed the demo publishes, using a separate seed,
+// so the dictionary comes from traffic of the same kind rather than from the
+// frames it is later scored against. A real trainer builds it from captured
+// traffic that has been anonymised and reviewed first.
+func oddsDictionary(proto centrifuge.ProtocolType) []byte {
 	rng := rand.New(rand.NewSource(11))
 	samples := make([][]byte, 0, 256)
 	for i := 0; i < 256; i++ {
-		samples = append(samples, oddsUpdate(i, rng))
+		samples = append(samples, dictionaryengine.Frame(proto, feedChannel, oddsUpdate(i, rng)))
 	}
-	dict := append([]byte{}, protocol.StructureDictionary...)
-	return append(dict, dictionaryengine.Train(samples, demoDictionarySize)...)
+	return dictionaryengine.Train(samples, demoDictionarySize)
 }
 
 // mode is one server configuration under comparison.
@@ -104,20 +109,26 @@ func (m *mode) newNode() {
 	switch m.key {
 	case "structure":
 		// Nothing trained for any profile, so every connection falls back to the
-		// protocol structure dictionary. That is the tier a connection gets when
-		// its profile has no dictionary - it holds no application data, so it
-		// needs no disclosure decision from anyone.
-		m.engine = dictionaryengine.New(dictionaryengine.Options{FrameCacheSize: 4096})
+		// envelope-only dictionary for its protocol. That is the tier a
+		// connection gets when its profile has no dictionary - it holds no
+		// application data, so it needs no disclosure decision from anyone.
+		//
+		// Watch what it is worth on each protocol. On JSON it is a real if
+		// modest gain; on Protobuf it barely moves, because the envelope there
+		// is field tags rather than repeated key strings.
+		m.engine = dictionaryengine.New(dictionaryengine.Options{
+			Fallback: map[centrifuge.ProtocolType][]byte{
+				centrifuge.ProtocolTypeJSON:     dictionaryengine.StructureDictionary(centrifuge.ProtocolTypeJSON),
+				centrifuge.ProtocolTypeProtobuf: dictionaryengine.StructureDictionary(centrifuge.ProtocolTypeProtobuf),
+			},
+			FrameCacheSize: 4096,
+		})
 		cfg.DictionaryCompression = m.engine
 	case "dict":
-		dict := oddsDictionary()
-		// The same dictionary is served on both protocols here because the demo
-		// publishes JSON payloads either way, so only the envelope differs. A
-		// real trainer builds one per protocol from that protocol's own frames.
 		m.engine = dictionaryengine.New(dictionaryengine.Options{
 			Dictionaries: map[dictionaryengine.Key][]byte{
-				{Profile: feedProfile, Protocol: centrifuge.ProtocolTypeJSON}:     dict,
-				{Profile: feedProfile, Protocol: centrifuge.ProtocolTypeProtobuf}: dict,
+				{Profile: feedProfile, Protocol: centrifuge.ProtocolTypeJSON}:     oddsDictionary(centrifuge.ProtocolTypeJSON),
+				{Profile: feedProfile, Protocol: centrifuge.ProtocolTypeProtobuf}: oddsDictionary(centrifuge.ProtocolTypeProtobuf),
 			},
 			FrameCacheSize: 4096,
 		})
@@ -259,19 +270,22 @@ func main() {
 
 	mux.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// Per mode rather than global: two modes now run an engine, and they hold
-		// different dictionaries.
+		// Per mode and per protocol: two modes run an engine, and each holds a
+		// separate dictionary for JSON and for Protobuf.
+		type dictStat struct {
+			ID   string `json:"id"`
+			Size int    `json:"size"`
+			// WireBytes is what delivering it costs once, which is what a
+			// connection has to earn back.
+			WireBytes int `json:"wireBytes"`
+		}
 		type modeStat struct {
 			Bytes int64 `json:"bytes"`
 			Msgs  int64 `json:"msgs"`
 			// Present only for modes running an engine.
-			FrameCompressions int64  `json:"frameCompressions,omitempty"`
-			FrameCacheHits    int64  `json:"frameCacheHits,omitempty"`
-			DictionaryID      string `json:"dictionaryId,omitempty"`
-			DictionarySize    int    `json:"dictionarySize,omitempty"`
-			// What delivering the dictionary costs once, which is what a
-			// connection has to earn back.
-			DictionaryWireBytes int `json:"dictionaryWireBytes,omitempty"`
+			FrameCompressions int64               `json:"frameCompressions,omitempty"`
+			FrameCacheHits    int64               `json:"frameCacheHits,omitempty"`
+			Dictionaries      map[string]dictStat `json:"dictionaries,omitempty"`
 		}
 		ms := map[string]modeStat{}
 		out := map[string]any{"modes": ms}
@@ -281,19 +295,13 @@ func main() {
 				s := m.engine.Stats()
 				st.FrameCompressions = s.FrameCompressions
 				st.FrameCacheHits = s.FrameCacheHits
-				// The structure mode has no profile dictionary, so it reports the
-				// fallback - the one under the empty profile.
-				want := feedProfile
-				if m.key == "structure" {
-					want = ""
-				}
+				st.Dictionaries = map[string]dictStat{}
 				for _, d := range s.Dictionaries {
-					if d.Key.Profile == want {
-						st.DictionaryID = d.ID
-						st.DictionarySize = d.Size
-						st.DictionaryWireBytes = d.WireSize
-						break
+					name := "json"
+					if d.Key.Protocol == centrifuge.ProtocolTypeProtobuf {
+						name = "protobuf"
 					}
+					st.Dictionaries[name] = dictStat{ID: d.ID, Size: d.Size, WireBytes: d.WireSize}
 				}
 			}
 			ms[m.key] = st

@@ -34,7 +34,6 @@ import (
 	"github.com/centrifugal/centrifuge"
 	centrifugego "github.com/centrifugal/centrifuge-go"
 	"github.com/centrifugal/centrifuge/_examples/dictionaryengine"
-	"github.com/centrifugal/protocol"
 )
 
 type countingConn struct {
@@ -145,14 +144,17 @@ func sessionStreams() []stream {
 // than a single-shape profile would need.
 const casinoDictionarySize = 8192
 
-// casinoDictionary is the artifact a trainer would produce for this profile.
+// casinoDictionary is the artifact a trainer would produce for this profile on
+// this protocol.
 //
 // One dictionary covers everything a player's connection carries - odds, the
 // jackpot ticker, the live table, their own account events - because a profile
-// is a kind of client, not a channel. It is generated here from the same feeds
-// with a separate seed; a real trainer builds it from captured traffic that has
-// been anonymised and reviewed first.
-func casinoDictionary() []byte {
+// is a kind of client, not a channel. One per protocol, because a dictionary is
+// matched against frames and the two protocols share no envelope.
+//
+// Generated here from the same feeds with a separate seed; a real trainer builds
+// it from captured traffic that has been anonymised and reviewed first.
+func casinoDictionary(proto centrifuge.ProtocolType) []byte {
 	rng := rand.New(rand.NewSource(4242))
 	var samples [][]byte
 	for _, st := range sessionStreams() {
@@ -162,11 +164,10 @@ func casinoDictionary() []byte {
 			n = 8
 		}
 		for i := 0; i < n; i++ {
-			samples = append(samples, st.gen(i, rng))
+			samples = append(samples, dictionaryengine.Frame(proto, st.channel, st.gen(i, rng)))
 		}
 	}
-	dict := append([]byte{}, protocol.StructureDictionary...)
-	return append(dict, dictionaryengine.Train(samples, casinoDictionarySize)...)
+	return dictionaryengine.Train(samples, casinoDictionarySize)
 }
 
 func max64(a, b int64) int64 {
@@ -224,7 +225,7 @@ func run(m mode, useProtobuf bool) outcome {
 			proto = centrifuge.ProtocolTypeProtobuf
 		}
 		engine = dictionaryengine.New(dictionaryengine.Options{
-			Dictionaries:   map[dictionaryengine.Key][]byte{{Protocol: proto}: casinoDictionary()},
+			Dictionaries:   map[dictionaryengine.Key][]byte{{Protocol: proto}: casinoDictionary(proto)},
 			FrameCacheSize: 4096,
 		})
 		cfg.DictionaryCompression = engine
@@ -402,7 +403,7 @@ func runFanout(m mode, players, warmupRounds, measuredRounds int) (int64, dictio
 	if m == modeDictionary {
 		engine = dictionaryengine.New(dictionaryengine.Options{
 			Dictionaries: map[dictionaryengine.Key][]byte{
-				{Protocol: centrifuge.ProtocolTypeJSON}: casinoDictionary(),
+				{Protocol: centrifuge.ProtocolTypeJSON}: casinoDictionary(centrifuge.ProtocolTypeJSON),
 			},
 			FrameCacheSize: 4096,
 		})
