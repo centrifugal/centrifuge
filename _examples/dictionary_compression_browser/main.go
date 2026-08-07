@@ -92,7 +92,7 @@ type mode struct {
 	msgs atomic.Int64
 	// deflate enables permessage-deflate for this mode.
 	deflate bool
-	// engine is set only for the dictionary mode.
+	// engine is set for both compressed modes.
 	engine *dictionaryengine.Engine
 }
 
@@ -101,7 +101,15 @@ func (m *mode) newNode() {
 		LogLevel:   centrifuge.LogLevelError,
 		LogHandler: func(centrifuge.LogEntry) {},
 	}
-	if m.key == "dict" {
+	switch m.key {
+	case "structure":
+		// Nothing trained for any profile, so every connection falls back to the
+		// protocol structure dictionary. That is the tier a connection gets when
+		// its profile has no dictionary - it holds no application data, so it
+		// needs no disclosure decision from anyone.
+		m.engine = dictionaryengine.New(dictionaryengine.Options{FrameCacheSize: 4096})
+		cfg.DictionaryCompression = m.engine
+	case "dict":
 		dict := oddsDictionary()
 		// The same dictionary is served on both protocols here because the demo
 		// publishes JSON payloads either way, so only the envelope differs. A
@@ -229,6 +237,7 @@ func main() {
 	modes := []*mode{
 		{key: "none", path: "/connection/websocket"},
 		{key: "deflate", path: "/connection/websocket/deflate", deflate: true},
+		{key: "structure", path: "/connection/websocket/structure"},
 		{key: "dict", path: "/connection/websocket/compressed"},
 	}
 	for _, m := range modes {
@@ -250,32 +259,44 @@ func main() {
 
 	mux.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		// Per mode rather than global: two modes now run an engine, and they hold
+		// different dictionaries.
 		type modeStat struct {
 			Bytes int64 `json:"bytes"`
 			Msgs  int64 `json:"msgs"`
+			// Present only for modes running an engine.
+			FrameCompressions int64  `json:"frameCompressions,omitempty"`
+			FrameCacheHits    int64  `json:"frameCacheHits,omitempty"`
+			DictionaryID      string `json:"dictionaryId,omitempty"`
+			DictionarySize    int    `json:"dictionarySize,omitempty"`
+			// What delivering the dictionary costs once, which is what a
+			// connection has to earn back.
+			DictionaryWireBytes int `json:"dictionaryWireBytes,omitempty"`
 		}
 		ms := map[string]modeStat{}
 		out := map[string]any{"modes": ms}
 		for _, m := range modes {
-			ms[m.key] = modeStat{Bytes: m.bytes.Load(), Msgs: m.msgs.Load()}
+			st := modeStat{Bytes: m.bytes.Load(), Msgs: m.msgs.Load()}
 			if m.engine != nil {
 				s := m.engine.Stats()
-				out["frameCompressions"] = s.FrameCompressions
-				out["frameCacheHits"] = s.FrameCacheHits
-				// The number of dictionaries is what the memory overhead scales
-				// with, so it is worth showing rather than hiding.
-				out["dictionaries"] = len(s.Dictionaries)
+				st.FrameCompressions = s.FrameCompressions
+				st.FrameCacheHits = s.FrameCacheHits
+				// The structure mode has no profile dictionary, so it reports the
+				// fallback - the one under the empty profile.
+				want := feedProfile
+				if m.key == "structure" {
+					want = ""
+				}
 				for _, d := range s.Dictionaries {
-					if d.Key.Profile == feedProfile {
-						out["dictionaryId"] = d.ID
-						out["dictionarySize"] = d.Size
-						// What delivering it costs once, which is what the
-						// connection has to earn back.
-						out["dictionaryWireBytes"] = d.WireSize
+					if d.Key.Profile == want {
+						st.DictionaryID = d.ID
+						st.DictionarySize = d.Size
+						st.DictionaryWireBytes = d.WireSize
 						break
 					}
 				}
 			}
+			ms[m.key] = st
 		}
 		_ = json.NewEncoder(w).Encode(out)
 	})

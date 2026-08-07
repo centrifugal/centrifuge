@@ -26,16 +26,23 @@ Open <http://localhost:8400>.
 
 ## What it shows
 
-The server runs **three Centrifuge nodes side by side** — plain,
-permessage-deflate and dictionary compression — publishing the identical feed
-into all of them. The page picks an
+The server runs **four Centrifuge nodes side by side** — plain,
+permessage-deflate, structure dictionary and profile dictionary — publishing the
+identical feed into all of them. The page picks an
 endpoint, so switching mode compares like with like:
 
 | mode | endpoint |
 |---|---|
 | no compression | `/connection/websocket` |
 | permessage-deflate | `/connection/websocket/deflate` |
-| dictionary compression | `/connection/websocket/compressed` |
+| structure dictionary | `/connection/websocket/structure` |
+| profile dictionary | `/connection/websocket/compressed` |
+
+The last two are the same feature at its two tiers. `structure` runs an engine
+with nothing trained for any profile, so connections fall back to the protocol
+structure dictionary — no application data in it, no review, nothing for an
+operator to decide. `compressed` serves a dictionary trained from this feed. The
+gap between those two rows is what training is worth.
 
 The feed is a live odds board: ~20 small JSON messages a second, which is the
 shape where this helps most.
