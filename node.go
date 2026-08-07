@@ -214,13 +214,7 @@ func New(c Config) (*Node, error) {
 	}
 	n.metrics = m
 
-	var sampleDict func(string, protocol.Type, []byte, int)
-	if e, ok := c.DictionaryCompression.(*DictionaryCompressionEngine); ok {
-		sampleDict = func(channel string, proto protocol.Type, data []byte, subscribers int) {
-			e.observe(e.dictionaryChannel(channel), proto, data, subscribers)
-		}
-	}
-	n.hub = newHub(lg, n.metrics, c.ClientChannelPositionMaxTimeLag.Milliseconds(), sampleDict)
+	n.hub = newHub(lg, n.metrics, c.ClientChannelPositionMaxTimeLag.Milliseconds())
 
 	b, err := NewMemoryBroker(n, MemoryBrokerConfig{})
 	if err != nil {

@@ -79,14 +79,13 @@ type Hub struct {
 }
 
 // newHub initializes Hub.
-func newHub(logger *logger, metrics *metrics, maxTimeLagMilli int64,
-	sampleDict func(string, protocol.Type, []byte, int)) *Hub {
+func newHub(logger *logger, metrics *metrics, maxTimeLagMilli int64) *Hub {
 	h := &Hub{
 		sessions: map[string]*Client{},
 	}
 	for i := 0; i < numHubShards; i++ {
 		h.connShards[i] = newConnShard()
-		h.subShards[i] = newSubShard(logger, metrics, maxTimeLagMilli, i, sampleDict)
+		h.subShards[i] = newSubShard(logger, metrics, maxTimeLagMilli, i)
 	}
 	return h
 }
@@ -780,25 +779,17 @@ type subShard struct {
 	// node gauge update.
 	numSubs         int
 	maxTimeLagMilli int64
-	// sampleDict feeds encoded publications to the dictionary engine. It runs
-	// here, and not on the write path, because this is the last point where the
-	// channel is known - sampling downstream would mix channels into one
-	// dictionary and defeat the grouping that keeps content inside its trust
-	// boundary. Nil when the feature is off.
-	sampleDict func(channel string, proto protocol.Type, data []byte, subscribers int)
-	logger     *logger
-	metrics    *metrics
-	shardIndex int
+	logger          *logger
+	metrics         *metrics
+	shardIndex      int
 
 	chanIDs     map[string]int64
 	lastChanID  atomic.Int64
 	mapChannels map[string]bool // tracks which channels are keyed subscriptions
 }
 
-func newSubShard(logger *logger, metrics *metrics, maxTimeLagMilli int64, shardIndex int,
-	sampleDict func(string, protocol.Type, []byte, int)) *subShard {
+func newSubShard(logger *logger, metrics *metrics, maxTimeLagMilli int64, shardIndex int) *subShard {
 	return &subShard{
-		sampleDict:      sampleDict,
 		subs:            make(map[string]map[string]subInfo),
 		logger:          logger,
 		metrics:         metrics,
@@ -1302,16 +1293,6 @@ func (s *subShard) broadcastPublication(
 						return err
 					}
 				}
-			}
-
-			// Feed the dictionary engine a real encoded publication for this
-			// channel. Filtered keys are skipped: their payload was withheld from
-			// this subscriber, so it must not shape a dictionary either.
-			if s.sampleDict != nil && !wasFiltered && len(fullData) > 0 {
-				// Subscriber count is passed so the engine can rank channels by
-				// egress rather than publish rate. All subscribers of a channel
-				// live in this shard, so this is the node-local total.
-				s.sampleDict(channel, key.ProtocolType, fullData, len(channelSubscribers))
 			}
 
 			prepValue = preparedData{

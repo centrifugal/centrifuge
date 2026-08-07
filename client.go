@@ -284,25 +284,29 @@ func (r *ConnectRequest) toProto() *protocol.ConnectRequest {
 
 // Client represents client connection to server.
 type Client struct {
-	mu                     sync.RWMutex
-	connectMu              sync.Mutex    // allows syncing connect with disconnect.
-	presenceMu             sync.Mutex    // allows syncing presence routine with client closing.
-	presenceInFlight       atomic.Bool   // guards against overlapping presence ticks.
-	closing                atomic.Bool   // set before close blocks on presenceMu.
-	subGenCounter          atomic.Uint64 // monotonic per-subscription generation, see subInfo.subGen.
-	ctx                    context.Context
-	transport              Transport
-	node                   *Node
-	exp                    int64
-	channels               map[string]ChannelContext
-	messageWriter          *writer
-	perChannelWriter       *perChannelWriter
-	pubSubSync             *recovery.PubSubSync
-	uid                    string
-	session                string
-	user                   string
-	info                   []byte
-	storage                map[string]any
+	mu               sync.RWMutex
+	connectMu        sync.Mutex    // allows syncing connect with disconnect.
+	presenceMu       sync.Mutex    // allows syncing presence routine with client closing.
+	presenceInFlight atomic.Bool   // guards against overlapping presence ticks.
+	closing          atomic.Bool   // set before close blocks on presenceMu.
+	subGenCounter    atomic.Uint64 // monotonic per-subscription generation, see subInfo.subGen.
+	ctx              context.Context
+	transport        Transport
+	node             *Node
+	exp              int64
+	channels         map[string]ChannelContext
+	messageWriter    *writer
+	perChannelWriter *perChannelWriter
+	pubSubSync       *recovery.PubSubSync
+	uid              string
+	session          string
+	user             string
+	info             []byte
+	storage          map[string]any
+	// profile is the application context this connection belongs to, resolved at
+	// connect: what an OnConnecting handler set, or failing that what the client
+	// declared. Empty means unclassified.
+	profile                string
 	storageMu              sync.Mutex
 	metricName             string // Make a unique.Handle.
 	metricVersion          string // Make a unique.Handle.
@@ -1316,6 +1320,20 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx Channe
 		c.mu.Unlock()
 	}
 	return validPosition
+}
+
+// Profile returns the application context this connection belongs to, as
+// resolved at connect time - the value an OnConnecting handler set, or failing
+// that the one the client declared in its connect command. Empty means the
+// connection is unclassified.
+//
+// Nothing in this package interprets it. It exists so features layered on top
+// can group connections whose traffic looks alike, and so operators can filter
+// and measure by it.
+func (c *Client) Profile() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.profile
 }
 
 // ID returns unique client connection id.
@@ -3071,29 +3089,8 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			metricClientVersion = req.Version
 		}
 	}
-	// Codec negotiation belongs to the engine: it is handed the client's
-	// advertised capability flags and returns nil when it has nothing that client
-	// can decode. That keeps adding a codec a change in one place rather than
-	// here, and leaves every pre-feature client uncompressed.
 	var acceptedFlags int64
-	if engine := c.node.config.DictionaryCompression; engine != nil {
-		if ca, ok := c.transport.(compressionAware); ok {
-			params := ConnectionParams{
-				ProtocolType: c.transport.Protocol(),
-				ClientFlags:  req.Flag,
-			}
-			if st := req.GetState(); st != nil {
-				// Dictionaries this client kept from an earlier connection. Ids are
-				// content hashes, so anything the engine recognises can be activated
-				// by name rather than re-sent; anything it does not is ignored.
-				params.HeldDictionaryIDs = st.GetDictionaryIds()
-			}
-			if cc := engine.NewConnection(params); cc != nil {
-				ca.setConnectionCompression(cc)
-				acceptedFlags |= ConnectionFlagDictionaryCompression
-			}
-		}
-	}
+	var dict *protocol.Dictionary
 
 	c.mu.RLock()
 	authenticated := c.authenticated
@@ -3119,6 +3116,8 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		subscriptions     map[string]SubscribeOptions
 		clientSideRefresh bool
 		labels            map[string]string
+		// What the client declared about itself. An application may override it.
+		profile = req.GetProfile()
 	)
 
 	if c.node.clientEvents.connectingHandler != nil {
@@ -3165,6 +3164,11 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		}
 		clientSideRefresh = reply.ClientSideRefresh
 		labels = reply.Labels
+		if reply.Profile != "" {
+			// The application classified this connection, which beats whatever the
+			// client claimed about itself.
+			profile = reply.Profile
+		}
 		if len(reply.Subscriptions) > 0 {
 			subscriptions = make(map[string]SubscribeOptions, len(reply.Subscriptions))
 			for ch, opts := range reply.Subscriptions {
@@ -3239,6 +3243,38 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	}
 	c.mu.RUnlock()
 
+	// Compression is negotiated here rather than earlier because it needs the
+	// resolved profile, and an application only sets that in OnConnecting.
+	//
+	// The engine decides everything: whether this client gets a dictionary, which
+	// one, and whether the client already holds it. Returning nil leaves the
+	// connection uncompressed, which is what every server without the feature
+	// does.
+	if engine := c.node.config.DictionaryCompression; engine != nil {
+		if ca, ok := c.transport.(compressionAware); ok {
+			cc := engine.NewConnection(ConnectionParams{
+				ProtocolType: c.transport.Protocol(),
+				ClientFlags:  req.Flag,
+				Profile:      profile,
+				// The dictionary this client kept from an earlier connection. An id
+				// identifies content, so if the engine recognises it the dictionary
+				// can be named rather than sent again.
+				HeldDictionaryID: req.GetDict(),
+			})
+			if cc != nil {
+				dict = cc.Dictionary()
+				// The transport skips one frame before it starts encoding, because
+				// the next frame is the connect reply and that is what carries the
+				// dictionary.
+				ca.setConnectionCompression(cc)
+				acceptedFlags |= ConnectionFlagDictionaryCompression
+			}
+		}
+	}
+	c.mu.Lock()
+	c.profile = profile
+	c.mu.Unlock()
+
 	res := &protocol.ConnectResult{}
 	res.Version = version
 	res.Expires = expires
@@ -3247,6 +3283,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	// Advertising one is not enough: the node may have it turned off, or the
 	// engine may decline this particular connection.
 	res.Flag = acceptedFlags
+	res.Dict = dict
 
 	if c.pingInterval > 0 {
 		res.Ping = uint32(c.pingInterval.Seconds())
@@ -4082,14 +4119,6 @@ func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind res
 	ctx.subscribingCh = nil
 	c.channels[channel] = ctx
 	c.mu.Unlock()
-	// Let the compression engine see what this connection is subscribed to. A
-	// connection may only use a dictionary built from a channel it can read, so
-	// this is what keeps dictionary content inside its trust boundary.
-	if ca, ok := c.transport.(compressionAware); ok {
-		if cc := ca.connectionCompression(); cc != nil {
-			cc.OnSubscribe(channel)
-		}
-	}
 	return subscribingCh, true
 }
 
@@ -4964,14 +4993,6 @@ func (c *Client) writeLeave(ch string, leave *protocol.Leave, data []byte, batch
 
 // Lock must be held outside.
 func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect *Disconnect) error {
-	// Tell the compression engine first. A dictionary is built over time, so one
-	// handed out after this point could carry content published after the
-	// connection lost access - including when an admin revoked it.
-	if ca, ok := c.transport.(compressionAware); ok {
-		if cc := ca.connectionCompression(); cc != nil {
-			cc.OnUnsubscribe(channel)
-		}
-	}
 	c.mu.RLock()
 	info := c.clientInfo(channel)
 	chCtx, ok := c.channels[channel]

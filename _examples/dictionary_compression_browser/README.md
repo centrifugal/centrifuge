@@ -6,7 +6,7 @@ a browser, with a toggle between server modes and between JSON and Protobuf.
 ## Running
 
 Two servers. First the SDK bundles, from a `centrifuge-js` checkout on the
-`dictionary-compression` branch:
+`dictionary_compression` branch:
 
 ```
 yarn dev            # serves both bundles on http://localhost:2000, both watched
@@ -26,8 +26,9 @@ Open <http://localhost:8400>.
 
 ## What it shows
 
-The server runs **two Centrifuge nodes side by side** — one with compression,
-one without — publishing the identical feed into both. The page picks an
+The server runs **three Centrifuge nodes side by side** — plain,
+permessage-deflate and dictionary compression — publishing the identical feed
+into all of them. The page picks an
 endpoint, so switching mode compares like with like:
 
 | mode | endpoint |
@@ -42,7 +43,12 @@ shape where this helps most.
 The **side by side** table keeps the best sample per mode/protocol pair, so you
 can run each in turn and compare bytes per message directly.
 
-The **server side** panel polls `DictionaryCompressionEngine.Stats()` and shows
+The page declares `profile: 'odds-board'` at connect, and the server answers with
+the dictionary trained for that profile. `centrifuge` ships no trainer and no
+dictionaries: the demo uses `_examples/dictionaryengine`, which is handed a
+dictionary built from the same feed at startup.
+
+The **server side** panel polls the example engine's `Stats()` and shows
 the frame cache hit rate — frames the server compressed once and reused for
 other subscribers. Do not expect much from a few browser tabs: the rate scales
 with fan-out, measured 0% at 3 subscribers, 68% at 30 and 99% at 2000. The cache
@@ -52,15 +58,14 @@ nothing to save.
 
 ## The connection switches from text to binary
 
-On a JSON connection frames start as WebSocket **text** messages. The
-`ConnectionState` frame carrying the dictionary is the last text frame; every
-frame after it is **binary**, because a compressed payload is arbitrary bytes and
-a text frame must be valid UTF-8. Observed on the wire:
+On a JSON connection the connect reply is a WebSocket **text** message, and it is
+the last one: it carries the dictionary, so every frame after it is **binary**,
+because a compressed payload is arbitrary bytes and a text frame must be valid
+UTF-8. Observed on the wire:
 
 ```
-msg #1    text
-msg #61   text     <- ConnectionState carrying the dictionary
-msg #62   BINARY   marker=0x01
+msg #1    text     <- connect reply, carrying the dictionary
+msg #2    BINARY   marker=0x01
 ```
 
 Protobuf connections were binary already, so nothing changes there. Anything
@@ -69,12 +74,13 @@ connection.
 
 ## Reading the numbers
 
-- Give dictionary mode ~10 seconds. The dictionary is only sent once a
-  connection has carried enough traffic to earn it back, so the first seconds
-  are deliberately uncompressed and drag the whole-session average down.
+- Compression starts immediately: the dictionary rides in the connect reply, so
+  there is nothing to wait for.
 - **Compression ratio** is steady state — compressed frames only. **Net saved**
   is the whole connection, with the dictionary transfer subtracted, so it is the
-  honest figure and can start negative.
+  honest figure and starts negative until the transfer is earned back. Reload the
+  page and it starts positive: the client cached the dictionary and the server
+  sends only its id.
 - Byte counts come from the **server**, measured at the socket after
   compression. They have to: a browser cannot see permessage-deflate at all,
   because the WebSocket API inflates those frames before JavaScript gets them, so

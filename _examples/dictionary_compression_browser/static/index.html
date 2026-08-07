@@ -100,12 +100,12 @@
     </div>
     <div class="card">
       <div class="k">Net saved</div><div class="v good" id="saved">waiting</div>
-      <div class="n" id="savedNote">dictionary not sent yet</div>
+      <div class="n" id="savedNote">dictionary arrives with the connect reply</div>
       <div class="meter"><i id="payMeter" style="width:0%"></i></div>
     </div>
     <div class="card">
       <div class="k">Dictionary</div><div class="v" id="dictSize">—</div>
-      <div class="n" id="dictId">not sent yet</div>
+      <div class="n" id="dictId">connecting</div>
     </div>
     <div class="card">
       <div class="k">Server cache hits</div><div class="v" id="sRate">—</div>
@@ -119,14 +119,18 @@
   <h2>What you are looking at</h2>
   <div class="panel note">
     <p>
-      The dictionary row starts level with the others and drops after a few
-      seconds. That is deliberate: the dictionary costs its own size in bytes, so
-      the server withholds it until a connection has carried enough traffic to
-      earn it back. Before that point the connection uses the built-in
-      dictionary, which both sides compile in and which costs nothing to
-      deliver, which is why
-      the whole-session <em>bytes / message</em> stays above the steady-state
-      ratio shown in the card.
+      The dictionary row drops immediately. The page declares a
+      <code>profile</code> at connect &mdash; here <code>odds-board</code> &mdash;
+      and the server answers with the dictionary trained for that profile in the
+      connect reply, so every frame after that reply is compressed. There is
+      nothing to wait for and no window in which a compressed frame could reach a
+      client that does not hold the dictionary yet.
+    </p>
+    <p>
+      The dictionary still costs its delivery, once, which is what the pay-back
+      meter tracks. Reload the page and the meter starts full: the client kept
+      the dictionary, advertises its id at connect, and the server answers with
+      the id alone.
     </p>
     <p>
       permessage-deflate runs here at <code>CompressionLevel: 6</code>. The
@@ -202,8 +206,10 @@ async function start() {
   el('note').textContent = 'three connections open on ' + proto + ' — same feed, same window';
 
   for (const m of MODES) {
-    // The bundle picks the protocol, not an option.
-    const client = new Ctor('ws://' + location.host + m.path, {});
+    // The bundle picks the protocol, not an option. The profile names the kind
+    // of client this is, and the server answers with the dictionary trained for
+    // it, in the connect reply.
+    const client = new Ctor('ws://' + location.host + m.path, { profile: 'odds-board' });
     const rec = { client, msgs: 0, state: 'connecting' };
     conns[m.key] = rec;
 
@@ -265,33 +271,17 @@ function renderRows() {
       }
     }
     const active = x.s && x.s.active;
-    // Two dictionaries can be in use. The built-in one both sides compile in
-    // costs nothing and starts immediately; the learned one is built from this
-    // channel's traffic and has to be earned. Saying "compressing" for both
-    // hides the whole point of the demo.
-    const builtin = active && x.s.dictionaryId === 'builtin-v1';
     const pct = base && base.bpm > 0 ? Math.min(100, 100 * x.bpm / base.bpm) : 100;
     // The dot already says whether the connection is up. This line describes
     // what the mode is doing to frames, which is the thing that differs.
-    // Two separate things gate the dictionary, and it is worth saying which one
-    // you are waiting on: the node has to build one at all, and then this
-    // connection has to carry enough traffic to be worth sending it to.
-    let pending;
-    if (!dictReady) {
-      pending = 'server still sampling traffic to build a dictionary';
-    } else {
-      const carried = x.s ? x.s.transportBytesReceived : 0;
-      pending = breakEven > 0
-        ? 'earning the dictionary — ' + fmt(carried) + ' of ~' + fmt(breakEven) + ' carried'
-        : 'waiting for this connection to earn the dictionary';
-    }
+    // The dictionary arrives in the connect reply, so there is nothing to wait
+    // for: every frame after that reply is compressed against it.
     const tag = m.key === 'none' ? 'frames sent as-is'
       : m.key === 'deflate' ? 'deflated per message, dictionary reset each time'
-      : builtin ? 'built-in dictionary (free, immediate) — ' + pending
-      : active ? 'compressing against this channel\'s learned dictionary'
-      : pending;
+      : active ? 'compressing against the dictionary for this profile'
+      : 'connecting — the dictionary arrives with the connect reply';
     const subLabel = '<div class="tag">' + tag + '</div>';
-    return '<tr class="' + (m.key === 'dict' && active && !builtin ? 'hero' : '') + '">' +
+    return '<tr class="' + (m.key === 'dict' && active ? 'hero' : '') + '">' +
       '<td><span class="mode"><span class="dot ' + dotCls + '"></span>' + m.label + '</span>' + subLabel + '</td>' +
       '<td>' + x.msgs.toLocaleString() + '</td>' +
       '<td>' + fmt(x.wire) + '</td>' +
@@ -302,47 +292,46 @@ function renderRows() {
       '</tr>';
   }).join('');
 
-  // Detail cards track the dictionary connection. Until the dictionary arrives
-  // these have genuinely nothing to report - there are no compressed frames yet
-  // - so they say why rather than showing a bare dash.
+  // Detail cards track the dictionary connection. The dictionary is delivered
+  // with the connect reply, so these are populated from the first frame - what
+  // they show climbing is the pay-back, not the wait.
   const d = sample('dict');
   if (d && d.s) {
     if (d.s.active) {
       el('ratio').textContent = d.s.ratio.toFixed(2) + '×';
       el('frames').textContent = d.s.frames.toLocaleString() + ' compressed frames';
       el('saved').textContent = fmt(d.s.bytesSaved);
-      el('savedNote').textContent = 'after paying ' + fmt(d.s.dictionaryBytes) + ' for the dictionary';
-      el('payMeter').style.width = '100%';
-      el('dictSize').textContent = fmt(d.s.dictionaryBytes);
+      // A dictionary costs its delivery once. On a reconnect the client
+      // advertises the id it kept and the server sends nothing, so this cost is
+      // paid on the first connection only.
+      el('savedNote').textContent = d.s.dictionaryBytes > 0
+        ? 'after paying ' + fmt(d.s.dictionaryBytes) + ' to receive the dictionary'
+        : 'dictionary came from cache — nothing paid for it on this connection';
+      const owed = d.s.dictionaryBytes;
+      el('payMeter').style.width = owed > 0
+        ? Math.min(100, 100 * Math.max(0, d.s.bytesDecompressed - d.s.bytesReceived) / owed) + '%'
+        : '100%';
+      el('dictSize').textContent = fmt(dictSize);
       el('dictId').textContent = d.s.dictionaryId;
     } else {
       el('ratio').textContent = 'waiting';
       el('frames').textContent = 'no compressed frames yet';
       el('saved').textContent = 'waiting';
-      el('savedNote').textContent = !dictReady
-        ? 'server still sampling traffic to build a dictionary'
-        : fmt(d.s ? d.s.transportBytesReceived : 0) + ' of ~' + fmt(breakEven)
-          + ' carried — the dictionary is withheld until this connection has paid for it';
-      // breakEven comes from the server so the page does not guess at the
-      // engine's rule; it is only a progress hint.
-      const carried = d.s ? d.s.transportBytesReceived : 0;
-      el('payMeter').style.width = breakEven > 0
-        ? Math.min(100, 100 * carried / breakEven) + '%' : '0%';
+      el('savedNote').textContent = 'the dictionary arrives with the connect reply';
+      el('payMeter').style.width = '0%';
       el('dictSize').textContent = '—';
-      el('dictId').textContent = d.s.accepted ? 'accepted, not sent yet' : 'not accepted';
+      el('dictId').textContent = 'connecting';
     }
   }
 }
 
-let breakEven = 0;
-let dictReady = false;
+let dictSize = 0;
 let serverModes = {};
 
 async function pollServer() {
   try {
     const s = await (await fetch('/stats')).json();
-    breakEven = s.breakEvenBytes || 0;
-    dictReady = !!s.dictionaryReady;
+    dictSize = s.dictionarySize || 0;
     serverModes = s.modes || {};
     const total = (s.frameCompressions || 0) + (s.frameCacheHits || 0);
     el('sRate').textContent = total > 0 ? (100 * s.frameCacheHits / total).toFixed(1) + '%' : '—';

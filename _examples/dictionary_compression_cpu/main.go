@@ -32,6 +32,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,25 +40,29 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge"
+	"github.com/centrifugal/centrifuge/_examples/dictionaryengine"
+	"github.com/centrifugal/protocol"
 	"github.com/gorilla/websocket"
 )
 
 var (
-	mode      = flag.String("mode", "server", "server or client")
-	compress  = flag.Bool("compress", false, "enable dictionary compression (server)")
-	addr      = flag.String("addr", "127.0.0.1:8300", "listen / connect address")
-	cwarm     = flag.Duration("cwarm", 13*time.Second, "client: wait before snapshotting bytes (aligns with server warm-up)")
-	cmeasure  = flag.Duration("cmeasure", 20*time.Second, "client: measured window")
-	conns     = flag.Int("conns", 2000, "number of client connections (client)")
-	waitConns = flag.Int("wait", 2000, "connections to wait for before measuring (server)")
-	duration  = flag.Duration("duration", 20*time.Second, "measured publish duration (server)")
-	rate      = flag.Int("rate", 2, "publications per second per shared channel (server)")
-	shared    = flag.Int("shared", 5, "channels each client subscribes to")
-	nocache   = flag.Bool("nocache", false, "disable the shared frame cache (server)")
-	random    = flag.Bool("random", false, "publish incompressible random payloads (server)")
-	wdelay    = flag.Duration("writedelay", 0, "ConnectReply.WriteDelay - batches messages per connection (server)")
-	deflate   = flag.Bool("deflate", false, "use permessage-deflate instead of dictionary (server)")
-	pool      = flag.Int("pool", 5, "total channel pool; >shared makes each client subscribe to a random subset, so batched frames differ between connections")
+	mode       = flag.String("mode", "server", "server or client")
+	compress   = flag.Bool("compress", false, "enable dictionary compression (server)")
+	addr       = flag.String("addr", "127.0.0.1:8300", "listen / connect address")
+	cwarm      = flag.Duration("cwarm", 13*time.Second, "client: wait before snapshotting bytes (aligns with server warm-up)")
+	cmeasure   = flag.Duration("cmeasure", 20*time.Second, "client: measured window")
+	conns      = flag.Int("conns", 2000, "number of client connections (client)")
+	waitConns  = flag.Int("wait", 2000, "connections to wait for before measuring (server)")
+	duration   = flag.Duration("duration", 20*time.Second, "measured publish duration (server)")
+	rate       = flag.Int("rate", 2, "publications per second per shared channel (server)")
+	shared     = flag.Int("shared", 5, "channels each client subscribes to")
+	nocache    = flag.Bool("nocache", false, "disable the shared frame cache (server)")
+	random     = flag.Bool("random", false, "publish incompressible random payloads (server)")
+	wdelay     = flag.Duration("writedelay", 0, "ConnectReply.WriteDelay - batches messages per connection (server)")
+	deflate    = flag.Bool("deflate", false, "use permessage-deflate instead of dictionary (server)")
+	cpuprofile = flag.String("cpuprofile", "", "write a CPU profile of the measured window to this file (server)")
+	prepared   = flag.Int64("prepared", 0, "CompressionPreparedMessageCacheSize: lets deflate compress once and reuse the bytes across connections, which is the same trick the dictionary frame cache uses")
+	pool       = flag.Int("pool", 5, "total channel pool; >shared makes each client subscribe to a random subset, so batched frames differ between connections")
 )
 
 func cpuSeconds() float64 {
@@ -72,22 +77,65 @@ func cpuSeconds() float64 {
 
 func sharedChannel(i int) string { return fmt.Sprintf("odds:market:%02d", i) }
 
+// newPayloadFn returns the publication generator. It is a constructor rather
+// than a plain function because the random variant carries its own state, and
+// because the dictionary is trained from a separate instance of the same
+// generator - traffic of the same kind, not the very frames later measured.
+func newPayloadFn() func(i int) []byte {
+	seed := uint32(99)
+	randByte := func() byte { seed = seed*1664525 + 1013904223; return byte(seed >> 24) }
+	return func(i int) []byte {
+		if *random {
+			// Incompressible: models already compressed or encrypted payloads.
+			raw := make([]byte, 120)
+			for j := range raw {
+				raw[j] = randByte()
+			}
+			b, _ := json.Marshal(map[string]any{"blob": raw})
+			return b
+		}
+		b, _ := json.Marshal(map[string]any{
+			"eventId": fmt.Sprintf("evt-%06d", 100000+i%400),
+			"market":  "1x2",
+			"odds":    map[string]any{"h": 1.5 + float64(i%300)/100, "d": 3.2, "a": 2.1 + float64(i%200)/100},
+			"ts":      1780000000000 + int64(i)*250,
+		})
+		return b
+	}
+}
+
+// trainDictionary is the offline half of the design, standing in for a trainer
+// that would build this from anonymised captured traffic: take frames of the
+// kind this profile carries and keep the most recent up to a size cap, with the
+// protocol structure dictionary underneath so the envelope is covered too.
+func trainDictionary() []byte {
+	gen := newPayloadFn()
+	samples := make([][]byte, 0, 512)
+	for i := 0; i < 512; i++ {
+		samples = append(samples, gen(i))
+	}
+	dict := append([]byte{}, protocol.StructureDictionary...)
+	return append(dict, dictionaryengine.Train(samples, 4096)...)
+}
+
 // ---------------------------------------------------------------------------
 // Server
 // ---------------------------------------------------------------------------
 
 func runServer() {
-	var engine *centrifuge.DictionaryCompressionEngine
+	var engine *dictionaryengine.Engine
 	cfg := centrifuge.Config{LogLevel: centrifuge.LogLevelError, LogHandler: func(centrifuge.LogEntry) {}}
 	if *compress {
-		dcCfg := centrifuge.DictionaryCompressionConfig{
-			UseChannelDictionary:   func(string) bool { return true },
-			MaxChannelDictionaries: 64,
+		opts := dictionaryengine.Options{
+			Dictionaries: map[dictionaryengine.Key][]byte{
+				{Protocol: centrifuge.ProtocolTypeJSON}: trainDictionary(),
+			},
+			FrameCacheSize: 4096,
 		}
 		if *nocache {
-			dcCfg.FrameCacheSize = -1
+			opts.FrameCacheSize = 0
 		}
-		engine = centrifuge.NewDictionaryCompressionEngine(dcCfg)
+		engine = dictionaryengine.New(opts)
 		cfg.DictionaryCompression = engine
 	}
 	node, err := centrifuge.New(cfg)
@@ -121,6 +169,10 @@ func runServer() {
 		// compresses. Level 6 matches what dictionary compression uses, so the two
 		// are compared at the same setting.
 		CompressionLevel: 6,
+		// Without this, every connection compresses the same broadcast
+		// separately. With it, gorilla compresses once and reuses the bytes -
+		// the comparison is not fair unless it is measured too.
+		CompressionPreparedMessageCacheSize: *prepared,
 		// Pings are pushed out beyond the run so the load generator does not have
 		// to implement pong handling, and so ping/pong work does not land in the
 		// CPU measurement. Both runs use the same setting, so the comparison is
@@ -140,28 +192,10 @@ func runServer() {
 	}
 	fmt.Printf("%d connections up\n", atomic.LoadInt64(&connected))
 
-	seed := uint32(99)
-	randByte := func() byte { seed = seed*1664525 + 1013904223; return byte(seed >> 24) }
-	payload := func(i int) []byte {
-		if *random {
-			// Incompressible: models already compressed or encrypted payloads.
-			raw := make([]byte, 120)
-			for j := range raw {
-				raw[j] = randByte()
-			}
-			b, _ := json.Marshal(map[string]any{"blob": raw})
-			return b
-		}
-		b, _ := json.Marshal(map[string]any{
-			"eventId": fmt.Sprintf("evt-%06d", 100000+i%400),
-			"market":  "1x2",
-			"odds":    map[string]any{"h": 1.5 + float64(i%300)/100, "d": 3.2, "a": 2.1 + float64(i%200)/100},
-			"ts":      1780000000000 + int64(i)*250,
-		})
-		return b
-	}
+	payload := newPayloadFn()
 
-	// Warm up so the dictionary is built, shipped and active before measuring.
+	// Warm up so caches and buffers are hot before measuring. The dictionary
+	// itself needs no warm-up: it arrives with the connect reply.
 	fmt.Println("warming up...")
 	warmTicker := time.NewTicker(time.Second / time.Duration(*rate))
 	warmUntil := time.Now().Add(12 * time.Second)
@@ -175,6 +209,19 @@ func runServer() {
 	}
 	warmTicker.Stop()
 
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal(err)
+		}
+		defer func() {
+			pprof.StopCPUProfile()
+			_ = f.Close()
+		}()
+	}
 	before := cpuSeconds()
 	beforeStats := engineStats(engine)
 	startWall := time.Now()
@@ -231,6 +278,7 @@ func runServer() {
 // ---------------------------------------------------------------------------
 
 var readBytes int64
+var readFrames int64
 
 // countingConn counts bytes as they arrive off the socket, before any
 // transport-level decompression.
@@ -304,6 +352,10 @@ func runClient() {
 				if err != nil {
 					return
 				}
+				// One WebSocket message is one server write. Counting them tells
+				// whether two modes differ in syscall count rather than in bytes,
+				// which is the difference a byte total cannot show.
+				atomic.AddInt64(&readFrames, 1)
 				_ = msg
 			}
 		}(n)
@@ -317,19 +369,23 @@ func runClient() {
 		}
 		fmt.Printf("client: %d connections up, waiting %s then measuring %s\n", *conns, *cwarm, *cmeasure)
 		time.Sleep(*cwarm)
+		startFrames := atomic.LoadInt64(&readFrames)
 		start := atomic.LoadInt64(&readBytes)
 		time.Sleep(*cmeasure)
 		got := atomic.LoadInt64(&readBytes) - start
+		frames := atomic.LoadInt64(&readFrames) - startFrames
 		fmt.Printf("CLIENT WIRE BYTES over measured window: %d\n", got)
+		fmt.Printf("CLIENT FRAMES over measured window: %d (%.1f B/frame)\n",
+			frames, float64(got)/float64(frames))
 	}()
 	wg.Wait()
 }
 
-// engineStats returns stats for the built-in engine, or a zero value when
+// engineStats returns stats for the engine, or a zero value when
 // compression is not enabled for this run.
-func engineStats(e *centrifuge.DictionaryCompressionEngine) centrifuge.DictionaryCompressionStats {
+func engineStats(e *dictionaryengine.Engine) dictionaryengine.Stats {
 	if e == nil {
-		return centrifuge.DictionaryCompressionStats{}
+		return dictionaryengine.Stats{}
 	}
 	return e.Stats()
 }

@@ -5,10 +5,9 @@
 // counting real bytes delivered from server to client over a real WebSocket
 // connection, and prints the comparison.
 //
-// The payload shapes are deliberately unrelated to each other and nothing in the
-// server knows about any of them: the dictionary is derived from whatever
-// traffic the node happens to see, which is what makes the mechanism general
-// rather than tuned to one example.
+// The payload shapes are deliberately unrelated to each other. Each scenario
+// trains its own dictionary offline from traffic of the same kind, using a
+// separate seed, which is what a trainer would do from captured traffic.
 package main
 
 import (
@@ -27,7 +26,9 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge"
+	"github.com/centrifugal/centrifuge/_examples/dictionaryengine"
 	centrifugego "github.com/centrifugal/centrifuge-go"
+	"github.com/centrifugal/protocol"
 )
 
 // countingConn counts bytes arriving from the server. Measuring at the socket
@@ -146,24 +147,59 @@ const (
 	modeOff        mode = iota // no compression at all
 	modeDeflate                // permessage-deflate, the existing option
 	modeDictionary             // connection-level dictionary compression
-	// modeBuiltin has the feature enabled but no channel opted in, so the
-	// connection only ever gets the built-in protocol structure dictionary. This
-	// is the floor: what every connection gets for free, including the quiet ones
-	// that never carry enough traffic to earn a learned dictionary.
+	// modeBuiltin has the feature enabled but serves only the protocol structure
+	// dictionary, which carries no application data. This is the floor: what a
+	// connection gets when nothing was trained for its profile.
 	modeBuiltin
 )
 
-func newNode(m mode) *centrifuge.Node {
+// dictionarySize is what a trained dictionary is capped at. Bigger dictionaries
+// keep helping, but with falling returns and rising cost to deliver.
+const dictionarySize = 4096
+
+// trainDictionary builds the dictionary a scenario's connections are served.
+//
+// It is the offline half of the design in one function: take frames of the kind
+// this profile carries, keep the most recent up to a size cap, and put the
+// protocol structure dictionary underneath so the result covers the envelope as
+// well as the payload. A real trainer does this from captured traffic that has
+// been anonymised and reviewed - the part an example cannot stand in for - but
+// the shape of the artifact is the same.
+//
+// The corpus uses a different seed from the measured run, so the dictionary is
+// built from traffic of the same kind rather than from the very frames it is
+// later scored against.
+func trainDictionary(sh shape) []byte {
+	rng := rand.New(rand.NewSource(7))
+	samples := make([][]byte, 0, 256)
+	for i := 0; i < 256; i++ {
+		samples = append(samples, sh.gen(i, rng))
+	}
+	dict := append([]byte{}, protocol.StructureDictionary...)
+	return append(dict, dictionaryengine.Train(samples, dictionarySize)...)
+}
+
+func newNode(m mode, sh shape, useProtobuf bool) *centrifuge.Node {
 	cfg := centrifuge.Config{
 		LogLevel:   centrifuge.LogLevelError,
 		LogHandler: func(e centrifuge.LogEntry) {},
 	}
-	if m == modeDictionary || m == modeBuiltin {
-		optIn := func(string) bool { return m == modeDictionary }
-		cfg.DictionaryCompression = centrifuge.NewDictionaryCompressionEngine(
-			centrifuge.DictionaryCompressionConfig{DictionarySize: 4096, MinSamples: 64,
-				UseChannelDictionary:   optIn,
-				MaxChannelDictionaries: 64})
+	switch m {
+	case modeBuiltin:
+		// No dictionary for this profile, so every connection falls back to the
+		// structure dictionary.
+		cfg.DictionaryCompression = dictionaryengine.New(dictionaryengine.Options{
+			FrameCacheSize: 4096,
+		})
+	case modeDictionary:
+		proto := centrifuge.ProtocolTypeJSON
+		if useProtobuf {
+			proto = centrifuge.ProtocolTypeProtobuf
+		}
+		cfg.DictionaryCompression = dictionaryengine.New(dictionaryengine.Options{
+			Dictionaries:   map[dictionaryengine.Key][]byte{{Protocol: proto}: trainDictionary(sh)},
+			FrameCacheSize: 4096,
+		})
 	}
 	node, err := centrifuge.New(cfg)
 	if err != nil {
@@ -194,7 +230,7 @@ type result struct {
 // run performs one full scenario end to end and returns the bytes actually
 // delivered from server to client during the measured phase.
 func run(sh shape, useProtobuf bool, m mode, warmup, measured int) result {
-	node := newNode(m)
+	node := newNode(m, sh, useProtobuf)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	wsHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
@@ -374,7 +410,8 @@ func main() {
 	fmt.Println("so dictionary numbers are steady state and exclude the ramp-up.")
 	fmt.Println("Bytes are counted at the client socket and include WebSocket framing.")
 	fmt.Println("Every received payload is compared against what was published; any mismatch aborts.")
-	fmt.Println("\n\"built-in\" is the feature enabled with no channel opted in: the protocol structure")
-	fmt.Println("dictionary both sides compile in. It costs nothing to deliver and applies from the")
-	fmt.Println("frame after connect, so it is what quiet connections and unopted channels get.")
+	fmt.Println("\n\"built-in\" is the engine enabled with nothing trained for this profile, so")
+	fmt.Println("connections fall back to the protocol structure dictionary, which holds no")
+	fmt.Println("application data. It is the floor: what a connection gets when no dictionary")
+	fmt.Println("exists for it.")
 }

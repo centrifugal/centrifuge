@@ -15,30 +15,30 @@ socket, so the numbers include WebSocket framing rather than just protocol
 payloads. Every received payload is compared against what was published, and any
 mismatch aborts the run.
 
-The payload shapes are unrelated to each other and nothing in the server knows
-about any of them. The dictionary is built from whatever traffic the node
-happens to observe, which is what makes the mechanism general rather than tuned
-to one example. One shape is deliberately incompressible (random bytes) to show
-the floor and to exercise the raw-frame fallback.
+The payload shapes are unrelated to each other. Each scenario trains its own
+dictionary offline from traffic of the same kind, using a separate seed, which is
+what a trainer would do from captured traffic. One shape is deliberately
+incompressible (random bytes) to show the floor and to exercise the raw-frame
+fallback.
 
 ## How it works
 
-1. A client advertises support in `ConnectRequest.flag`. There is no client-side
-   option — the server decides.
-2. If `Config.DictionaryCompression` is set, the node samples the frames it sends
-   and builds a shared dictionary once it has seen enough traffic.
-3. The dictionary is **not** sent at connect. It costs its own size in bytes, and
-   a connection that only ever receives a handful of frames would spend more on
-   the dictionary than it saves. The server waits until the connection has
-   carried enough traffic for the dictionary to pay for itself.
-4. At that point the server emits a `ConnectionState` push carrying the
-   dictionary, then compresses every subsequent frame. The activation frame is
-   written immediately before the first compressed frame on the same goroutine,
-   so no compressed frame can overtake the dictionary that decodes it.
+1. A client advertises support in `ConnectRequest.flag`, and may name a
+   `profile` describing what kind of client it is.
+2. If `Config.DictionaryCompression` is set, the node asks the engine for a
+   dictionary for that profile and protocol. `centrifuge` ships no engine: the
+   examples use `_examples/dictionaryengine`, which serves dictionaries handed to
+   it at construction.
+3. The dictionary travels in `ConnectResult.dict`, and every frame after the
+   connect reply is compressed against it. That ordering is the point of
+   delivering it there: there is no window in which a compressed frame can reach
+   a client that does not hold the dictionary yet.
+4. A client caches the dictionary and advertises its id in `ConnectRequest.dict`
+   next time. An id is a hash of the content, so when the server recognises it it
+   answers with the id alone and sends nothing.
 
-`ConnectionState` is intentionally generic — every field is independent and
-optional, so future connection-level state can be added without a new push type
-and without breaking clients that do not understand it.
+`Push.state` can also carry a dictionary mid-connection. The protocol keeps that
+path, but the server does not currently use it.
 
 ## Caveats when reading the output
 
@@ -53,8 +53,9 @@ and without breaking clients that do not understand it.
   `flate.NoCompression` - the connection negotiates permessage-deflate and then
   stores rather than compresses, measuring ~0.99x. Comparing against that default
   overstates dictionary compression by roughly 5x, so do not do it.
-- The `built-in` column is the feature enabled with no channel opted in: only the
-  protocol structure dictionary both sides compile in. It is the floor every
-  connection gets, and it lands close to a properly configured
+- The `built-in` column is the engine enabled with nothing trained for this
+  profile, so connections fall back to the protocol structure dictionary, which
+  contains no application data. It is the floor a connection gets when no
+  dictionary exists for it, and it lands close to a properly configured
   permessage-deflate - the difference between the two is CPU, not bytes (see
   `dictionary_compression_cpu`).

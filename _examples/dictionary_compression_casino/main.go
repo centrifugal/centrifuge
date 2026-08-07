@@ -33,6 +33,8 @@ import (
 
 	"github.com/centrifugal/centrifuge"
 	centrifugego "github.com/centrifugal/centrifuge-go"
+	"github.com/centrifugal/centrifuge/_examples/dictionaryengine"
+	"github.com/centrifugal/protocol"
 )
 
 type countingConn struct {
@@ -139,6 +141,34 @@ func sessionStreams() []stream {
 	}
 }
 
+// casinoDictionarySize covers five different message shapes, so it is larger
+// than a single-shape profile would need.
+const casinoDictionarySize = 8192
+
+// casinoDictionary is the artifact a trainer would produce for this profile.
+//
+// One dictionary covers everything a player's connection carries - odds, the
+// jackpot ticker, the live table, their own account events - because a profile
+// is a kind of client, not a channel. It is generated here from the same feeds
+// with a separate seed; a real trainer builds it from captured traffic that has
+// been anonymised and reviewed first.
+func casinoDictionary() []byte {
+	rng := rand.New(rand.NewSource(4242))
+	var samples [][]byte
+	for _, st := range sessionStreams() {
+		// Sample each stream in proportion to how much of the traffic it is.
+		n := st.count / 20
+		if n < 8 {
+			n = 8
+		}
+		for i := 0; i < n; i++ {
+			samples = append(samples, st.gen(i, rng))
+		}
+	}
+	dict := append([]byte{}, protocol.StructureDictionary...)
+	return append(dict, dictionaryengine.Train(samples, casinoDictionarySize)...)
+}
+
 func max64(a, b int64) int64 {
 	if a > b {
 		return a
@@ -181,17 +211,21 @@ type outcome struct {
 	wireBytes    int64
 	payloadBytes int64
 	messages     int
-	stats        centrifuge.DictionaryCompressionStats
+	stats        dictionaryengine.Stats
 	clientStats  centrifugego.CompressionStats
 }
 
 func run(m mode, useProtobuf bool) outcome {
-	var engine *centrifuge.DictionaryCompressionEngine
+	var engine *dictionaryengine.Engine
 	cfg := centrifuge.Config{LogLevel: centrifuge.LogLevelError, LogHandler: func(centrifuge.LogEntry) {}}
 	if m == modeDictionary {
-		engine = centrifuge.NewDictionaryCompressionEngine(centrifuge.DictionaryCompressionConfig{
-			UseChannelDictionary:   func(string) bool { return true },
-			MaxChannelDictionaries: 64,
+		proto := centrifuge.ProtocolTypeJSON
+		if useProtobuf {
+			proto = centrifuge.ProtocolTypeProtobuf
+		}
+		engine = dictionaryengine.New(dictionaryengine.Options{
+			Dictionaries:   map[dictionaryengine.Key][]byte{{Protocol: proto}: casinoDictionary()},
+			FrameCacheSize: 4096,
 		})
 		cfg.DictionaryCompression = engine
 	}
@@ -362,13 +396,15 @@ func run(m mode, useProtobuf bool) outcome {
 // runFanout models what actually happens in production: many players watching
 // the same markets. It reports aggregate egress and how often the shared frame
 // cache spared the server a compression.
-func runFanout(m mode, players, warmupRounds, measuredRounds int) (int64, centrifuge.DictionaryCompressionStats) {
-	var engine *centrifuge.DictionaryCompressionEngine
+func runFanout(m mode, players, warmupRounds, measuredRounds int) (int64, dictionaryengine.Stats) {
+	var engine *dictionaryengine.Engine
 	cfg := centrifuge.Config{LogLevel: centrifuge.LogLevelError, LogHandler: func(centrifuge.LogEntry) {}}
 	if m == modeDictionary {
-		engine = centrifuge.NewDictionaryCompressionEngine(centrifuge.DictionaryCompressionConfig{
-			UseChannelDictionary:   func(string) bool { return true },
-			MaxChannelDictionaries: 64,
+		engine = dictionaryengine.New(dictionaryengine.Options{
+			Dictionaries: map[dictionaryengine.Key][]byte{
+				{Protocol: centrifuge.ProtocolTypeJSON}: casinoDictionary(),
+			},
+			FrameCacheSize: 4096,
 		})
 		cfg.DictionaryCompression = engine
 	}
@@ -498,11 +534,11 @@ func runFanout(m mode, players, warmupRounds, measuredRounds int) (int64, centri
 	return atomic.LoadInt64(&readBytes) - warmBytes, st
 }
 
-// engineStats returns stats for the built-in engine, or a zero value when
+// engineStats returns stats for the engine, or a zero value when
 // compression is not enabled for this run.
-func engineStats(e *centrifuge.DictionaryCompressionEngine) centrifuge.DictionaryCompressionStats {
+func engineStats(e *dictionaryengine.Engine) dictionaryengine.Stats {
 	if e == nil {
-		return centrifuge.DictionaryCompressionStats{}
+		return dictionaryengine.Stats{}
 	}
 	return e.Stats()
 }
@@ -548,15 +584,13 @@ func main() {
 			baseGB-dictGB, (baseGB-dictGB)*egressPerGB, 100*(1-dictGB/baseGB))
 
 		s := dic.stats
-		dictSize, dictID := 0, "-"
-		for _, g := range s.Groups {
-			if g.Ready {
-				dictSize, dictID = g.Size, g.ID
-				break
-			}
+		dictSize, dictWire, dictID := 0, 0, "-"
+		if len(s.Dictionaries) > 0 {
+			d0 := s.Dictionaries[0]
+			dictSize, dictWire, dictID = d0.Size, d0.WireSize, d0.ID
 		}
-		fmt.Printf("\n  server cost: %d dictionary group(s), %d B (id %s), %d frames compressed, %d from cache\n",
-			len(s.Groups), dictSize, dictID, s.FrameCompressions, s.FrameCacheHits)
+		fmt.Printf("\n  server cost: %d dictionary(s), %d B (id %s, %d B to deliver), %d frames compressed, %d from cache\n",
+			len(s.Dictionaries), dictSize, dictID, dictWire, s.FrameCompressions, s.FrameCacheHits)
 
 		// Accuracy check: what the client believes it saved, against what the
 		// socket actually carried.

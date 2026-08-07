@@ -55,6 +55,21 @@ type ConnectReply struct {
 	// over Client.AcquireStorage() call. This API is EXPERIMENTAL.
 	Storage map[string]any
 
+	// Profile is the application context this connection belongs to - which view,
+	// screen or client kind it is. Connections sharing a profile see traffic of a
+	// similar shape.
+	//
+	// Setting it here overrides whatever the client declared in its connect
+	// command, and is the recommended way to classify connections: a claim in the
+	// token this handler already reads is one change to the service issuing
+	// tokens, rather than a release of every client.
+	//
+	// It is carried on the Client and can be read with Client.Profile(). Nothing
+	// in this package interprets it; it exists so features layered on top - the
+	// obvious one being compression dictionaries - can group connections that
+	// look alike.
+	Profile string
+
 	// MaxMessagesInFrame is the maximum number of messages (replies and pushes) which
 	// Centrifuge Client message writer will collect from the client's queue before sending
 	// to the connection. By default, it's 16. Use -1 to disable the limit.

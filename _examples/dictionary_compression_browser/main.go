@@ -40,6 +40,8 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge"
+	"github.com/centrifugal/centrifuge/_examples/dictionaryengine"
+	"github.com/centrifugal/protocol"
 )
 
 // The page is embedded rather than read from disk so the demo runs the same
@@ -52,10 +54,30 @@ var addr = flag.String("addr", ":8400", "address to listen on")
 
 const feedChannel = "odds:board"
 
-// demoDictionarySize is small on purpose so the demo activates within a couple
-// of seconds. The engine withholds the dictionary until a connection has carried
-// roughly six times its size, which is where the page's progress hint comes from.
+// feedProfile is what the page declares at connect. It names the kind of client
+// this is, and the server serves the dictionary trained for it.
+const feedProfile = "odds-board"
+
+// demoDictionarySize caps the trained dictionary. A few kilobytes is the useful
+// range: bigger keeps helping, with falling returns and a rising cost to deliver.
 const demoDictionarySize = 2048
+
+// oddsDictionary is the artifact a trainer would produce for this profile: a
+// sample of the traffic it carries, with the protocol structure dictionary
+// underneath so it covers the envelope as well as the payload.
+//
+// Here it is generated from the same feed the demo publishes, using a separate
+// seed. A real trainer builds it from captured traffic that has been anonymised
+// and reviewed before anything is written into a dictionary handed to clients.
+func oddsDictionary() []byte {
+	rng := rand.New(rand.NewSource(11))
+	samples := make([][]byte, 0, 256)
+	for i := 0; i < 256; i++ {
+		samples = append(samples, oddsUpdate(i, rng))
+	}
+	dict := append([]byte{}, protocol.StructureDictionary...)
+	return append(dict, dictionaryengine.Train(samples, demoDictionarySize)...)
+}
 
 // mode is one server configuration under comparison.
 type mode struct {
@@ -71,7 +93,7 @@ type mode struct {
 	// deflate enables permessage-deflate for this mode.
 	deflate bool
 	// engine is set only for the dictionary mode.
-	engine *centrifuge.DictionaryCompressionEngine
+	engine *dictionaryengine.Engine
 }
 
 func (m *mode) newNode() {
@@ -80,15 +102,17 @@ func (m *mode) newNode() {
 		LogHandler: func(centrifuge.LogEntry) {},
 	}
 	if m.key == "dict" {
-		m.engine = centrifuge.NewDictionaryCompressionEngine(
-			centrifuge.DictionaryCompressionConfig{
-				DictionarySize: demoDictionarySize,
-				MinSamples:     16,
-				// Only the odds feed takes part. Dictionaries are per channel and
-				// never merged, so nothing else can reach this one.
-				UseChannelDictionary:   func(ch string) bool { return ch == feedChannel },
-				MaxChannelDictionaries: 64,
-			})
+		dict := oddsDictionary()
+		// The same dictionary is served on both protocols here because the demo
+		// publishes JSON payloads either way, so only the envelope differs. A
+		// real trainer builds one per protocol from that protocol's own frames.
+		m.engine = dictionaryengine.New(dictionaryengine.Options{
+			Dictionaries: map[dictionaryengine.Key][]byte{
+				{Profile: feedProfile, Protocol: centrifuge.ProtocolTypeJSON}:     dict,
+				{Profile: feedProfile, Protocol: centrifuge.ProtocolTypeProtobuf}: dict,
+			},
+			FrameCacheSize: 4096,
+		})
 		cfg.DictionaryCompression = m.engine
 	}
 	node, err := centrifuge.New(cfg)
@@ -231,24 +255,23 @@ func main() {
 			Msgs  int64 `json:"msgs"`
 		}
 		ms := map[string]modeStat{}
-		out := map[string]any{
-			"breakEvenBytes": demoDictionarySize * 6,
-			"modes":          ms,
-		}
+		out := map[string]any{"modes": ms}
 		for _, m := range modes {
 			ms[m.key] = modeStat{Bytes: m.bytes.Load(), Msgs: m.msgs.Load()}
 			if m.engine != nil {
 				s := m.engine.Stats()
 				out["frameCompressions"] = s.FrameCompressions
 				out["frameCacheHits"] = s.FrameCacheHits
-				// Groups is what the feature's overhead scales with, so it is worth
-				// showing rather than hiding behind a single "ready" flag.
-				out["groups"] = len(s.Groups)
-				out["dictionaryReady"] = s.DictionariesReady > 0
-				for _, g := range s.Groups {
-					if g.Ready {
-						out["dictionaryId"] = g.ID
-						out["dictionarySize"] = g.Size
+				// The number of dictionaries is what the memory overhead scales
+				// with, so it is worth showing rather than hiding.
+				out["dictionaries"] = len(s.Dictionaries)
+				for _, d := range s.Dictionaries {
+					if d.Key.Profile == feedProfile {
+						out["dictionaryId"] = d.ID
+						out["dictionarySize"] = d.Size
+						// What delivering it costs once, which is what the
+						// connection has to earn back.
+						out["dictionaryWireBytes"] = d.WireSize
 						break
 					}
 				}

@@ -58,5 +58,7 @@ more expensive exactly when the server is already busy.
 > instead of compressing. It looks nearly free in CPU because it is doing
 > nothing, and it makes dictionary compression look ~5x better than it is.
 
-`DictionaryCompressionEngine.Stats()` exposes the hit rate, so this is measurable in
-production rather than guessed.
+The frame cache lives in the engine, not in `centrifuge` — so does the decision
+of whether to have one at all, and whether to report its hit rate. The example
+engine (`_examples/dictionaryengine`) exposes it through `Stats()`, which is what
+makes the numbers above measurable rather than guessed.

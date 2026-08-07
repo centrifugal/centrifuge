@@ -230,9 +230,13 @@ type Config struct {
 	// broadcast path, so must be fast. This is an EXPERIMENTAL feature.
 	GetChannelBatchConfig func(channel string) ChannelBatchConfig
 	// DictionaryCompression enables connection-level frame compression against a
-	// shared dictionary. Nil (the default) disables it. Use
-	// NewDictionaryCompressionEngine for the built-in engine, or supply your own
-	// implementation to control dictionary selection and encoding.
+	// shared dictionary. Nil - the default - disables it entirely: nothing is
+	// allocated and no compression code path is entered.
+	//
+	// This package deliberately ships no implementation. Deciding which
+	// dictionary a connection gets, where dictionaries come from and what may go
+	// into one are product decisions with real consequences, so they belong to
+	// whoever supplies the engine rather than here.
 	//
 	// It only applies to connections whose client advertised support, so it is
 	// safe to enable for a mixed fleet of old and new clients. This is an

@@ -20,10 +20,11 @@ very different fan-out, rates and payload sizes — all mixed on one connection:
 | `table:blackjack:07` | medium | 1/s | full table state |
 | `user:#42` | one | 1 per 20s | balance, settlement, bonus |
 
-The per-user channel matters: it is the topology where a dictionary helps most,
-and also where a naive implementation would *hurt*, because a connection that
-receives a handful of frames cannot amortise a dictionary shipped to it. The
-break-even guard is what makes it safe.
+All five channels are covered by one dictionary, because a dictionary belongs to
+a profile — a kind of client — not to a channel. That is what makes the per-user
+channel work: on its own it carries too few frames to pay for a dictionary, but
+it shares the one the rest of the session already paid for. A returning player
+pays nothing at all, having cached it.
 
 ## Reading the output
 
