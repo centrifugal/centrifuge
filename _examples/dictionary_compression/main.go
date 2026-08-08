@@ -26,8 +26,8 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge"
-	"github.com/centrifugal/centrifuge/_examples/dictionaryengine"
 	centrifugego "github.com/centrifugal/centrifuge-go"
+	"github.com/centrifugal/centrifuge/_examples/dictionaryengine"
 )
 
 // countingConn counts bytes arriving from the server. Measuring at the socket

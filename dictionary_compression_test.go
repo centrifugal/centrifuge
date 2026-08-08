@@ -88,8 +88,11 @@ func testDictionary() []byte {
 // A raw client, so the test sees exactly what goes on the wire rather than what
 // an SDK makes of it.
 type wireClient struct {
-	t     *testing.T
-	conn  *websocket.Conn
+	t    *testing.T
+	conn *websocket.Conn
+	// held is the dictionary this client advertised, and therefore the one it
+	// can decode a compressed connect reply with.
+	held  []byte
 	codec *protocol.DeflateFrameCodec
 }
 
@@ -101,19 +104,34 @@ func dialWire(t *testing.T, url string, req *protocol.ConnectRequest) *wireClien
 	// connection on every test.
 	t.Cleanup(func() { _ = conn.Close() })
 	w := &wireClient{t: t, conn: conn}
+	if req.Dict != "" {
+		w.held = testDictionary()
+	}
 	data, err := protocol.NewJSONCommandEncoder().Encode(&protocol.Command{Id: 1, Connect: req})
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 	return w
 }
 
-// connectResult reads the connect reply, which is always raw, and installs any
-// dictionary it carried.
+// connectResult reads the connect reply and installs any dictionary it
+// carried.
+//
+// The reply is raw when it is delivering a dictionary, and compressed when the
+// client already held one - so this checks the frame marker rather than
+// assuming, which is exactly what a real client does. A client that advertised
+// an id can always decode, because it has the bytes that id names.
 func (w *wireClient) connectResult() *protocol.ConnectResult {
 	w.t.Helper()
 	require.NoError(w.t, w.conn.SetReadDeadline(time.Now().Add(5*time.Second)))
 	_, msg, err := w.conn.ReadMessage()
 	require.NoError(w.t, err)
+	if len(msg) > 0 && msg[0] == protocol.FrameCodecCompressed {
+		require.NotNil(w.t, w.held, "a compressed connect reply means the server took the id this client advertised")
+		codec := protocol.NewDeflateFrameCodec(protocol.DictionaryID(w.held), w.held)
+		msg, err = codec.Decompress(nil, msg, 1<<20)
+		require.NoError(w.t, err)
+		w.codec = codec
+	}
 	r, err := protocol.NewJSONReplyDecoder(msg).Decode()
 	require.NoError(w.t, err)
 	require.NotNil(w.t, r.Connect)
@@ -427,4 +445,51 @@ func TestConnectionParamsCarryUserID(t *testing.T) {
 	w := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
 	w.connectResult()
 	require.Equal(t, "u", e.seen.UserID)
+}
+
+// A client that already holds the dictionary has nothing to wait for, so its
+// connect reply is compressed like every other frame. The saving is small - a
+// warm reply is a couple of hundred bytes - but the rule is simpler than
+// exempting one frame: compression starts once both sides provably hold the
+// dictionary, which for this client is immediately.
+func TestWarmConnectReplyIsItselfCompressed(t *testing.T) {
+	t.Parallel()
+	e := &testCompression{dict: testDictionary()}
+	_, url := newCompressionNode(t, e, nil)
+
+	// First connection: cold, so the reply carries the bytes and is raw.
+	cold := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
+	first := cold.connectResult()
+	require.NotEmpty(t, first.Dict.DataB64, "a client holding nothing is sent the bytes")
+
+	// Second connection advertises the id it now holds.
+	conn, _, _, err := (&websocket.Dialer{}).Dial(url, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	data, err := protocol.NewJSONCommandEncoder().Encode(&protocol.Command{
+		Id: 1, Connect: &protocol.ConnectRequest{
+			Flag: ConnectionFlagDictionaryCompression, Dict: first.Dict.Id,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+
+	// Self-describing: the marker says what this is, so a client never has to
+	// predict whether its reply was compressed.
+	require.Equal(t, protocol.FrameCodecCompressed, msg[0],
+		"a warm client's connect reply must itself be compressed")
+
+	codec := protocol.NewDeflateFrameCodec(first.Dict.Id, testDictionary())
+	decoded, err := codec.Decompress(nil, msg, 1<<20)
+	require.NoError(t, err, "and must decode against the dictionary the client already had")
+	r, err := protocol.NewJSONReplyDecoder(decoded).Decode()
+	require.NoError(t, err)
+	require.NotNil(t, r.Connect)
+	require.Equal(t, first.Dict.Id, r.Connect.Dict.Id)
+	require.Empty(t, r.Connect.Dict.DataB64, "and must not re-send bytes it already holds")
+	require.Less(t, len(msg), len(decoded), "compressed on the wire, not merely marked")
 }

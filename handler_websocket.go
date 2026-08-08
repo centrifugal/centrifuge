@@ -458,6 +458,10 @@ func (t *websocketTransport) setConnectionCompression(cc ConnectionCompression) 
 	t.compressionPending.Store(&cc)
 }
 
+func (t *websocketTransport) setConnectionCompressionNow(cc ConnectionCompression) {
+	t.compression.Store(&cc)
+}
+
 // closeConnectionCompression hands the codec its last call. It also covers a
 // connection that never wrote a frame after the connect reply, whose codec is
 // therefore still sitting in compressionPending having never been promoted.

@@ -67,18 +67,24 @@ type ConnectionCompression interface {
 	// Dictionary returns what to put in ConnectResult.dict, or nil to send
 	// nothing.
 	//
-	// It is called once, before the connect reply is written, and the connect
-	// reply itself is never compressed. That is what removes the ordering
-	// problem: this frame carries the dictionary, and every frame after it is
-	// compressed with it. There is no window in which a compressed frame can
-	// reach a client that does not yet hold the dictionary.
+	// It is called once, before the connect reply is written.
+	//
+	// Compression begins as soon as both sides provably hold the dictionary.
+	// Returning bytes here means the client does not have them yet, so this
+	// reply is what delivers them and encoding starts on the frame after it.
+	// Returning only an id means the client presented that id and already has
+	// the bytes, so there is nothing to wait for and this reply is itself
+	// compressed. Either way there is no window in which a compressed frame
+	// can reach a client that does not hold the dictionary, and a client never
+	// has to predict which it got: every frame carries a codec marker.
 	//
 	// Set only the id when the client advertised that same id - it already holds
 	// the bytes.
 	Dictionary() *protocol.Dictionary
 
-	// Encode is called for every frame after the connect reply, on the
-	// connection's write goroutine.
+	// Encode is called for every frame this connection compresses, on the
+	// connection's write goroutine - including the connect reply when the
+	// client already held the dictionary.
 	//
 	// It returns the bytes to write and whether they must go out as a binary
 	// message, which compressed payloads need even on a JSON connection.
@@ -101,7 +107,15 @@ type ConnectionCompression interface {
 // unexported: a transport either supports this or it does not, and nothing
 // outside this package needs to ask.
 type compressionAware interface {
+	// setConnectionCompression installs a codec that must not encode the next
+	// frame written, because that frame is the connect reply carrying the
+	// dictionary this codec uses.
 	setConnectionCompression(cc ConnectionCompression)
+	// setConnectionCompressionNow installs a codec that encodes every frame
+	// including the connect reply. Used when the client presented an id the
+	// server recognised: it already holds the bytes, so there is nothing to
+	// deliver and nothing to wait for.
+	setConnectionCompressionNow(cc ConnectionCompression)
 	// closeConnectionCompression is called once the writer has stopped, so an
 	// implementation's Close cannot race the last Encode.
 	closeConnectionCompression()

@@ -356,9 +356,9 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		// if the response encode fails below — without rollback the connection
 		// would mark cached items as delivered while the SDK never received them.
 		type versionRollback struct {
-			ks              *keyedKeyState
-			prevVersion     uint64
-			prevDeltaReady  bool
+			ks             *keyedKeyState
+			prevVersion    uint64
+			prevDeltaReady bool
 		}
 		var rollbacks []versionRollback
 		if len(cachedItems) > 0 {

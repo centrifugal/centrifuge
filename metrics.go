@@ -136,15 +136,15 @@ type metrics struct {
 	commandDurationSubRefresh    prometheus.Observer
 	commandDurationUnknown       prometheus.Observer
 
-	broadcastDurationHistogram  *prometheus.HistogramVec
-	pubSubLagHistogram          *prometheus.HistogramVec
-	pingPongDurationHistogram   *prometheus.HistogramVec
+	broadcastDurationHistogram      *prometheus.HistogramVec
+	pubSubLagHistogram              *prometheus.HistogramVec
+	pingPongDurationHistogram       *prometheus.HistogramVec
 	brokerPublishSuppressedCount    *prometheus.CounterVec
 	mapBrokerPublishSuppressedCount *prometheus.CounterVec
 	mapBrokerRemoveSuppressedCount  *prometheus.CounterVec
-	mapBrokerCleanupLag      *prometheus.GaugeVec
-	mapBrokerCleanupRemoved  *prometheus.CounterVec
-	mapBrokerCleanupErrors   *prometheus.CounterVec
+	mapBrokerCleanupLag             *prometheus.GaugeVec
+	mapBrokerCleanupRemoved         *prometheus.CounterVec
+	mapBrokerCleanupErrors          *prometheus.CounterVec
 
 	redisBrokerPubSubErrors           *prometheus.CounterVec
 	redisBrokerPubSubDroppedMessages  *prometheus.CounterVec
@@ -171,28 +171,28 @@ type metrics struct {
 
 	config MetricsConfig
 
-	transportMessagesSentCache     sync.Map
-	transportMessagesReceivedCache sync.Map
-	commandDurationCache           sync.Map
-	replyErrorCache                sync.Map
-	actionCache                    sync.Map
-	recoverCache                   sync.Map
-	unsubscribeCache               sync.Map
-	disconnectCache                sync.Map
-	messagesSentCache              sync.Map
-	messagesReceivedCache          sync.Map
-	tagsFilterDroppedCache         sync.Map
+	transportMessagesSentCache      sync.Map
+	transportMessagesReceivedCache  sync.Map
+	commandDurationCache            sync.Map
+	replyErrorCache                 sync.Map
+	actionCache                     sync.Map
+	recoverCache                    sync.Map
+	unsubscribeCache                sync.Map
+	disconnectCache                 sync.Map
+	messagesSentCache               sync.Map
+	messagesReceivedCache           sync.Map
+	tagsFilterDroppedCache          sync.Map
 	brokerPublishSuppressedCache    sync.Map
 	mapBrokerPublishSuppressedCache sync.Map
 	mapBrokerRemoveSuppressedCache  sync.Map
-	pubSubLagCache                 sync.Map
-	broadcastDurationCache         sync.Map
-	sharedPollHandlerCache         sync.Map
-	sharedPollResultCache          sync.Map
-	sharedPollChannelCache         sync.Map
-	sharedPollPublishCache         sync.Map
-	nsCache                        *otter.Cache[string, string]
-	codeStrings                    map[uint32]string
+	pubSubLagCache                  sync.Map
+	broadcastDurationCache          sync.Map
+	sharedPollHandlerCache          sync.Map
+	sharedPollResultCache           sync.Map
+	sharedPollChannelCache          sync.Map
+	sharedPollPublishCache          sync.Map
+	nsCache                         *otter.Cache[string, string]
+	codeStrings                     map[uint32]string
 
 	// Cache for client label combinations: maps cache key -> {labelValues, cacheKey}
 	// This allows sharing pre-computed label data across all clients with the same label values

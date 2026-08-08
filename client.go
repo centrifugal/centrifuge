@@ -3274,10 +3274,21 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			})
 			if cc != nil {
 				dict = cc.Dictionary()
-				// The transport skips one frame before it starts encoding, because
-				// the next frame is the connect reply and that is what carries the
-				// dictionary.
-				ca.setConnectionCompression(cc)
+				// Compression starts as soon as both sides provably hold the
+				// dictionary. For a client that presented an id the engine
+				// recognised, that is now - it already has the bytes, so there is
+				// nothing to wait for and the connect reply itself is compressed.
+				// For a client being sent one, the reply is what carries it, so
+				// encoding starts on the frame after.
+				//
+				// Either way the client can tell what it received: every frame
+				// carries a codec marker, so a reply is self-describing rather
+				// than something the client has to predict.
+				if dict != nil && len(dict.Data) == 0 && dict.DataB64 == "" {
+					ca.setConnectionCompressionNow(cc)
+				} else {
+					ca.setConnectionCompression(cc)
+				}
 				acceptedFlags |= ConnectionFlagDictionaryCompression
 			}
 		}
