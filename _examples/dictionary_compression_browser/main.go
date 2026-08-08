@@ -139,7 +139,15 @@ func (m *mode) newNode() {
 		log.Fatal(err)
 	}
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
-		return centrifuge.ConnectReply{Credentials: &centrifuge.Credentials{UserID: "demo"}}, nil
+		reply := centrifuge.ConnectReply{Credentials: &centrifuge.Credentials{UserID: "demo"}}
+		// e.Profile is what the client asked for, and asking is all it can do.
+		// Echoing it back is what makes it real, so check it against the profiles
+		// this server actually has: an unknown name leaves the connection
+		// unclassified rather than inventing a profile on the client's say-so.
+		if e.Profile == feedProfile {
+			reply.Profile = e.Profile
+		}
+		return reply, nil
 	})
 	node.OnTransportWrite(func(c *centrifuge.Client, e centrifuge.TransportWriteEvent) bool {
 		m.msgs.Add(1)

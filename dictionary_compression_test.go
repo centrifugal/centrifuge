@@ -246,25 +246,29 @@ func TestClientWithoutSupportGetsNothing(t *testing.T) {
 	require.Nil(t, w.codec)
 }
 
-// The profile is resolved by the server and handed to the engine: what the
-// application said if it said anything, otherwise what the client declared.
+// The profile a connection ends up with is the one the application returned,
+// and only that one. A client's declaration reaches the application as a
+// request and goes no further on its own, so a server that expresses no opinion
+// classifies nobody. The alternative - letting an unanswered claim stand - would
+// mean any policy expressed by returning "" was silently ignored.
 func TestProfileResolution(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		declared string
-		override string
+		reply    string
 		want     string
 	}{
-		{"client declares", "dashboard", "", "dashboard"},
-		{"application overrides", "dashboard", "trusted", "trusted"},
-		{"application sets, client silent", "", "trusted", "trusted"},
+		{"declaration alone classifies nobody", "dashboard", "", ""},
+		{"application answers the declaration", "dashboard", "dashboard", "dashboard"},
+		{"application overrides the declaration", "dashboard", "trusted", "trusted"},
+		{"application classifies a silent client", "", "trusted", "trusted"},
 		{"nobody says anything", "", "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := &testCompression{dict: testDictionary()}
 			_, url := newCompressionNode(t, e, func(ConnectEvent) ConnectReply {
-				return ConnectReply{Profile: tc.override}
+				return ConnectReply{Profile: tc.reply}
 			})
 			w := dialWire(t, url, &protocol.ConnectRequest{
 				Flag:    ConnectionFlagDictionaryCompression,
@@ -274,6 +278,30 @@ func TestProfileResolution(t *testing.T) {
 			require.Equal(t, tc.want, e.seen.Profile)
 		})
 	}
+}
+
+// The declaration still has to reach the application, or it has nothing to
+// validate against and no way to honour a client that asked correctly.
+func TestConnectEventCarriesDeclaredProfile(t *testing.T) {
+	t.Parallel()
+	seen := make(chan string, 1)
+	e := &testCompression{dict: testDictionary()}
+	_, url := newCompressionNode(t, e, func(ev ConnectEvent) ConnectReply {
+		seen <- ev.Profile
+		// Echoing only a name this server knows is the intended pattern: it is
+		// what turns an assertion into a classification.
+		if ev.Profile == "dashboard" {
+			return ConnectReply{Profile: ev.Profile}
+		}
+		return ConnectReply{}
+	})
+	w := dialWire(t, url, &protocol.ConnectRequest{
+		Flag:    ConnectionFlagDictionaryCompression,
+		Profile: "dashboard",
+	})
+	w.connectResult()
+	require.Equal(t, "dashboard", <-seen)
+	require.Equal(t, "dashboard", e.seen.Profile)
 }
 
 // Client.Profile reports the same resolved value, so an application can filter

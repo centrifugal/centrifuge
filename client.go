@@ -3127,6 +3127,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			Token:     req.Token,
 			Name:      req.Name,
 			Version:   req.Version,
+			Profile:   profile,
 			Transport: c.transport,
 			Headers:   req.Headers,
 		}
@@ -3164,11 +3165,13 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		}
 		clientSideRefresh = reply.ClientSideRefresh
 		labels = reply.Labels
-		if reply.Profile != "" {
-			// The application classified this connection, which beats whatever the
-			// client claimed about itself.
-			profile = reply.Profile
-		}
+		// The application classifies the connection, and its answer is the whole
+		// answer: an empty one means unclassified, not "keep what the client
+		// said". A client's declaration is a request, and a request that nothing
+		// server-side affirms must not survive - otherwise any policy expressed
+		// by returning "" would be silently ignored, which is the direction a
+		// mistake must never fail in.
+		profile = reply.Profile
 		if len(reply.Subscriptions) > 0 {
 			subscriptions = make(map[string]SubscribeOptions, len(reply.Subscriptions))
 			for ch, opts := range reply.Subscriptions {

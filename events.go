@@ -20,6 +20,12 @@ type ConnectEvent struct {
 	Name string
 	// Version can contain client version if provided on connect.
 	Version string
+	// Profile can contain the profile name the client declared on connect.
+	// This is an unvalidated client assertion, exactly like Name and Version:
+	// treat it as a request, not a fact. Return ConnectReply.Profile to set the
+	// profile the server will actually use - whatever is returned there wins,
+	// and returning an empty one discards the client's claim entirely.
+	Profile string
 	// Transport contains information about transport used by client.
 	Transport TransportInfo
 	// Channels is a list of channels a client wants to subscribe to
