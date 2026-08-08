@@ -576,3 +576,50 @@ func TestTransportWriteObservesUncompressedFrames(t *testing.T) {
 	_, derr := protocol.NewJSONReplyDecoder(encoded).Decode()
 	require.Error(t, derr, "a compressed frame must not parse as protocol data")
 }
+
+// An engine that names a dictionary the client never advertised is refused.
+//
+// The contract says to set only the id when the client presented that same id,
+// because naming it is a claim that both sides already hold the bytes. An
+// engine that gets this wrong - a third-party one, or a bug in a supplied one -
+// would otherwise have the server compress every frame, including the connect
+// reply, against bytes the client provably does not have. The connection would
+// receive nothing it could read and have no way to say why, so the server
+// declines rather than trusting the claim.
+func TestNamedDictionaryTheClientNeverAdvertisedIsRefused(t *testing.T) {
+	t.Parallel()
+	e := &misnamingCompression{dict: testDictionary()}
+	_, url := newCompressionNode(t, e, nil)
+
+	w := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
+	res := w.connectResult()
+
+	require.Nil(t, res.Dict, "a dictionary the client cannot hold must not be offered")
+	require.Zero(t, res.Flag&ConnectionFlagDictionaryCompression,
+		"and the connection must not be told compression is on")
+	require.Equal(t, int64(1), e.last.closed.Load(),
+		"the refused codec is closed, not leaked")
+
+	// The connection still works, uncompressed.
+	w.subscribe("demo")
+}
+
+// misnamingCompression names a dictionary regardless of what the client
+// advertised, which is precisely what the contract forbids.
+type misnamingCompression struct {
+	dict []byte
+	last *testConnCompression
+}
+
+func (e *misnamingCompression) NewConnection(params ConnectionParams) ConnectionCompression {
+	if params.ClientFlags&ConnectionFlagDictionaryCompression == 0 {
+		return nil
+	}
+	e.last = &testConnCompression{
+		codec: protocol.NewDeflateFrameCodec(protocol.DictionaryID(e.dict), e.dict),
+		proto: params.ProtocolType.toProto(),
+		// Claim the client holds it whatever it actually advertised.
+		held: protocol.DictionaryID(e.dict),
+	}
+	return e.last
+}

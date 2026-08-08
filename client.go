@@ -3274,27 +3274,52 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			})
 			if cc != nil {
 				dict = cc.Dictionary()
-				// Compression starts as soon as both sides provably hold the
-				// dictionary. For a client that presented an id the engine
-				// recognised, that is now - it already has the bytes, so there is
-				// nothing to wait for and the connect reply itself is compressed.
-				// For a client being sent one, the reply is what carries it, so
-				// encoding starts on the frame after.
-				//
-				// Either way the client can tell what it received: every frame
-				// carries a codec marker, so a reply is self-describing rather
-				// than something the client has to predict.
-				if dict != nil && len(dict.Data) == 0 && dict.DataB64 == "" {
+				named := dict != nil && len(dict.Data) == 0 && dict.DataB64 == ""
+				switch {
+				case named && dict.Id != req.GetDict():
+					// An engine returned a dictionary by name that this client
+					// never advertised, so the client does not have those bytes
+					// and no frame compressed against them could be decoded.
+					// The contract says only to name what the client presented;
+					// this is the backstop for an engine that gets it wrong,
+					// because the alternative is a connection that receives
+					// nothing it can read and cannot say why.
+					cc.Close()
+					dict = nil
+				case named:
+					// The client presented this id, so both sides hold the
+					// bytes and there is nothing to wait for: the connect reply
+					// is itself compressed.
 					ca.setConnectionCompressionNow(cc)
-				} else {
+					acceptedFlags |= ConnectionFlagDictionaryCompression
+				default:
+					// This reply carries the dictionary, so encoding starts on
+					// the frame after it. Either way the client can tell what
+					// it received - every frame carries a codec marker, so a
+					// reply is self-describing rather than something a client
+					// has to predict.
 					ca.setConnectionCompression(cc)
+					acceptedFlags |= ConnectionFlagDictionaryCompression
 				}
-				acceptedFlags |= ConnectionFlagDictionaryCompression
 			}
 		}
 	}
 	c.mu.Lock()
 	c.profile = profile
+	// close() can run concurrently with a slow connectCmd - the stale-connection
+	// timer firing during a long OnConnecting, say - and it is one-shot, so a
+	// codec installed after it has already run would never be closed. The
+	// interface promises exactly once when the connection goes away, and an
+	// implementation that batches its accounting loses everything it held.
+	// Closing it here is that promise kept: connectCmd bails on the same status
+	// a few lines below, so this connection writes nothing either way.
+	if c.status == statusClosed {
+		c.mu.Unlock()
+		if ca, ok := c.transport.(compressionAware); ok {
+			ca.closeConnectionCompression()
+		}
+		return DisconnectConnectionClosed
+	}
 	c.mu.Unlock()
 
 	res := &protocol.ConnectResult{}
