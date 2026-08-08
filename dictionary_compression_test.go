@@ -493,3 +493,86 @@ func TestWarmConnectReplyIsItselfCompressed(t *testing.T) {
 	require.Empty(t, r.Connect.Dict.DataB64, "and must not re-send bytes it already holds")
 	require.Less(t, len(msg), len(decoded), "compressed on the wire, not merely marked")
 }
+
+// OnTransportWrite must see frames before they are compressed.
+//
+// This is load-bearing and easy to break without noticing. The training side of
+// dictionary compression observes connections through this hook and parses what
+// it sees; if the hook ever moved after the codec, every frame on an already
+// compressed connection would arrive as deflate bytes, extraction would reject
+// them all as unparseable, and retraining a profile that is already serving a
+// dictionary would silently learn nothing. The symptom would be "the dictionary
+// got worse after retraining", with a parse rate of zero as the only clue.
+func TestTransportWriteObservesUncompressedFrames(t *testing.T) {
+	t.Parallel()
+	e := &testCompression{dict: testDictionary()}
+
+	seen := make(chan []byte, 32)
+	n, err := New(Config{DictionaryCompression: e})
+	require.NoError(t, err)
+	n.OnConnecting(func(ctx context.Context, ev ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{Credentials: &Credentials{UserID: "u"}}, nil
+	})
+	n.OnTransportWrite(func(c *Client, ev TransportWriteEvent) bool {
+		cp := make([]byte, len(ev.Data))
+		copy(cp, ev.Data)
+		select {
+		case seen <- cp:
+		default:
+		}
+		return true
+	})
+	n.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(ev SubscribeEvent, cb SubscribeCallback) { cb(SubscribeReply{}, nil) })
+	})
+	require.NoError(t, n.Run())
+	t.Cleanup(func() { _ = n.Shutdown(context.Background()) })
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
+		PingPongConfig: PingPongConfig{PingInterval: 10 * time.Minute, PongTimeout: time.Minute},
+	}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/connection/websocket"
+
+	w := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
+	require.NotNil(t, w.connectResult().Dict, "this connection must actually be compressing")
+	w.subscribe("demo")
+
+	_, err = n.Publish("demo", []byte(`{"observable":"payload"}`))
+	require.NoError(t, err)
+	w.next()
+
+	// Every frame the hook saw must still be readable as protocol data. A
+	// compressed one would fail to decode here, which is exactly the
+	// regression this guards - and the check is not vacuous, since the same
+	// bytes after the codec do carry the compressed marker (asserted below).
+	var sawPublication bool
+	var lastRaw []byte
+	for len(seen) > 0 {
+		frame := <-seen
+		require.NotEqual(t, protocol.FrameCodecCompressed, frame[0],
+			"the hook must run before compression, not after")
+		lastRaw = frame
+		for _, line := range bytes.Split(bytes.TrimRight(frame, "\n"), []byte("\n")) {
+			r, derr := protocol.NewJSONReplyDecoder(line).Decode()
+			require.NoError(t, derr, "an observer must be able to parse what it is given")
+			if r.Push != nil && r.Push.Pub != nil {
+				require.Contains(t, string(r.Push.Pub.Data), "observable")
+				sawPublication = true
+			}
+		}
+	}
+	require.True(t, sawPublication, "the publication must have reached the hook at all")
+
+	// Prove the assertion above discriminates: the very same frame, once
+	// encoded by this connection's codec, is marked compressed and no longer
+	// parses. Without this the test would pass even if compression had been
+	// silently disabled for the connection.
+	require.NotNil(t, e.last)
+	encoded, _ := e.last.Encode(lastRaw)
+	require.Equal(t, protocol.FrameCodecCompressed, encoded[0])
+	_, derr := protocol.NewJSONReplyDecoder(encoded).Decode()
+	require.Error(t, derr, "a compressed frame must not parse as protocol data")
+}
