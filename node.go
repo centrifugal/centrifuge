@@ -53,7 +53,6 @@ type Node struct {
 	nodes *nodeRegistry
 	// metrics registry.
 	metrics *metrics
-
 	// shutdown is a flag which is only true when node is going to shut down.
 	shutdown bool
 	// shutdownCh is a channel which is closed when node shutdown initiated.

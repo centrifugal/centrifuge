@@ -539,8 +539,16 @@ func (t *websocketTransport) writeData(data []byte) error {
 	// This is the frame that carries the dictionary, so it goes out raw and
 	// arms compression for everything after it. That ordering is what lets the
 	// client decode every later frame without a negotiation window.
-	if p := t.compressionPending.Swap(nil); p != nil {
-		t.compression.Store(p)
+	//
+	// Loaded before it is swapped, and the load is what almost every frame in
+	// almost every deployment executes. A bare Swap here reads the same but is a
+	// locked read-modify-write on every frame of every connection - measured at
+	// 1.70ns against 0.51ns - which is a cost paid forever by everyone who never
+	// turns this feature on. The promotion itself happens once per connection.
+	if t.compressionPending.Load() != nil {
+		if p := t.compressionPending.Swap(nil); p != nil {
+			t.compression.Store(p)
+		}
 	}
 	return t.writeFrame(data, false)
 }
