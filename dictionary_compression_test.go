@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +33,9 @@ type testCompression struct {
 	// seen records the params of the last connection created, so a test can
 	// assert what the server resolved.
 	seen ConnectionParams
+	// last is the connection most recently handed out, so a test can assert its
+	// lifecycle rather than only what went on the wire.
+	last *testConnCompression
 }
 
 func (e *testCompression) NewConnection(params ConnectionParams) ConnectionCompression {
@@ -39,17 +43,20 @@ func (e *testCompression) NewConnection(params ConnectionParams) ConnectionCompr
 	if params.ClientFlags&ConnectionFlagDictionaryCompression == 0 {
 		return nil
 	}
-	return &testConnCompression{
+	e.last = &testConnCompression{
 		codec: protocol.NewDeflateFrameCodec(protocol.DictionaryID(e.dict), e.dict),
 		proto: params.ProtocolType.toProto(),
 		held:  params.HeldDictionaryID,
 	}
+	return e.last
 }
 
 type testConnCompression struct {
-	codec *protocol.DeflateFrameCodec
-	proto protocol.Type
-	held  string
+	codec   *protocol.DeflateFrameCodec
+	proto   protocol.Type
+	held    string
+	encoded atomic.Int64
+	closed  atomic.Int64
 }
 
 func (c *testConnCompression) Dictionary() *protocol.Dictionary {
@@ -68,8 +75,11 @@ func (c *testConnCompression) Dictionary() *protocol.Dictionary {
 }
 
 func (c *testConnCompression) Encode(frame []byte) ([]byte, bool) {
+	c.encoded.Add(1)
 	return c.codec.Compress(nil, frame), true
 }
+
+func (c *testConnCompression) Close() { c.closed.Add(1) }
 
 func testDictionary() []byte {
 	return bytes.Repeat([]byte(`{"push":{"channel":"demo","pub":{"data":{"seq":,"v":"x"}}}}`), 40)
@@ -361,3 +371,60 @@ func TestEngineMayDecline(t *testing.T) {
 type declineAll struct{}
 
 func (declineAll) NewConnection(ConnectionParams) ConnectionCompression { return nil }
+
+// An implementation that batches its accounting has to be told when a
+// connection ends, or everything since its last flush is lost. That loss is not
+// evenly spread: short connections are the ones that end before a flush and
+// also the ones most likely to have paid for a dictionary transfer, so dropping
+// them makes compression look better than it was.
+func TestConnectionCompressionClosedOnDisconnect(t *testing.T) {
+	t.Parallel()
+	e := &testCompression{dict: testDictionary()}
+	n, url := newCompressionNode(t, e, nil)
+
+	w := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
+	w.connectResult()
+	w.subscribe("demo")
+	cc := e.last
+	require.NotNil(t, cc)
+	require.Zero(t, cc.closed.Load(), "still connected")
+
+	require.NoError(t, w.conn.Close())
+	require.Eventually(t, func() bool { return cc.closed.Load() == 1 },
+		5*time.Second, 10*time.Millisecond, "close must reach the codec exactly once")
+	_ = n
+}
+
+// A connection that never writes a frame after the connect reply still has a
+// codec - it is sitting unpromoted, waiting for a first write that never comes.
+// Closing has to find it there too, otherwise the quietest connections, which
+// are exactly the ones a dictionary transfer is hardest to justify for, would be
+// the ones missing from the accounting.
+func TestConnectionCompressionClosedWhenNeverWritten(t *testing.T) {
+	t.Parallel()
+	e := &testCompression{dict: testDictionary()}
+	_, url := newCompressionNode(t, e, nil)
+
+	w := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
+	w.connectResult()
+	cc := e.last
+	require.NotNil(t, cc)
+	require.Zero(t, cc.encoded.Load(), "nothing was written after the connect reply")
+
+	require.NoError(t, w.conn.Close())
+	require.Eventually(t, func() bool { return cc.closed.Load() == 1 },
+		5*time.Second, 10*time.Millisecond, "an unpromoted codec must still be closed")
+}
+
+// The user is the only identity that survives a reconnect, so it is what a
+// staged rollout has to split on. Without it an implementation can only draw a
+// fresh number per connection, which re-dices the cohort on every reconnect and
+// makes a client pay to be resent a dictionary it already had.
+func TestConnectionParamsCarryUserID(t *testing.T) {
+	t.Parallel()
+	e := &testCompression{dict: testDictionary()}
+	_, url := newCompressionNode(t, e, nil)
+	w := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
+	w.connectResult()
+	require.Equal(t, "u", e.seen.UserID)
+}

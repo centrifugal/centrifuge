@@ -1598,6 +1598,13 @@ func (c *Client) close(disconnect Disconnect) error {
 	}
 	_ = c.messageWriter.close(flushRemaining)
 
+	// After the writer has closed and flushed, so this cannot overlap an Encode,
+	// and before the transport goes away, so an implementation still has
+	// everything it needs to account for what this connection did.
+	if ca, ok := c.transport.(compressionAware); ok {
+		ca.closeConnectionCompression()
+	}
+
 	_ = c.transport.Close(disconnect)
 
 	// Transport is closed; do the (potentially slow) channel cleanup now, off the
@@ -3259,6 +3266,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 				ProtocolType: c.transport.Protocol(),
 				ClientFlags:  req.Flag,
 				Profile:      profile,
+				UserID:       c.UserID(),
 				// The dictionary this client kept from an earlier connection. An id
 				// identifies content, so if the engine recognises it the dictionary
 				// can be named rather than sent again.

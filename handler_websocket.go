@@ -458,6 +458,19 @@ func (t *websocketTransport) setConnectionCompression(cc ConnectionCompression) 
 	t.compressionPending.Store(&cc)
 }
 
+// closeConnectionCompression hands the codec its last call. It also covers a
+// connection that never wrote a frame after the connect reply, whose codec is
+// therefore still sitting in compressionPending having never been promoted.
+func (t *websocketTransport) closeConnectionCompression() {
+	if ccp := t.compression.Swap(nil); ccp != nil {
+		(*ccp).Close()
+		return
+	}
+	if ccp := t.compressionPending.Swap(nil); ccp != nil {
+		(*ccp).Close()
+	}
+}
+
 type websocketTransportOptions struct {
 	protoType          ProtocolType
 	pingPong           PingPongConfig

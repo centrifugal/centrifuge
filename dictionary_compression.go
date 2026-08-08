@@ -43,9 +43,17 @@ type ConnectionParams struct {
 	ClientFlags int64
 
 	// Profile is the application context this connection belongs to, resolved by
-	// the server: the value an OnConnecting handler set, or failing that the one
-	// the client declared. Empty means unclassified.
+	// the server. Empty means unclassified.
 	Profile string
+
+	// UserID is the authenticated user, or empty for an anonymous connection.
+	//
+	// It is here because it is the only identity that survives a reconnect, and
+	// a staged rollout needs one: a cohort re-drawn on every reconnect is not a
+	// cohort, and a client that fell out of one would pay to be sent a
+	// dictionary it already had. Implementations that split traffic should
+	// derive the split from this rather than from anything per-connection.
+	UserID string
 
 	// HeldDictionaryID is the dictionary the client says it already has from an
 	// earlier connection. An id identifies dictionary content, so a match means
@@ -75,6 +83,18 @@ type ConnectionCompression interface {
 	// It returns the bytes to write and whether they must go out as a binary
 	// message, which compressed payloads need even on a JSON connection.
 	Encode(frame []byte) (out []byte, binary bool)
+
+	// Close is called once when the connection goes away, on the same goroutine
+	// as the final Encode and never concurrently with one.
+	//
+	// Implementations that batch their accounting need this, and need it to be
+	// exact rather than best-effort. Without it, everything a connection did
+	// since its last flush is lost - and what is lost is not a random sample:
+	// short connections are the ones that end before a flush, and they are also
+	// the ones that most often pay to be sent a dictionary. Dropping them makes
+	// compression look better than it is, in a number an operator uses to decide
+	// whether the feature is worth keeping on.
+	Close()
 }
 
 // compressionAware is implemented by transports that can compress frames. It is
@@ -82,4 +102,7 @@ type ConnectionCompression interface {
 // outside this package needs to ask.
 type compressionAware interface {
 	setConnectionCompression(cc ConnectionCompression)
+	// closeConnectionCompression is called once the writer has stopped, so an
+	// implementation's Close cannot race the last Encode.
+	closeConnectionCompression()
 }
