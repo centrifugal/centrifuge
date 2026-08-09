@@ -3272,50 +3272,36 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 				// can be named rather than sent again.
 				HeldDictionaryID: req.GetDict(),
 			})
-			replyCompressed := false
 			if cc != nil {
 				dict = cc.Dictionary()
-				named := dict != nil && len(dict.Data) == 0 && dict.DataB64 == ""
-				switch {
-				case named && dict.Id != req.GetDict():
-					// An engine returned a dictionary by name that this client
-					// never advertised, so the client does not have those bytes
-					// and no frame compressed against them could be decoded.
-					// The contract says only to name what the client presented;
-					// this is the backstop for an engine that gets it wrong,
-					// because the alternative is a connection that receives
-					// nothing it can read and cannot say why.
+				if dict != nil && len(dict.Data) == 0 && dict.DataB64 == "" && dict.Id != req.GetDict() {
+					// An engine named a dictionary by id that this client never
+					// advertised, so the client does not have those bytes and no
+					// frame compressed against them could be decoded. The
+					// contract says only to name what the client presented; this
+					// is the backstop for an engine that gets it wrong, because
+					// the alternative is a connection that receives nothing it
+					// can read and cannot say why.
 					cc.Close()
 					dict = nil
-				case named:
-					// The client presented this id, so both sides hold the
-					// bytes and there is nothing to wait for: the connect reply
-					// is itself compressed.
-					ca.setConnectionCompressionNow(cc)
-					replyCompressed = true
-					acceptedFlags |= ConnectionFlagDictionaryCompression
-				default:
-					// This reply carries the dictionary, so encoding starts on
-					// the frame after it. Either way the client can tell what
-					// it received - every frame carries a codec marker, so a
-					// reply is self-describing rather than something a client
-					// has to predict.
+				} else {
+					// Encoding starts on the frame AFTER this one, always. The
+					// connect reply goes out in the plain protocol - text JSON,
+					// length-prefixed Protobuf - so a client never has to work
+					// out whether the frame that establishes compression was
+					// itself compressed.
+					//
+					// It could be, when the client already holds the dictionary.
+					// It is not, because knowing that requires the client to
+					// decide how to read the reply before reading it, and the
+					// two encodings are not reliably distinguishable: a Protobuf
+					// ping is an empty reply, one 0x00 byte, which is exactly a
+					// raw frame marker. Buying one compressed reply per
+					// connection would cost either a byte on every frame or a
+					// rule that only holds until someone adds a field.
 					ca.setConnectionCompression(cc)
 					acceptedFlags |= ConnectionFlagDictionaryCompression
 				}
-			}
-			// A client that advertised a dictionary has already installed the
-			// codec for it and will strip a marker from this reply - see
-			// markNextFrame. That holds however the switch above decided,
-			// including when the engine declined this connection entirely: the
-			// client cannot learn it was declined without first reading the
-			// reply, and it cannot read the reply without stripping.
-			//
-			// Not when the reply is itself compressed: that path installs the
-			// codec now, so the encoder marks the frame and marking again here
-			// would leave the flag set for the frame after it.
-			if req.GetDict() != "" && !replyCompressed {
-				ca.markNextFrame()
 			}
 		}
 	}

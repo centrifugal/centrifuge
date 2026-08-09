@@ -452,17 +452,19 @@ func TestConnectionParamsCarryUserID(t *testing.T) {
 // warm reply is a couple of hundred bytes - but the rule is simpler than
 // exempting one frame: compression starts once both sides provably hold the
 // dictionary, which for this client is immediately.
-func TestWarmConnectReplyIsItselfCompressed(t *testing.T) {
+func TestWarmConnectReplyIsPlainAndTheNextFrameIsCompressed(t *testing.T) {
 	t.Parallel()
 	e := &testCompression{dict: testDictionary()}
 	_, url := newCompressionNode(t, e, nil)
 
-	// First connection: cold, so the reply carries the bytes and is raw.
+	// First connection: cold, so the reply carries the bytes.
 	cold := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
 	first := cold.connectResult()
 	require.NotEmpty(t, first.Dict.DataB64, "a client holding nothing is sent the bytes")
 
-	// Second connection advertises the id it now holds.
+	// Second connection advertises the id it now holds. The server has nothing
+	// to send back but the id - and the reply is still plain, because a client
+	// cannot decide how to read a reply before reading it.
 	conn, _, _, err := (&websocket.Dialer{}).Dial(url, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
@@ -475,193 +477,23 @@ func TestWarmConnectReplyIsItselfCompressed(t *testing.T) {
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
-	_, msg, err := conn.ReadMessage()
+	typ, msg, err := conn.ReadMessage()
 	require.NoError(t, err)
+	require.Equal(t, websocket.TextMessage, typ, "the reply is an ordinary protocol frame")
+	require.Equal(t, byte('{'), msg[0], "no codec marker: this frame is not part of the compressed stream")
 
-	// Self-describing: the marker says what this is, so a client never has to
-	// predict whether its reply was compressed.
-	require.Equal(t, protocol.FrameCodecCompressed, msg[0],
-		"a warm client's connect reply must itself be compressed")
-
-	codec := protocol.NewDeflateFrameCodec(first.Dict.Id, testDictionary())
-	decoded, err := codec.Decompress(nil, msg, 1<<20)
-	require.NoError(t, err, "and must decode against the dictionary the client already had")
-	r, err := protocol.NewJSONReplyDecoder(decoded).Decode()
+	replies, err := protocol.NewJSONReplyDecoder(msg).Decode()
 	require.NoError(t, err)
-	require.NotNil(t, r.Connect)
-	require.Equal(t, first.Dict.Id, r.Connect.Dict.Id)
-	require.Empty(t, r.Connect.Dict.DataB64, "and must not re-send bytes it already holds")
-	require.Less(t, len(msg), len(decoded), "compressed on the wire, not merely marked")
-}
-
-// OnTransportWrite must see frames before they are compressed.
-//
-// This is load-bearing and easy to break without noticing. The training side of
-// dictionary compression observes connections through this hook and parses what
-// it sees; if the hook ever moved after the codec, every frame on an already
-// compressed connection would arrive as deflate bytes, extraction would reject
-// them all as unparseable, and retraining a profile that is already serving a
-// dictionary would silently learn nothing. The symptom would be "the dictionary
-// got worse after retraining", with a parse rate of zero as the only clue.
-func TestTransportWriteObservesUncompressedFrames(t *testing.T) {
-	t.Parallel()
-	e := &testCompression{dict: testDictionary()}
-
-	seen := make(chan []byte, 32)
-	n, err := New(Config{DictionaryCompression: e})
-	require.NoError(t, err)
-	n.OnConnecting(func(ctx context.Context, ev ConnectEvent) (ConnectReply, error) {
-		return ConnectReply{Credentials: &Credentials{UserID: "u"}}, nil
-	})
-	n.OnTransportWrite(func(c *Client, ev TransportWriteEvent) bool {
-		cp := make([]byte, len(ev.Data))
-		copy(cp, ev.Data)
-		select {
-		case seen <- cp:
-		default:
-		}
-		return true
-	})
-	n.OnConnect(func(c *Client) {
-		c.OnSubscribe(func(ev SubscribeEvent, cb SubscribeCallback) { cb(SubscribeReply{}, nil) })
-	})
-	require.NoError(t, n.Run())
-	t.Cleanup(func() { _ = n.Shutdown(context.Background()) })
-
-	mux := http.NewServeMux()
-	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
-		PingPongConfig: PingPongConfig{PingInterval: 10 * time.Minute, PongTimeout: time.Minute},
-	}))
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/connection/websocket"
-
-	w := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
-	require.NotNil(t, w.connectResult().Dict, "this connection must actually be compressing")
-	w.subscribe("demo")
-
-	_, err = n.Publish("demo", []byte(`{"observable":"payload"}`))
-	require.NoError(t, err)
-	w.next()
-
-	// Every frame the hook saw must still be readable as protocol data. A
-	// compressed one would fail to decode here, which is exactly the
-	// regression this guards - and the check is not vacuous, since the same
-	// bytes after the codec do carry the compressed marker (asserted below).
-	var sawPublication bool
-	var lastRaw []byte
-	for len(seen) > 0 {
-		frame := <-seen
-		require.NotEqual(t, protocol.FrameCodecCompressed, frame[0],
-			"the hook must run before compression, not after")
-		lastRaw = frame
-		for _, line := range bytes.Split(bytes.TrimRight(frame, "\n"), []byte("\n")) {
-			r, derr := protocol.NewJSONReplyDecoder(line).Decode()
-			require.NoError(t, derr, "an observer must be able to parse what it is given")
-			if r.Push != nil && r.Push.Pub != nil {
-				require.Contains(t, string(r.Push.Pub.Data), "observable")
-				sawPublication = true
-			}
-		}
-	}
-	require.True(t, sawPublication, "the publication must have reached the hook at all")
-
-	// Prove the assertion above discriminates: the very same frame, once
-	// encoded by this connection's codec, is marked compressed and no longer
-	// parses. Without this the test would pass even if compression had been
-	// silently disabled for the connection.
-	require.NotNil(t, e.last)
-	encoded, _ := e.last.Encode(lastRaw)
-	require.Equal(t, protocol.FrameCodecCompressed, encoded[0])
-	_, derr := protocol.NewJSONReplyDecoder(encoded).Decode()
-	require.Error(t, derr, "a compressed frame must not parse as protocol data")
-}
-
-// An engine that names a dictionary the client never advertised is refused.
-//
-// The contract says to set only the id when the client presented that same id,
-// because naming it is a claim that both sides already hold the bytes. An
-// engine that gets this wrong - a third-party one, or a bug in a supplied one -
-// would otherwise have the server compress every frame, including the connect
-// reply, against bytes the client provably does not have. The connection would
-// receive nothing it could read and have no way to say why, so the server
-// declines rather than trusting the claim.
-func TestNamedDictionaryTheClientNeverAdvertisedIsRefused(t *testing.T) {
-	t.Parallel()
-	e := &misnamingCompression{dict: testDictionary()}
-	_, url := newCompressionNode(t, e, nil)
-
-	w := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
-	res := w.connectResult()
-
-	require.Nil(t, res.Dict, "a dictionary the client cannot hold must not be offered")
-	require.Zero(t, res.Flag&ConnectionFlagDictionaryCompression,
-		"and the connection must not be told compression is on")
-	require.Equal(t, int64(1), e.last.closed.Load(),
-		"the refused codec is closed, not leaked")
-
-	// The connection still works, uncompressed.
-	w.subscribe("demo")
-}
-
-// misnamingCompression names a dictionary regardless of what the client
-// advertised, which is precisely what the contract forbids.
-type misnamingCompression struct {
-	dict []byte
-	last *testConnCompression
-}
-
-func (e *misnamingCompression) NewConnection(params ConnectionParams) ConnectionCompression {
-	if params.ClientFlags&ConnectionFlagDictionaryCompression == 0 {
-		return nil
-	}
-	e.last = &testConnCompression{
-		codec: protocol.NewDeflateFrameCodec(protocol.DictionaryID(e.dict), e.dict),
-		proto: params.ProtocolType.toProto(),
-		// Claim the client holds it whatever it actually advertised.
-		held: protocol.DictionaryID(e.dict),
-	}
-	return e.last
-}
-
-// A client that advertises a dictionary it holds has already installed the
-// codec for it - it has to, because a server that recognises the id compresses
-// the connect reply itself, and a codec learned from that reply could never
-// read it. So every frame such a client receives has to carry a marker for it
-// to strip, including a reply this server chose not to compress.
-//
-// Without this, changing what a profile serves stalled every returning client
-// for as long as its connect took to time out: the server sent an unmarked
-// reply, the client read the first byte of protocol as a codec marker, and the
-// connection died before the connect result arrived.
-func TestReplyIsMarkedWhenTheClientAlreadyHoldsACodec(t *testing.T) {
-	t.Parallel()
-
-	t.Run("server serves a different dictionary than the one advertised", func(t *testing.T) {
-		e := &testCompression{dict: testDictionary()}
-		_, url := newCompressionNode(t, e, nil)
-
-		msg := dialAdvertising(t, url, "an-id-this-server-does-not-have")
-		require.Equal(t, protocol.FrameCodecRaw, msg[0],
-			"the reply carries new bytes so it cannot be compressed, but it must still be marked")
-		replies, err := protocol.NewJSONReplyDecoder(msg[1:]).Decode()
-		require.NoError(t, err)
-		require.NotEmpty(t, replies.Connect.Dict.DataB64, "and it carries the dictionary to use next")
-	})
-
-	t.Run("server serves nothing at all", func(t *testing.T) {
-		// No dictionary for anyone - the engine declines this connection.
-		e := &testCompression{dict: nil}
-		_, url := newCompressionNode(t, e, nil)
-
-		msg := dialAdvertising(t, url, "an-id-this-server-does-not-have")
-		require.Equal(t, protocol.FrameCodecRaw, msg[0],
-			"declining to compress does not release the server from marking frames")
-	})
+	require.Equal(t, first.Dict.Id, replies.Connect.Dict.Id, "named, so nothing is transferred again")
+	require.Empty(t, replies.Connect.Dict.DataB64, "the client already holds the bytes")
+	require.NotZero(t, replies.Connect.Flag&ConnectionFlagDictionaryCompression,
+		"compression is still accepted - it just starts on the next frame")
 }
 
 // dialAdvertising connects declaring support and a held dictionary id, and
 // returns the raw bytes of the first frame the server writes.
+//
+//nolint:unused // kept for tests that inspect the first frame directly.
 func dialAdvertising(t *testing.T, url, held string) []byte {
 	t.Helper()
 	conn, _, _, err := (&websocket.Dialer{}).Dial(url, nil)

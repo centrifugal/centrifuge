@@ -69,14 +69,24 @@ type ConnectionCompression interface {
 	//
 	// It is called once, before the connect reply is written.
 	//
-	// Compression begins as soon as both sides provably hold the dictionary.
-	// Returning bytes here means the client does not have them yet, so this
-	// reply is what delivers them and encoding starts on the frame after it.
-	// Returning only an id means the client presented that id and already has
-	// the bytes, so there is nothing to wait for and this reply is itself
-	// compressed. Either way there is no window in which a compressed frame
-	// can reach a client that does not hold the dictionary, and a client never
-	// has to predict which it got: every frame carries a codec marker.
+	// Compression always begins on the frame AFTER the connect reply, whether
+	// this returns bytes or only an id. The reply itself goes out in the plain
+	// protocol - text JSON, length-prefixed Protobuf - so a client never has to
+	// work out whether the frame that establishes compression was itself
+	// compressed.
+	//
+	// A reply could be compressed when the client already holds the dictionary,
+	// and briefly was. Doing so requires the client to decide how to decode the
+	// reply before it can read it, and the two encodings are not reliably
+	// distinguishable: a Protobuf ping is an empty reply, a single 0x00 byte,
+	// which is exactly what a raw frame marker looks like. Every scheme that
+	// resolves that costs either a byte on every frame or an invariant about
+	// minimum frame sizes that nobody would think to preserve - to save one
+	// small frame, once per connection.
+	//
+	// Returning only an id means the client presented that id and already holds
+	// the bytes, so nothing is transferred - which is where the saving on a
+	// returning connection actually is, and it is unaffected by any of this.
 	//
 	// Set only the id when the client advertised that same id - it already holds
 	// the bytes.
@@ -111,28 +121,7 @@ type compressionAware interface {
 	// frame written, because that frame is the connect reply carrying the
 	// dictionary this codec uses.
 	setConnectionCompression(cc ConnectionCompression)
-	// setConnectionCompressionNow installs a codec that encodes every frame
-	// including the connect reply. Used when the client presented an id the
-	// server recognised: it already holds the bytes, so there is nothing to
-	// deliver and nothing to wait for.
-	setConnectionCompressionNow(cc ConnectionCompression)
 	// closeConnectionCompression is called once the writer has stopped, so an
 	// implementation's Close cannot race the last Encode.
 	closeConnectionCompression()
-	// markNextFrame says the client already installed a codec of its own - it
-	// advertised a dictionary it holds - so the next frame written must carry a
-	// codec marker even though this server is not compressing it.
-	//
-	// A client that advertises has no choice but to install first: a server
-	// that recognises the id compresses the connect reply itself, and a codec
-	// learned from that reply could never read it. So it will strip a marker
-	// from whatever comes back, and an unmarked reply is read as a frame in an
-	// unknown codec.
-	//
-	// Only the next frame. After the connect reply the client knows from the
-	// reply's flags whether compression was accepted, and drops its codec if it
-	// was not - so marking beyond this point would both cost a byte and force
-	// every frame binary, which turns permessage-deflate off for a connection
-	// getting nothing in return.
-	markNextFrame()
 }
