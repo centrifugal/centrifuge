@@ -449,6 +449,10 @@ type websocketTransport struct {
 	// reply, which carries the dictionary and so must itself go out
 	// uncompressed. The first write moves it into compression.
 	compressionPending atomic.Pointer[ConnectionCompression]
+	// markNext marks the next frame as raw rather than leaving it bare - see
+	// markNextFrame. Consumed by the first write, so it costs one atomic load
+	// on the frame that was already doing the promotion check anyway.
+	markNext atomic.Bool
 }
 
 // setConnectionCompression installs the engine's per-connection encoder. It
@@ -460,6 +464,11 @@ func (t *websocketTransport) setConnectionCompression(cc ConnectionCompression) 
 
 func (t *websocketTransport) setConnectionCompressionNow(cc ConnectionCompression) {
 	t.compression.Store(&cc)
+}
+
+// markNextFrame implements compressionAware.
+func (t *websocketTransport) markNextFrame() {
+	t.markNext.Store(true)
 }
 
 // closeConnectionCompression hands the codec its last call. It also covers a
@@ -566,6 +575,15 @@ func (t *websocketTransport) writeData(data []byte) error {
 		if p := t.compressionPending.Swap(nil); p != nil {
 			t.compression.Store(p)
 		}
+	}
+	if t.markNext.Load() && t.markNext.Swap(false) {
+		// The client installed a codec before connecting and will strip a
+		// marker from this frame - see markNextFrame. Binary, because a marker
+		// byte in front of a text frame is no longer the string a JSON client
+		// expects to read.
+		out := make([]byte, 0, len(data)+1)
+		out = append(out, protocol.FrameCodecRaw)
+		return t.writeFrame(append(out, data...), true)
 	}
 	return t.writeFrame(data, false)
 }

@@ -3272,6 +3272,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 				// can be named rather than sent again.
 				HeldDictionaryID: req.GetDict(),
 			})
+			replyCompressed := false
 			if cc != nil {
 				dict = cc.Dictionary()
 				named := dict != nil && len(dict.Data) == 0 && dict.DataB64 == ""
@@ -3291,6 +3292,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 					// bytes and there is nothing to wait for: the connect reply
 					// is itself compressed.
 					ca.setConnectionCompressionNow(cc)
+					replyCompressed = true
 					acceptedFlags |= ConnectionFlagDictionaryCompression
 				default:
 					// This reply carries the dictionary, so encoding starts on
@@ -3301,6 +3303,19 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 					ca.setConnectionCompression(cc)
 					acceptedFlags |= ConnectionFlagDictionaryCompression
 				}
+			}
+			// A client that advertised a dictionary has already installed the
+			// codec for it and will strip a marker from this reply - see
+			// markNextFrame. That holds however the switch above decided,
+			// including when the engine declined this connection entirely: the
+			// client cannot learn it was declined without first reading the
+			// reply, and it cannot read the reply without stripping.
+			//
+			// Not when the reply is itself compressed: that path installs the
+			// codec now, so the encoder marks the frame and marking again here
+			// would leave the flag set for the frame after it.
+			if req.GetDict() != "" && !replyCompressed {
+				ca.markNextFrame()
 			}
 		}
 	}

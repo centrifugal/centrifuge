@@ -119,4 +119,20 @@ type compressionAware interface {
 	// closeConnectionCompression is called once the writer has stopped, so an
 	// implementation's Close cannot race the last Encode.
 	closeConnectionCompression()
+	// markNextFrame says the client already installed a codec of its own - it
+	// advertised a dictionary it holds - so the next frame written must carry a
+	// codec marker even though this server is not compressing it.
+	//
+	// A client that advertises has no choice but to install first: a server
+	// that recognises the id compresses the connect reply itself, and a codec
+	// learned from that reply could never read it. So it will strip a marker
+	// from whatever comes back, and an unmarked reply is read as a frame in an
+	// unknown codec.
+	//
+	// Only the next frame. After the connect reply the client knows from the
+	// reply's flags whether compression was accepted, and drops its codec if it
+	// was not - so marking beyond this point would both cost a byte and force
+	// every frame binary, which turns permessage-deflate off for a connection
+	// getting nothing in return.
+	markNextFrame()
 }

@@ -623,3 +623,62 @@ func (e *misnamingCompression) NewConnection(params ConnectionParams) Connection
 	}
 	return e.last
 }
+
+// A client that advertises a dictionary it holds has already installed the
+// codec for it - it has to, because a server that recognises the id compresses
+// the connect reply itself, and a codec learned from that reply could never
+// read it. So every frame such a client receives has to carry a marker for it
+// to strip, including a reply this server chose not to compress.
+//
+// Without this, changing what a profile serves stalled every returning client
+// for as long as its connect took to time out: the server sent an unmarked
+// reply, the client read the first byte of protocol as a codec marker, and the
+// connection died before the connect result arrived.
+func TestReplyIsMarkedWhenTheClientAlreadyHoldsACodec(t *testing.T) {
+	t.Parallel()
+
+	t.Run("server serves a different dictionary than the one advertised", func(t *testing.T) {
+		e := &testCompression{dict: testDictionary()}
+		_, url := newCompressionNode(t, e, nil)
+
+		msg := dialAdvertising(t, url, "an-id-this-server-does-not-have")
+		require.Equal(t, protocol.FrameCodecRaw, msg[0],
+			"the reply carries new bytes so it cannot be compressed, but it must still be marked")
+		replies, err := protocol.NewJSONReplyDecoder(msg[1:]).Decode()
+		require.NoError(t, err)
+		require.NotEmpty(t, replies.Connect.Dict.DataB64, "and it carries the dictionary to use next")
+	})
+
+	t.Run("server serves nothing at all", func(t *testing.T) {
+		// No dictionary for anyone - the engine declines this connection.
+		e := &testCompression{dict: nil}
+		_, url := newCompressionNode(t, e, nil)
+
+		msg := dialAdvertising(t, url, "an-id-this-server-does-not-have")
+		require.Equal(t, protocol.FrameCodecRaw, msg[0],
+			"declining to compress does not release the server from marking frames")
+	})
+}
+
+// dialAdvertising connects declaring support and a held dictionary id, and
+// returns the raw bytes of the first frame the server writes.
+func dialAdvertising(t *testing.T, url, held string) []byte {
+	t.Helper()
+	conn, _, _, err := (&websocket.Dialer{}).Dial(url, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	data, err := protocol.NewJSONCommandEncoder().Encode(&protocol.Command{
+		Id: 1, Connect: &protocol.ConnectRequest{
+			Flag: ConnectionFlagDictionaryCompression, Dict: held,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+	require.NotEmpty(t, msg)
+	return msg
+}
