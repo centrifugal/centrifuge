@@ -86,11 +86,11 @@ type brokerPubSubRunner interface {
 // By default, Redis >= 5 required (due to the fact RedisBroker uses STREAM data
 // structure to keep publication history for a channel).
 type RedisBroker struct {
-	controlRound uint64
-	node         *Node
-	sharding     bool
-	config       RedisBrokerConfig
-	shards       []*shardWrapper
+	controlRound            uint64
+	node                    *Node
+	sharding                bool
+	config                  RedisBrokerConfig
+	shards                  []*shardWrapper
 	// partitionTags is non-nil when UsePrecomputedPartitionTags is enabled;
 	// indexed by partition index, returns the hash tag string. Read-only
 	// after construction (shared with the package-level precomputed table).

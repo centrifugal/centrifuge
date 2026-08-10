@@ -29,12 +29,9 @@ func newNonFlusherWriter() *nonFlusherResponseWriter {
 	return &nonFlusherResponseWriter{headers: http.Header{}, status: http.StatusOK}
 }
 
-func (w *nonFlusherResponseWriter) Header() http.Header { return w.headers }
-func (w *nonFlusherResponseWriter) Write(b []byte) (int, error) {
-	w.body = append(w.body, b...)
-	return len(b), nil
-}
-func (w *nonFlusherResponseWriter) WriteHeader(status int) { w.status = status }
+func (w *nonFlusherResponseWriter) Header() http.Header         { return w.headers }
+func (w *nonFlusherResponseWriter) Write(b []byte) (int, error) { w.body = append(w.body, b...); return len(b), nil }
+func (w *nonFlusherResponseWriter) WriteHeader(status int)      { w.status = status }
 
 func TestHTTPStreamHandler(t *testing.T) {
 	t.Parallel()

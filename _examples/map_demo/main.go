@@ -51,7 +51,7 @@ func main() {
 				}
 				if channel == "visualizer" {
 					return centrifuge.MapChannelOptions{
-						Mode:        centrifuge.MapModePersistent,
+						Mode:               centrifuge.MapModePersistent,
 						MinPageSize: 1, // Set to 1 for demo purposes, default is 100.
 					}
 				}
