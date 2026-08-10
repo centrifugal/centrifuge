@@ -1,66 +1,48 @@
-# Connection-level dictionary compression
+# Dictionary compression
 
-Measures what the feature actually saves, by counting real bytes delivered from
-server to client over a real WebSocket connection.
+A minimal `centrifuge.DictionaryCompression` implementation: one dictionary,
+built at startup, served to every client that can decode one.
 
+```bash
+go run main.go
 ```
-go run ./dictionary_compression/
-```
 
-## What it does
+Then connect a client that supports dictionary compression (`centrifuge-go` or
+`centrifuge-js`) to `ws://localhost:8000/connection/websocket` and subscribe to
+`market`.
 
-For every payload shape it runs three full scenarios end to end — no compression,
-`permessage-deflate`, and dictionary compression — and counts bytes at the client
-socket, so the numbers include WebSocket framing rather than just protocol
-payloads. Every received payload is compared against what was published, and any
-mismatch aborts the run.
+## What Centrifuge gives you, and what it doesn't
 
-The payload shapes are unrelated to each other. Each scenario trains its own
-dictionary offline from traffic of the same kind, using a separate seed, which is
-what a trainer would do from captured traffic. One shape is deliberately
-incompressible (random bytes) to show the floor and to exercise the raw-frame
-fallback.
+Centrifuge handles the wire: it advertises support, carries a dictionary in the
+connect reply, installs the codec on the connection, and marks every frame as
+compressed or not so a client always knows what it received.
 
-## How it works
+It ships no implementation, and that is deliberate. A dictionary is sent to
+clients, so whatever goes into one is disclosed to them — deciding its contents,
+which connection receives which dictionary, and when one is withdrawn are
+product decisions with real consequences. They belong to whoever supplies the
+engine.
 
-1. A client advertises support in `ConnectRequest.flag`, and may name a
-   `profile` describing what kind of client it is.
-2. If `Config.DictionaryCompression` is set, the node asks the engine for a
-   dictionary for that profile and protocol. `centrifuge` ships no engine: the
-   examples use `_examples/dictionaryengine`, which serves dictionaries handed to
-   it at construction.
-3. The dictionary travels in `ConnectResult.dict`, and every frame after the
-   connect reply is compressed against it. That ordering is the point of
-   delivering it there: there is no window in which a compressed frame can reach
-   a client that does not hold the dictionary yet.
-4. A client caches the dictionary and advertises its id in `ConnectRequest.dict`
-   next time. An id is a hash of the content, so when the server recognises it it
-   answers with the id alone and sends nothing.
+This example takes the simplest possible position on all three, and the
+dictionary is hardcoded from data that belongs to the application rather than to
+any user. [Centrifugo PRO](https://centrifugal.dev/docs/pro/bandwidth_optimizations#dictionary-compression)
+takes the other end: it trains dictionaries from live traffic, has a human
+approve every value that goes in, serves them per audience, and can stage or
+withdraw a version without a restart.
 
-`Push.state` can also carry a dictionary mid-connection. The protocol keeps that
-path, but the server does not currently use it.
+## If you build on this
 
-## Caveats when reading the output
+Two things decide what the feature costs, and only the first is in this file:
 
-- Steady-state rows exclude the warm-up, so they show the ceiling. The
-  whole-session row includes warm-up and the dictionary transfer.
-- The shapes are synthetic and have lower entropy than most real traffic; the
-  document-state shape in particular keeps 19 of 20 blocks identical between
-  revisions, which is favourable. Treat the numbers as an upper bound for
-  comparable traffic, not a promise.
-- The `deflate` column runs at `CompressionLevel: 6`. That is deliberate:
-  `WebsocketConfig.CompressionLevel` defaults to `0`, which is
-  `flate.NoCompression` - the connection negotiates permessage-deflate and then
-  stores rather than compresses, measuring ~0.99x. Comparing against that default
-  overstates dictionary compression by roughly 5x, so do not do it.
-- The `built-in` column is the engine enabled with nothing trained for this
-  profile, so connections fall back to the envelope-only dictionary for their
-  protocol, which contains no application data. It is the floor a connection gets
-  when no dictionary exists for it, and it lands close to a properly configured
-  permessage-deflate - the difference between the two is CPU, not bytes (see
-  `dictionary_compression_cpu`).
-- Every dictionary is trained **per protocol**, from real encoded frames rather
-  than from payloads. A frame is envelope plus payload and the two protocols
-  share no envelope, so a JSON-trained dictionary covers nothing of a Protobuf
-  frame's envelope. Measured on held-out frames, training this way is worth about
-  25% over training on payloads alone.
+- **Compress a fan-out once.** One publication reaching a thousand subscribers
+  should be one compression. The cache here does that for frames it has already
+  seen.
+- **Collapse concurrent duplicates.** Those subscribers are written by that many
+  goroutines at nearly the same instant, so they all miss the cache — the first
+  has not stored its result yet — and all compress the same bytes. Measured on a
+  four-subscriber channel, every frame was compressed three or four times over
+  while the cache reported a hit rate that looked fine. Have the first arrival
+  compress and the rest wait for it. On that workload it removed half the
+  compressions and a third of the server's CPU.
+
+The second is left out here to keep the example about the interface.

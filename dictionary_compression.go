@@ -98,6 +98,24 @@ type ConnectionCompression interface {
 	//
 	// It returns the bytes to write and whether they must go out as a binary
 	// message, which compressed payloads need even on a JSON connection.
+	//
+	// One publication reaches every subscriber of a channel as the same bytes,
+	// so implementations are called with an identical frame once per
+	// subscriber, from that many goroutines, at nearly the same instant. What
+	// an implementation does about that decides what the feature costs: a
+	// dictionary compression is dominated by loading the dictionary rather than
+	// by the frame, so compressing a fan-out once instead of once per
+	// subscriber is the difference between the feature being viable and not.
+	//
+	// A cache alone does not achieve it. The subscribers arrive together and
+	// all miss, because the first has not finished compressing yet - measured
+	// on a four-subscriber channel, the same frame was compressed three or four
+	// times over while the cache reported a plausible hit rate. Collapsing the
+	// duplicates as well removed half the compressions and a third of the CPU.
+	//
+	// This package deliberately provides neither, so that engines keep control
+	// of their own memory and lifetime. It is what an implementation should
+	// build first.
 	Encode(frame []byte) (out []byte, binary bool)
 
 	// Close is called once when the connection goes away, on the same goroutine
