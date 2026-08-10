@@ -138,7 +138,11 @@ type ConnectionCompression interface {
 // feature for a mixed fleet, where a client may arrive over a fallback
 // transport that cannot carry a compressed frame.
 //
-// It is exported so transports defined outside this package can opt in.
+// It is exported so transports defined outside this package can opt in, and
+// only for that. Centrifuge calls these methods itself, as part of the connect
+// handshake and connection teardown; application code should not. Installing a
+// codec outside the handshake compresses frames against a dictionary the client
+// was never sent, and it has no way to report that it cannot read them.
 // Whether a transport can is a question about framing rather than effort: a
 // compressed frame is arbitrary bytes, so a transport that delimits messages
 // with a newline cannot carry one without re-encoding it and giving the saving
