@@ -131,15 +131,24 @@ type ConnectionCompression interface {
 	Close()
 }
 
-// compressionAware is implemented by transports that can compress frames. It is
-// unexported: a transport either supports this or it does not, and nothing
-// outside this package needs to ask.
-type compressionAware interface {
-	// setConnectionCompression installs a codec that must not encode the next
+// DictionaryAwareTransport is implemented by transports that can carry
+// dictionary-compressed frames. A transport that does not implement it is left
+// alone: no dictionary is offered on it, and the connect reply never claims
+// compression that was not installed. That is what makes it safe to enable the
+// feature for a mixed fleet, where a client may arrive over a fallback
+// transport that cannot carry a compressed frame.
+//
+// It is exported so transports defined outside this package can opt in.
+// Whether a transport can is a question about framing rather than effort: a
+// compressed frame is arbitrary bytes, so a transport that delimits messages
+// with a newline cannot carry one without re-encoding it and giving the saving
+// straight back.
+type DictionaryAwareTransport interface {
+	// SetDictionaryCompression installs a codec that must not encode the next
 	// frame written, because that frame is the connect reply carrying the
 	// dictionary this codec uses.
-	setConnectionCompression(cc ConnectionCompression)
-	// closeConnectionCompression is called once the writer has stopped, so an
+	SetDictionaryCompression(cc ConnectionCompression)
+	// CloseDictionaryCompression is called once the writer has stopped, so an
 	// implementation's Close cannot race the last Encode.
-	closeConnectionCompression()
+	CloseDictionaryCompression()
 }

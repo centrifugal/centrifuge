@@ -451,17 +451,17 @@ type websocketTransport struct {
 	compressionPending atomic.Pointer[ConnectionCompression]
 }
 
-// setConnectionCompression installs the engine's per-connection encoder. It
+// SetDictionaryCompression installs the engine's per-connection encoder. It
 // starts encoding from the frame after the next one, because the next one is
-// the connect reply carrying the dictionary. Implements compressionAware.
-func (t *websocketTransport) setConnectionCompression(cc ConnectionCompression) {
+// the connect reply carrying the dictionary. Implements DictionaryAwareTransport.
+func (t *websocketTransport) SetDictionaryCompression(cc ConnectionCompression) {
 	t.compressionPending.Store(&cc)
 }
 
-// closeConnectionCompression hands the codec its last call. It also covers a
+// CloseDictionaryCompression hands the codec its last call. It also covers a
 // connection that never wrote a frame after the connect reply, whose codec is
 // therefore still sitting in compressionPending having never been promoted.
-func (t *websocketTransport) closeConnectionCompression() {
+func (t *websocketTransport) CloseDictionaryCompression() {
 	if ccp := t.compression.Swap(nil); ccp != nil {
 		(*ccp).Close()
 		return

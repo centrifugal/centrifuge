@@ -1601,8 +1601,8 @@ func (c *Client) close(disconnect Disconnect) error {
 	// After the writer has closed and flushed, so this cannot overlap an Encode,
 	// and before the transport goes away, so an implementation still has
 	// everything it needs to account for what this connection did.
-	if ca, ok := c.transport.(compressionAware); ok {
-		ca.closeConnectionCompression()
+	if ca, ok := c.transport.(DictionaryAwareTransport); ok {
+		ca.CloseDictionaryCompression()
 	}
 
 	_ = c.transport.Close(disconnect)
@@ -3261,7 +3261,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	// connection uncompressed, which is what every server without the feature
 	// does.
 	if engine := c.node.config.DictionaryCompression; engine != nil {
-		if ca, ok := c.transport.(compressionAware); ok {
+		if ca, ok := c.transport.(DictionaryAwareTransport); ok {
 			cc := engine.NewConnection(ConnectionParams{
 				ProtocolType: c.transport.Protocol(),
 				ClientFlags:  req.Flag,
@@ -3299,7 +3299,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 					// raw frame marker. Buying one compressed reply per
 					// connection would cost either a byte on every frame or a
 					// rule that only holds until someone adds a field.
-					ca.setConnectionCompression(cc)
+					ca.SetDictionaryCompression(cc)
 					acceptedFlags |= ConnectionFlagDictionaryCompression
 				}
 			}
@@ -3316,8 +3316,8 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	// a few lines below, so this connection writes nothing either way.
 	if c.status == statusClosed {
 		c.mu.Unlock()
-		if ca, ok := c.transport.(compressionAware); ok {
-			ca.closeConnectionCompression()
+		if ca, ok := c.transport.(DictionaryAwareTransport); ok {
+			ca.CloseDictionaryCompression()
 		}
 		return DisconnectConnectionClosed
 	}
