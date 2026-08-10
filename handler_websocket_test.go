@@ -2456,3 +2456,189 @@ func readUntilReplyID(conn *websocket.Conn, want uint32) bool {
 		}
 	}
 }
+
+// --- dictionary compression -------------------------------------------------
+//
+// What this file owns is narrow: promote the codec one frame late, put
+// compressed bytes in a binary message, and keep permessage-deflate away from a
+// frame that is already compressed. The handshake itself lives in
+// dictionary_compression_test.go.
+
+// The encoding is decided per frame, not per connection. A compressed frame
+// goes out binary even on a JSON connection, because a text frame is UTF-8
+// decoded by browsers and that would mangle compressed bytes before an inflater
+// ever saw them. A frame the engine declined stays text. Either way the client
+// reads the marker byte rather than remembering what was agreed at connect
+// time, which is what lets an engine decline any individual frame.
+func TestWsDictionaryFrameEncodingIsPerFrame(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		rawFallback bool
+		wantType    int
+		wantMarker  byte
+	}{
+		{"compressed frames go out binary", false, websocket.BinaryMessage, protocol.FrameCodecCompressed},
+		{"declined frames stay text", true, websocket.TextMessage, protocol.FrameCodecRaw},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := &testCompression{dict: testDictionary(), rawFallback: tc.rawFallback}
+			n, url := newCompressionNode(t, e, nil)
+
+			w := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
+			w.connectResult()
+			w.subscribe("demo")
+			_, err := n.Publish("demo", []byte(`{"seq":1,"v":"x"}`))
+			require.NoError(t, err)
+
+			mt, raw := w.nextFrame()
+			require.Equal(t, tc.wantType, mt)
+			require.NotEmpty(t, raw)
+			require.Equal(t, tc.wantMarker, raw[0], "every frame says how it is encoded")
+
+			decoded, err := w.codec.Decompress(nil, raw, 1<<20)
+			require.NoError(t, err)
+			r, err := protocol.NewJSONReplyDecoder(bytes.TrimRight(decoded, "\n")).Decode()
+			require.NoError(t, err)
+			require.NotNil(t, r.Push)
+		})
+	}
+}
+
+// One publication, three clients on one channel: one that cannot decode a
+// compressed frame at all, and two holding different dictionaries. All three
+// have to read it.
+//
+// This is the mixed fleet the feature has to survive, because a rollout never
+// converts every client at once. It is also where the transport is doing the
+// most at once - permessage-deflate and a prepared-message cache serving one
+// connection while dictionary compression bypasses both on the others - and the
+// prepared cache is shared, so a frame built for one connection is reachable
+// from another. Client "a" negotiates permessage-deflate as well as holding a
+// dictionary, which is the connection where the two schemes actually meet.
+//
+// What this pins is that every client can read the publication. That a
+// dictionary frame is not then handed to permessage-deflate as well is a
+// separate, performance property: double compression is invisible here because
+// the client inflates it transparently, so it is measured by benchmark rather
+// than asserted here.
+func TestWsMixedFleetReadsTheSamePublication(t *testing.T) {
+	t.Parallel()
+	e := &testCompression{
+		dict: testDictionary(),
+		// Per-profile dictionaries, so a frame compressed for one client cannot
+		// be decoded by the other.
+		dictFor: func(p ConnectionParams) []byte {
+			return append(testDictionary(), []byte(p.Profile)...)
+		},
+	}
+	n, url := newCompressionNodeCfg(t, e, func(ev ConnectEvent) ConnectReply {
+		return ConnectReply{Profile: ev.Profile}
+	}, WebsocketConfig{
+		Compression:                         true,
+		CompressionMinSize:                  1,
+		CompressionPreparedMessageCacheSize: 1 << 20,
+	})
+
+	plain := dialWireOpts(t, url, &protocol.ConnectRequest{}, true)
+	require.Zero(t, plain.connectResult().Flag, "this client never asked for a dictionary")
+	a := dialWireOpts(t, url, &protocol.ConnectRequest{
+		Flag: ConnectionFlagDictionaryCompression, Profile: "a"}, true)
+	a.connectResult()
+	b := dialWire(t, url, &protocol.ConnectRequest{
+		Flag: ConnectionFlagDictionaryCompression, Profile: "b"})
+	b.connectResult()
+	require.NotNil(t, a.codec)
+	require.NotNil(t, b.codec)
+	require.NotEqual(t, a.codec.ID(), b.codec.ID(), "the two must hold different dictionaries")
+
+	for _, w := range []*wireClient{plain, a, b} {
+		w.subscribe("demo")
+	}
+	_, err := n.Publish("demo", []byte(`{"seq":1,"v":"x"}`))
+	require.NoError(t, err)
+
+	for name, w := range map[string]*wireClient{
+		"no support": plain, "dictionary a": a, "dictionary b": b,
+	} {
+		replies := w.next()
+		require.NotNil(t, replies[0].Push, name)
+		require.NotNil(t, replies[0].Push.Pub, name)
+		require.JSONEq(t, `{"seq":1,"v":"x"}`, string(replies[0].Push.Pub.Data), name)
+	}
+}
+
+// A frame can carry several replies, and it is the whole frame that gets
+// compressed - so batching and a dictionary multiply rather than compete. This
+// is an end-to-end check on that combination rather than a guard on any one
+// line: the writer batches a burst whether or not a write delay is configured,
+// so what it pins is that a multi-reply frame still costs one compression and
+// still decodes whole.
+func TestWsDictionaryCompressesWholeBatchedFrame(t *testing.T) {
+	t.Parallel()
+	e := &testCompression{dict: testDictionary()}
+	n, url := newCompressionNode(t, e, func(ConnectEvent) ConnectReply {
+		return ConnectReply{WriteDelay: 200 * time.Millisecond, MaxMessagesInFrame: 16}
+	})
+	w := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
+	w.connectResult()
+	w.subscribe("demo")
+
+	const published = 8
+	for i := 0; i < published; i++ {
+		_, err := n.Publish("demo", []byte(`{"seq":1,"v":"x"}`))
+		require.NoError(t, err)
+	}
+
+	// Read until every publication is accounted for, however the writer chose
+	// to group them.
+	var got, frames int
+	for got < published {
+		replies := w.next()
+		frames++
+		for _, r := range replies {
+			require.NotNil(t, r.Push)
+			got++
+		}
+	}
+	require.Greater(t, published, frames, "a burst must arrive in fewer frames than it had messages")
+	require.EqualValues(t, frames+1, e.last.encoded.Load(),
+		"one compression per frame, whatever a frame carries - the +1 is the subscribe reply")
+}
+
+// close() calls this unconditionally, and connectCmd calls it too when a
+// connection turns out to have been closed while it was still connecting. Both
+// can reach the same connection, so a second call has to be a no-op rather than
+// a second Close on the engine's codec - an engine is entitled to account for
+// what a connection did, and would be counting it twice.
+func TestWsCloseDictionaryCompressionIsIdempotent(t *testing.T) {
+	t.Parallel()
+	newCodec := func() *testConnCompression {
+		d := testDictionary()
+		return &testConnCompression{codec: protocol.NewDeflateFrameCodec(protocol.DictionaryID(d), d)}
+	}
+
+	t.Run("still pending", func(t *testing.T) {
+		t.Parallel()
+		cc, tr := newCodec(), &websocketTransport{}
+		tr.SetDictionaryCompression(cc)
+		tr.CloseDictionaryCompression()
+		tr.CloseDictionaryCompression()
+		require.EqualValues(t, 1, cc.closed.Load())
+	})
+
+	t.Run("promoted", func(t *testing.T) {
+		t.Parallel()
+		cc, tr := newCodec(), &websocketTransport{}
+		tr.SetDictionaryCompression(cc)
+		// Exactly the promotion writeData performs on the first frame after the
+		// connect reply.
+		if p := tr.compressionPending.Swap(nil); p != nil {
+			tr.compression.Store(p)
+		}
+		tr.CloseDictionaryCompression()
+		tr.CloseDictionaryCompression()
+		require.EqualValues(t, 1, cc.closed.Load())
+	})
+}

@@ -10,6 +10,7 @@ package centrifuge
 // and everything after that reply is compressed.
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -36,6 +37,15 @@ type testCompression struct {
 	// last is the connection most recently handed out, so a test can assert its
 	// lifecycle rather than only what went on the wire.
 	last *testConnCompression
+	// rawFallback makes every frame come back declined, which is what an engine
+	// does when compressing a frame did not pay.
+	rawFallback bool
+	// nameUnknown makes the engine name a dictionary the client never
+	// advertised, which is the mistake the server has to catch on its behalf.
+	nameUnknown bool
+	// dictFor gives each connection its own dictionary, so a test can put
+	// clients holding different ones on the same node.
+	dictFor func(ConnectionParams) []byte
 }
 
 func (e *testCompression) NewConnection(params ConnectionParams) ConnectionCompression {
@@ -43,10 +53,16 @@ func (e *testCompression) NewConnection(params ConnectionParams) ConnectionCompr
 	if params.ClientFlags&ConnectionFlagDictionaryCompression == 0 {
 		return nil
 	}
+	dict := e.dict
+	if e.dictFor != nil {
+		dict = e.dictFor(params)
+	}
 	e.last = &testConnCompression{
-		codec: protocol.NewDeflateFrameCodec(protocol.DictionaryID(e.dict), e.dict),
-		proto: params.ProtocolType.toProto(),
-		held:  params.HeldDictionaryID,
+		codec:       protocol.NewDeflateFrameCodec(protocol.DictionaryID(dict), dict),
+		proto:       params.ProtocolType.toProto(),
+		held:        params.HeldDictionaryID,
+		rawFallback: e.rawFallback,
+		nameUnknown: e.nameUnknown,
 	}
 	return e.last
 }
@@ -57,9 +73,17 @@ type testConnCompression struct {
 	held    string
 	encoded atomic.Int64
 	closed  atomic.Int64
+
+	rawFallback bool
+	nameUnknown bool
 }
 
 func (c *testConnCompression) Dictionary() *protocol.Dictionary {
+	if c.nameUnknown {
+		// An id naming bytes this client never advertised and is not being
+		// sent, so nothing it receives afterwards could be decoded.
+		return &protocol.Dictionary{Id: "AAAAAAAAAAAA"}
+	}
 	d := &protocol.Dictionary{Id: c.codec.ID()}
 	if c.held == c.codec.ID() {
 		// The client already holds these bytes, so naming it is enough.
@@ -76,6 +100,12 @@ func (c *testConnCompression) Dictionary() *protocol.Dictionary {
 
 func (c *testConnCompression) Encode(frame []byte) ([]byte, bool) {
 	c.encoded.Add(1)
+	if c.rawFallback {
+		// A declined frame still says so. The marker is per frame, so what a
+		// client does is read the first byte - not remember what the connection
+		// agreed to at connect time.
+		return append([]byte{protocol.FrameCodecRaw}, frame...), false
+	}
 	return c.codec.Compress(nil, frame), true
 }
 
@@ -98,7 +128,14 @@ type wireClient struct {
 
 func dialWire(t *testing.T, url string, req *protocol.ConnectRequest) *wireClient {
 	t.Helper()
-	conn, _, _, err := (&websocket.Dialer{}).Dial(url, nil)
+	return dialWireOpts(t, url, req, false)
+}
+
+// dialWireOpts dials with permessage-deflate optionally negotiated, so a test
+// can put a compressed frame and a deflated one on the same server.
+func dialWireOpts(t *testing.T, url string, req *protocol.ConnectRequest, permessageDeflate bool) *wireClient {
+	t.Helper()
+	conn, _, _, err := (&websocket.Dialer{EnableCompression: permessageDeflate}).Dial(url, nil)
 	require.NoError(t, err)
 	// Closed before the server is, otherwise httptest waits out the open
 	// connection on every test.
@@ -143,6 +180,16 @@ func (w *wireClient) connectResult() *protocol.ConnectResult {
 	return r.Connect
 }
 
+// nextFrame reads one frame without decoding it, so a test can see the
+// WebSocket message type the server chose.
+func (w *wireClient) nextFrame() (int, []byte) {
+	w.t.Helper()
+	require.NoError(w.t, w.conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	mt, msg, err := w.conn.ReadMessage()
+	require.NoError(w.t, err)
+	return mt, msg
+}
+
 // next reads one frame, decoding it if a dictionary was installed.
 func (w *wireClient) next() []*protocol.Reply {
 	w.t.Helper()
@@ -184,6 +231,13 @@ func mustBase64(t *testing.T, s string) []byte {
 
 func newCompressionNode(t *testing.T, e DictionaryCompression, onConnecting func(ConnectEvent) ConnectReply) (*Node, string) {
 	t.Helper()
+	return newCompressionNodeCfg(t, e, onConnecting, WebsocketConfig{})
+}
+
+// newCompressionNodeCfg is newCompressionNode with the transport configured,
+// for tests about how compressed frames sit alongside permessage-deflate.
+func newCompressionNodeCfg(t *testing.T, e DictionaryCompression, onConnecting func(ConnectEvent) ConnectReply, cfg WebsocketConfig) (*Node, string) {
+	t.Helper()
 	n, err := New(Config{DictionaryCompression: e})
 	require.NoError(t, err)
 	n.OnConnecting(func(ctx context.Context, ev ConnectEvent) (ConnectReply, error) {
@@ -201,12 +255,11 @@ func newCompressionNode(t *testing.T, e DictionaryCompression, onConnecting func
 	require.NoError(t, n.Run())
 	t.Cleanup(func() { _ = n.Shutdown(context.Background()) })
 
+	// A raw client does not answer pings, and a pong with no preceding ping is
+	// itself grounds for disconnect, so move pings past the test.
+	cfg.PingPongConfig = PingPongConfig{PingInterval: 10 * time.Minute, PongTimeout: time.Minute}
 	mux := http.NewServeMux()
-	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
-		// A raw client does not answer pings, and a pong with no preceding ping
-		// is itself grounds for disconnect, so move pings past the test.
-		PingPongConfig: PingPongConfig{PingInterval: 10 * time.Minute, PongTimeout: time.Minute},
-	}))
+	mux.Handle("/connection/websocket", NewWebsocketHandler(n, cfg))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return n, "ws" + strings.TrimPrefix(srv.URL, "http") + "/connection/websocket"
@@ -513,4 +566,76 @@ func dialAdvertising(t *testing.T, url, held string) []byte {
 	require.NoError(t, err)
 	require.NotEmpty(t, msg)
 	return msg
+}
+
+// An engine can get this wrong: name a dictionary by an id the client never
+// advertised, and send no bytes for it. Nothing the client received afterwards
+// would decode, and it has no way to report that - a frame it cannot inflate
+// looks like a broken connection rather than a mistake anyone can attribute.
+// So the server refuses on the client's behalf and the connection simply runs
+// uncompressed, which is a thing every client already knows how to be.
+func TestEngineNamingUnheldDictionaryIsRefused(t *testing.T) {
+	t.Parallel()
+	e := &testCompression{dict: testDictionary(), nameUnknown: true}
+	n, url := newCompressionNode(t, e, nil)
+
+	w := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
+	res := w.connectResult()
+
+	require.Nil(t, res.Dict, "a dictionary the client cannot hold must not be announced")
+	require.Zero(t, res.Flag, "and compression must not be claimed")
+	require.Nil(t, w.codec)
+	require.EqualValues(t, 1, e.last.closed.Load(), "the refused codec is closed, not leaked")
+
+	// From here it is an ordinary connection.
+	w.subscribe("demo")
+	_, err := n.Publish("demo", []byte(`{"seq":1,"v":"x"}`))
+	require.NoError(t, err)
+	replies := w.next()
+	require.NotNil(t, replies[0].Push)
+	require.Zero(t, e.last.encoded.Load(), "nothing was compressed")
+}
+
+// A transport that cannot carry a compressed frame does not implement
+// DictionaryAwareTransport, and an engine is never consulted for one. HTTP
+// streaming is the case in hand: its JSON framing is newline-delimited and
+// UTF-8 decoded, so arbitrary compressed bytes cannot travel over it at all.
+//
+// This is what makes the feature safe to enable for a fleet where a client can
+// fall back to such a transport. The connect reply claims nothing, and the
+// connection behaves exactly as it would on a server without the feature - so a
+// client that asked for compression and fell back is not left waiting for
+// frames in an encoding that never arrives.
+func TestTransportThatCannotCompressIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	e := &testCompression{dict: testDictionary()}
+	n, err := New(Config{DictionaryCompression: e})
+	require.NoError(t, err)
+	n.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{Credentials: &Credentials{UserID: "u"}}, nil
+	})
+	require.NoError(t, n.Run())
+	t.Cleanup(func() { _ = n.Shutdown(context.Background()) })
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/http_stream", NewHTTPStreamHandler(n, HTTPStreamConfig{}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	cmd, err := protocol.NewJSONCommandEncoder().Encode(&protocol.Command{
+		Id: 1, Connect: &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression},
+	})
+	require.NoError(t, err)
+	resp, err := http.Post(srv.URL+"/connection/http_stream", "application/json", bytes.NewReader(cmd))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	line, err := bufio.NewReader(resp.Body).ReadBytes('\n')
+	require.NoError(t, err)
+	r, err := protocol.NewJSONReplyDecoder(bytes.TrimRight(line, "\n")).Decode()
+	require.NoError(t, err)
+	require.NotNil(t, r.Connect)
+	require.Zero(t, r.Connect.Flag, "nothing may claim compression this transport cannot carry")
+	require.Nil(t, r.Connect.Dict)
+	require.Nil(t, e.last, "the engine is not even consulted")
 }
