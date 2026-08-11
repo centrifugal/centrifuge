@@ -4675,28 +4675,31 @@ func (c *Client) makeRecoveredPubsDeltaFossil(recoveredPubs []*protocol.Publicat
 	}
 	// Probably during recovery we should not make deltas? This is something to investigate, in
 	// RecoveryModeCache case this won't be used since there is only one publication max recovered.
-	if len(recoveredPubs) > 1 {
-		for i, pub := range recoveredPubs[1:] {
-			patch := fdelta.Create(prevPub.Data, pub.Data)
-			delta := true
-			deltaData := patch
-			if len(patch) >= len(pub.Data) {
-				delta = false
-				deltaData = pub.Data
-			}
-			if c.transport.Protocol() == ProtocolTypeJSON {
-				deltaData = json.Escape(convert.BytesToString(deltaData))
-			}
-			deltaPub := &protocol.Publication{
-				Offset: pub.Offset,
-				Data:   deltaData,
-				Info:   pub.Info,
-				Tags:   pub.Tags,
-				Delta:  delta,
-			}
-			prevPub = recoveredPubs[i+1]
-			recoveredPubs[i+1] = deltaPub
+	// Indexed from 1 rather than ranging over recoveredPubs[1:]: the element
+	// being replaced is the one the next delta is based on, and writing that as
+	// i+1 against a slice that starts at 1 made both the reader and gosec do the
+	// off-by-one in their heads.
+	for i := 1; i < len(recoveredPubs); i++ {
+		pub := recoveredPubs[i]
+		patch := fdelta.Create(prevPub.Data, pub.Data)
+		delta := true
+		deltaData := patch
+		if len(patch) >= len(pub.Data) {
+			delta = false
+			deltaData = pub.Data
 		}
+		if c.transport.Protocol() == ProtocolTypeJSON {
+			deltaData = json.Escape(convert.BytesToString(deltaData))
+		}
+		deltaPub := &protocol.Publication{
+			Offset: pub.Offset,
+			Data:   deltaData,
+			Info:   pub.Info,
+			Tags:   pub.Tags,
+			Delta:  delta,
+		}
+		prevPub = pub
+		recoveredPubs[i] = deltaPub
 	}
 	return recoveredPubs
 }
