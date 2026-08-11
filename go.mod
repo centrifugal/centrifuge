@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/FZambia/eagle v0.2.0
-	github.com/centrifugal/protocol v0.20.0
+	github.com/centrifugal/protocol v0.20.1-0.20260811164823-815457ed4d09
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/google/cel-go v0.28.0
 	github.com/google/uuid v1.6.0
@@ -41,5 +41,3 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240826202546-f6391c0de4c7 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/centrifugal/protocol => ../protocol
