@@ -57,7 +57,7 @@ func newEngine(dict []byte) *engine {
 	}
 }
 
-func (e *engine) NewConnection(p centrifuge.ConnectionParams) centrifuge.ConnectionCompression {
+func (e *engine) NewConnection(p centrifuge.DictionaryConnectionParams) centrifuge.DictionaryConnection {
 	// A client that cannot decode a compressed frame must not be sent one.
 	if p.ClientFlags&centrifuge.ConnectionFlagDictionaryCompression == 0 {
 		return nil

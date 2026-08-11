@@ -3262,7 +3262,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	// does.
 	if engine := c.node.config.DictionaryCompression; engine != nil {
 		if ca, ok := c.transport.(DictionaryAwareTransport); ok {
-			cc := engine.NewConnection(ConnectionParams{
+			cc := engine.NewConnection(DictionaryConnectionParams{
 				ProtocolType: c.transport.Protocol(),
 				ClientFlags:  req.Flag,
 				Profile:      profile,

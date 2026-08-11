@@ -444,17 +444,17 @@ type websocketTransport struct {
 	// compression encodes outgoing frames once a connection has negotiated
 	// dictionary compression. Client installs it while handling the connect
 	// command, so it is read atomically on the write path.
-	compression atomic.Pointer[ConnectionCompression]
+	compression atomic.Pointer[DictionaryConnection]
 	// compressionPending holds the encoder for exactly one frame - the connect
 	// reply, which carries the dictionary and so must itself go out
 	// uncompressed. The first write moves it into compression.
-	compressionPending atomic.Pointer[ConnectionCompression]
+	compressionPending atomic.Pointer[DictionaryConnection]
 }
 
 // SetDictionaryCompression installs the engine's per-connection encoder. It
 // starts encoding from the frame after the next one, because the next one is
 // the connect reply carrying the dictionary. Implements DictionaryAwareTransport.
-func (t *websocketTransport) SetDictionaryCompression(cc ConnectionCompression) {
+func (t *websocketTransport) SetDictionaryCompression(cc DictionaryConnection) {
 	t.compressionPending.Store(&cc)
 }
 

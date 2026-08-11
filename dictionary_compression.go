@@ -28,13 +28,13 @@ type DictionaryCompression interface {
 	// Returning nil leaves the connection uncompressed, which is the right answer
 	// for a client that cannot decode, a profile with nothing to offer, or any
 	// case the implementation would rather sit out.
-	NewConnection(params ConnectionParams) ConnectionCompression
+	NewConnection(params DictionaryConnectionParams) DictionaryConnection
 }
 
-// ConnectionParams describes the client a ConnectionCompression is being made
-// for. It is a struct rather than an argument list so more can be negotiated
-// later without breaking implementations outside this package.
-type ConnectionParams struct {
+// DictionaryConnectionParams describes the client a DictionaryConnection is
+// being made for. It is a struct rather than an argument list so more can be
+// negotiated later without breaking implementations outside this package.
+type DictionaryConnectionParams struct {
 	// ProtocolType is the connection's protocol. A dictionary built from JSON
 	// frames is useless on Protobuf, so implementations must keep them apart.
 	ProtocolType ProtocolType
@@ -62,8 +62,11 @@ type ConnectionParams struct {
 	HeldDictionaryID string
 }
 
-// ConnectionCompression encodes outgoing frames for one connection.
-type ConnectionCompression interface {
+// DictionaryConnection compresses one connection's outgoing frames against a
+// dictionary. It is named for the dictionary rather than for compression in
+// general: a connection may also be using permessage-deflate, delta compression
+// or channel compaction, and none of those go through here.
+type DictionaryConnection interface {
 	// Dictionary returns what to put in ConnectResult.dict, or nil to send
 	// nothing.
 	//
@@ -166,7 +169,7 @@ type DictionaryAwareTransport interface {
 	// SetDictionaryCompression installs a codec that must not encode the next
 	// frame written, because that frame is the connect reply carrying the
 	// dictionary this codec uses.
-	SetDictionaryCompression(cc ConnectionCompression)
+	SetDictionaryCompression(cc DictionaryConnection)
 	// CloseDictionaryCompression is called once the writer has stopped, so an
 	// implementation's Close cannot race the last Encode.
 	CloseDictionaryCompression()

@@ -34,7 +34,7 @@ type testCompression struct {
 	dict []byte
 	// seen records the params of the last connection created, so a test can
 	// assert what the server resolved.
-	seen ConnectionParams
+	seen DictionaryConnectionParams
 	// last is the connection most recently handed out, so a test can assert its
 	// lifecycle rather than only what went on the wire.
 	last *testConnCompression
@@ -46,10 +46,10 @@ type testCompression struct {
 	nameUnknown bool
 	// dictFor gives each connection its own dictionary, so a test can put
 	// clients holding different ones on the same node.
-	dictFor func(ConnectionParams) []byte
+	dictFor func(DictionaryConnectionParams) []byte
 }
 
-func (e *testCompression) NewConnection(params ConnectionParams) ConnectionCompression {
+func (e *testCompression) NewConnection(params DictionaryConnectionParams) DictionaryConnection {
 	e.seen = params
 	if params.ClientFlags&ConnectionFlagDictionaryCompression == 0 {
 		return nil
@@ -451,7 +451,7 @@ func TestEngineMayDecline(t *testing.T) {
 
 type declineAll struct{}
 
-func (declineAll) NewConnection(ConnectionParams) ConnectionCompression { return nil }
+func (declineAll) NewConnection(DictionaryConnectionParams) DictionaryConnection { return nil }
 
 // An implementation that batches its accounting has to be told when a
 // connection ends, or everything since its last flush is lost. That loss is not

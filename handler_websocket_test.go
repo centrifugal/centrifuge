@@ -2529,7 +2529,7 @@ func TestWsMixedFleetReadsTheSamePublication(t *testing.T) {
 		dict: testDictionary(),
 		// Per-profile dictionaries, so a frame compressed for one client cannot
 		// be decoded by the other.
-		dictFor: func(p ConnectionParams) []byte {
+		dictFor: func(p DictionaryConnectionParams) []byte {
 			return append(testDictionary(), []byte(p.Profile)...)
 		},
 	}
