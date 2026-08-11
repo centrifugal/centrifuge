@@ -144,8 +144,9 @@ func dialWire(t *testing.T, url string, req *protocol.ConnectRequest) *wireClien
 // can put a compressed frame and a deflated one on the same server.
 func dialWireOpts(t *testing.T, url string, req *protocol.ConnectRequest, permessageDeflate bool) *wireClient {
 	t.Helper()
-	conn, _, _, err := (&websocket.Dialer{EnableCompression: permessageDeflate}).Dial(url, nil)
+	conn, resp, _, err := (&websocket.Dialer{EnableCompression: permessageDeflate}).Dial(url, nil)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	// Closed before the server is, otherwise httptest waits out the open
 	// connection on every test.
 	t.Cleanup(func() { _ = conn.Close() })
@@ -527,8 +528,9 @@ func TestWarmConnectReplyIsPlainAndTheNextFrameIsCompressed(t *testing.T) {
 	// Second connection advertises the id it now holds. The server has nothing
 	// to send back but the id - and the reply is still plain, because a client
 	// cannot decide how to read a reply before reading it.
-	conn, _, _, err := (&websocket.Dialer{}).Dial(url, nil)
+	conn, resp, _, err := (&websocket.Dialer{}).Dial(url, nil)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	t.Cleanup(func() { _ = conn.Close() })
 	data, err := protocol.NewJSONCommandEncoder().Encode(&protocol.Command{
 		Id: 1, Connect: &protocol.ConnectRequest{
@@ -558,8 +560,9 @@ func TestWarmConnectReplyIsPlainAndTheNextFrameIsCompressed(t *testing.T) {
 //nolint:unused // kept for tests that inspect the first frame directly.
 func dialAdvertising(t *testing.T, url, held string) []byte {
 	t.Helper()
-	conn, _, _, err := (&websocket.Dialer{}).Dial(url, nil)
+	conn, resp, _, err := (&websocket.Dialer{}).Dial(url, nil)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	t.Cleanup(func() { _ = conn.Close() })
 
 	data, err := protocol.NewJSONCommandEncoder().Encode(&protocol.Command{
