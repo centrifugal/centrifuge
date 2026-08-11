@@ -122,11 +122,26 @@ func (e *engine) compress(frame []byte) []byte {
 
 // --- building a dictionary --------------------------------------------------
 
+// structurePrefix is protocol structure only - the envelope every frame
+// carries, and nothing an application ever put in a message. It costs almost
+// nothing and works from the first frame, so it is worth having in front of
+// anything else.
+//
+// Fragments are ordered with the most repeated last: DEFLATE encodes nearer
+// matches in fewer bits, and the end of the dictionary is nearest.
+var structurePrefix = `"subscribe":{"recoverable":"connect":{"version":"","ttl":,"ping":,"session":"",` +
+	`"unsubscribe":{"code":,"reason":"","join":{"leave":{"presence":{"history":{` +
+	`"error":{"temporary":true,"method":"rpc":{"message":{` +
+	`"epoch":"","recovered":,"positioned":,"was_recovering":,"expires":,"delta":true,` +
+	`"info":{"user":"","client":"","tags":{"time":,"id":,"offset":,` +
+	`{"push":{"channel":"","pub":{"data":{`
+
 // buildDictionary makes a dictionary out of sample messages, wrapped in the
 // frames a client will actually receive so that the protocol envelope is in it
-// too. Centrifugo PRO trains this from live traffic and has a human approve
-// what goes in; here it is hardcoded, which is fine because the contents are
-// ours rather than a user's.
+// too. Here it is hardcoded, which is fine because the contents are the
+// application's own rather than any user's - a dictionary trained from live
+// traffic is a different proposition, since whatever goes into one is disclosed
+// to every client that receives it.
 func buildDictionary() []byte {
 	samples := []map[string]any{
 		{"event": "price.changed", "symbol": "AAPL", "price": 192.4, "currency": "USD", "venue": "NASDAQ"},
@@ -134,10 +149,7 @@ func buildDictionary() []byte {
 		{"event": "order.filled", "symbol": "AAPL", "quantity": 100, "side": "buy", "status": "filled"},
 		{"event": "order.filled", "symbol": "MSFT", "quantity": 250, "side": "sell", "status": "filled"},
 	}
-	// The structure dictionary ships with the protocol package and holds the
-	// Centrifugo envelope - every frame carries it, so it is worth having in
-	// front of anything trained.
-	out := append([]byte(nil), protocol.StructureDictionary...)
+	out := []byte(structurePrefix)
 	for _, s := range samples {
 		data, _ := json.Marshal(s)
 		rep := &protocol.Reply{Push: &protocol.Push{
