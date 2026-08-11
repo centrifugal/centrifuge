@@ -88,8 +88,23 @@ type ConnectionCompression interface {
 	// the bytes, so nothing is transferred - which is where the saving on a
 	// returning connection actually is, and it is unaffected by any of this.
 	//
-	// Set only the id when the client advertised that same id - it already holds
-	// the bytes.
+	// Set only the id, with no bytes, when this engine RECOGNISES the id the
+	// client advertised - meaning it holds that dictionary and will compress
+	// against it. Matching the advertised id is necessary but not sufficient:
+	// echoing back an id merely because the client sent it is a security bug,
+	// not just a correctness one.
+	//
+	// A client's stored dictionary can be tampered with - browser storage is
+	// writable by anything running on the origin - and a client cannot fully
+	// detect it, since bytes and id rewritten together verify locally. What
+	// stops that is the server refusing to recognise an id it never issued, so
+	// the tampered bytes are replaced rather than used. An engine that echoes
+	// the advertised id removes exactly that defence: the client then decodes
+	// real server frames against attacker-chosen content, because DEFLATE back
+	// references resolve into whatever dictionary is installed.
+	//
+	// Centrifuge cannot check this for you. It does not know which dictionaries
+	// an engine holds, so it can only reject an id the client never mentioned.
 	Dictionary() *protocol.Dictionary
 
 	// Encode is called for every frame this connection compresses, on the
