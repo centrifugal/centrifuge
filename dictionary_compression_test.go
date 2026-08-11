@@ -13,6 +13,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
@@ -58,7 +59,7 @@ func (e *testCompression) NewConnection(params ConnectionParams) ConnectionCompr
 		dict = e.dictFor(params)
 	}
 	e.last = &testConnCompression{
-		codec:       protocol.NewDeflateFrameCodec(protocol.DictionaryID(dict), dict),
+		codec:       protocol.NewDeflateFrameCodec(testDictionaryID(dict), dict),
 		proto:       params.ProtocolType.toProto(),
 		held:        params.HeldDictionaryID,
 		rawFallback: e.rawFallback,
@@ -110,6 +111,14 @@ func (c *testConnCompression) Encode(frame []byte) ([]byte, bool) {
 }
 
 func (c *testConnCompression) Close() { c.closed.Add(1) }
+
+// testDictionaryID is the derivation the protocol fixes for Dictionary.id:
+// SHA-256 of the content, first 12 bytes, base64url unpadded. Engines live
+// outside this package and carry their own copy, so tests do too.
+func testDictionaryID(dict []byte) string {
+	sum := sha256.Sum256(dict)
+	return base64.RawURLEncoding.EncodeToString(sum[:12])
+}
 
 func testDictionary() []byte {
 	return bytes.Repeat([]byte(`{"push":{"channel":"demo","pub":{"data":{"seq":,"v":"x"}}}}`), 40)
@@ -164,7 +173,7 @@ func (w *wireClient) connectResult() *protocol.ConnectResult {
 	require.NoError(w.t, err)
 	if len(msg) > 0 && msg[0] == protocol.FrameCodecCompressed {
 		require.NotNil(w.t, w.held, "a compressed connect reply means the server took the id this client advertised")
-		codec := protocol.NewDeflateFrameCodec(protocol.DictionaryID(w.held), w.held)
+		codec := protocol.NewDeflateFrameCodec(testDictionaryID(w.held), w.held)
 		msg, err = codec.Decompress(nil, msg, 1<<20)
 		require.NoError(w.t, err)
 		w.codec = codec
@@ -299,7 +308,7 @@ func TestHeldDictionaryIsNamedNotSent(t *testing.T) {
 	e := &testCompression{dict: dict}
 	_, url := newCompressionNode(t, e, nil)
 
-	id := protocol.DictionaryID(dict)
+	id := testDictionaryID(dict)
 	w := dialWire(t, url, &protocol.ConnectRequest{
 		Flag: ConnectionFlagDictionaryCompression,
 		Dict: id,

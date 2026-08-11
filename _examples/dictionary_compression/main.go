@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -46,7 +47,7 @@ type engine struct {
 }
 
 func newEngine(dict []byte) *engine {
-	id := protocol.DictionaryID(dict) // content hash: clients cache by it
+	id := dictionaryID(dict)
 	return &engine{
 		id:    id,
 		raw:   dict,
@@ -118,6 +119,20 @@ func (e *engine) compress(frame []byte) []byte {
 	e.cache[string(frame)] = out
 	e.mu.Unlock()
 	return out
+}
+
+// dictionaryID derives the id for a dictionary's content, which is what an
+// engine has to put in Dictionary.id.
+//
+// The derivation is fixed by the protocol - SHA-256 of the content, first 12
+// bytes, base64url unpadded - and an engine that invents its own scheme is not
+// rejected, it just has every caching client quietly stop caching. A client
+// keeping a dictionary between connections hashes what it stored against this
+// id before reusing it, which is how it notices bytes something else on its
+// origin rewrote.
+func dictionaryID(dict []byte) string {
+	sum := sha256.Sum256(dict)
+	return base64.RawURLEncoding.EncodeToString(sum[:12])
 }
 
 // --- building a dictionary --------------------------------------------------
