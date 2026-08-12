@@ -49,7 +49,7 @@ type testCompression struct {
 	dictFor func(DictionaryConnectionParams) []byte
 }
 
-func (e *testCompression) NewConnection(params DictionaryConnectionParams) DictionaryConnection {
+func (e *testCompression) NewDictionaryConnection(params DictionaryConnectionParams) DictionaryConnection {
 	e.seen = params
 	if params.ClientFlags&ConnectionFlagDictionaryCompression == 0 {
 		return nil
@@ -451,7 +451,9 @@ func TestEngineMayDecline(t *testing.T) {
 
 type declineAll struct{}
 
-func (declineAll) NewConnection(DictionaryConnectionParams) DictionaryConnection { return nil }
+func (declineAll) NewDictionaryConnection(DictionaryConnectionParams) DictionaryConnection {
+	return nil
+}
 
 // An implementation that batches its accounting has to be told when a
 // connection ends, or everything since its last flush is lost. That loss is not

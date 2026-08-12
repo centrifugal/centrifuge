@@ -22,13 +22,13 @@ const ConnectionFlagDictionaryCompression int64 = 1 << 0
 // A nil DictionaryCompression means the feature is absent. Nothing is allocated
 // and no code path here is entered.
 type DictionaryCompression interface {
-	// NewConnection is called once per connection, after the client has been
+	// NewDictionaryConnection is called once per connection, after the client has been
 	// authenticated and before the connect reply is written.
 	//
 	// Returning nil leaves the connection uncompressed, which is the right answer
 	// for a client that cannot decode, a profile with nothing to offer, or any
 	// case the implementation would rather sit out.
-	NewConnection(params DictionaryConnectionParams) DictionaryConnection
+	NewDictionaryConnection(params DictionaryConnectionParams) DictionaryConnection
 }
 
 // DictionaryConnectionParams describes the client a DictionaryConnection is
