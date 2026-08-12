@@ -91,7 +91,7 @@ require (
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/quagmt/udecimal v1.10.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/redis/rueidis v1.0.76 // indirect
+	github.com/redis/rueidis v1.0.77-0.20260811083940-91dfdfd3b348 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
