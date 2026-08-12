@@ -622,7 +622,13 @@ func TestQueueReclaimsCapacityWhenIdle(t *testing.T) {
 		require.NoError(t, n.hub.broadcastPublication(
 			ch, sp, &Publication{Data: []byte(`{"a":1}`)}, nil, nil, ChannelBatchConfig{}))
 	}
-	time.Sleep(300 * time.Millisecond)
+	// Wait for the drain itself rather than for a fixed wall-clock delay: the
+	// shrink is deferred from the moment the queue goes empty, so polling until
+	// then leaves the whole shrink delay as slack for the check below. Sleeping
+	// a fixed amount instead spends an unknown part of that delay on the drain.
+	require.Eventually(t, func() bool {
+		return c.messageWriter.messages.Len() == 0
+	}, 5*time.Second, 5*time.Millisecond, "writer never drained the queued messages")
 	require.Greater(t, c.messageWriter.messages.Cap(), 2,
 		"a busy connection should hold its ring rather than rebuild it every frame")
 

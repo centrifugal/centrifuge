@@ -4003,7 +4003,7 @@ func TestRedisMapBroker_RefreshTTLOnSuppress_RefreshesMetaAndStream(t *testing.T
 		require.Greater(t, metaBefore, int64(0), "meta_key must have a TTL set")
 		require.Greater(t, streamBefore, int64(0), "stream_key must have a TTL set")
 
-		// Burn enough time for any TTL refresh to be observable above clock noise.
+		// Burn enough time for a missing refresh to be visible above clock noise.
 		time.Sleep(150 * time.Millisecond)
 
 		// Suppressed keepalive: same key, if_new + refresh_ttl_on_suppress.
@@ -4016,16 +4016,28 @@ func TestRedisMapBroker_RefreshTTLOnSuppress_RefreshesMetaAndStream(t *testing.T
 		require.True(t, res.Suppressed)
 		require.Equal(t, SuppressReasonKeyExists, res.SuppressReason)
 
-		metaAfter := pttl(metaKey)
-		streamAfter := pttl(streamKey)
-		// PTTL should be reset close to the configured TTL again — strictly
-		// greater than the value captured before the sleep.
-		require.Greater(t, metaAfter, metaBefore-100,
-			"meta_key TTL must be refreshed by suppressed keepalive (was %d, now %d)", metaBefore, metaAfter)
-		require.Greater(t, metaAfter, int64(60_000),
-			"meta_key TTL must be near MetaTTL after refresh, got %d ms", metaAfter)
-		require.Greater(t, streamAfter, streamBefore-100,
-			"stream_key TTL must be refreshed by suppressed keepalive (was %d, now %d)", streamBefore, streamAfter)
+		// Both PTTLs must read back near their configured TTLs. The keepalive
+		// is idempotent, so retry it: a single shot can be misread when the
+		// publish + PTTL round-trip is slow, which makes a genuinely refreshed
+		// TTL look decayed. Without a refresh the TTLs only keep falling, so a
+		// broken branch still fails here — by timeout, never by luck.
+		pttlAbove := func(key string, minMS int64) bool {
+			ms, err := client.Do(ctx, client.B().Pttl().Key(key).Build()).AsInt64()
+			return err == nil && ms > minMS
+		}
+		require.Eventually(t, func() bool {
+			_, err := broker.Publish(ctx, channel, "k", MapPublishOptions{
+				Data:                 []byte("v1"),
+				KeyMode:              KeyModeIfNew,
+				RefreshTTLOnSuppress: true,
+			})
+			if err != nil {
+				return false
+			}
+			return pttlAbove(metaKey, 119_900) && pttlAbove(streamKey, 59_900)
+		}, 5*time.Second, 100*time.Millisecond,
+			"meta_key (was %d) and stream_key (was %d) TTLs must be refreshed by suppressed keepalive",
+			metaBefore, streamBefore)
 	})
 }
 
