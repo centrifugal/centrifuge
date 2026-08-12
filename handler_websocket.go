@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/cancelctx"
@@ -440,6 +441,34 @@ type websocketTransport struct {
 	opts            websocketTransportOptions
 	nativePingTimer *time.Timer
 	closed          bool
+	// compression encodes outgoing frames once a connection has negotiated
+	// dictionary compression. Client installs it while handling the connect
+	// command, so it is read atomically on the write path.
+	compression atomic.Pointer[DictionaryConnection]
+	// compressionPending holds the encoder for exactly one frame - the connect
+	// reply, which carries the dictionary and so must itself go out
+	// uncompressed. The first write moves it into compression.
+	compressionPending atomic.Pointer[DictionaryConnection]
+}
+
+// SetDictionaryCompression installs the engine's per-connection encoder. It
+// starts encoding from the frame after the next one, because the next one is
+// the connect reply carrying the dictionary. Implements DictionaryAwareTransport.
+func (t *websocketTransport) SetDictionaryCompression(cc DictionaryConnection) {
+	t.compressionPending.Store(&cc)
+}
+
+// CloseDictionaryCompression hands the codec its last call. It also covers a
+// connection that never wrote a frame after the connect reply, whose codec is
+// therefore still sitting in compressionPending having never been promoted.
+func (t *websocketTransport) CloseDictionaryCompression() {
+	if ccp := t.compression.Swap(nil); ccp != nil {
+		(*ccp).Close()
+		return
+	}
+	if ccp := t.compressionPending.Swap(nil); ccp != nil {
+		(*ccp).Close()
+	}
 }
 
 type websocketTransportOptions struct {
@@ -514,14 +543,48 @@ func (t *websocketTransport) PingPongConfig() PingPongConfig {
 }
 
 func (t *websocketTransport) writeData(data []byte) error {
+	if ccp := t.compression.Load(); ccp != nil {
+		// Compressed output makes permessage-deflate pointless, and writeFrame
+		// bypasses it for binary frames.
+		out, binary := (*ccp).Encode(data)
+		return t.writeFrame(out, binary)
+	}
+	// This is the frame that carries the dictionary, so it goes out raw and
+	// arms compression for everything after it. That ordering is what lets the
+	// client decode every later frame without a negotiation window.
+	//
+	// Loaded before it is swapped, and the load is what almost every frame in
+	// almost every deployment executes. A bare Swap here reads the same but is a
+	// locked read-modify-write on every frame of every connection - measured at
+	// 1.70ns against 0.51ns - which is a cost paid forever by everyone who never
+	// turns this feature on. The promotion itself happens once per connection.
+	if t.compressionPending.Load() != nil {
+		if p := t.compressionPending.Swap(nil); p != nil {
+			t.compression.Store(p)
+		}
+	}
+	return t.writeFrame(data, false)
+}
+
+// writeFrame puts one frame on the wire. binary forces a binary WebSocket
+// message, which compressed frames need even on a JSON connection.
+func (t *websocketTransport) writeFrame(data []byte, binary bool) error {
 	usePreparedMessage := t.conn.IsCompressionNegotiated()
-	if t.opts.compressionMinSize > 0 {
+	if binary {
+		// Prepared messages were tried here: dictionary-compressed frames are
+		// byte-identical across connections, so they look like ideal candidates.
+		// Measured, it changed nothing - 9.59 against 9.60 core-seconds per
+		// million deliveries - because the cost is the write syscall itself, not
+		// building the frame header. Not worth the extra parameter.
+		usePreparedMessage = false
+		t.conn.EnableWriteCompression(false)
+	} else if t.opts.compressionMinSize > 0 {
 		enableCompression := len(data) > t.opts.compressionMinSize
 		usePreparedMessage = enableCompression
 		t.conn.EnableWriteCompression(enableCompression)
 	}
 	var messageType = websocket.TextMessage
-	if t.Protocol() == ProtocolTypeProtobuf {
+	if binary || t.Protocol() == ProtocolTypeProtobuf {
 		messageType = websocket.BinaryMessage
 	}
 	if t.opts.writeTimeout > 0 {

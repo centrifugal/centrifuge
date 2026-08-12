@@ -180,6 +180,11 @@ const (
 	flagMapUserPresence      // Emit to {channel}:users, key=userId, no info
 	flagCleanupOnUnsubscribe // Clean up keys by client_id when subscription ends
 	flagKeyed                // Channel uses keyed subscription (shared poll track/untrack)
+	// flagServerTagsFilter marks a subscription narrowed by a server-controlled
+	// tags filter. Such a subscriber must not be offered the channel's compression
+	// dictionary: the filter withholds publications from them, but the dictionary
+	// is built from all of them.
+	flagServerTagsFilter
 )
 
 // ChannelContext contains extra context for channel connection subscribed to.
@@ -279,25 +284,29 @@ func (r *ConnectRequest) toProto() *protocol.ConnectRequest {
 
 // Client represents client connection to server.
 type Client struct {
-	mu                     sync.RWMutex
-	connectMu              sync.Mutex    // allows syncing connect with disconnect.
-	presenceMu             sync.Mutex    // allows syncing presence routine with client closing.
-	presenceInFlight       atomic.Bool   // guards against overlapping presence ticks.
-	closing                atomic.Bool   // set before close blocks on presenceMu.
-	subGenCounter          atomic.Uint64 // monotonic per-subscription generation, see subInfo.subGen.
-	ctx                    context.Context
-	transport              Transport
-	node                   *Node
-	exp                    int64
-	channels               map[string]ChannelContext
-	messageWriter          *writer
-	perChannelWriter       *perChannelWriter
-	pubSubSync             *recovery.PubSubSync
-	uid                    string
-	session                string
-	user                   string
-	info                   []byte
-	storage                map[string]any
+	mu               sync.RWMutex
+	connectMu        sync.Mutex    // allows syncing connect with disconnect.
+	presenceMu       sync.Mutex    // allows syncing presence routine with client closing.
+	presenceInFlight atomic.Bool   // guards against overlapping presence ticks.
+	closing          atomic.Bool   // set before close blocks on presenceMu.
+	subGenCounter    atomic.Uint64 // monotonic per-subscription generation, see subInfo.subGen.
+	ctx              context.Context
+	transport        Transport
+	node             *Node
+	exp              int64
+	channels         map[string]ChannelContext
+	messageWriter    *writer
+	perChannelWriter *perChannelWriter
+	pubSubSync       *recovery.PubSubSync
+	uid              string
+	session          string
+	user             string
+	info             []byte
+	storage          map[string]any
+	// profile is the application context this connection belongs to, resolved at
+	// connect: what an OnConnecting handler set, or failing that what the client
+	// declared. Empty means unclassified.
+	profile                string
 	storageMu              sync.Mutex
 	metricName             string // Make a unique.Handle.
 	metricVersion          string // Make a unique.Handle.
@@ -1313,6 +1322,20 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx Channe
 	return validPosition
 }
 
+// Profile returns the application context this connection belongs to, as
+// resolved at connect time - the value an OnConnecting handler set, or failing
+// that the one the client declared in its connect command. Empty means the
+// connection is unclassified.
+//
+// Nothing in this package interprets it. It exists so features layered on top
+// can group connections whose traffic looks alike, and so operators can filter
+// and measure by it.
+func (c *Client) Profile() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.profile
+}
+
 // ID returns unique client connection id.
 func (c *Client) ID() string {
 	return c.uid
@@ -1574,6 +1597,13 @@ func (c *Client) close(disconnect Disconnect) error {
 		c.perChannelWriter.Close(flushRemaining)
 	}
 	_ = c.messageWriter.close(flushRemaining)
+
+	// After the writer has closed and flushed, so this cannot overlap an Encode,
+	// and before the transport goes away, so an implementation still has
+	// everything it needs to account for what this connection did.
+	if ca, ok := c.transport.(DictionaryAwareTransport); ok {
+		ca.CloseDictionaryCompression()
+	}
 
 	_ = c.transport.Close(disconnect)
 
@@ -3066,6 +3096,9 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			metricClientVersion = req.Version
 		}
 	}
+	var acceptedFlags int64
+	var dict *protocol.Dictionary
+
 	c.mu.RLock()
 	authenticated := c.authenticated
 	closed := c.status == statusClosed
@@ -3090,6 +3123,8 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		subscriptions     map[string]SubscribeOptions
 		clientSideRefresh bool
 		labels            map[string]string
+		// What the client declared about itself. An application may override it.
+		profile = req.GetProfile()
 	)
 
 	if c.node.clientEvents.connectingHandler != nil {
@@ -3099,6 +3134,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			Token:     req.Token,
 			Name:      req.Name,
 			Version:   req.Version,
+			Profile:   profile,
 			Transport: c.transport,
 			Headers:   req.Headers,
 		}
@@ -3136,6 +3172,13 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		}
 		clientSideRefresh = reply.ClientSideRefresh
 		labels = reply.Labels
+		// The application classifies the connection, and its answer is the whole
+		// answer: an empty one means unclassified, not "keep what the client
+		// said". A client's declaration is a request, and a request that nothing
+		// server-side affirms must not survive - otherwise any policy expressed
+		// by returning "" would be silently ignored, which is the direction a
+		// mistake must never fail in.
+		profile = reply.Profile
 		if len(reply.Subscriptions) > 0 {
 			subscriptions = make(map[string]SubscribeOptions, len(reply.Subscriptions))
 			for ch, opts := range reply.Subscriptions {
@@ -3210,10 +3253,85 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	}
 	c.mu.RUnlock()
 
+	// Compression is negotiated here rather than earlier because it needs the
+	// resolved profile, and an application only sets that in OnConnecting.
+	//
+	// The engine decides everything: whether this client gets a dictionary, which
+	// one, and whether the client already holds it. Returning nil leaves the
+	// connection uncompressed, which is what every server without the feature
+	// does.
+	if engine := c.node.config.DictionaryCompression; engine != nil {
+		if ca, ok := c.transport.(DictionaryAwareTransport); ok {
+			cc := engine.NewDictionaryConnection(DictionaryConnectionParams{
+				ProtocolType: c.transport.Protocol(),
+				ClientFlags:  req.Flag,
+				Profile:      profile,
+				UserID:       c.UserID(),
+				// The dictionary this client kept from an earlier connection. An id
+				// identifies content, so if the engine recognises it the dictionary
+				// can be named rather than sent again.
+				HeldDictionaryID: req.GetDict(),
+			})
+			if cc != nil {
+				dict = cc.Dictionary()
+				if dict != nil && len(dict.Data) == 0 && dict.DataB64 == "" && dict.Id != req.GetDict() {
+					// An engine named a dictionary by id that this client never
+					// advertised, so the client does not have those bytes and no
+					// frame compressed against them could be decoded. The
+					// contract says only to name what the client presented; this
+					// is the backstop for an engine that gets it wrong, because
+					// the alternative is a connection that receives nothing it
+					// can read and cannot say why.
+					cc.Close()
+					dict = nil
+				} else {
+					// Encoding starts on the frame AFTER this one, always. The
+					// connect reply goes out in the plain protocol - text JSON,
+					// length-prefixed Protobuf - so a client never has to work
+					// out whether the frame that establishes compression was
+					// itself compressed.
+					//
+					// It could be, when the client already holds the dictionary.
+					// It is not, because knowing that requires the client to
+					// decide how to read the reply before reading it, and the
+					// two encodings are not reliably distinguishable: a Protobuf
+					// ping is an empty reply, one 0x00 byte, which is exactly a
+					// raw frame marker. Buying one compressed reply per
+					// connection would cost either a byte on every frame or a
+					// rule that only holds until someone adds a field.
+					ca.SetDictionaryCompression(cc)
+					acceptedFlags |= ConnectionFlagDictionaryCompression
+				}
+			}
+		}
+	}
+	c.mu.Lock()
+	c.profile = profile
+	// close() can run concurrently with a slow connectCmd - the stale-connection
+	// timer firing during a long OnConnecting, say - and it is one-shot, so a
+	// codec installed after it has already run would never be closed. The
+	// interface promises exactly once when the connection goes away, and an
+	// implementation that batches its accounting loses everything it held.
+	// Closing it here is that promise kept: connectCmd bails on the same status
+	// a few lines below, so this connection writes nothing either way.
+	if c.status == statusClosed {
+		c.mu.Unlock()
+		if ca, ok := c.transport.(DictionaryAwareTransport); ok {
+			ca.CloseDictionaryCompression()
+		}
+		return DisconnectConnectionClosed
+	}
+	c.mu.Unlock()
+
 	res := &protocol.ConnectResult{}
 	res.Version = version
 	res.Expires = expires
 	res.Ttl = ttl
+	// Tell the client which of the features it advertised were actually enabled.
+	// Advertising one is not enough: the node may have it turned off, or the
+	// engine may decline this particular connection.
+	res.Flag = acceptedFlags
+	res.Dict = dict
 
 	if c.pingInterval > 0 {
 		res.Ping = uint32(c.pingInterval.Seconds())
@@ -4151,6 +4269,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			hash:   filter.Hash(reply.Options.ServerTagsFilter),
 		}
 	}
+	hasServerTagsFilter := reply.Options.ServerTagsFilter != nil
 
 	needPubSubSync := reply.Options.EnablePositioning || reply.Options.EnableRecovery
 	if needPubSubSync {
@@ -4475,6 +4594,9 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	}
 	if reply.Options.MapUserPresenceChannel != "" {
 		channelFlags |= flagMapUserPresence
+	}
+	if hasServerTagsFilter {
+		channelFlags |= flagServerTagsFilter
 	}
 
 	channelContext := ChannelContext{

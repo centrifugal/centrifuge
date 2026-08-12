@@ -7,6 +7,7 @@ replace github.com/centrifugal/centrifuge => ../
 require (
 	github.com/centrifugal/centrifuge v0.38.0
 	github.com/centrifugal/centrifuge-go v0.12.0
+	github.com/centrifugal/protocol v0.20.1-0.20260811164823-815457ed4d09
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/cristalhq/jwt/v5 v5.4.0
@@ -40,7 +41,6 @@ require (
 	github.com/bytedance/gopkg v0.1.4 // indirect
 	github.com/bytedance/sonic v1.15.2 // indirect
 	github.com/bytedance/sonic/loader v0.5.2 // indirect
-	github.com/centrifugal/protocol v0.20.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/x/ansi v0.11.7 // indirect
@@ -114,3 +114,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260803160001-6ac0973c030d // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/centrifugal/centrifuge-go => ../../centrifuge-go
