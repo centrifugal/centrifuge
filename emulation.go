@@ -165,7 +165,11 @@ func (h *emulationSurveyHandler) HandleEmulation(e SurveyEvent, cb SurveyCallbac
 	}
 	go func() {
 		reader := readerpool.GetBytesReader(data)
-		_ = HandleReadFrame(client, reader)
+		// data holds the already-buffered command bytes, so a single command
+		// cannot exceed its length; +1 keeps the limit positive (the stream
+		// decoder rejects a non-positive limit) and admits a command of exactly
+		// len(data) bytes. The ingress body size was already bounded upstream.
+		_ = HandleReadFrame(client, reader, int64(len(data))+1)
 		readerpool.PutBytesReader(reader)
 		cb(SurveyReply{})
 	}()

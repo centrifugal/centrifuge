@@ -223,20 +223,22 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		writeTimeout = 1 * time.Second
 	}
 	messageSizeLimit := s.config.MessageSizeLimit
-	if messageSizeLimit == 0 {
+	if messageSizeLimit <= 0 {
 		messageSizeLimit = 65536 // 64KB
 	}
-	if messageSizeLimit > 0 {
-		conn.SetReadLimit(int64(messageSizeLimit))
-	}
+	conn.SetReadLimit(int64(messageSizeLimit))
+	// The stream command decoder parses decoded command bytes, so it is bounded
+	// by the decompressed message size when compression is enabled, otherwise by
+	// the wire message size. It must be positive - the decoder rejects a
+	// non-positive limit.
+	decoderMessageSizeLimit := int64(messageSizeLimit)
 	if compression {
 		decompressedMessageSizeLimit := s.config.DecompressedMessageSizeLimit
-		if decompressedMessageSizeLimit == 0 {
+		if decompressedMessageSizeLimit <= 0 {
 			decompressedMessageSizeLimit = messageSizeLimit * defaultWebsocketDecompressedMessageSizeLimitMultiplier
 		}
-		if decompressedMessageSizeLimit > 0 {
-			conn.SetDecompressedReadLimit(int64(decompressedMessageSizeLimit))
-		}
+		conn.SetDecompressedReadLimit(int64(decompressedMessageSizeLimit))
+		decoderMessageSizeLimit = int64(decompressedMessageSizeLimit)
 	}
 
 	if useFramePingPong {
@@ -309,7 +311,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		// costs a goroutine but no allocation. See ProcessCommandsOffReadLoop.
 		var handoff *frameHandoff
 		if s.config.ProcessCommandsOffReadLoop {
-			handoff = newFrameHandoff(c)
+			handoff = newFrameHandoff(c, decoderMessageSizeLimit)
 		}
 
 		for {
@@ -324,7 +326,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			if handoff != nil {
 				proceed = handoff.handle(r)
 			} else {
-				proceed = HandleReadFrame(c, r)
+				proceed = HandleReadFrame(c, r, decoderMessageSizeLimit)
 			}
 			if !proceed {
 				break
@@ -365,17 +367,18 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 // Only the read loop writes r, and it does so before starting run and does not
 // touch it again until run has sent on done, so the two goroutines never race.
 type frameHandoff struct {
-	c    *Client
-	r    io.Reader
-	done chan bool
+	c                *Client
+	r                io.Reader
+	done             chan bool
+	messageSizeLimit int64
 }
 
-func newFrameHandoff(c *Client) *frameHandoff {
-	return &frameHandoff{c: c, done: make(chan bool, 1)}
+func newFrameHandoff(c *Client, messageSizeLimit int64) *frameHandoff {
+	return &frameHandoff{c: c, done: make(chan bool, 1), messageSizeLimit: messageSizeLimit}
 }
 
 func (h *frameHandoff) run() {
-	h.done <- HandleReadFrame(h.c, h.r)
+	h.done <- HandleReadFrame(h.c, h.r, h.messageSizeLimit)
 }
 
 // handle processes one frame off the read loop and reports whether the
@@ -393,9 +396,14 @@ func (h *frameHandoff) handle(r io.Reader) bool {
 // HandleReadFrame is a helper to read Centrifuge commands from frame-based io.Reader and
 // process them. Frame-based means that EOF treated as the end of the frame, not the entire
 // connection close.
-func HandleReadFrame(c *Client, r io.Reader) bool {
+//
+// messageSizeLimit bounds the size of a single command and must be positive: the
+// underlying stream decoder rejects a non-positive limit, since the length prefix
+// is attacker-controlled and used as an allocation size. Callers pass the
+// transport's configured limit (coerced to a positive default).
+func HandleReadFrame(c *Client, r io.Reader, messageSizeLimit int64) bool {
 	protoType := c.Transport().Protocol().toProto()
-	decoder := protocol.GetStreamCommandDecoder(protoType, r)
+	decoder := protocol.GetStreamCommandDecoderLimited(protoType, r, messageSizeLimit)
 	defer protocol.PutStreamCommandDecoder(protoType, decoder)
 
 	hadCommands := false

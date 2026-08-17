@@ -263,7 +263,7 @@ func TestClientV2PingPong(t *testing.T) {
 		for msg := range messages {
 			if string(msg) == "{}" {
 				// PING
-				HandleReadFrame(client, bytes.NewReader([]byte("{}")))
+				HandleReadFrame(client, bytes.NewReader([]byte("{}")), 1<<20)
 			}
 		}
 	}()
@@ -2834,14 +2834,14 @@ func TestClientHandleEmptyData(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
-	proceed := HandleReadFrame(client, bytes.NewReader([]byte(nil)))
+	proceed := HandleReadFrame(client, bytes.NewReader([]byte(nil)), 1<<20)
 	require.False(t, proceed)
 	select {
 	case <-client.Context().Done():
 	case <-time.After(time.Second):
 		require.Fail(t, "client not closed")
 	}
-	proceed = HandleReadFrame(client, bytes.NewReader([]byte("test")))
+	proceed = HandleReadFrame(client, bytes.NewReader([]byte("test")), 1<<20)
 	require.False(t, proceed)
 	disconnect, proceed := client.dispatchCommand(&protocol.Command{}, 0)
 	require.Nil(t, disconnect)
@@ -2854,7 +2854,7 @@ func TestClientHandleBrokenData(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
-	proceed := HandleReadFrame(client, bytes.NewReader([]byte(`nd3487yt734y38&**&**`)))
+	proceed := HandleReadFrame(client, bytes.NewReader([]byte(`nd3487yt734y38&**&**`)), 1<<20)
 	require.False(t, proceed)
 	select {
 	case <-client.Context().Done():
@@ -2874,7 +2874,7 @@ func TestClientHandleCommandNotAuthenticated(t *testing.T) {
 	}}
 	data, err := json.Marshal(cmd)
 	require.NoError(t, err)
-	proceed := HandleReadFrame(client, bytes.NewReader(data))
+	proceed := HandleReadFrame(client, bytes.NewReader(data), 1<<20)
 	require.False(t, proceed)
 	select {
 	case <-client.Context().Done():
@@ -2932,7 +2932,7 @@ func TestClientHandleCommandWithoutID(t *testing.T) {
 	cmd := &protocol.Command{}
 	data, err := json.Marshal(cmd)
 	require.NoError(t, err)
-	proceed := HandleReadFrame(client, bytes.NewReader(data))
+	proceed := HandleReadFrame(client, bytes.NewReader(data), 1<<20)
 	require.False(t, proceed)
 	select {
 	case <-client.Context().Done():
@@ -2968,7 +2968,7 @@ func TestClientAlreadyAuthenticated(t *testing.T) {
 	cmd := &protocol.Command{Id: 2, Connect: &protocol.ConnectRequest{}}
 	data, err := json.Marshal(cmd)
 	require.NoError(t, err)
-	proceed := HandleReadFrame(client, bytes.NewReader(data))
+	proceed := HandleReadFrame(client, bytes.NewReader(data), 1<<20)
 	require.False(t, proceed)
 	select {
 	case <-client.Context().Done():
@@ -4899,7 +4899,7 @@ func BenchmarkClientRPC(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		decoder := protocol.GetStreamCommandDecoder(protocol.TypeProtobuf, bytes.NewReader(frame))
+		decoder := protocol.GetStreamCommandDecoderLimited(protocol.TypeProtobuf, bytes.NewReader(frame), 1<<20)
 		cmd, cmdProtocolSize, err := decoder.Decode()
 		require.NoError(b, err)
 		client.HandleCommand(cmd, cmdProtocolSize)
