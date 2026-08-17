@@ -21,12 +21,12 @@ require (
 	github.com/nats-io/nats.go v1.53.1
 	github.com/prometheus/client_golang v1.24.1
 	github.com/quic-go/quic-go v0.61.0
-	github.com/stretchr/testify v1.11.1
+	github.com/stretchr/testify v1.12.0
 	go.opentelemetry.io/contrib/bridges/prometheus v0.70.0
 	go.opentelemetry.io/otel/exporters/stdout/stdoutmetric v1.45.0
 	go.opentelemetry.io/otel/sdk/metric v1.45.0
 	go.uber.org/ratelimit v0.3.1
-	golang.org/x/net v0.57.0
+	golang.org/x/net v0.58.0
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.12
@@ -49,7 +49,6 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/cloudwego/base64x v0.1.7 // indirect
-	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
 	github.com/gin-contrib/sse v1.1.1 // indirect
@@ -85,13 +84,12 @@ require (
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.70.1 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/quagmt/udecimal v1.10.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/redis/rueidis v1.0.77-0.20260811083940-91dfdfd3b348 // indirect
+	github.com/redis/rueidis v1.0.77 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
