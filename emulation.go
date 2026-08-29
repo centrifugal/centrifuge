@@ -52,7 +52,7 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	maxBytesSize := s.config.MaxRequestBodySize
-	if maxBytesSize == 0 {
+	if maxBytesSize <= 0 {
 		maxBytesSize = 64 * 1024
 	}
 	r.Body = http.MaxBytesReader(rw, r.Body, int64(maxBytesSize))

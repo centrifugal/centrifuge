@@ -97,6 +97,47 @@ func TestEmulationHandler_RequestTooLarge(t *testing.T) {
 	_ = resp.Body.Close()
 }
 
+func TestEmulationHandler_NegativeMaxRequestBodySizeUsesDefault(t *testing.T) {
+	t.Parallel()
+	n, _ := New(Config{})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	mux := http.NewServeMux()
+	mux.Handle("/emulation", NewEmulationHandler(n, EmulationConfig{
+		MaxRequestBodySize: -1,
+	}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := server.URL + "/emulation"
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	command := &protocol.Command{
+		Id:      1,
+		Connect: &protocol.ConnectRequest{},
+	}
+	jsonData, err := json.Marshal(command)
+	require.NoError(t, err)
+
+	emuRequest := &protocol.EmulationRequest{
+		Node:    "unknown",
+		Session: "unknown",
+		Data:    jsonData,
+	}
+	jsonEmuRequest, err := json.Marshal(emuRequest)
+	require.NoError(t, err)
+
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(jsonEmuRequest))
+	require.NoError(t, err)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	// A negative config value must fall back to the default limit, not be
+	// coerced to zero (which would reject every non-empty request).
+	require.NotEqual(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+}
+
 func TestEmulationHandler_NodeNotFound(t *testing.T) {
 	t.Parallel()
 	n, _ := New(Config{})
