@@ -2,11 +2,11 @@ version: "3.8"
 
 services:
   redis:
-    image: redis:${REDIS_VERSION:-7}-alpine
+    image: redis:${REDIS_VERSION:-8}-alpine
     ports:
       - "6379:6379"
   cluster:
-    image: redis:${REDIS_VERSION:-7}-alpine
+    image: redis:${REDIS_VERSION:-8}-alpine
     entrypoint:
       - /bin/sh
       - -c
@@ -21,7 +21,7 @@ services:
       - "7002:7002"
       - "7003:7003"
   sentinel:
-    image: redis:${REDIS_VERSION:-7}-alpine
+    image: redis:${REDIS_VERSION:-8}-alpine
     entrypoint:
       - /bin/sh
       - -c
@@ -37,11 +37,11 @@ services:
       - "6382:6382"
       - "26379:26379"
   valkey:
-    image: valkey/valkey:${VALKEY_VERSION:-8}-alpine
+    image: valkey/valkey:${VALKEY_VERSION:-9}-alpine
     ports:
       - "16379:6379"
   valkey-cluster:
-    image: valkey/valkey:${VALKEY_VERSION:-8}-alpine
+    image: valkey/valkey:${VALKEY_VERSION:-9}-alpine
     entrypoint:
       - /bin/sh
       - -c
@@ -56,11 +56,11 @@ services:
       - "17001:17001"
       - "17002:17002"
   dragonflydb:
-    image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.27.1
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.40.1
     ports:
       - "36379:6379"
   dragonflydb-cluster:
-    image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.27.1
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.40.1
     ports:
       - "37000:6379"
     command: ["--cluster_mode", "emulated"]
