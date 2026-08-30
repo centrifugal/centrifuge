@@ -27,6 +27,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testDictionaryCompressionLevel is an arbitrary valid protocol.DeflateFrameCodec
+// level for tests that exercise something other than level choice itself - see
+// protocol.NewDeflateFrameCodec's doc comment for how a real caller should pick
+// one; this package implements no engine of its own, so it has no basis for
+// recommending a value beyond "one that works" for its own tests.
+const testDictionaryCompressionLevel = 7
+
 // testCompression is an engine supplied from outside the package, which is the
 // only way engines exist. It hands every supporting connection one fixed
 // dictionary, and records what it was told about the connection.
@@ -59,7 +66,7 @@ func (e *testCompression) NewDictionaryConnection(params DictionaryConnectionPar
 		dict = e.dictFor(params)
 	}
 	e.last = &testConnCompression{
-		codec:       protocol.NewDeflateFrameCodec(testDictionaryID(dict), dict),
+		codec:       protocol.NewDeflateFrameCodec(testDictionaryID(dict), dict, testDictionaryCompressionLevel),
 		proto:       params.ProtocolType.toProto(),
 		held:        params.HeldDictionaryID,
 		rawFallback: e.rawFallback,
@@ -90,7 +97,7 @@ func (c *testConnCompression) Dictionary() *protocol.Dictionary {
 		// The client already holds these bytes, so naming it is enough.
 		return d
 	}
-	packed := protocol.DeflateDictionary(c.codec.Dict())
+	packed := protocol.DeflateDictionary(c.codec.Dict(), testDictionaryCompressionLevel)
 	if c.proto == protocol.TypeJSON {
 		d.DataB64 = base64.StdEncoding.EncodeToString(packed)
 	} else {
@@ -174,7 +181,7 @@ func (w *wireClient) connectResult() *protocol.ConnectResult {
 	require.NoError(w.t, err)
 	if len(msg) > 0 && msg[0] == protocol.FrameCodecCompressed {
 		require.NotNil(w.t, w.held, "a compressed connect reply means the server took the id this client advertised")
-		codec := protocol.NewDeflateFrameCodec(testDictionaryID(w.held), w.held)
+		codec := protocol.NewDeflateFrameCodec(testDictionaryID(w.held), w.held, testDictionaryCompressionLevel)
 		msg, err = codec.Decompress(nil, msg, 1<<20)
 		require.NoError(w.t, err)
 		w.codec = codec
@@ -185,7 +192,7 @@ func (w *wireClient) connectResult() *protocol.ConnectResult {
 	if d := r.Connect.Dict; d != nil && d.DataB64 != "" {
 		raw, derr := protocol.InflateDictionary(mustBase64(w.t, d.DataB64), 1<<20)
 		require.NoError(w.t, derr)
-		w.codec = protocol.NewDeflateFrameCodec(d.Id, raw)
+		w.codec = protocol.NewDeflateFrameCodec(d.Id, raw, testDictionaryCompressionLevel)
 	}
 	return r.Connect
 }

@@ -31,6 +31,14 @@ import (
 	"github.com/centrifugal/protocol"
 )
 
+// dictionaryCompressionLevel is a DEFLATE level for protocol.NewDeflateFrameCodec
+// and protocol.DeflateDictionary. protocol picks no default for this: the right
+// level depends on the traffic and dictionary shapes a real deployment sees -
+// see protocol.NewDeflateFrameCodec's doc comment for the measurements behind
+// this particular choice, and re-derive it for your own workload rather than
+// copying this number.
+const dictionaryCompressionLevel = 7
+
 // --- the engine -------------------------------------------------------------
 
 // engine is a centrifuge.DictionaryCompression serving one dictionary to
@@ -51,8 +59,8 @@ func newEngine(dict []byte) *engine {
 	return &engine{
 		id:    id,
 		raw:   dict,
-		wire:  base64.StdEncoding.EncodeToString(protocol.DeflateDictionary(dict)),
-		codec: protocol.NewDeflateFrameCodec(id, dict),
+		wire:  base64.StdEncoding.EncodeToString(protocol.DeflateDictionary(dict, dictionaryCompressionLevel)),
+		codec: protocol.NewDeflateFrameCodec(id, dict, dictionaryCompressionLevel),
 		cache: map[string][]byte{},
 	}
 }
