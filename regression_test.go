@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -1447,6 +1448,16 @@ func TestPresenceTickDefaultIsAllocationFree(t *testing.T) {
 		client.updatePresence()
 	}
 
+	// testing.AllocsPerRun reads the process-wide runtime.MemStats.Mallocs
+	// counter, not a per-goroutine one: a GC cycle landing mid-measurement can
+	// both evict presenceSnapshotPool (forcing a fresh allocation on the next
+	// Get) and itself allocate bookkeeping, and either shows up here even
+	// though updatePresence did nothing differently. Pin GC off for the
+	// measurement window so the pool cannot be swept out from under it - this
+	// is what actually flaked in CI (see the FAIL this replaces), not
+	// reproducible locally even under a full -race suite run, consistent with
+	// depending on when the CI runner's GC happened to fire.
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	allocs := testing.AllocsPerRun(200, func() {
 		client.updatePresence()
 	})
