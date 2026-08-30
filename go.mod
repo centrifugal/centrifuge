@@ -3,10 +3,10 @@ module github.com/centrifugal/centrifuge
 go 1.26.0
 
 require (
+	cel.dev/cel-go v0.32.0
 	github.com/FZambia/eagle v0.2.0
 	github.com/centrifugal/protocol v0.22.0
 	github.com/cespare/xxhash/v2 v2.3.0
-	github.com/google/cel-go v0.30.0
 	github.com/google/uuid v1.6.0
 	github.com/maypok86/otter/v2 v2.3.0
 	github.com/planetscale/vtprotobuf v0.6.0
