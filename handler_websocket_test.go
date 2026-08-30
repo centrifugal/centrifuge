@@ -2489,7 +2489,15 @@ func TestWsDictionaryFrameEncodingIsPerFrame(t *testing.T) {
 			w := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
 			w.connectResult()
 			w.subscribe("demo")
-			_, err := n.Publish("demo", []byte(`{"seq":1,"v":"x"}`))
+			// The payload must be large/redundant enough to compress smaller than
+			// its own raw size on its own, independent of the dictionary: how well a
+			// tiny payload compresses against a preset dictionary varies by Go
+			// version (e.g. go1.26 vs go1.27 ship different compress/flate
+			// implementations at the same level, see protocol's frameCompressionLevel
+			// doc comment), so a tiny fixture like `{"seq":1,"v":"x"}` is not a
+			// reliable way to force protocol.DeflateFrameCodec.Compress down the
+			// compressed path across Go versions.
+			_, err := n.Publish("demo", []byte(`{"seq":1,"v":"`+strings.Repeat("x", 256)+`"}`))
 			require.NoError(t, err)
 
 			mt, raw := w.nextFrame()
