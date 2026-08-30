@@ -2489,7 +2489,21 @@ func TestWsDictionaryFrameEncodingIsPerFrame(t *testing.T) {
 			w := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
 			w.connectResult()
 			w.subscribe("demo")
-			_, err := n.Publish("demo", []byte(`{"seq":1,"v":"x"}`))
+			// The payload must be large/redundant enough to compress smaller than
+			// its raw size on its own, independent of the dictionary.
+			//
+			// go1.27.0's compress/flate has a preset-dictionary bug (golang/go#80538,
+			// fixed by https://go-review.googlesource.com/c/go/+/804680, not yet in
+			// a released Go as of this writing) where fillWindow does not set
+			// blockStart, so a non-compressed first block writes the dictionary
+			// bytes into the output. A tiny fixture like `{"seq":1,"v":"x"}` then
+			// "compresses" to something larger than itself, and a frame that grows
+			// is correctly sent as FrameCodecRaw by design (see
+			// protocol.DeflateFrameCodec.Compress's `buf.Len() >= len(src)`
+			// fallback) - so the test would be asserting a property of a buggy Go
+			// version, not of Centrifuge, unless the payload is big enough to always
+			// win on its own.
+			_, err := n.Publish("demo", []byte(`{"seq":1,"v":"`+strings.Repeat("x", 256)+`"}`))
 			require.NoError(t, err)
 
 			mt, raw := w.nextFrame()
