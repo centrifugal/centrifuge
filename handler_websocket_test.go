@@ -2464,6 +2464,26 @@ func readUntilReplyID(conn *websocket.Conn, want uint32) bool {
 // frame that is already compressed. The handshake itself lives in
 // dictionary_compression_test.go.
 
+// skipIfFlateDictionaryBug skips a test on go1.27.0, whose compress/flate has
+// a preset-dictionary bug: fillWindow does not set blockStart, so a
+// non-compressed first block writes the dictionary bytes into the output
+// (golang/go#80538, fixed by https://go-review.googlesource.com/c/go/+/804680).
+// That makes a small dictionary-compressed payload "compress" to something
+// larger than raw, so protocol.DeflateFrameCodec.Compress correctly falls back
+// to FrameCodecRaw - a real difference in Go's output, not a bug in Centrifuge
+// or the protocol package.
+//
+// The fix landed after go1.27.0 shipped and is expected in go1.27.1: this only
+// matches "go1.27.0" exactly, so the affected test starts running - and should
+// pass - again on its own once that release is out. If it doesn't, re-check
+// which release actually carries the fix and adjust the version match here.
+func skipIfFlateDictionaryBug(t *testing.T) {
+	t.Helper()
+	if runtime.Version() == "go1.27.0" {
+		t.Skip("go1.27.0 compress/flate preset-dictionary bug, golang/go#80538 - fixed upstream, expected in go1.27.1")
+	}
+}
+
 // The encoding is decided per frame, not per connection. A compressed frame
 // goes out binary even on a JSON connection, because a text frame is UTF-8
 // decoded by browsers and that would mangle compressed bytes before an inflater
@@ -2483,27 +2503,16 @@ func TestWsDictionaryFrameEncodingIsPerFrame(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			if !tc.rawFallback {
+				skipIfFlateDictionaryBug(t)
+			}
 			e := &testCompression{dict: testDictionary(), rawFallback: tc.rawFallback}
 			n, url := newCompressionNode(t, e, nil)
 
 			w := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
 			w.connectResult()
 			w.subscribe("demo")
-			// The payload must be large/redundant enough to compress smaller than
-			// its raw size on its own, independent of the dictionary.
-			//
-			// go1.27.0's compress/flate has a preset-dictionary bug (golang/go#80538,
-			// fixed by https://go-review.googlesource.com/c/go/+/804680, not yet in
-			// a released Go as of this writing) where fillWindow does not set
-			// blockStart, so a non-compressed first block writes the dictionary
-			// bytes into the output. A tiny fixture like `{"seq":1,"v":"x"}` then
-			// "compresses" to something larger than itself, and a frame that grows
-			// is correctly sent as FrameCodecRaw by design (see
-			// protocol.DeflateFrameCodec.Compress's `buf.Len() >= len(src)`
-			// fallback) - so the test would be asserting a property of a buggy Go
-			// version, not of Centrifuge, unless the payload is big enough to always
-			// win on its own.
-			_, err := n.Publish("demo", []byte(`{"seq":1,"v":"`+strings.Repeat("x", 256)+`"}`))
+			_, err := n.Publish("demo", []byte(`{"seq":1,"v":"x"}`))
 			require.NoError(t, err)
 
 			mt, raw := w.nextFrame()
