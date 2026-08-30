@@ -2624,7 +2624,7 @@ func TestWsCloseDictionaryCompressionIsIdempotent(t *testing.T) {
 	t.Parallel()
 	newCodec := func() *testConnCompression {
 		d := testDictionary()
-		return &testConnCompression{codec: protocol.NewDeflateFrameCodec(testDictionaryID(d), d)}
+		return &testConnCompression{codec: protocol.NewDeflateFrameCodec(testDictionaryID(d), d, testDictionaryCompressionLevel)}
 	}
 
 	t.Run("still pending", func(t *testing.T) {
