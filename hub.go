@@ -310,7 +310,7 @@ func (h *Hub) NumUsers() int {
 func (h *Hub) NumSubscriptions() int {
 	var total int
 	for i := 0; i < numHubShards; i++ {
-		// users do not overlap among shards.
+		// channels do not overlap among shards.
 		total += h.subShards[i].NumSubscriptions()
 	}
 	return total
