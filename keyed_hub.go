@@ -155,6 +155,18 @@ func (h *keyedHub) broadcastRemoval(channel string, key string) {
 	}
 }
 
+// stringSet builds a lookup set from items, or returns nil if items is empty.
+func stringSet(items []string) map[string]struct{} {
+	if len(items) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		set[item] = struct{}{}
+	}
+	return set
+}
+
 // broadcastRemovalToUsers sends removal publications only to connections
 // belonging to the specified users (or excluding specified users).
 func (h *keyedHub) broadcastRemovalToUsers(channel string, key string, users []string, excludeUsers []string) {
@@ -163,21 +175,8 @@ func (h *keyedHub) broadcastRemovalToUsers(channel string, key string, users []s
 		return
 	}
 
-	var userSet map[string]struct{}
-	var excludeSet map[string]struct{}
-
-	if len(users) > 0 {
-		userSet = make(map[string]struct{}, len(users))
-		for _, u := range users {
-			userSet[u] = struct{}{}
-		}
-	}
-	if len(excludeUsers) > 0 {
-		excludeSet = make(map[string]struct{}, len(excludeUsers))
-		for _, u := range excludeUsers {
-			excludeSet[u] = struct{}{}
-		}
-	}
+	userSet := stringSet(users)
+	excludeSet := stringSet(excludeUsers)
 
 	pub := &protocol.Publication{Key: key, Removed: true}
 	for _, c := range targets {
@@ -198,21 +197,8 @@ func (h *keyedHub) broadcastRemovalToUsers(channel string, key string, users []s
 
 // removeSubscribersForUsers removes subscribers matching user/exclude filters.
 func (h *keyedHub) removeSubscribersForUsers(key string, users []string, excludeUsers []string) {
-	var userSet map[string]struct{}
-	var excludeSet map[string]struct{}
-
-	if len(users) > 0 {
-		userSet = make(map[string]struct{}, len(users))
-		for _, u := range users {
-			userSet[u] = struct{}{}
-		}
-	}
-	if len(excludeUsers) > 0 {
-		excludeSet = make(map[string]struct{}, len(excludeUsers))
-		for _, u := range excludeUsers {
-			excludeSet[u] = struct{}{}
-		}
-	}
+	userSet := stringSet(users)
+	excludeSet := stringSet(excludeUsers)
 
 	h.mu.Lock()
 	subs, ok := h.items[key]
