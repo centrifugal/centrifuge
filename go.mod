@@ -11,7 +11,7 @@ require (
 	github.com/maypok86/otter/v2 v2.3.0
 	github.com/planetscale/vtprotobuf v0.6.0
 	github.com/prometheus/client_golang v1.24.1
-	github.com/prometheus/client_model v0.6.2
+	github.com/prometheus/client_model v0.6.3
 	github.com/quagmt/udecimal v1.10.1
 	github.com/redis/rueidis v1.0.77
 	github.com/segmentio/encoding v0.5.4
@@ -28,7 +28,7 @@ require (
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/prometheus/common v0.70.1 // indirect
+	github.com/prometheus/common v0.71.0 // indirect
 	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
