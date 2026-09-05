@@ -5,12 +5,14 @@ package centrifuge
 import (
 	"context"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/rueidis"
 	"github.com/stretchr/testify/require"
 )
 
@@ -206,12 +208,38 @@ func TestRedisPresenceManagerWithUserMapping(t *testing.T) {
 	}
 }
 
+// supportsHashFieldTTL reports whether the server at port implements HEXPIRE,
+// which RedisPresenceManagerConfig.UseHashFieldTTL relies on. It arrived in
+// Redis 7.4, so older servers – and forks that never implemented it – answer
+// with "unknown command". Probing the command mirrors how the sharded PUB/SUB
+// tests detect their own feature.
+func supportsHashFieldTTL(tb testing.TB, port int) bool {
+	tb.Helper()
+	client, err := rueidis.NewClient(rueidis.ClientOption{
+		InitAddress:       []string{"127.0.0.1:" + strconv.Itoa(port)},
+		DisableCache:      true,
+		ForceSingleClient: true,
+	})
+	require.NoError(tb, err)
+	defer client.Close()
+	// A missing hash is fine here: implementations answer it either with an
+	// array or with an error about the key, never with "unknown command".
+	res := client.Do(context.Background(), client.B().Arbitrary(
+		"HEXPIRE", getUniquePrefix()+".hexpire_probe", "100", "FIELDS", "1", "field").Build())
+	if err := res.Error(); err != nil {
+		return !strings.Contains(strings.ToLower(err.Error()), "unknown command")
+	}
+	return true
+}
+
 func TestRedisPresenceManagerWithHashFieldTTL(t *testing.T) {
 	t.Parallel()
-	t.Skip() // Will work on Redis 7.4 for now, so skipping for now since CI also runs on Redis 6.
 	for _, tt := range redisPresenceTests {
 		for _, userMapping := range []bool{true, false} {
 			t.Run(tt.Name+"_user_mapping_"+strconv.FormatBool(userMapping), func(t *testing.T) {
+				if !supportsHashFieldTTL(t, tt.Port) {
+					t.Skip("hash field TTL (HEXPIRE) not supported by this server, skipping test")
+				}
 				node := testNode(t)
 				pm := newTestRedisPresenceManager(t, node, tt.UseCluster, userMapping, true, tt.Port)
 				defer func() { _ = node.Shutdown(context.Background()) }()
@@ -352,6 +380,77 @@ func TestRedisPresenceManagerWithUserMappingExpire(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 0, stats.NumClients)
 			require.Equal(t, 0, stats.NumUsers)
+		})
+	}
+}
+
+// TestRedisPresenceManagerWithHashFieldTTLExpire covers the reason
+// UseHashFieldTTL exists: entries drop out on their own once their HEXPIRE
+// fires, with no expiration ZSET for the read scripts to sweep. The ZSET path
+// is covered by TestRedisPresenceManagerWithUserMappingExpire.
+func TestRedisPresenceManagerWithHashFieldTTLExpire(t *testing.T) {
+	t.Parallel()
+	for _, tt := range redisPresenceTests {
+		t.Run(tt.Name, func(t *testing.T) {
+			t.Parallel()
+			if !supportsHashFieldTTL(t, tt.Port) {
+				t.Skip("hash field TTL (HEXPIRE) not supported by this server, skipping test")
+			}
+			node := testNode(t)
+			pm := newTestRedisPresenceManager(t, node, tt.UseCluster, true, true, tt.Port)
+			pm.config.PresenceTTL = 2 * time.Second
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			defer stopRedisPresenceManager(pm)
+
+			require.NoError(t, pm.AddPresence("channel", "uid", &ClientInfo{
+				ClientID: "uid",
+				UserID:   "1",
+			}))
+			// Different user, different conn - never refreshed below, so it is the
+			// one that must disappear.
+			require.NoError(t, pm.AddPresence("channel", "uid-2", &ClientInfo{
+				ClientID: "uid-2",
+				UserID:   "2",
+			}))
+
+			stats, err := pm.PresenceStats("channel")
+			require.NoError(t, err)
+			require.Equal(t, 2, stats.NumClients)
+			require.Equal(t, 2, stats.NumUsers)
+
+			// Keep "uid" alive across the TTL. Refreshing must extend both the
+			// client field and the per-user field, otherwise the counts below
+			// would drop to zero.
+			for i := 0; i < 5; i++ {
+				time.Sleep(500 * time.Millisecond)
+				require.NoError(t, pm.AddPresence("channel", "uid", &ClientInfo{
+					ClientID: "uid",
+					UserID:   "1",
+				}))
+			}
+
+			// uid-2 expired a second ago, uid was refreshed 500ms ago.
+			time.Sleep(500 * time.Millisecond)
+			stats, err = pm.PresenceStats("channel")
+			require.NoError(t, err)
+			require.Equal(t, 1, stats.NumClients)
+			require.Equal(t, 1, stats.NumUsers)
+
+			presence, err := pm.Presence("channel")
+			require.NoError(t, err)
+			require.Len(t, presence, 1)
+			require.Contains(t, presence, "uid")
+
+			// Stop refreshing - uid must expire on its own too.
+			time.Sleep(3 * time.Second)
+			stats, err = pm.PresenceStats("channel")
+			require.NoError(t, err)
+			require.Equal(t, 0, stats.NumClients)
+			require.Equal(t, 0, stats.NumUsers)
+
+			presence, err = pm.Presence("channel")
+			require.NoError(t, err)
+			require.Len(t, presence, 0)
 		})
 	}
 }
