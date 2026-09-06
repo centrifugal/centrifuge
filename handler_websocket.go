@@ -407,13 +407,19 @@ func HandleReadFrame(c *Client, r io.Reader, messageSizeLimit int64) bool {
 	defer protocol.PutStreamCommandDecoder(protoType, decoder)
 
 	hadCommands := false
+	// Accumulated so the frame can be observed as a whole. The per-command
+	// counters cannot answer what a frame weighs, because the protocol batches:
+	// one frame routinely carries a connect plus every subscribe.
+	frameSize := 0
 
 	for {
 		cmd, cmdProtocolSize, err := decoder.Decode()
 		if cmd != nil {
 			hadCommands = true
+			frameSize += cmdProtocolSize
 			proceed := c.HandleCommand(cmd, cmdProtocolSize)
 			if !proceed {
+				c.node.metrics.observeTransportFrameSize(c.transport.Name(), frameSize, c)
 				return false
 			}
 		}
@@ -425,13 +431,17 @@ func HandleReadFrame(c *Client, r io.Reader, messageSizeLimit int64) bool {
 					return false
 				}
 				break
-			} else {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "error reading command", map[string]any{"client": c.ID(), "user": c.UserID(), "error": err.Error()}))
-				c.Disconnect(DisconnectBadRequest)
-				return false
 			}
+			// A frame that failed to decode part-way still cost what was read.
+			if hadCommands {
+				c.node.metrics.observeTransportFrameSize(c.transport.Name(), frameSize, c)
+			}
+			c.node.logger.log(newLogEntry(LogLevelInfo, "error reading command", map[string]any{"client": c.ID(), "user": c.UserID(), "error": err.Error()}))
+			c.Disconnect(DisconnectBadRequest)
+			return false
 		}
 	}
+	c.node.metrics.observeTransportFrameSize(c.transport.Name(), frameSize, c)
 	return true
 }
 

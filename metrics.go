@@ -77,6 +77,10 @@ var (
 		Subsystem: "transport",
 		Name:      "outgoing_close_count",
 	}
+	metricTransportFrameSize = clientMetricDef{
+		Subsystem: "transport",
+		Name:      "frame_size",
+	}
 )
 
 type metrics struct {
@@ -97,6 +101,7 @@ type metrics struct {
 	serverUnsubscribeCount      *prometheus.CounterVec
 	serverDisconnectCount       *prometheus.CounterVec
 	transportOutgoingCloseCount *prometheus.CounterVec
+	transportFrameSizeHistogram *prometheus.HistogramVec
 	// commandDurationSummary holds the legacy Summary by default; when
 	// EnableNativeHistograms is true it is a no-op (the Summary is not
 	// exposed). The companion commandDurationHistogram below always carries
@@ -136,15 +141,15 @@ type metrics struct {
 	commandDurationSubRefresh    prometheus.Observer
 	commandDurationUnknown       prometheus.Observer
 
-	broadcastDurationHistogram  *prometheus.HistogramVec
-	pubSubLagHistogram          *prometheus.HistogramVec
-	pingPongDurationHistogram   *prometheus.HistogramVec
+	broadcastDurationHistogram      *prometheus.HistogramVec
+	pubSubLagHistogram              *prometheus.HistogramVec
+	pingPongDurationHistogram       *prometheus.HistogramVec
 	brokerPublishSuppressedCount    *prometheus.CounterVec
 	mapBrokerPublishSuppressedCount *prometheus.CounterVec
 	mapBrokerRemoveSuppressedCount  *prometheus.CounterVec
-	mapBrokerCleanupLag      *prometheus.GaugeVec
-	mapBrokerCleanupRemoved  *prometheus.CounterVec
-	mapBrokerCleanupErrors   *prometheus.CounterVec
+	mapBrokerCleanupLag             *prometheus.GaugeVec
+	mapBrokerCleanupRemoved         *prometheus.CounterVec
+	mapBrokerCleanupErrors          *prometheus.CounterVec
 
 	redisBrokerPubSubErrors           *prometheus.CounterVec
 	redisBrokerPubSubDroppedMessages  *prometheus.CounterVec
@@ -171,28 +176,28 @@ type metrics struct {
 
 	config MetricsConfig
 
-	transportMessagesSentCache     sync.Map
-	transportMessagesReceivedCache sync.Map
-	commandDurationCache           sync.Map
-	replyErrorCache                sync.Map
-	actionCache                    sync.Map
-	recoverCache                   sync.Map
-	unsubscribeCache               sync.Map
-	disconnectCache                sync.Map
-	messagesSentCache              sync.Map
-	messagesReceivedCache          sync.Map
-	tagsFilterDroppedCache         sync.Map
+	transportMessagesSentCache      sync.Map
+	transportMessagesReceivedCache  sync.Map
+	commandDurationCache            sync.Map
+	replyErrorCache                 sync.Map
+	actionCache                     sync.Map
+	recoverCache                    sync.Map
+	unsubscribeCache                sync.Map
+	disconnectCache                 sync.Map
+	messagesSentCache               sync.Map
+	messagesReceivedCache           sync.Map
+	tagsFilterDroppedCache          sync.Map
 	brokerPublishSuppressedCache    sync.Map
 	mapBrokerPublishSuppressedCache sync.Map
 	mapBrokerRemoveSuppressedCache  sync.Map
-	pubSubLagCache                 sync.Map
-	broadcastDurationCache         sync.Map
-	sharedPollHandlerCache         sync.Map
-	sharedPollResultCache          sync.Map
-	sharedPollChannelCache         sync.Map
-	sharedPollPublishCache         sync.Map
-	nsCache                        *otter.Cache[string, string]
-	codeStrings                    map[uint32]string
+	pubSubLagCache                  sync.Map
+	broadcastDurationCache          sync.Map
+	sharedPollHandlerCache          sync.Map
+	sharedPollResultCache           sync.Map
+	sharedPollChannelCache          sync.Map
+	sharedPollPublishCache          sync.Map
+	nsCache                         *otter.Cache[string, string]
+	codeStrings                     map[uint32]string
 
 	// Cache for client label combinations: maps cache key -> {labelValues, cacheKey}
 	// This allows sharing pre-computed label data across all clients with the same label values
@@ -707,6 +712,34 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "MaxSize in bytes of messages received from client connections over specific transport (uncompressed and does not include framing overhead).",
 	}, m.buildMetricLabels([]string{"transport", "frame_type", "channel_namespace"}))
 
+	// Size of whole protocol frames read from client connections.
+	//
+	// This is deliberately not derivable from the messages_received counters.
+	// Those count individual commands, and a frame may carry many: the protocol
+	// batches, and SDKs use it - centrifuge-js puts the connect command and
+	// every subscribe into a single frame on each transport open. So a frame is
+	// not a command, and dividing the two counters yields a mean command size,
+	// never the tail.
+	//
+	// The tail is the part that matters. WebsocketConfig.MessageSizeLimit is
+	// applied as a transport read limit, so it bounds the whole frame: a client
+	// whose batched reconnect frame exceeds it is closed with 1009 every time it
+	// tries, and that is visible after the fact in outgoing_close_count. This
+	// histogram is what lets the limit be chosen before that happens, from an
+	// observed p99 rather than an estimate.
+	//
+	// Its _count series is also the number of frames, so mean commands per frame
+	// falls out of it and messages_received without a second metric.
+	m.transportFrameSizeHistogram = prometheus.NewHistogramVec(nativeHistogramOpts(prometheus.HistogramOpts{
+		Namespace: metricsNamespace,
+		Subsystem: metricTransportFrameSize.Subsystem,
+		Name:      metricTransportFrameSize.Name,
+		Help:      "Size in bytes of protocol frames received from client connections, over specific transport. A frame may contain several commands, so this is not the same as messages_received_size which counts individual commands.",
+		Buckets: []float64{
+			64, 256, 1024, 4096, 16384, 65536, 262144, 1048576,
+		},
+	}, config.EnableNativeHistograms), m.buildMetricLabels([]string{"transport"}))
+
 	m.tagsFilterDroppedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
@@ -995,6 +1028,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.serverUnsubscribeCount,
 		m.serverDisconnectCount,
 		m.transportOutgoingCloseCount,
+		m.transportFrameSizeHistogram,
 		m.recoverCount,
 		m.pingPongDurationHistogram,
 		m.transportMessagesSent,
@@ -1399,6 +1433,13 @@ type disconnectLabels struct {
 
 func (m *metrics) incTransportOutgoingClose(transport string, code int) {
 	m.transportOutgoingCloseCount.WithLabelValues(transport, m.getCodeLabel(uint32(code))).Inc()
+}
+
+// observeTransportFrameSize records the size of one protocol frame read from a
+// client connection.
+func (m *metrics) observeTransportFrameSize(transport string, size int, c *Client) {
+	m.transportFrameSizeHistogram.WithLabelValues(
+		m.appendClientLabels([]string{transport}, c)...).Observe(float64(size))
 }
 
 func (m *metrics) incServerDisconnect(code uint32, c *Client) {

@@ -389,6 +389,19 @@ func (n *Node) IncTransportOutgoingClose(transport string, code int) {
 	}
 }
 
+// ObserveTransportFrameSize records the size in bytes of one protocol frame read
+// from a client connection. It is exported so that custom transports implemented
+// outside this package can record frame sizes too.
+//
+// A frame is not a command: the protocol batches, so one frame may carry many
+// commands. Transports that read a continuous stream rather than discrete frames
+// have nothing frame-shaped to record here.
+func (n *Node) ObserveTransportFrameSize(transport string, size int, c *Client) {
+	if n.metrics != nil {
+		n.metrics.observeTransportFrameSize(transport, size, c)
+	}
+}
+
 // Shutdown sets shutdown flag to Node so handlers could stop accepting
 // new requests and disconnects clients with shutdown reason.
 func (n *Node) Shutdown(ctx context.Context) error {
