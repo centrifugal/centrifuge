@@ -4319,7 +4319,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		if !ok || c.status == statusClosed {
 			c.mu.Unlock()
 			c.pubSubSync.StopBuffering(channel)
-			c.node.logger.log(newErrorLogEntry(err, "client closed or unsubscribed after adding subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+			c.node.logger.log(newLogEntry(LogLevelInfo, "client closed or unsubscribed after adding subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
 			ctx.disconnect = &DisconnectServerError
 			return ctx
 		}
