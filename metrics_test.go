@@ -905,3 +905,68 @@ func TestMetrics_EnableNativeHistograms(t *testing.T) {
 		require.True(t, found, "histogram metric %s not present in registry output", name)
 	}
 }
+
+// TestClientLabelsMetricCacheIsPerLabelCombination pins that the metric caches
+// which resolve a Prometheus child once and keep it are keyed by the client
+// label combination as well.
+//
+// These caches exist so the hot path does not re-hash label values on every
+// call, but the cached child is bound to the label values it was created with.
+// A key that omits them makes the first client to reach a given (code,
+// namespace, frame type) own the child forever: every later client increments
+// the first one's series regardless of its own labels, so one app_region gets
+// all the traffic and the others report zero.
+func TestClientLabelsMetricCacheIsPerLabelCombination(t *testing.T) {
+	t.Parallel()
+
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:   "test_client_label_cache",
+		RegistererGatherer: prometheus.NewRegistry(),
+		ClientLabels:       []string{"region"},
+	})
+	require.NoError(t, err)
+
+	newClient := func(region string) *Client {
+		c := &Client{labels: map[string]string{"region": region}}
+		c.labelCombinationCached.Store(m.getOrCreateClientLabelCombinationFromLabels(c.labels))
+		return c
+	}
+	eu, us := newClient("eu"), newClient("us")
+
+	counterValue := func(vec *prometheus.CounterVec, labelValues ...string) float64 {
+		t.Helper()
+		counter, err := vec.GetMetricWithLabelValues(labelValues...)
+		require.NoError(t, err)
+		var out dto.Metric
+		require.NoError(t, counter.Write(&out))
+		return out.GetCounter().GetValue()
+	}
+	histogramCount := func(vec *prometheus.HistogramVec, labelValues ...string) uint64 {
+		t.Helper()
+		obs, err := vec.GetMetricWithLabelValues(labelValues...)
+		require.NoError(t, err)
+		var out dto.Metric
+		require.NoError(t, obs.(prometheus.Metric).Write(&out))
+		return out.GetHistogram().GetSampleCount()
+	}
+
+	// Same non-client labels for both clients - only the client label differs,
+	// which is exactly the case a cache key without it collapses.
+	for _, c := range []*Client{eu, us} {
+		m.incServerDisconnect(3000, c)
+		m.incServerUnsubscribe(2000, "ch", c)
+		m.incReplyError(protocol.FrameTypeSubscribe, 100, "ch", c)
+		m.observeCommandDuration(protocol.FrameTypeSubscribe, time.Millisecond, "ch", c)
+	}
+
+	for _, region := range []string{"eu", "us"} {
+		require.Equal(t, float64(1), counterValue(m.serverDisconnectCount, "3000", region),
+			"disconnect count for app_region=%s", region)
+		require.Equal(t, float64(1), counterValue(m.serverUnsubscribeCount, "2000", "", region),
+			"unsubscribe count for app_region=%s", region)
+		require.Equal(t, float64(1), counterValue(m.replyErrorCount, "subscribe", "100", "", region),
+			"reply error count for app_region=%s", region)
+		require.Equal(t, uint64(1), histogramCount(m.commandDurationHistogram, "subscribe", "", region),
+			"command duration count for app_region=%s", region)
+	}
+}

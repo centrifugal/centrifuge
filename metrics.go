@@ -334,6 +334,27 @@ func (m *metrics) extractClientLabelValues(c *Client) []string {
 	return values
 }
 
+// clientLabelsCacheKey returns a key identifying the client label combination
+// used for this client, or an empty string when client labels are not
+// configured. Metric caches keyed by label struct must include it: two clients
+// with different label values resolve to different Prometheus children, so a
+// cache key that ignores them would hand the second client the first client's
+// metric.
+//
+// It reuses the key precomputed on the client at connect time, so the hot path
+// does no allocation.
+func (m *metrics) clientLabelsCacheKey(c *Client) string {
+	if len(m.config.ClientLabels) == 0 {
+		return ""
+	}
+	if c != nil {
+		if combo := c.labelCombinationCached.Load(); combo != nil {
+			return combo.cacheKey
+		}
+	}
+	return buildClientLabelsCacheKey(m.extractClientLabelValues(c))
+}
+
 // buildClientLabelsCacheKey builds a cache key from client label values without allocations.
 // Uses strings.Builder with pre-sized buffer to minimize allocations.
 func buildClientLabelsCacheKey(values []string) string {
@@ -1120,6 +1141,7 @@ func (m *metrics) getChannelNamespaceLabel(ch string) string {
 type commandDurationLabels struct {
 	ChannelNamespace string
 	FrameType        protocol.FrameType
+	ClientLabels     string // Concatenated client label values for cache key
 }
 
 func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Duration, ch string, c *Client) {
@@ -1129,6 +1151,7 @@ func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Du
 		labels := commandDurationLabels{
 			ChannelNamespace: channelNamespace,
 			FrameType:        frameType,
+			ClientLabels:     m.clientLabelsCacheKey(c),
 		}
 		observer, ok := m.commandDurationCache.Load(labels)
 		if !ok {
@@ -1242,6 +1265,7 @@ type replyErrorLabels struct {
 	FrameType        protocol.FrameType
 	ChannelNamespace string
 	Code             string
+	ClientLabels     string // Concatenated client label values for cache key
 }
 
 func (m *metrics) incReplyError(frameType protocol.FrameType, code uint32, ch string, c *Client) {
@@ -1250,6 +1274,7 @@ func (m *metrics) incReplyError(frameType protocol.FrameType, code uint32, ch st
 		ChannelNamespace: channelNamespace,
 		FrameType:        frameType,
 		Code:             m.getCodeLabel(code),
+		ClientLabels:     m.clientLabelsCacheKey(c),
 	}
 	counter, ok := m.replyErrorCache.Load(labels)
 	if !ok {
@@ -1429,7 +1454,8 @@ func (m *metrics) getCodeLabel(code uint32) string {
 }
 
 type disconnectLabels struct {
-	Code string
+	Code         string
+	ClientLabels string // Concatenated client label values for cache key
 }
 
 func (m *metrics) incTransportOutgoingClose(transport string, code int) {
@@ -1474,7 +1500,8 @@ func (m *metrics) observeTransportFrameSize(transport string, size int, c *Clien
 
 func (m *metrics) incServerDisconnect(code uint32, c *Client) {
 	labels := disconnectLabels{
-		Code: m.getCodeLabel(code),
+		Code:         m.getCodeLabel(code),
+		ClientLabels: m.clientLabelsCacheKey(c),
 	}
 	counter, ok := m.disconnectCache.Load(labels)
 	if !ok {
@@ -1489,12 +1516,14 @@ func (m *metrics) incServerDisconnect(code uint32, c *Client) {
 type unsubscribeLabels struct {
 	Code             string
 	ChannelNamespace string
+	ClientLabels     string // Concatenated client label values for cache key
 }
 
 func (m *metrics) incServerUnsubscribe(code uint32, ch string, c *Client) {
 	labels := unsubscribeLabels{
 		Code:             m.getCodeLabel(code),
 		ChannelNamespace: m.getChannelNamespaceLabel(ch),
+		ClientLabels:     m.clientLabelsCacheKey(c),
 	}
 	counter, ok := m.unsubscribeCache.Load(labels)
 	if !ok {
