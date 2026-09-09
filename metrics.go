@@ -179,6 +179,7 @@ type metrics struct {
 	transportMessagesSentCache      sync.Map
 	transportMessagesReceivedCache  sync.Map
 	transportFrameSizeCache         sync.Map
+	pingPongCache                   sync.Map
 	commandDurationCache            sync.Map
 	replyErrorCache                 sync.Map
 	actionCache                     sync.Map
@@ -342,7 +343,9 @@ func (m *metrics) extractClientLabelValues(c *Client) []string {
 // metric.
 //
 // It reuses the key precomputed on the client at connect time, so the hot path
-// does no allocation.
+// does no allocation. The fallback below does allocate, but only runs for a
+// client whose combination is not cached yet - one observed before connect
+// completes, or none at all.
 func (m *metrics) clientLabelsCacheKey(c *Client) string {
 	if len(m.config.ClientLabels) == 0 {
 		return ""
@@ -352,7 +355,14 @@ func (m *metrics) clientLabelsCacheKey(c *Client) string {
 			return combo.cacheKey
 		}
 	}
-	return buildClientLabelsCacheKey(m.extractClientLabelValues(c))
+	values := m.extractClientLabelValues(c)
+	if values == nil {
+		// No client at all. appendClientLabels resolves this to a full set of
+		// empty values, so the key has to be built over the same shape - not
+		// over nil, which would key the all-empty combination twice.
+		values = make([]string, len(m.config.ClientLabels))
+	}
+	return buildClientLabelsCacheKey(values)
 }
 
 // buildClientLabelsCacheKey builds a cache key from client label values without allocations.
@@ -1233,8 +1243,29 @@ func (m *metrics) observeBroadcastDuration(started time.Time, ch string) {
 	observer.(prometheus.Observer).Observe(time.Since(started).Seconds())
 }
 
-func (m *metrics) observePingPongDuration(duration time.Duration, transport string) {
-	m.pingPongDurationHistogram.WithLabelValues(transport).Observe(duration.Seconds())
+type pingPongLabels struct {
+	Transport    string
+	ClientLabels string // Concatenated client label values for cache key
+}
+
+// observePingPongDuration records the round trip time of one server ping and
+// the client pong answering it.
+//
+// The resolved observer is cached per label combination, as the transport frame
+// size histogram is: this runs once per ping interval per connection, so on a
+// node holding many connections it is a steady stream of label lookups.
+func (m *metrics) observePingPongDuration(duration time.Duration, transport string, c *Client) {
+	labels := pingPongLabels{
+		Transport:    transport,
+		ClientLabels: m.clientLabelsCacheKey(c),
+	}
+	observer, ok := m.pingPongCache.Load(labels)
+	if !ok {
+		baseLabels := []string{transport}
+		observer = m.pingPongDurationHistogram.WithLabelValues(m.appendClientLabels(baseLabels, c)...)
+		m.pingPongCache.Store(labels, observer)
+	}
+	observer.(prometheus.Observer).Observe(duration.Seconds())
 }
 
 func (m *metrics) setBuildInfo(version string) {
@@ -1290,9 +1321,10 @@ type recoverLabels struct {
 	ChannelNamespace string
 	Success          string
 	HasPublications  string
+	ClientLabels     string // Concatenated client label values for cache key
 }
 
-func (m *metrics) incRecover(success bool, ch string, hasPublications bool) {
+func (m *metrics) incRecover(success bool, ch string, hasPublications bool, c *Client) {
 	var successStr string
 	if success {
 		successStr = "yes"
@@ -1310,19 +1342,21 @@ func (m *metrics) incRecover(success bool, ch string, hasPublications bool) {
 		ChannelNamespace: channelNamespace,
 		Success:          successStr,
 		HasPublications:  hasPubsStr,
+		ClientLabels:     m.clientLabelsCacheKey(c),
 	}
 	counter, ok := m.recoverCache.Load(labels)
 	if !ok {
-		counter = m.recoverCount.WithLabelValues(successStr, channelNamespace, hasPubsStr)
+		baseLabels := []string{successStr, channelNamespace, hasPubsStr}
+		counter = m.recoverCount.WithLabelValues(m.appendClientLabels(baseLabels, c)...)
 		m.recoverCache.Store(labels, counter)
 	}
 	counter.(prometheus.Counter).Inc()
 }
 
-func (m *metrics) observeRecoveredPublications(count int, ch string) {
+func (m *metrics) observeRecoveredPublications(count int, ch string, c *Client) {
 	if m.recoveredPublications != nil {
-		channelNamespace := m.getChannelNamespaceLabel(ch)
-		m.recoveredPublications.WithLabelValues(channelNamespace).Observe(float64(count))
+		baseLabels := []string{m.getChannelNamespaceLabel(ch)}
+		m.recoveredPublications.WithLabelValues(m.appendClientLabels(baseLabels, c)...).Observe(float64(count))
 	}
 }
 

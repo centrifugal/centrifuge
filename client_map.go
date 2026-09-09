@@ -942,8 +942,8 @@ func (c *Client) handleMapTransitionToLive(
 	c.releaseSubscribeCommandReply(protoReply)
 	c.node.metrics.incActionCount(params.metricsAction, channel)
 	if params.isRecovery && req.Recover {
-		c.node.metrics.incRecover(true, channel, len(recoveredPubs) > 0)
-		c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
+		c.node.metrics.incRecover(true, channel, len(recoveredPubs) > 0, c)
+		c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel, c)
 	}
 
 	// Stop buffering after response written.

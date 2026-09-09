@@ -177,7 +177,7 @@ func BenchmarkMetricsIncRecover(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			m.incRecover(true, channels[i%1024], false)
+			m.incRecover(true, channels[i%1024], false, nil)
 			i++
 		}
 	})
@@ -579,12 +579,12 @@ func TestMetrics(t *testing.T) {
 				}
 
 				m.observeSurveyDuration("test", time.Second)
-				m.incRecover(true, "channel"+strconv.Itoa(i%2), false)
-				m.incRecover(false, "channel"+strconv.Itoa(i%2), false)
-				m.observeRecoveredPublications(10, "channel"+strconv.Itoa(i%2))
+				m.incRecover(true, "channel"+strconv.Itoa(i%2), false, nil)
+				m.incRecover(false, "channel"+strconv.Itoa(i%2), false, nil)
+				m.observeRecoveredPublications(10, "channel"+strconv.Itoa(i%2), nil)
 				m.observePubSubDeliveryLag(100, "channel"+strconv.Itoa(i%2))
 				m.observePubSubDeliveryLag(-10, "channel"+strconv.Itoa(i%2))
-				m.observePingPongDuration(time.Second, transportWebsocket)
+				m.observePingPongDuration(time.Second, transportWebsocket, nil)
 				m.incServerDisconnect(3000, nil)
 				m.incServerDisconnect(30000, nil)
 				m.incServerUnsubscribe(2500, "channel"+strconv.Itoa(i%2), nil)
@@ -906,23 +906,26 @@ func TestMetrics_EnableNativeHistograms(t *testing.T) {
 	}
 }
 
-// TestClientLabelsMetricCacheIsPerLabelCombination pins that the metric caches
-// which resolve a Prometheus child once and keep it are keyed by the client
-// label combination as well.
+// TestClientLabelsMetricCacheIsPerLabelCombination pins that every metric
+// declaring client labels resolves its Prometheus child per label combination.
 //
-// These caches exist so the hot path does not re-hash label values on every
-// call, but the cached child is bound to the label values it was created with.
-// A key that omits them makes the first client to reach a given (code,
-// namespace, frame type) own the child forever: every later client increments
-// the first one's series regardless of its own labels, so one app_region gets
-// all the traffic and the others report zero.
+// Two failures are covered. The caches which resolve a child once and keep it
+// exist so the hot path does not re-hash label values on every call, but the
+// cached child is bound to the label values it was created with: a key that
+// omits them makes the first client to reach a given (code, namespace, frame
+// type) own the child forever, so one app_region gets all the traffic and the
+// others report zero. And a metric declaring client-label dimensions while
+// passing only the base values does not mis-record at all - WithLabelValues
+// panics on the cardinality mismatch, taking down whichever goroutine emitted
+// it.
 func TestClientLabelsMetricCacheIsPerLabelCombination(t *testing.T) {
 	t.Parallel()
 
 	m, err := newMetricsRegistry(MetricsConfig{
-		MetricsNamespace:   "test_client_label_cache",
-		RegistererGatherer: prometheus.NewRegistry(),
-		ClientLabels:       []string{"region"},
+		MetricsNamespace:                     "test_client_label_cache",
+		RegistererGatherer:                   prometheus.NewRegistry(),
+		ClientLabels:                         []string{"region"},
+		EnableRecoveredPublicationsHistogram: true,
 	})
 	require.NoError(t, err)
 
@@ -957,6 +960,9 @@ func TestClientLabelsMetricCacheIsPerLabelCombination(t *testing.T) {
 		m.incServerUnsubscribe(2000, "ch", c)
 		m.incReplyError(protocol.FrameTypeSubscribe, 100, "ch", c)
 		m.observeCommandDuration(protocol.FrameTypeSubscribe, time.Millisecond, "ch", c)
+		m.incRecover(true, "ch", true, c)
+		m.observeRecoveredPublications(3, "ch", c)
+		m.observePingPongDuration(time.Millisecond, transportWebsocket, c)
 	}
 
 	for _, region := range []string{"eu", "us"} {
@@ -968,5 +974,11 @@ func TestClientLabelsMetricCacheIsPerLabelCombination(t *testing.T) {
 			"reply error count for app_region=%s", region)
 		require.Equal(t, uint64(1), histogramCount(m.commandDurationHistogram, "subscribe", "", region),
 			"command duration count for app_region=%s", region)
+		require.Equal(t, float64(1), counterValue(m.recoverCount, "yes", "", "yes", region),
+			"recover count for app_region=%s", region)
+		require.Equal(t, uint64(1), histogramCount(m.recoveredPublications, "", region),
+			"recovered publications count for app_region=%s", region)
+		require.Equal(t, uint64(1), histogramCount(m.pingPongDurationHistogram, transportWebsocket, region),
+			"ping pong count for app_region=%s", region)
 	}
 }
