@@ -3196,8 +3196,11 @@ func parseDeltaMessage(data []byte) (uint64, string, []byte, bool, []byte, error
 		return 0, "", nil, false, nil, fmt.Errorf("delta: invalid prev length: %w", err)
 	}
 
-	// Extract prev_protobuf
+	// Extract prev_protobuf. The length comes off the wire and may be negative.
 	remaining = remaining[thirdColon+1:]
+	if prevLen < 0 {
+		return 0, "", nil, false, nil, fmt.Errorf("delta: negative prev length")
+	}
 	if len(remaining) < prevLen {
 		return 0, "", nil, false, nil, fmt.Errorf("delta: insufficient data for prev protobuf")
 	}
@@ -3220,6 +3223,9 @@ func parseDeltaMessage(data []byte) (uint64, string, []byte, bool, []byte, error
 
 	// Extract curr_protobuf
 	remaining = remaining[fourthColon+1:]
+	if currLen < 0 {
+		return 0, "", nil, false, nil, fmt.Errorf("delta: negative curr length")
+	}
 	if len(remaining) < currLen {
 		return 0, "", nil, false, nil, fmt.Errorf("delta: insufficient data for curr protobuf")
 	}

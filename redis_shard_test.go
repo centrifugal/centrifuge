@@ -246,3 +246,120 @@ func TestRedisShardModeStandalone(t *testing.T) {
 	s3 := &RedisShard{isSentinel: true}
 	require.Equal(t, RedisShardModeSentinel, s3.Mode())
 }
+
+// The parsers below consume data read back from Redis - PUB/SUB payloads,
+// history stream values, map state values. Every length in those formats is
+// taken off the wire, so a malformed or foreign message must be rejected rather
+// than sliced with. They run on the PUB/SUB processing goroutine, where a panic
+// is not recovered and takes the process down, and the same message reaches
+// every subscribed node.
+//
+// They live in this file, rather than beside the parsers in
+// broker_redis_test.go and map_broker_redis_test.go, because those carry the
+// integration build tag: the parsers are pure functions needing no Redis, and
+// tests for them must run in the default suite.
+
+func TestExtractPushDataMalformed(t *testing.T) {
+	t.Parallel()
+
+	for _, data := range []string{
+		"__p__x",           // header shorter than the "p1:" tag
+		"__p1__x",          // header one byte short of the tag
+		"__p__",            // no payload either
+		"__d1:1:e:5:abcde", // delta prev length equal to what remains
+		"__d1:1:e:-1:x:1:y",
+		"__d1:1:e:1:a:-1:y",
+		"__d1:",
+		"__d__",
+		"__j__",
+		"__l__",
+		"__",
+		"__x__payload",
+	} {
+		require.NotPanics(t, func() {
+			_, _, _, _, _, _ = extractPushData([]byte(data))
+		}, "extractPushData(%q)", data)
+	}
+
+	// A well formed publication still parses.
+	payload, pushType, sp, delta, prevPayload, ok := extractPushData([]byte("__p1:42:epoch__payload"))
+	require.True(t, ok)
+	require.Equal(t, pubPushType, pushType)
+	require.Equal(t, "payload", string(payload))
+	require.Equal(t, uint64(42), sp.Offset)
+	require.Equal(t, "epoch", sp.Epoch)
+	require.False(t, delta)
+	require.Nil(t, prevPayload)
+}
+
+func TestParseDeltaPushMalformed(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range []string{
+		"d1:1:e:5:abcde",  // prev payload length leaves no room for the separator
+		"d1:1:e:-1:x:1:y", // negative prev payload length
+		"d1:1:e:1:a:-1:y", // negative payload length
+		"d1:1:e:1:a:9:y",  // payload length past the end
+		"d1:",
+		"d1:1:",
+		"d1:1:e:",
+	} {
+		_, err := parseDeltaPush(input)
+		require.Error(t, err, "parseDeltaPush(%q)", input)
+	}
+
+	parsed, err := parseDeltaPush("d1:7:ep:3:abc:5:hello")
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), parsed.Offset)
+	require.Equal(t, "ep", parsed.Epoch)
+	require.Equal(t, "abc", parsed.PrevPayload)
+	require.Equal(t, "hello", parsed.Payload)
+}
+
+func TestParseMapMessageMalformed(t *testing.T) {
+	t.Parallel()
+
+	for _, data := range []string{
+		"d:1:e:-1:x:1:y", // negative prev length
+		"d:1:e:1:a:-1:y", // negative curr length
+		"d:1:e:5:abc",    // prev length past the end
+		"d:",
+		"d:1:e:1:a:9:y",
+	} {
+		require.NotPanics(t, func() {
+			_, _, _, _, _, _ = parseMessage([]byte(data))
+		}, "parseMessage(%q)", data)
+	}
+
+	offset, epoch, payload, isDelta, prevPayload, err := parseMessage([]byte("d:7:ep:3:abc:5:hello"))
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), offset)
+	require.Equal(t, "ep", epoch)
+	require.Equal(t, "hello", string(payload))
+	require.True(t, isDelta)
+	require.Equal(t, "abc", string(prevPayload))
+}
+
+func FuzzExtractPushData(f *testing.F) {
+	for _, seed := range []string{
+		"__p1:42:epoch__payload", "__j__info", "__l__info",
+		"__d1:7:ep:3:abc:5:hello", "__p__x", "__d1:1:e:-1:x:1:y", "plain", "__",
+	} {
+		f.Add([]byte(seed))
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_, _, _, _, _, _ = extractPushData(data)
+	})
+}
+
+func FuzzParseMapMessage(f *testing.F) {
+	for _, seed := range []string{
+		"d:7:ep:3:abc:5:hello", "1:epoch:protobuf", "raw", "d:", "d:1:e:-1:x:1:y", "",
+	} {
+		f.Add([]byte(seed))
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_, _, _, _, _, _ = parseMessage(data)
+		_, _, _, _ = parseStateValue(data)
+	})
+}
