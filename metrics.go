@@ -510,6 +510,11 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		if cacheTTL < 0 {
 			return nil, errors.New("channel namespace cache TTL must be positive")
 		}
+		if cacheSize < -1 {
+			// -1 is the documented way to disable the cache; anything below it is
+			// a misconfiguration, and the cache constructor panics on it.
+			return nil, errors.New("channel namespace cache size must be positive, or -1 to disable the cache")
+		}
 		if cacheSize != -1 {
 			nsCache = otter.Must(&otter.Options[string, string]{
 				MaximumSize:      cacheSize,

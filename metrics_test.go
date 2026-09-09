@@ -1047,3 +1047,29 @@ func TestSubscriptionsAcceptedCounted(t *testing.T) {
 	require.NoError(t, counter.Write(&out))
 	require.Equal(t, float64(1), out.GetCounter().GetValue())
 }
+
+// TestChannelNamespaceCacheSizeValidated pins that an out-of-range cache size is
+// reported as an error from New rather than panicking inside the cache
+// constructor, the way a negative TTL already is.
+func TestChannelNamespaceCacheSizeValidated(t *testing.T) {
+	t.Parallel()
+
+	_, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:          "test_ns_cache_size",
+		RegistererGatherer:        prometheus.NewRegistry(),
+		GetChannelNamespaceLabel:  func(ch string) string { return "ns" },
+		ChannelNamespaceCacheSize: -5,
+	})
+	require.Error(t, err)
+
+	// -1 stays the documented way to disable the cache.
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:          "test_ns_cache_disabled",
+		RegistererGatherer:        prometheus.NewRegistry(),
+		GetChannelNamespaceLabel:  func(ch string) string { return "ns" },
+		ChannelNamespaceCacheSize: -1,
+	})
+	require.NoError(t, err)
+	require.Nil(t, m.nsCache)
+	require.Equal(t, "ns", m.getChannelNamespaceLabel("ch"))
+}
