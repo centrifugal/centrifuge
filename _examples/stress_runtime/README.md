@@ -116,6 +116,24 @@ was expected vs. observed and where. Failures are listed first in the report.
 | `sub_refresh_expiry` | a 2s-TTL subscription survives several TTL windows via server-side sub refresh |
 | `recovery_storm` | subscribers kicked off repeatedly during continuous publishing end with **zero gaps and zero duplicates** |
 
+### Keyed subscriptions (map state and shared poll)
+
+Both kinds hand a connection a set of keys rather than a stream of
+publications, and both have a handshake no other scenario exercises: a map
+subscription pages through channel state before going live, a shared poll
+subscription tracks keys that a server-side refresh loop polls through
+`OnSharedPoll`. The shared poll scenarios answer from a harness-owned store, so
+moving a key's version there and then seeing the update arrive is an end-to-end
+check of the refresh loop, not of a mock.
+
+| Scenario | Invariant |
+|---|---|
+| `map_state_live` | state paging delivers every key exactly once across pages, the server switches the reported phase to LIVE on the last page, and updates and removals then arrive on the same subscription |
+| `map_ttl_removal` | keys that expire by `KeyTTL` are delivered as removals — the cleanup path nothing else drives |
+| `map_churn` | connections churning through the whole state handshake while keys change underneath leave the hub with no subscribers |
+| `shared_poll_track` | every tracked key is refreshed at its current version, a removal is delivered, and an untracked key goes quiet while its neighbours keep updating |
+| `shared_poll_churn` | subscribe/track/untrack/drop cycles against a 50ms refresh loop produce no errors and drain the hub |
+
 ### Node APIs and payload edges
 
 | Scenario | Invariant |
@@ -162,6 +180,7 @@ gap that survives to the client is a real defect, not flakiness.
 | `redis_history_pagination` | a stream written on node A pages forward and reads back in reverse from node B |
 | `redis_recovery_storm` | subscribers on both nodes kicked repeatedly during continuous publishing end with zero gaps and zero duplicates |
 | `redis_chaos` | mixed operations from many clients on both nodes for the whole load window, no errors |
+| `redis_map_cross_node` | a map key written through node A is in the state a subscriber reads on node B, and later updates and removals cross nodes live |
 
 ### Final
 
@@ -200,7 +219,8 @@ frames that grew, biggest first — that list *is* the leak.
   in `main.go`; a name starting with `redis_` is dropped automatically under
   `-no-redis`.
 - Channel behaviour is selected by name prefix (`recov:`, `delta:`, `pos:`,
-  `cache:`, `pres:`, `plain:`, `tags:`, `stags:`, `subexp:`, `deny:`, `nopub:`)
+  `cache:`, `pres:`, `plain:`, `tags:`, `stags:`, `subexp:`, `deny:`, `nopub:`,
+  `map:`, `mapttl:`, `poll:`)
   via `subOptions`, and per-connection behaviour by user-id prefix (`refresh:`,
   `expire:`, `ping:`, `ssub:<channel>[,<channel>…]`), so one set of handlers
   serves every scenario.

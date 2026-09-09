@@ -29,7 +29,15 @@ const (
 	chDeny   = "deny:"   // subscribe is rejected with ErrorPermissionDenied
 	chNoPub  = "nopub:"  // client publish is rejected with ErrorPermissionDenied
 	chSubExp = "subexp:" // subscription with a short TTL (exercises sub refresh)
+	chMap    = "map:"    // map subscription: keyed state with stream + live phases
+	chMapTTL = "mapttl:" // map subscription whose keys expire quickly (cleanup worker)
+	chPoll   = "poll:"   // shared poll subscription: per-connection tracked keys
 )
+
+// isMapChannel reports whether a channel name selects a map subscription.
+func isMapChannel(ch string) bool {
+	return strings.HasPrefix(ch, chMap) || strings.HasPrefix(ch, chMapTTL)
+}
 
 // User (token) prefixes select per-connection behaviour in OnConnecting.
 const (
@@ -67,6 +75,12 @@ func subOptions(channel string) centrifuge.SubscribeOptions {
 	if strings.HasPrefix(channel, chDelta) {
 		o.AllowedDeltaTypes = []centrifuge.DeltaType{centrifuge.DeltaTypeFossil}
 	}
+	if isMapChannel(channel) {
+		return centrifuge.SubscribeOptions{Type: centrifuge.SubscriptionTypeMap}
+	}
+	if strings.HasPrefix(channel, chPoll) {
+		return centrifuge.SubscribeOptions{Type: centrifuge.SubscriptionTypeSharedPoll}
+	}
 	// Presence + join/leave everywhere they don't conflict — cheap and lets any
 	// channel be inspected. Kept off delta channels to avoid mixing concerns, and
 	// off "plain:" channels used by scenarios that subscribe to thousands of them.
@@ -90,14 +104,61 @@ func historyPublishOptions(channel string) centrifuge.PublishOptions {
 	return opts
 }
 
+// mapChannelOptions gives "map:" channels a generous key TTL and "mapttl:"
+// channels a short one, so a scenario can watch keys expire and the cleanup
+// worker generate the removals for them.
+func mapChannelOptions(channel string) centrifuge.MapChannelOptions {
+	o := centrifuge.MapChannelOptions{
+		Mode:            centrifuge.MapModeEphemeral,
+		KeyTTL:          2 * time.Minute,
+		MinPageSize:     1,
+		DefaultPageSize: 10,
+		MaxPageSize:     100,
+	}
+	if strings.HasPrefix(channel, chMapTTL) {
+		o.KeyTTL = 3 * time.Second
+	}
+	return o
+}
+
+// sharedPollOptions drives the refresh loop fast enough for a scenario to see
+// several cycles without waiting on wall clock.
+func sharedPollOptions() centrifuge.SharedPollChannelOptions {
+	return centrifuge.SharedPollChannelOptions{
+		RefreshInterval:      50 * time.Millisecond,
+		RefreshBatchSize:     64,
+		MaxKeysPerConnection: 128,
+	}
+}
+
+// withKeyedFeatures adds the map and shared-poll configuration every node in the
+// suite shares.
+func withKeyedFeatures(cfg centrifuge.Config) centrifuge.Config {
+	cfg.Map = centrifuge.MapConfig{
+		GetMapChannelOptions: func(channel string) centrifuge.MapChannelOptions {
+			return mapChannelOptions(channel)
+		},
+	}
+	cfg.SharedPoll = centrifuge.SharedPollConfig{
+		GetSharedPollChannelOptions: func(channel string) (centrifuge.SharedPollChannelOptions, bool) {
+			if !strings.HasPrefix(channel, chPoll) {
+				return centrifuge.SharedPollChannelOptions{}, false
+			}
+			return sharedPollOptions(), true
+		},
+	}
+	return cfg
+}
+
 // nodeConfig is the tuning that differs between the nodes the suite runs.
 type nodeConfig struct {
 	name string
 	cfg  centrifuge.Config
 	ws   centrifuge.WebsocketConfig
-	// storage builds the broker and presence manager. Nil means in-memory. The
-	// returned closer releases whatever the storage holds (Redis clients).
-	storage func(*centrifuge.Node) (centrifuge.Broker, centrifuge.PresenceManager, func(), error)
+	// storage builds the broker, presence manager and map broker. Nil means
+	// in-memory. The returned closer releases whatever the storage holds (Redis
+	// clients).
+	storage func(*centrifuge.Node) (centrifuge.Broker, centrifuge.PresenceManager, centrifuge.MapBroker, func(), error)
 }
 
 // mainNodeConfig is generous on purpose: bursty concurrent scenarios must not
@@ -106,11 +167,11 @@ type nodeConfig struct {
 func mainNodeConfig() nodeConfig {
 	return nodeConfig{
 		name: "main",
-		cfg: centrifuge.Config{
+		cfg: withKeyedFeatures(centrifuge.Config{
 			LogLevel:           centrifuge.LogLevelError,
 			ClientQueueMaxSize: 128 * 1024 * 1024,
 			ClientChannelLimit: 100000,
-		},
+		}),
 		ws: centrifuge.WebsocketConfig{
 			UseWriteBufferPool: true,
 			// Large enough for the megabyte-scale client publishes in large_payloads.
@@ -151,7 +212,7 @@ func strictNodeConfig() nodeConfig {
 func redisNodeConfig(name, address, prefix string) nodeConfig {
 	return nodeConfig{
 		name: name,
-		cfg: centrifuge.Config{
+		cfg: withKeyedFeatures(centrifuge.Config{
 			Name:               name,
 			LogLevel:           centrifuge.LogLevelError,
 			ClientQueueMaxSize: 128 * 1024 * 1024,
@@ -159,15 +220,15 @@ func redisNodeConfig(name, address, prefix string) nodeConfig {
 			// Keep every key this run creates short-lived: the suite uses a fresh
 			// prefix per run and never deletes anything, so Redis must expire it.
 			HistoryMetaTTL: 2 * time.Minute,
-		},
+		}),
 		ws: centrifuge.WebsocketConfig{
 			UseWriteBufferPool: true,
 			MessageSizeLimit:   4 * 1024 * 1024,
 		},
-		storage: func(node *centrifuge.Node) (centrifuge.Broker, centrifuge.PresenceManager, func(), error) {
+		storage: func(node *centrifuge.Node) (centrifuge.Broker, centrifuge.PresenceManager, centrifuge.MapBroker, func(), error) {
 			shard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{Address: address})
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("redis shard: %w", err)
+				return nil, nil, nil, nil, fmt.Errorf("redis shard: %w", err)
 			}
 			shards := []*centrifuge.RedisShard{shard}
 			broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
@@ -176,7 +237,7 @@ func redisNodeConfig(name, address, prefix string) nodeConfig {
 			})
 			if err != nil {
 				shard.Close()
-				return nil, nil, nil, fmt.Errorf("redis broker: %w", err)
+				return nil, nil, nil, nil, fmt.Errorf("redis broker: %w", err)
 			}
 			pm, err := centrifuge.NewRedisPresenceManager(node, centrifuge.RedisPresenceManagerConfig{
 				Prefix:      prefix,
@@ -186,16 +247,27 @@ func redisNodeConfig(name, address, prefix string) nodeConfig {
 			if err != nil {
 				_ = broker.Close(context.Background())
 				shard.Close()
-				return nil, nil, nil, fmt.Errorf("redis presence manager: %w", err)
+				return nil, nil, nil, nil, fmt.Errorf("redis presence manager: %w", err)
+			}
+			mapBroker, err := centrifuge.NewRedisMapBroker(node, centrifuge.RedisMapBrokerConfig{
+				Prefix: prefix,
+				Shards: shards,
+			})
+			if err != nil {
+				_ = broker.Close(context.Background())
+				_ = pm.Close(context.Background())
+				shard.Close()
+				return nil, nil, nil, nil, fmt.Errorf("redis map broker: %w", err)
 			}
 			closer := func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				_ = broker.Close(ctx)
 				_ = pm.Close(ctx)
+				_ = mapBroker.Close(ctx)
 				shard.Close()
 			}
-			return broker, pm, closer, nil
+			return broker, pm, mapBroker, closer, nil
 		},
 	}
 }
@@ -211,12 +283,23 @@ func buildNode(nc nodeConfig) (*centrifuge.Node, func(), error) {
 	if storage == nil {
 		storage = memoryStorage
 	}
-	broker, pm, closeStorage, err := storage(node)
+	broker, pm, mapBroker, closeStorage, err := storage(node)
 	if err != nil {
 		return nil, nil, err
 	}
 	node.SetBroker(broker)
 	node.SetPresenceManager(pm)
+	if mapBroker != nil {
+		node.SetMapBroker(mapBroker)
+	}
+
+	// Shared poll answers from the harness-owned store, so a scenario can move a
+	// key's version and then assert the update reached the connections tracking
+	// it. Must be installed before Run - Run refuses a shared poll config without
+	// a handler.
+	node.OnSharedPoll(func(_ context.Context, e centrifuge.SharedPollEvent) (centrifuge.SharedPollResult, error) {
+		return pollStore.poll(e), nil
+	})
 
 	// Survey/notification handlers must be installed before Run.
 	node.OnSurvey(func(e centrifuge.SurveyEvent, cb centrifuge.SurveyCallback) {
@@ -241,16 +324,20 @@ func buildNode(nc nodeConfig) (*centrifuge.Node, func(), error) {
 	return node, closer, nil
 }
 
-func memoryStorage(node *centrifuge.Node) (centrifuge.Broker, centrifuge.PresenceManager, func(), error) {
+func memoryStorage(node *centrifuge.Node) (centrifuge.Broker, centrifuge.PresenceManager, centrifuge.MapBroker, func(), error) {
 	broker, err := centrifuge.NewMemoryBroker(node, centrifuge.MemoryBrokerConfig{})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	pm, err := centrifuge.NewMemoryPresenceManager(node, centrifuge.MemoryPresenceManagerConfig{})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return broker, pm, func() {}, nil
+	mapBroker, err := centrifuge.NewMemoryMapBroker(node, centrifuge.MemoryMapBrokerConfig{})
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return broker, pm, mapBroker, func() {}, nil
 }
 
 func installHandlers(node *centrifuge.Node) {
@@ -363,6 +450,9 @@ func installHandlers(node *centrifuge.Node) {
 		})
 		client.OnSubRefresh(func(e centrifuge.SubRefreshEvent, cb centrifuge.SubRefreshCallback) {
 			cb(centrifuge.SubRefreshReply{ExpireAt: time.Now().Add(2 * time.Second).Unix()}, nil)
+		})
+		client.OnTrack(func(e centrifuge.TrackEvent, cb centrifuge.TrackCallback) {
+			cb(centrifuge.TrackReply{}, nil)
 		})
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
 			if debugDisc && e.Code != centrifuge.DisconnectConnectionClosed.Code {

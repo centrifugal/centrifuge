@@ -148,6 +148,13 @@ func allScenarios() []scenario {
 		{name: "sub_refresh_expiry", run: subRefreshExpiry},
 		{name: "recovery_storm", run: recoveryStorm},
 
+		// Keyed subscriptions: map state/stream/live and shared poll tracking.
+		{name: "map_state_live", run: mapStateLive},
+		{name: "map_ttl_removal", run: mapTTLRemoval},
+		{name: "map_churn", run: mapChurn},
+		{name: "shared_poll_track", run: sharedPollTrack},
+		{name: "shared_poll_churn", run: sharedPollChurn},
+
 		// Node APIs and payload edges.
 		{name: "survey_notify", run: surveyNotify},
 		{name: "async_send_echo", run: asyncSendEcho},
@@ -179,6 +186,7 @@ func allScenarios() []scenario {
 		{name: "redis_cache_recovery", run: redisCacheRecovery},
 		{name: "redis_history_pagination", run: redisHistoryPagination},
 		{name: "redis_recovery_storm", run: redisRecoveryStorm},
+		{name: "redis_map_cross_node", run: redisMapCrossNode},
 	}
 }
 
