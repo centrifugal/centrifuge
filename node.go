@@ -1267,6 +1267,12 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Counted here, not inside hub.addSub, to mirror connectionsAccepted: every
+	// accepted subscription counts, including a resubscribe that overwrites an
+	// existing entry, while the inflight gauge only moves for a genuinely new
+	// one.
+	acceptedLabels := []string{sub.client.metricName, n.metrics.getChannelNamespaceLabel(ch)}
+	n.metrics.subscriptionsAccepted.WithLabelValues(n.metrics.appendClientLabels(acceptedLabels, sub.client)...).Inc()
 	if first {
 		if n.config.GetChannelMediumOptions != nil {
 			mediumOptions := n.config.GetChannelMediumOptions(ch)

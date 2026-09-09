@@ -347,12 +347,25 @@ func (m *metrics) extractClientLabelValues(c *Client) []string {
 // client whose combination is not cached yet - one observed before connect
 // completes, or none at all.
 func (m *metrics) clientLabelsCacheKey(c *Client) string {
+	_, key := m.clientLabelValuesAndKey(c)
+	return key
+}
+
+// clientLabelValuesAndKey resolves both the client label values and the cache
+// key identifying them, returning (nil, "") when client labels are not
+// configured.
+//
+// Paths that need the values as well as the key must go through this rather
+// than calling buildClientLabelsCacheKey per call: the key precomputed on the
+// client at connect time is reused as is, which is what keeps the per-message
+// paths allocation free.
+func (m *metrics) clientLabelValuesAndKey(c *Client) ([]string, string) {
 	if len(m.config.ClientLabels) == 0 {
-		return ""
+		return nil, ""
 	}
 	if c != nil {
 		if combo := c.labelCombinationCached.Load(); combo != nil {
-			return combo.cacheKey
+			return combo.labelValues, combo.cacheKey
 		}
 	}
 	values := m.extractClientLabelValues(c)
@@ -362,7 +375,7 @@ func (m *metrics) clientLabelsCacheKey(c *Client) string {
 		// over nil, which would key the all-empty combination twice.
 		values = make([]string, len(m.config.ClientLabels))
 	}
-	return buildClientLabelsCacheKey(values)
+	return values, buildClientLabelsCacheKey(values)
 }
 
 // buildClientLabelsCacheKey builds a cache key from client label values without allocations.
@@ -1439,21 +1452,12 @@ func (m *metrics) incTransportMessagesSent(transport string, frameType protocol.
 
 func (m *metrics) incTransportMessagesReceived(transport string, frameType protocol.FrameType, channel string, size int, c *Client) {
 	channelNamespace := m.getChannelNamespaceLabel(channel)
-	clientLabelValues := m.extractClientLabelValues(c)
 
-	// Apply client labels if they are configured
+	// Runs once per received command, so the label values and their key come
+	// from the combination cached on the client - building the key here would
+	// allocate on every message.
+	clientLabelValues, clientLabelsKey := m.clientLabelValuesAndKey(c)
 	useClientLabels := len(m.config.ClientLabels) > 0
-	if useClientLabels {
-		if clientLabelValues == nil {
-			clientLabelValues = make([]string, len(m.config.ClientLabels))
-		}
-	} else {
-		// Client labels not configured - don't use them even if provided
-		clientLabelValues = nil
-	}
-
-	// Build cache key including client labels
-	clientLabelsKey := buildClientLabelsCacheKey(clientLabelValues)
 
 	labels := transportMessageLabels{
 		Transport:        transport,
@@ -1510,15 +1514,12 @@ type transportFrameLabels struct {
 // the cache it measured 52ns/frame, and 63ns with an allocation when client
 // labels are configured; with it the label work is a single map load.
 func (m *metrics) observeTransportFrameSize(transport string, size int, c *Client) {
-	clientLabelValues := m.extractClientLabelValues(c)
+	clientLabelValues, clientLabelsKey := m.clientLabelValuesAndKey(c)
 	useClientLabels := len(m.config.ClientLabels) > 0
-	if useClientLabels && clientLabelValues == nil {
-		clientLabelValues = make([]string, len(m.config.ClientLabels))
-	}
 
 	labels := transportFrameLabels{
 		Transport:    transport,
-		ClientLabels: buildClientLabelsCacheKey(clientLabelValues),
+		ClientLabels: clientLabelsKey,
 	}
 	observer, ok := m.transportFrameSizeCache.Load(labels)
 	if !ok {

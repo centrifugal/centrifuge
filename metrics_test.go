@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"context"
 	"strconv"
 	"testing"
 	"time"
@@ -981,4 +982,68 @@ func TestClientLabelsMetricCacheIsPerLabelCombination(t *testing.T) {
 		require.Equal(t, uint64(1), histogramCount(m.pingPongDurationHistogram, transportWebsocket, region),
 			"ping pong count for app_region=%s", region)
 	}
+}
+
+// TestClientLabelsHotPathsDoNotAllocate pins that the per-message and per-frame
+// metric paths reuse the label combination cached on the client instead of
+// rebuilding its cache key, which allocated a string on every received command
+// and every read frame once ClientLabels was configured.
+func TestClientLabelsHotPathsDoNotAllocate(t *testing.T) {
+	// Not t.Parallel: testing.AllocsPerRun cannot run in a parallel test.
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:   "test_client_label_alloc",
+		RegistererGatherer: prometheus.NewRegistry(),
+		ClientLabels:       []string{"region"},
+	})
+	require.NoError(t, err)
+
+	c := &Client{labels: map[string]string{"region": "eu"}}
+	c.labelCombinationCached.Store(m.getOrCreateClientLabelCombinationFromLabels(c.labels))
+
+	// Warm the caches so the measured runs only take the hit path.
+	m.incTransportMessagesSent(transportWebsocket, protocol.FrameTypePublish, "ch", 100, c)
+	m.incTransportMessagesReceived(transportWebsocket, protocol.FrameTypePublish, "ch", 100, c)
+	m.observeTransportFrameSize(transportWebsocket, 512, c)
+
+	for _, tc := range []struct {
+		name string
+		fn   func()
+	}{
+		{"sent", func() { m.incTransportMessagesSent(transportWebsocket, protocol.FrameTypePublish, "ch", 100, c) }},
+		{"received", func() {
+			m.incTransportMessagesReceived(transportWebsocket, protocol.FrameTypePublish, "ch", 100, c)
+		}},
+		{"frame_size", func() { m.observeTransportFrameSize(transportWebsocket, 512, c) }},
+	} {
+		require.Zero(t, testing.AllocsPerRun(100, tc.fn), "allocations on %s path", tc.name)
+	}
+}
+
+// TestSubscriptionsAcceptedCounted pins that the subscriptions_accepted counter
+// is actually incremented - it was declared and registered but never written,
+// so it always reported zero.
+func TestSubscriptionsAcceptedCounted(t *testing.T) {
+	t.Parallel()
+
+	n, err := New(Config{Metrics: MetricsConfig{
+		MetricsNamespace:   "test_subs_accepted",
+		RegistererGatherer: prometheus.NewRegistry(),
+	}})
+	require.NoError(t, err)
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(_ SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+	})
+
+	client := newTestSubscribedClientV2(t, n, "42", "test_channel")
+	require.NotNil(t, client)
+
+	counter, err := n.metrics.subscriptionsAccepted.GetMetricWithLabelValues(client.metricName, "")
+	require.NoError(t, err)
+	var out dto.Metric
+	require.NoError(t, counter.Write(&out))
+	require.Equal(t, float64(1), out.GetCounter().GetValue())
 }
