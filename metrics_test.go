@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"context"
 	"strconv"
 	"testing"
 	"time"
@@ -177,7 +178,7 @@ func BenchmarkMetricsIncRecover(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			m.incRecover(true, channels[i%1024], false)
+			m.incRecover(true, channels[i%1024], false, nil)
 			i++
 		}
 	})
@@ -579,12 +580,12 @@ func TestMetrics(t *testing.T) {
 				}
 
 				m.observeSurveyDuration("test", time.Second)
-				m.incRecover(true, "channel"+strconv.Itoa(i%2), false)
-				m.incRecover(false, "channel"+strconv.Itoa(i%2), false)
-				m.observeRecoveredPublications(10, "channel"+strconv.Itoa(i%2))
+				m.incRecover(true, "channel"+strconv.Itoa(i%2), false, nil)
+				m.incRecover(false, "channel"+strconv.Itoa(i%2), false, nil)
+				m.observeRecoveredPublications(10, "channel"+strconv.Itoa(i%2), nil)
 				m.observePubSubDeliveryLag(100, "channel"+strconv.Itoa(i%2))
 				m.observePubSubDeliveryLag(-10, "channel"+strconv.Itoa(i%2))
-				m.observePingPongDuration(time.Second, transportWebsocket)
+				m.observePingPongDuration(time.Second, transportWebsocket, nil)
 				m.incServerDisconnect(3000, nil)
 				m.incServerDisconnect(30000, nil)
 				m.incServerUnsubscribe(2500, "channel"+strconv.Itoa(i%2), nil)
@@ -903,5 +904,258 @@ func TestMetrics_EnableNativeHistograms(t *testing.T) {
 	}
 	for name, found := range wantHistograms {
 		require.True(t, found, "histogram metric %s not present in registry output", name)
+	}
+}
+
+// TestClientLabelsMetricCacheIsPerLabelCombination pins that every metric
+// declaring client labels resolves its Prometheus child per label combination.
+//
+// Two failures are covered. The caches which resolve a child once and keep it
+// exist so the hot path does not re-hash label values on every call, but the
+// cached child is bound to the label values it was created with: a key that
+// omits them makes the first client to reach a given (code, namespace, frame
+// type) own the child forever, so one app_region gets all the traffic and the
+// others report zero. And a metric declaring client-label dimensions while
+// passing only the base values does not mis-record at all - WithLabelValues
+// panics on the cardinality mismatch, taking down whichever goroutine emitted
+// it.
+func TestClientLabelsMetricCacheIsPerLabelCombination(t *testing.T) {
+	t.Parallel()
+
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:                     "test_client_label_cache",
+		RegistererGatherer:                   prometheus.NewRegistry(),
+		ClientLabels:                         []string{"region"},
+		EnableRecoveredPublicationsHistogram: true,
+	})
+	require.NoError(t, err)
+
+	newClient := func(region string) *Client {
+		c := &Client{labels: map[string]string{"region": region}}
+		c.labelCombinationCached.Store(m.getOrCreateClientLabelCombinationFromLabels(c.labels))
+		return c
+	}
+	eu, us := newClient("eu"), newClient("us")
+
+	counterValue := func(vec *prometheus.CounterVec, labelValues ...string) float64 {
+		t.Helper()
+		counter, err := vec.GetMetricWithLabelValues(labelValues...)
+		require.NoError(t, err)
+		var out dto.Metric
+		require.NoError(t, counter.Write(&out))
+		return out.GetCounter().GetValue()
+	}
+	histogramCount := func(vec *prometheus.HistogramVec, labelValues ...string) uint64 {
+		t.Helper()
+		obs, err := vec.GetMetricWithLabelValues(labelValues...)
+		require.NoError(t, err)
+		var out dto.Metric
+		require.NoError(t, obs.(prometheus.Metric).Write(&out))
+		return out.GetHistogram().GetSampleCount()
+	}
+
+	// Same non-client labels for both clients - only the client label differs,
+	// which is exactly the case a cache key without it collapses.
+	for _, c := range []*Client{eu, us} {
+		m.incServerDisconnect(3000, c)
+		m.incServerUnsubscribe(2000, "ch", c)
+		m.incReplyError(protocol.FrameTypeSubscribe, 100, "ch", c)
+		m.observeCommandDuration(protocol.FrameTypeSubscribe, time.Millisecond, "ch", c)
+		m.incRecover(true, "ch", true, c)
+		m.observeRecoveredPublications(3, "ch", c)
+		m.observePingPongDuration(time.Millisecond, transportWebsocket, c)
+	}
+
+	for _, region := range []string{"eu", "us"} {
+		require.Equal(t, float64(1), counterValue(m.serverDisconnectCount, "3000", region),
+			"disconnect count for app_region=%s", region)
+		require.Equal(t, float64(1), counterValue(m.serverUnsubscribeCount, "2000", "", region),
+			"unsubscribe count for app_region=%s", region)
+		require.Equal(t, float64(1), counterValue(m.replyErrorCount, "subscribe", "100", "", region),
+			"reply error count for app_region=%s", region)
+		require.Equal(t, uint64(1), histogramCount(m.commandDurationHistogram, "subscribe", "", region),
+			"command duration count for app_region=%s", region)
+		require.Equal(t, float64(1), counterValue(m.recoverCount, "yes", "", "yes", region),
+			"recover count for app_region=%s", region)
+		require.Equal(t, uint64(1), histogramCount(m.recoveredPublications, "", region),
+			"recovered publications count for app_region=%s", region)
+		require.Equal(t, uint64(1), histogramCount(m.pingPongDurationHistogram, transportWebsocket, region),
+			"ping pong count for app_region=%s", region)
+	}
+}
+
+// TestClientLabelsHotPathsDoNotAllocate pins that the per-message and per-frame
+// metric paths reuse the label combination cached on the client instead of
+// rebuilding its cache key, which allocated a string on every received command
+// and every read frame once ClientLabels was configured.
+func TestClientLabelsHotPathsDoNotAllocate(t *testing.T) {
+	// Not t.Parallel: testing.AllocsPerRun cannot run in a parallel test.
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:   "test_client_label_alloc",
+		RegistererGatherer: prometheus.NewRegistry(),
+		ClientLabels:       []string{"region"},
+	})
+	require.NoError(t, err)
+
+	c := &Client{labels: map[string]string{"region": "eu"}}
+	c.labelCombinationCached.Store(m.getOrCreateClientLabelCombinationFromLabels(c.labels))
+
+	// Warm the caches so the measured runs only take the hit path.
+	m.incTransportMessagesSent(transportWebsocket, protocol.FrameTypePublish, "ch", 100, c)
+	m.incTransportMessagesReceived(transportWebsocket, protocol.FrameTypePublish, "ch", 100, c)
+	m.observeTransportFrameSize(transportWebsocket, 512, c)
+
+	for _, tc := range []struct {
+		name string
+		fn   func()
+	}{
+		{"sent", func() { m.incTransportMessagesSent(transportWebsocket, protocol.FrameTypePublish, "ch", 100, c) }},
+		{"received", func() {
+			m.incTransportMessagesReceived(transportWebsocket, protocol.FrameTypePublish, "ch", 100, c)
+		}},
+		{"frame_size", func() { m.observeTransportFrameSize(transportWebsocket, 512, c) }},
+	} {
+		require.Zero(t, testing.AllocsPerRun(100, tc.fn), "allocations on %s path", tc.name)
+	}
+}
+
+// TestSubscriptionsAcceptedCounted pins that the subscriptions_accepted counter
+// is actually incremented - it was declared and registered but never written,
+// so it always reported zero.
+func TestSubscriptionsAcceptedCounted(t *testing.T) {
+	t.Parallel()
+
+	n, err := New(Config{Metrics: MetricsConfig{
+		MetricsNamespace:   "test_subs_accepted",
+		RegistererGatherer: prometheus.NewRegistry(),
+	}})
+	require.NoError(t, err)
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(_ SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+	})
+
+	client := newTestSubscribedClientV2(t, n, "42", "test_channel")
+	require.NotNil(t, client)
+
+	counter, err := n.metrics.subscriptionsAccepted.GetMetricWithLabelValues(client.metricName, "")
+	require.NoError(t, err)
+	var out dto.Metric
+	require.NoError(t, counter.Write(&out))
+	require.Equal(t, float64(1), out.GetCounter().GetValue())
+}
+
+// TestChannelNamespaceCacheSizeValidated pins that an out-of-range cache size is
+// reported as an error from New rather than panicking inside the cache
+// constructor, the way a negative TTL already is.
+func TestChannelNamespaceCacheSizeValidated(t *testing.T) {
+	t.Parallel()
+
+	_, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:          "test_ns_cache_size",
+		RegistererGatherer:        prometheus.NewRegistry(),
+		GetChannelNamespaceLabel:  func(ch string) string { return "ns" },
+		ChannelNamespaceCacheSize: -5,
+	})
+	require.Error(t, err)
+
+	// -1 stays the documented way to disable the cache.
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:          "test_ns_cache_disabled",
+		RegistererGatherer:        prometheus.NewRegistry(),
+		GetChannelNamespaceLabel:  func(ch string) string { return "ns" },
+		ChannelNamespaceCacheSize: -1,
+	})
+	require.NoError(t, err)
+	require.Nil(t, m.nsCache)
+	require.Equal(t, "ns", m.getChannelNamespaceLabel("ch"))
+}
+
+// TestMetricsSurfaceUnderFullConfig calls every metric recording path with all
+// MetricsConfig options turned on.
+//
+// A metric declaring label dimensions its recording path does not fill does not
+// mis-record - prometheus.WithLabelValues panics on the cardinality mismatch,
+// killing whichever goroutine emitted it. Three metrics shipped that way once
+// ClientLabels was configured, and nothing exercised them under that config, so
+// this walks the whole surface with every option enabled.
+func TestMetricsSurfaceUnderFullConfig(t *testing.T) {
+	t.Parallel()
+
+	for _, clientLabels := range [][]string{nil, {"region", "tier"}} {
+		m, err := newMetricsRegistry(MetricsConfig{
+			MetricsNamespace:                     "test_surface",
+			RegistererGatherer:                   prometheus.NewRegistry(),
+			ClientLabels:                         clientLabels,
+			GetChannelNamespaceLabel:             func(ch string) string { return "ns" },
+			EnableRecoveredPublicationsHistogram: true,
+			ExposeTransportAcceptProtocol:        true,
+			RegisteredClientNames:                []string{"js"},
+		})
+		require.NoError(t, err)
+
+		// Both a client carrying labels and no client at all: the latter is what
+		// a metric recorded before connect completes sees.
+		labelled := &Client{labels: map[string]string{"region": "eu", "tier": "paid"}}
+		labelled.labelCombinationCached.Store(m.getOrCreateClientLabelCombinationFromLabels(labelled.labels))
+
+		for _, c := range []*Client{labelled, nil} {
+			for _, frameType := range []protocol.FrameType{protocol.FrameTypeConnect, protocol.FrameTypePublish} {
+				m.observeCommandDuration(frameType, time.Millisecond, "ch", c)
+				m.incReplyError(frameType, 100, "ch", c)
+				m.incTransportMessagesSent(transportWebsocket, frameType, "ch", 10, c)
+				m.incTransportMessagesReceived(transportWebsocket, frameType, "ch", 10, c)
+			}
+			m.observeTransportFrameSize(transportWebsocket, 512, c)
+			m.observePingPongDuration(time.Millisecond, transportWebsocket, c)
+			m.incServerDisconnect(3000, c)
+			m.incServerUnsubscribe(2000, "ch", c)
+			m.incRecover(true, "ch", true, c)
+			m.incRecover(false, "ch", false, c)
+			m.observeRecoveredPublications(3, "ch", c)
+		}
+
+		// Paths that carry no client.
+		m.incTransportOutgoingClose(transportWebsocket, 3000)
+		m.observePubSubDeliveryLag(100, "ch")
+		m.observeBroadcastDuration(time.Now(), "ch")
+		m.incMessagesSent("publication", "ch")
+		m.incMessagesReceived("publication", "ch")
+		m.incActionCount("survey", "ch")
+		m.observeSurveyDuration("op", time.Millisecond)
+		m.incTagsFilterDropped("ch", 2)
+		m.incRedisBrokerPubSubErrors("broker", "err")
+		m.incBrokerPublishSuppressed(SuppressReasonIdempotency, "ch")
+		m.incMapBrokerPublishSuppressed(SuppressReasonVersion, "ch")
+		m.incMapBrokerRemoveSuppressed(SuppressReasonKeyExists, "ch")
+		m.setMapBrokerCleanupLag("broker", 1)
+		m.addMapBrokerCleanupRemoved("broker", 1)
+		m.incMapBrokerCleanupErrors("broker")
+		m.setBuildInfo("1.0.0")
+		m.setNumClients(1)
+		m.setNumUsers(1)
+		m.setNumSubscriptions(1)
+		m.setNumChannels(1)
+		m.setNumNodes(1)
+		m.setSharedPollNumChannels(1)
+		m.setSharedPollNumKeys(1)
+
+		handler := m.getSharedPollHandlerCached("trigger", "ch")
+		handler.errorCount.Inc()
+		handler.itemsPolled.Inc()
+		result := m.getSharedPollResultCached("trigger", "ch")
+		result.changed.Inc()
+		channel := m.getSharedPollChannelCached("ch")
+		channel.notifyCount.Inc()
+		publish := m.getSharedPollPublishCached("ch")
+		publish.applied.Inc()
+
+		// Everything recorded must also be gatherable: a vec whose children were
+		// built with the wrong number of values would fail collection here.
+		_, err = m.config.RegistererGatherer.Gather()
+		require.NoError(t, err)
 	}
 }

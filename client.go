@@ -694,7 +694,7 @@ func (c *Client) checkPong() {
 		return
 	}
 	diff := lastSeen - lastPing
-	c.node.metrics.observePingPongDuration(time.Duration(diff)*time.Nanosecond, c.transport.Name())
+	c.node.metrics.observePingPongDuration(time.Duration(diff)*time.Nanosecond, c.transport.Name(), c)
 	c.pingPongLatency.Store(diff)
 	c.mu.Lock()
 	c.nextPong = 0
@@ -4414,20 +4414,20 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 						latestEpoch = currentSP.Epoch
 						recoveredPubs, recovered = isCacheRecovered(latestPub, recoveredPub, currentSP, cmdOffset, cmdEpoch)
 						res.Recovered = recovered
-						c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
+						c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0, c)
 						if res.Recovered {
-							c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
+							c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel, c)
 						}
 					} else {
-						c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
+						c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0, c)
 						if res.Recovered {
-							c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
+							c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel, c)
 						}
 					}
 				} else {
-					c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
+					c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0, c)
 					if res.Recovered {
-						c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
+						c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel, c)
 					}
 				}
 			} else {
@@ -4443,7 +4443,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 						latestOffset = historyResult.Offset
 						latestEpoch = historyResult.Epoch
 						res.Recovered = false
-						c.node.metrics.incRecover(res.Recovered, channel, false)
+						c.node.metrics.incRecover(res.Recovered, channel, false, c)
 					} else {
 						c.node.logger.log(newErrorLogEntry(err, "error on recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 						return handleErr(err)
@@ -4468,9 +4468,9 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 							realRecovered++
 						}
 					}
-					c.node.metrics.incRecover(res.Recovered, channel, realRecovered > 0)
+					c.node.metrics.incRecover(res.Recovered, channel, realRecovered > 0, c)
 					if res.Recovered {
-						c.node.metrics.observeRecoveredPublications(realRecovered, channel)
+						c.node.metrics.observeRecoveredPublications(realRecovered, channel, c)
 					}
 				}
 			}

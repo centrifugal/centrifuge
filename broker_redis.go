@@ -1877,6 +1877,12 @@ func extractPushData(data []byte) ([]byte, pushType, StreamPosition, bool, []byt
 
 		rest := data[len(metaSep)+nextMetaSepPos+len(metaSep):]
 
+		// The header is "p1:offset:epoch" - anything shorter than the "p1:" tag
+		// is malformed, and this is data off PUB/SUB, so it cannot be trusted to
+		// be long enough to slice.
+		if len(stringHeader) < 3 {
+			return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, false
+		}
 		stringHeader = stringHeader[3:] // offset:epoch
 		epochDelimiterPos := strings.Index(stringHeader, contentSep)
 		if epochDelimiterPos <= 0 {
@@ -1952,8 +1958,14 @@ func parseDeltaPush(input string) (deltaPublicationPush, error) {
 
 	input = input[idx+1:]
 
-	// Extract prev_payload based on prev_payload_length
-	if len(input) < prevPayloadLength {
+	// Extract prev_payload based on prev_payload_length. The length comes off
+	// the wire, so it may be negative or reach past the end of the input - and
+	// one more byte than the payload itself is required, for the separator
+	// which follows it.
+	if prevPayloadLength < 0 {
+		return deltaPublicationPush{}, fmt.Errorf("negative prev payload length")
+	}
+	if len(input) < prevPayloadLength+1 {
 		return deltaPublicationPush{}, fmt.Errorf("input is shorter than expected prev payload length")
 	}
 	prevPayload := input[:prevPayloadLength]
@@ -1971,6 +1983,9 @@ func parseDeltaPush(input string) (deltaPublicationPush, error) {
 	input = input[idx+1:]
 
 	// Extract payload based on payload_length
+	if payloadLength < 0 {
+		return deltaPublicationPush{}, fmt.Errorf("negative payload length")
+	}
 	if len(input) < payloadLength {
 		return deltaPublicationPush{}, fmt.Errorf("input is shorter than expected payload length")
 	}
