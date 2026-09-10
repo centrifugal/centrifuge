@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -37,8 +39,11 @@ type connectResult struct {
 }
 
 type pubPush struct {
-	Data   json.RawMessage `json:"data"`
-	Offset uint64          `json:"offset"`
+	Data    json.RawMessage `json:"data"`
+	Offset  uint64          `json:"offset"`
+	Key     string          `json:"key"`
+	Removed bool            `json:"removed"`
+	Version uint64          `json:"version"`
 }
 
 type pushBody struct {
@@ -76,6 +81,7 @@ type command struct {
 	Unsubscribe *unsubscribeCmd `json:"unsubscribe,omitempty"`
 	Publish     *publishCmd     `json:"publish,omitempty"`
 	RPC         *rpcCmd         `json:"rpc,omitempty"`
+	SubRefresh  *subRefreshCmd  `json:"sub_refresh,omitempty"`
 }
 
 type connectCmd struct {
@@ -88,6 +94,42 @@ type subscribeCmd struct {
 	Recover bool   `json:"recover,omitempty"`
 	Offset  uint64 `json:"offset,omitempty"`
 	Epoch   string `json:"epoch,omitempty"`
+	// Keyed subscriptions: type selects map (1) or shared poll (2), phase picks
+	// the map handshake stage, and cursor/limit page through it.
+	Type   int32  `json:"type,omitempty"`
+	Phase  int32  `json:"phase,omitempty"`
+	Cursor string `json:"cursor,omitempty"`
+	Limit  int32  `json:"limit,omitempty"`
+	Asc    bool   `json:"asc,omitempty"`
+}
+
+// subRefreshCmd doubles as the track/untrack command for shared poll: type 1
+// tracks the items, type 2 untracks the listed keys.
+type subRefreshCmd struct {
+	Channel string       `json:"channel"`
+	Type    int32        `json:"type,omitempty"`
+	Track   []trackBatch `json:"track,omitempty"`
+	Untrack []string     `json:"untrack,omitempty"`
+}
+
+type trackBatch struct {
+	Items []keyedItem `json:"items"`
+}
+
+type keyedItem struct {
+	Key     string `json:"key"`
+	Version uint64 `json:"version,omitempty"`
+}
+
+// subscribeResult is the part of a subscribe reply the keyed scenarios read.
+type subscribeResult struct {
+	Type         int32     `json:"type"`
+	Phase        int32     `json:"phase"`
+	Cursor       string    `json:"cursor"`
+	Epoch        string    `json:"epoch"`
+	Offset       uint64    `json:"offset"`
+	State        []pubPush `json:"state"`
+	Publications []pubPush `json:"publications"`
 }
 
 type unsubscribeCmd struct {
@@ -126,6 +168,10 @@ func splitReplies(frame []byte) [][]byte {
 type rawWS struct {
 	ws      *websocket.Conn
 	pending [][]byte
+	// failed records that a read already errored. gorilla panics on a second
+	// read after a failure, and a read deadline that expires is such a failure,
+	// so every helper here must stop reading once one has.
+	failed error
 }
 
 func dialRaw(wsURL string) (*rawWS, error) {
@@ -155,6 +201,9 @@ func (r *rawWS) sendBytes(b []byte) error {
 // readReply returns the next protocol reply, transparently answering server
 // pings so the connection is not dropped while a scenario waits.
 func (r *rawWS) readReply(timeout time.Duration) (*reply, error) {
+	if r.failed != nil {
+		return nil, r.failed
+	}
 	deadline := time.Now().Add(timeout)
 	for {
 		for len(r.pending) > 0 {
@@ -177,6 +226,7 @@ func (r *rawWS) readReply(timeout time.Duration) (*reply, error) {
 		_ = r.ws.SetReadDeadline(time.Now().Add(remaining))
 		_, frame, err := r.ws.ReadMessage()
 		if err != nil {
+			r.failed = err
 			return nil, err
 		}
 		r.pending = splitReplies(frame)
@@ -184,6 +234,166 @@ func (r *rawWS) readReply(timeout time.Duration) (*reply, error) {
 }
 
 var errReadTimeout = fmt.Errorf("raw read timeout")
+
+// waitReplyID waits for the reply to one command, returning every push that
+// arrived while waiting. Keyed subscriptions interleave pushes with replies, so
+// a scenario that dropped them would lose the very updates it is asserting on.
+func (r *rawWS) waitReplyID(id uint32, timeout time.Duration) (*reply, []*pushBody, error) {
+	deadline := time.Now().Add(timeout)
+	var pushes []*pushBody
+	for {
+		rep, err := r.readReply(time.Until(deadline))
+		if err != nil {
+			return nil, pushes, err
+		}
+		if rep.Push != nil {
+			pushes = append(pushes, rep.Push)
+			continue
+		}
+		if rep.ID == id {
+			return rep, pushes, nil
+		}
+	}
+}
+
+// drainUntil reads pushes until enough returns true or the window elapses.
+//
+// It stops on the caller's condition rather than on a read deadline: letting a
+// deadline expire fails the connection for good (gorilla panics on the next
+// read), so a scenario that still has commands to send must never wait past
+// what it needs.
+func (r *rawWS) drainUntil(window time.Duration, enough func(*pushBody) bool) ([]*pushBody, error) {
+	deadline := time.Now().Add(window)
+	var pushes []*pushBody
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return pushes, nil
+		}
+		rep, err := r.readReply(remaining)
+		if err != nil {
+			var netErr net.Error
+			if errors.Is(err, errReadTimeout) || (errors.As(err, &netErr) && netErr.Timeout()) {
+				return pushes, nil
+			}
+			return pushes, err
+		}
+		if rep.Push == nil {
+			continue
+		}
+		pushes = append(pushes, rep.Push)
+		if enough != nil && enough(rep.Push) {
+			return pushes, nil
+		}
+	}
+}
+
+// drainPushes collects every push in the window. It leaves the connection
+// unusable for further reads, so callers must not send commands afterwards.
+func (r *rawWS) drainPushes(window time.Duration) ([]*pushBody, error) {
+	return r.drainUntil(window, nil)
+}
+
+// mapSubscribe sends one map subscribe command and decodes its result.
+func (r *rawWS) mapSubscribe(id uint32, channel string, phase int32, cursor string, limit int32) (*subscribeResult, []*pushBody, error) {
+	cmd := command{ID: id, Subscribe: &subscribeCmd{
+		Channel: channel,
+		Type:    subTypeMap,
+		Phase:   phase,
+		Cursor:  cursor,
+		Limit:   limit,
+	}}
+	if err := r.sendJSON(cmd); err != nil {
+		return nil, nil, err
+	}
+	rep, pushes, err := r.waitReplyID(id, 10*time.Second)
+	if err != nil {
+		return nil, pushes, err
+	}
+	if rep.Error != nil {
+		return nil, pushes, fmt.Errorf("map subscribe %s: error %d %s", channel, rep.Error.Code, rep.Error.Message)
+	}
+	if rep.Subscribe == nil {
+		return nil, pushes, fmt.Errorf("map subscribe %s: empty result", channel)
+	}
+	var res subscribeResult
+	if err := json.Unmarshal(*rep.Subscribe, &res); err != nil {
+		return nil, pushes, fmt.Errorf("decode map subscribe result: %w", err)
+	}
+	return &res, pushes, nil
+}
+
+// pollSubscribe subscribes to a shared poll channel.
+func (r *rawWS) pollSubscribe(id uint32, channel string) (*subscribeResult, error) {
+	cmd := command{ID: id, Subscribe: &subscribeCmd{Channel: channel, Type: subTypeSharedPoll}}
+	if err := r.sendJSON(cmd); err != nil {
+		return nil, err
+	}
+	rep, _, err := r.waitReplyID(id, 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if rep.Error != nil {
+		return nil, fmt.Errorf("poll subscribe %s: error %d %s", channel, rep.Error.Code, rep.Error.Message)
+	}
+	var res subscribeResult
+	if rep.Subscribe != nil {
+		_ = json.Unmarshal(*rep.Subscribe, &res)
+	}
+	return &res, nil
+}
+
+// track and untrack drive the shared poll key set for this connection.
+func (r *rawWS) track(id uint32, channel string, keys []string) error {
+	items := make([]keyedItem, 0, len(keys))
+	for _, k := range keys {
+		items = append(items, keyedItem{Key: k})
+	}
+	cmd := command{ID: id, SubRefresh: &subRefreshCmd{
+		Channel: channel, Type: trackTypeTrack, Track: []trackBatch{{Items: items}},
+	}}
+	if err := r.sendJSON(cmd); err != nil {
+		return err
+	}
+	rep, _, err := r.waitReplyID(id, 10*time.Second)
+	if err != nil {
+		return err
+	}
+	if rep.Error != nil {
+		return fmt.Errorf("track %s: error %d %s", channel, rep.Error.Code, rep.Error.Message)
+	}
+	return nil
+}
+
+func (r *rawWS) untrack(id uint32, channel string, keys []string) error {
+	cmd := command{ID: id, SubRefresh: &subRefreshCmd{
+		Channel: channel, Type: trackTypeUntrack, Untrack: keys,
+	}}
+	if err := r.sendJSON(cmd); err != nil {
+		return err
+	}
+	rep, _, err := r.waitReplyID(id, 10*time.Second)
+	if err != nil {
+		return err
+	}
+	if rep.Error != nil {
+		return fmt.Errorf("untrack %s: error %d %s", channel, rep.Error.Code, rep.Error.Message)
+	}
+	return nil
+}
+
+// Protocol constants the keyed scenarios send on the wire.
+const (
+	subTypeMap        int32 = 1
+	subTypeSharedPoll int32 = 4
+
+	trackTypeTrack   int32 = 1
+	trackTypeUntrack int32 = 2
+
+	mapPhaseLive   int32 = 0
+	mapPhaseStream int32 = 1
+	mapPhaseState  int32 = 2
+)
 
 // connect performs the handshake and returns the connect result.
 func (r *rawWS) connect(token string) (*reply, error) {
