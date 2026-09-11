@@ -91,3 +91,79 @@ func TestMergePublications_AllBufferedFiltered_WithBrokerPubs(t *testing.T) {
 	require.Equal(t, uint64(5), pubs[0].Offset)
 	require.Equal(t, uint64(7), maxSeenOffset)
 }
+
+func pubOffsets(pubs []*protocol.Publication) []uint64 {
+	offsets := make([]uint64, 0, len(pubs))
+	for _, p := range pubs {
+		offsets = append(offsets, p.Offset)
+	}
+	return offsets
+}
+
+// TestMergePublications_OverlapDeduplicated covers the common case where a
+// publication arrives both from history and from PUB/SUB while subscribing.
+func TestMergePublications_OverlapDeduplicated(t *testing.T) {
+	recoveredPubs := []*protocol.Publication{
+		{Offset: 1},
+		{Offset: 2},
+		{Offset: 3},
+	}
+	bufferedPubs := []*protocol.Publication{
+		{Offset: 3},
+		{Offset: 4},
+	}
+	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, bufferedPubs)
+	require.True(t, ok)
+	require.Equal(t, []uint64{1, 2, 3, 4}, pubOffsets(pubs))
+	require.Equal(t, uint64(4), maxSeenOffset)
+}
+
+// TestMergePublications_GapWithoutFiltered asserts that a missing offset
+// between recovered and buffered publications is reported as a failed merge,
+// so the client is not sent a stream with a hole in it.
+func TestMergePublications_GapWithoutFiltered(t *testing.T) {
+	recoveredPubs := []*protocol.Publication{
+		{Offset: 1},
+		{Offset: 2},
+	}
+	bufferedPubs := []*protocol.Publication{
+		{Offset: 4},
+	}
+	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, bufferedPubs)
+	require.False(t, ok)
+	require.Nil(t, pubs)
+	require.Zero(t, maxSeenOffset)
+}
+
+// TestMergePublications_GapCoveredByFiltered asserts that offsets missing from
+// the result are fine when every one of them belongs to a filtered publication.
+func TestMergePublications_GapCoveredByFiltered(t *testing.T) {
+	recoveredPubs := []*protocol.Publication{
+		{Offset: 1},
+		{Offset: 2, Time: -1},
+	}
+	bufferedPubs := []*protocol.Publication{
+		{Offset: 3, Time: -1},
+		{Offset: 4},
+	}
+	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, bufferedPubs)
+	require.True(t, ok)
+	require.Equal(t, []uint64{1, 4}, pubOffsets(pubs))
+	require.Equal(t, uint64(4), maxSeenOffset)
+}
+
+// TestMergePublications_GapPartiallyCoveredByFiltered asserts that having some
+// filtered publications does not hide an offset that is genuinely missing.
+func TestMergePublications_GapPartiallyCoveredByFiltered(t *testing.T) {
+	recoveredPubs := []*protocol.Publication{
+		{Offset: 1},
+	}
+	bufferedPubs := []*protocol.Publication{
+		{Offset: 2, Time: -1},
+		{Offset: 4},
+	}
+	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, bufferedPubs)
+	require.False(t, ok)
+	require.Nil(t, pubs)
+	require.Zero(t, maxSeenOffset)
+}

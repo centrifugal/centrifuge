@@ -94,6 +94,30 @@ func TestPubSubSyncNonSynchronized(t *testing.T) {
 	require.Empty(t, psSync.subSync)
 }
 
+func TestPubSubSyncNotBuffering(t *testing.T) {
+	psSync := NewPubSubSync()
+
+	synced := 0
+	psSync.SyncPublication("ch", &protocol.Publication{Offset: 1}, func() { synced++ })
+	require.Equal(t, 1, synced, "publication must pass through when channel is not buffering")
+
+	require.Nil(t, psSync.LockBufferAndReadBuffered("ch"))
+	psSync.StopBuffering("ch") // No-op for a channel which is not buffering.
+	require.Empty(t, psSync.subSync)
+
+	psSync.StartBuffering("ch")
+	psSync.SyncPublication("ch", &protocol.Publication{Offset: 2}, func() { synced++ })
+	require.Equal(t, 1, synced, "publication must be buffered while subscribing")
+	pubs := psSync.LockBufferAndReadBuffered("ch")
+	require.Len(t, pubs, 1)
+	require.Equal(t, uint64(2), pubs[0].Offset)
+	psSync.StopBuffering("ch")
+
+	psSync.SyncPublication("ch", &protocol.Publication{Offset: 3}, func() { synced++ })
+	require.Equal(t, 2, synced, "publication must pass through after buffering stopped")
+	require.Empty(t, psSync.subSync)
+}
+
 func BenchmarkPubSubSync(b *testing.B) {
 	psSync := NewPubSubSync()
 	var channels []string
