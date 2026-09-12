@@ -151,6 +151,7 @@ func escapeStateForDelta(pubs []*protocol.Publication, deltaEnabled bool, isJSON
 // mapSubscribeState tracks state for map subscriptions that are still loading.
 type mapSubscribeState struct {
 	options             SubscribeOptions // From OnSubscribe callback
+	clientSideRefresh   bool             // From OnSubscribe callback: the client refreshes the subscription
 	epoch               string           // Epoch from first response (for validation)
 	offset              uint64           // Offset from first state page (frozen for consistency)
 	startedAt           int64            // UnixNano when catch-up started (for timeout)
@@ -207,7 +208,7 @@ func (c *Client) handleMapSubscribeCommand(
 			c.cleanupMapSubscribing(req.Channel)
 			return DisconnectSlow
 		}
-		reply := SubscribeReply{Options: state.options}
+		reply := SubscribeReply{Options: state.options, ClientSideRefresh: state.clientSideRefresh}
 		if handleErr := c.handleMapSubscribe(req, reply, cmd, started, rw); handleErr != nil {
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
 		}
@@ -223,7 +224,7 @@ func (c *Client) handleMapSubscribeCommand(
 			c.cleanupMapSubscribing(req.Channel)
 			return DisconnectSlow
 		}
-		reply := SubscribeReply{Options: state.options}
+		reply := SubscribeReply{Options: state.options, ClientSideRefresh: state.clientSideRefresh}
 		if handleErr := c.handleMapSubscribe(req, reply, cmd, started, rw); handleErr != nil {
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
 		}
@@ -253,6 +254,12 @@ func (c *Client) handleMapSubscribeCommand(
 
 		if reply.Options.Type != event.Type {
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, ErrorBadRequest, started, rw)
+			return
+		}
+
+		if _, _, expired := subscriptionExpiration(reply.Options.ExpireAt, reply.ClientSideRefresh); expired {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "subscription expiration must be greater than now", map[string]any{"channel": req.Channel, "client": c.uid, "user": c.UserID()}))
+			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, ErrorExpired, started, rw)
 			return
 		}
 
@@ -354,13 +361,14 @@ func (c *Client) handleMapStatePhase(
 			}
 		}
 		c.mapSubscribing[channel] = &mapSubscribeState{
-			options:          reply.Options,
-			startedAt:        time.Now().UnixNano(),
-			isPresence:       reply.Options.Type.IsMapPresence(),
-			subscribingCh:    make(chan struct{}),
-			subGen:           c.subGenCounter.Add(1),
-			tagsFilter:       tf,
-			serverTagsFilter: stf,
+			options:           reply.Options,
+			clientSideRefresh: reply.ClientSideRefresh,
+			startedAt:         time.Now().UnixNano(),
+			isPresence:        reply.Options.Type.IsMapPresence(),
+			subscribingCh:     make(chan struct{}),
+			subGen:            c.subGenCounter.Add(1),
+			tagsFilter:        tf,
+			serverTagsFilter:  stf,
 		}
 		c.mu.Unlock()
 	} else {
@@ -615,14 +623,15 @@ func (c *Client) handleMapTransitionToLive(
 		}
 		subGen = c.subGenCounter.Add(1)
 		ourState = &mapSubscribeState{
-			options:          opts,
-			startedAt:        time.Now().UnixNano(),
-			isPresence:       isPresence,
-			subscribingCh:    make(chan struct{}),
-			subGen:           subGen,
-			epoch:            req.Epoch,
-			tagsFilter:       params.tagsFilterFromState,
-			serverTagsFilter: params.serverTagsFilterFromState,
+			options:           opts,
+			clientSideRefresh: reply.ClientSideRefresh,
+			startedAt:         time.Now().UnixNano(),
+			isPresence:        isPresence,
+			subscribingCh:     make(chan struct{}),
+			subGen:            subGen,
+			epoch:             req.Epoch,
+			tagsFilter:        params.tagsFilterFromState,
+			serverTagsFilter:  params.serverTagsFilterFromState,
 		}
 		c.mapSubscribing[channel] = ourState
 	}
@@ -877,6 +886,9 @@ func (c *Client) handleMapTransitionToLive(
 	if d := opts.ClientPublishDebounceInterval; d > 0 {
 		res.PublishDebounce = uint32(d.Milliseconds())
 	}
+	// Tell the client when the subscription expires, so that it refreshes the
+	// token in time. Already expired subscriptions are rejected on the first request.
+	res.Expires, res.Ttl, _ = subscriptionExpiration(opts.ExpireAt, reply.ClientSideRefresh)
 	if positioning {
 		res.Recoverable = true
 	}
@@ -1018,12 +1030,13 @@ func (c *Client) handleMapStreamPhase(
 		// captured from this state while it was still loading — the unsubscribe
 		// would then fail its identity check and leak the subscription.
 		state = &mapSubscribeState{
-			options:       reply.Options,
-			startedAt:     time.Now().UnixNano(),
-			isPresence:    reply.Options.Type.IsMapPresence(),
-			subscribingCh: make(chan struct{}),
-			subGen:        c.subGenCounter.Add(1),
-			epoch:         req.Epoch,
+			options:           reply.Options,
+			clientSideRefresh: reply.ClientSideRefresh,
+			startedAt:         time.Now().UnixNano(),
+			isPresence:        reply.Options.Type.IsMapPresence(),
+			subscribingCh:     make(chan struct{}),
+			subGen:            c.subGenCounter.Add(1),
+			epoch:             req.Epoch,
 		}
 		tf, err := c.validateAndCreateTagsFilter(req, reply.Options.AllowTagsFilter, channel)
 		if err != nil {
