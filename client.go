@@ -4170,6 +4170,25 @@ func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind res
 	return subscribingCh, true
 }
 
+// subscriptionExpiration returns the expiration fields of a subscribe result for
+// a subscription expiring at expireAt (Unix seconds, zero means no expiration),
+// shared by all subscription types. expired is true when the subscription has
+// already expired. The client is only told about expiration when it refreshes the
+// subscription itself.
+func subscriptionExpiration(expireAt int64, clientSideRefresh bool) (expires bool, ttl uint32, expired bool) {
+	if expireAt <= 0 {
+		return false, 0, false
+	}
+	remaining := expireAt - time.Now().Unix()
+	if remaining <= 0 {
+		return false, 0, true
+	}
+	if !clientSideRefresh {
+		return false, 0, false
+	}
+	return true, uint32(remaining), false
+}
+
 // subscribeCmd handles subscribe command - clients send this when subscribe
 // on channel, if channel is private then we must validate provided sign here before
 // actually subscribe client on channel. Optionally we can send missed messages to
@@ -4194,17 +4213,13 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 	res := &protocol.SubscribeResult{}
 
-	if reply.Options.ExpireAt > 0 {
-		ttl := reply.Options.ExpireAt - time.Now().Unix()
-		if ttl <= 0 {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "subscription expiration must be greater than now", map[string]any{"client": c.uid, "user": c.UserID()}))
-			return errorDisconnectContext(ErrorExpired, nil)
-		}
-		if reply.ClientSideRefresh {
-			res.Expires = true
-			res.Ttl = uint32(ttl)
-		}
+	expires, ttl, expired := subscriptionExpiration(reply.Options.ExpireAt, reply.ClientSideRefresh)
+	if expired {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "subscription expiration must be greater than now", map[string]any{"client": c.uid, "user": c.UserID()}))
+		return errorDisconnectContext(ErrorExpired, nil)
 	}
+	res.Expires = expires
+	res.Ttl = ttl
 
 	if reply.Options.Data != nil {
 		res.Data = reply.Options.Data

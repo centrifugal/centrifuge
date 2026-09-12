@@ -60,16 +60,15 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 		res := &protocol.SubscribeResult{}
 		res.Type = int32(SubscriptionTypeSharedPoll)
 
-		if reply.Options.ExpireAt > 0 {
-			ttl := reply.Options.ExpireAt - time.Now().Unix()
-			if ttl <= 0 {
-				c.onSubscribeErrorGen(channel, subGen)
-				c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, ErrorExpired, started, rw)
-				return
-			}
-			res.Expires = true
-			res.Ttl = uint32(ttl)
+		// Shared poll subscriptions are always refreshed client-side.
+		expires, ttl, expired := subscriptionExpiration(reply.Options.ExpireAt, true)
+		if expired {
+			c.onSubscribeErrorGen(channel, subGen)
+			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, ErrorExpired, started, rw)
+			return
 		}
+		res.Expires = expires
+		res.Ttl = ttl
 
 		// Delta negotiation.
 		var deltaType DeltaType

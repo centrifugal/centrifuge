@@ -5793,3 +5793,150 @@ func TestMapSubscribe_DisconnectRace_NoGhostSubscription(t *testing.T) {
 	}, 15*time.Second, 50*time.Millisecond,
 		"expected zero hub subscribers, got %d", node.hub.NumSubscribers(channel))
 }
+
+// Map subscriptions expire like other subscription types: the client must be told
+// the TTL when it refreshes the subscription itself, the client-side refresh mode
+// must survive a paginated subscribe, and an already expired subscription must be
+// rejected.
+
+func setMapSubscribeExpiration(node *Node, expireAt int64, clientSideRefresh bool) {
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:     SubscriptionTypeMap,
+					ExpireAt: expireAt,
+				},
+				ClientSideRefresh: clientSideRefresh,
+			}, nil)
+		})
+		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+			cb(SubRefreshReply{ExpireAt: time.Now().Unix() + 3600}, nil)
+		})
+	})
+}
+
+func TestMapSubscribe_ExpirationClientSideRefresh(t *testing.T) {
+	t.Parallel()
+	node, _ := newTestNodeWithMapBroker(t)
+	setMapSubscribeExpiration(node, time.Now().Unix()+60, true)
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: "test_map_expiration",
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.True(t, result.Expires)
+	require.Greater(t, result.Ttl, uint32(0))
+	require.LessOrEqual(t, result.Ttl, uint32(60))
+}
+
+func TestMapSubscribe_ExpirationServerSideRefresh(t *testing.T) {
+	t.Parallel()
+	node, _ := newTestNodeWithMapBroker(t)
+	setMapSubscribeExpiration(node, time.Now().Unix()+60, false)
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: "test_map_expiration_server_side",
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.False(t, result.Expires)
+	require.Zero(t, result.Ttl)
+}
+
+func TestMapSubscribe_ExpirationAlreadyExpired(t *testing.T) {
+	t.Parallel()
+	node, _ := newTestNodeWithMapBroker(t)
+	setMapSubscribeExpiration(node, time.Now().Unix()-10, true)
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	protoErr := subscribeMapClientExpectError(t, client, &protocol.SubscribeRequest{
+		Channel: "test_map_expired",
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+	require.Equal(t, ErrorExpired.Code, protoErr.Code)
+}
+
+// A paginated subscribe authorizes on the first page only: the later pages must
+// keep the client-side refresh mode, or the client's refresh command is rejected.
+func TestMapSubscribe_ExpirationPaginatedClientSideRefresh(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	setMapSubscribeExpiration(node, time.Now().Unix()+60, true)
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	channel := "test_map_expiration_paginated"
+	for i := 0; i < 10; i++ {
+		_, err := broker.Publish(context.Background(), channel, string(rune('a'+i)), MapPublishOptions{
+			Data: []byte(`{"v":"data"}`),
+		})
+		require.NoError(t, err)
+	}
+
+	first := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   5,
+	})
+	require.NotEmpty(t, first.Cursor)
+
+	last := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   5,
+		Cursor:  first.Cursor,
+	})
+	require.Equal(t, MapPhaseLive, last.Phase)
+	require.True(t, last.Expires)
+	require.Greater(t, last.Ttl, uint32(0))
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
+		Channel: channel,
+		Token:   "token",
+	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	require.True(t, rwWrapper.replies[0].SubRefresh.Expires)
+}
+
+// Recovering a map subscription from a stream position goes live without the
+// state phase: it must also carry the expiration.
+func TestMapSubscribe_ExpirationStreamRecovery(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+	setMapSubscribeExpiration(node, time.Now().Unix()+60, true)
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	channel := "test_map_expiration_recovery"
+	res, err := broker.Publish(context.Background(), channel, "key1", MapPublishOptions{
+		Data: []byte(`{"v":"data"}`),
+	})
+	require.NoError(t, err)
+
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseStream,
+		Recover: true,
+		Offset:  res.Position.Offset,
+		Epoch:   res.Position.Epoch,
+		Limit:   100,
+	})
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.True(t, result.Expires)
+	require.Greater(t, result.Ttl, uint32(0))
+}
