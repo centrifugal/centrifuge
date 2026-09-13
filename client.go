@@ -2236,7 +2236,9 @@ func (c *Client) handleRefresh(req *protocol.RefreshRequest, cmd *protocol.Comma
 				c.addExpireUpdate(duration, true)
 				c.mu.Unlock()
 			} else {
-				c.writeDisconnectOrErrorFlush("", protocol.FrameTypeRefresh, cmd, ErrorExpired, started, rw)
+				// Same as Expired: disconnect with a reconnect code, so the client gets
+				// a new token on reconnect instead of treating an error as final.
+				c.writeDisconnectOrErrorFlush("", protocol.FrameTypeRefresh, cmd, DisconnectExpired, started, rw)
 				return
 			}
 		}

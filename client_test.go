@@ -3317,6 +3317,67 @@ func TestClientSideRefresh(t *testing.T) {
 	require.Nil(t, rwWrapper.replies[0].Error)
 }
 
+func TestClientSideRefreshExpired(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name  string
+		reply RefreshReply
+	}{
+		{name: "expired_flag", reply: RefreshReply{Expired: true}},
+		{name: "expire_at_in_past", reply: RefreshReply{ExpireAt: time.Now().Unix() - 60}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			node := defaultNodeNoHandlers()
+			defer func() { _ = node.Shutdown(context.Background()) }()
+
+			transport := newTestTransport(func() {})
+			ctx := context.Background()
+			newCtx := SetCredentials(ctx, &Credentials{
+				UserID:   "42",
+				ExpireAt: time.Now().Unix() + 60,
+			})
+			client, _ := newClient(newCtx, node, transport)
+
+			node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+				return ConnectReply{
+					ClientSideRefresh: true,
+				}, nil
+			})
+
+			disconnected := make(chan uint32, 1)
+			node.OnConnect(func(client *Client) {
+				client.OnRefresh(func(_ RefreshEvent, cb RefreshCallback) {
+					cb(tc.reply, nil)
+				})
+				client.OnDisconnect(func(event DisconnectEvent) {
+					disconnected <- event.Code
+				})
+			})
+
+			connectClientV2(t, client)
+
+			rwWrapper := testReplyWriterWrapper()
+			err := client.handleRefresh(&protocol.RefreshRequest{
+				Token: "expired_token",
+			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+			require.NoError(t, err)
+			// Disconnected with a reconnect code, no error reply.
+			require.Empty(t, rwWrapper.replies)
+
+			select {
+			case <-time.After(5 * time.Second):
+				require.Fail(t, "timeout waiting for client close")
+			case code := <-disconnected:
+				require.Equal(t, DisconnectExpired.Code, code)
+			}
+		})
+	}
+}
+
 func TestServerSideRefresh(t *testing.T) {
 	t.Parallel()
 	node := defaultNodeNoHandlers()
