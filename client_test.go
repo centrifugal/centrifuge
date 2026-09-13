@@ -1876,6 +1876,88 @@ func TestClientSubscribeDeltaRecoveryToLiveBoundary(t *testing.T) {
 		"live publication after recovery did not reconstruct against the recovered base")
 }
 
+// TestClientSubscribeDeltaRecoveryNoPublications checks that a successful stream
+// recovery with no publications to recover does not make the next live publication
+// a delta: the client got no base in this subscription, so it must get full data.
+func TestClientSubscribeDeltaRecoveryNoPublications(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{
+				EnableRecovery:    true,
+				EnablePositioning: true,
+				RecoveryMode:      RecoveryModeStream,
+				AllowedDeltaTypes: []DeltaType{DeltaTypeFossil},
+			}}, nil)
+		})
+	})
+
+	const ch = "delta_recovery_no_publications"
+	body := strings.Repeat("shared-body-", 12)
+	prevPayload := []byte("AAAA-" + body)
+	_, err := node.Publish(ch, prevPayload, WithHistory(10, time.Minute))
+	require.NoError(t, err)
+	hr, err := node.History(ch)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), hr.Offset)
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	defer cancelFn()
+	transport := newTestTransport(cancelFn)
+	transport.sink = make(chan []byte, 100)
+	transport.setProtocolType(ProtocolTypeProtobuf)
+	transport.setProtocolVersion(ProtocolVersion2)
+	client := newTestConnectedClientWithTransport(t, ctx, node, transport, "42")
+
+	// Recover from the stream top: there is nothing to recover.
+	rw := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: ch,
+		Recover: true,
+		Offset:  hr.Offset,
+		Epoch:   hr.Epoch,
+		Delta:   string(DeltaTypeFossil),
+	}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+	res := rw.replies[0].Subscribe
+	require.NotNil(t, res)
+	require.True(t, res.Recovered, "expected successful stream recovery")
+	require.True(t, res.Delta)
+	require.Empty(t, res.Publications)
+
+	// The next live publication has a real delta against the previous one, but the
+	// client never received that base in this subscription.
+	livePayload := []byte("AAAA-" + body + "-live")
+	require.NoError(t, node.hub.broadcastPublication(
+		ch,
+		StreamPosition{Offset: 2, Epoch: hr.Epoch},
+		&Publication{Offset: 2, Data: livePayload},
+		&Publication{Offset: 1, Data: prevPayload},
+		nil,
+		ChannelBatchConfig{},
+	))
+	livePub := readSinkPublication(t, transport.sink, 2)
+	require.False(t, livePub.Delta, "first publication after recovering nothing must have full data")
+	require.Equal(t, livePayload, []byte(livePub.Data))
+
+	// That full publication is the base: the following one is a delta again.
+	nextPayload := []byte("BBBB-" + body + "-live")
+	require.NoError(t, node.hub.broadcastPublication(
+		ch,
+		StreamPosition{Offset: 3, Epoch: hr.Epoch},
+		&Publication{Offset: 3, Data: nextPayload},
+		&Publication{Offset: 2, Data: livePayload},
+		nil,
+		ChannelBatchConfig{},
+	))
+	nextPub := readSinkPublication(t, transport.sink, 3)
+	require.True(t, nextPub.Delta, "publication after the base must be a delta")
+	applied, err := fdelta.Apply(livePayload, nextPub.Data)
+	require.NoError(t, err)
+	require.Equal(t, nextPayload, applied)
+}
+
 func TestFossilRecoveredMapPubs(t *testing.T) {
 	t.Parallel()
 	node := defaultNodeNoHandlers()
