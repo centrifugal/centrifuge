@@ -4540,9 +4540,13 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		// Only append recovered publications in case continuity in a channel can be achieved.
 		if res.Delta && req.Delta == string(DeltaTypeFossil) {
 			res.Publications = c.makeRecoveredPubsDeltaFossil(recoveredPubs)
-			// Allow delta for the following real-time publications since recovery is successful
-			// and makeRecoveredPubsDeltaFossil already created publication with base data if required.
-			channelFlags |= flagDeltaAllowed
+			// Allow delta for the following real-time publications only if recovered publications
+			// were sent: makeRecoveredPubsDeltaFossil sends the first one with full data, which gives
+			// the client its base. With nothing recovered the client has no base yet, so the first
+			// real-time publication goes with full data and the write path allows delta after it.
+			if len(res.Publications) > 0 {
+				channelFlags |= flagDeltaAllowed
+			}
 		} else {
 			res.Publications = recoveredPubs
 		}
