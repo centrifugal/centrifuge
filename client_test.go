@@ -3551,6 +3551,77 @@ func TestClientSideSubRefresh(t *testing.T) {
 	require.Nil(t, rwWrapper.replies[0].Error)
 }
 
+func TestClientSideSubRefreshExpired(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name  string
+		reply SubRefreshReply
+	}{
+		{name: "expired_flag", reply: SubRefreshReply{Expired: true}},
+		{name: "expire_at_in_past", reply: SubRefreshReply{ExpireAt: time.Now().Unix() - 60}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			node := defaultNodeNoHandlers()
+			defer func() { _ = node.Shutdown(context.Background()) }()
+
+			transport := newTestTransport(func() {})
+			ctx := context.Background()
+			newCtx := SetCredentials(ctx, &Credentials{
+				UserID:   "42",
+				ExpireAt: time.Now().Unix() + 60,
+			})
+			client, _ := newClient(newCtx, node, transport)
+
+			node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+				return ConnectReply{
+					ClientSideRefresh: true,
+				}, nil
+			})
+
+			disconnected := make(chan uint32, 1)
+			node.OnConnect(func(client *Client) {
+				client.OnSubscribe(func(_ SubscribeEvent, cb SubscribeCallback) {
+					cb(SubscribeReply{
+						Options: SubscribeOptions{
+							ExpireAt: time.Now().Unix() + 10,
+						},
+						ClientSideRefresh: true,
+					}, nil)
+				})
+				client.OnSubRefresh(func(_ SubRefreshEvent, cb SubRefreshCallback) {
+					cb(tc.reply, nil)
+				})
+				client.OnDisconnect(func(event DisconnectEvent) {
+					disconnected <- event.Code
+				})
+			})
+
+			connectClientV2(t, client)
+			subscribeClientV2(t, client, "test")
+
+			rwWrapper := testReplyWriterWrapper()
+			err := client.handleSubRefresh(&protocol.SubRefreshRequest{
+				Channel: "test",
+				Token:   "expired_token",
+			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+			require.NoError(t, err)
+			// Disconnected with a reconnect code, no reply.
+			require.Empty(t, rwWrapper.replies)
+
+			select {
+			case <-time.After(5 * time.Second):
+				require.Fail(t, "timeout waiting for client close")
+			case code := <-disconnected:
+				require.Equal(t, DisconnectSubExpired.Code, code)
+			}
+		})
+	}
+}
+
 func TestClientSideSubRefreshUnexpected(t *testing.T) {
 	t.Parallel()
 	node := defaultNodeNoHandlers()
