@@ -3582,19 +3582,21 @@ func TestClientSideSubRefreshExpired(t *testing.T) {
 				}, nil
 			})
 
-			subExpireAt := time.Now().Unix() + 10
-
+			disconnected := make(chan uint32, 1)
 			node.OnConnect(func(client *Client) {
 				client.OnSubscribe(func(_ SubscribeEvent, cb SubscribeCallback) {
 					cb(SubscribeReply{
 						Options: SubscribeOptions{
-							ExpireAt: subExpireAt,
+							ExpireAt: time.Now().Unix() + 10,
 						},
 						ClientSideRefresh: true,
 					}, nil)
 				})
 				client.OnSubRefresh(func(_ SubRefreshEvent, cb SubRefreshCallback) {
 					cb(tc.reply, nil)
+				})
+				client.OnDisconnect(func(event DisconnectEvent) {
+					disconnected <- event.Code
 				})
 			})
 
@@ -3607,14 +3609,15 @@ func TestClientSideSubRefreshExpired(t *testing.T) {
 				Token:   "expired_token",
 			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 			require.NoError(t, err)
-			require.NotNil(t, rwWrapper.replies[0].Error)
-			require.Equal(t, ErrorTokenExpired.Code, rwWrapper.replies[0].Error.Code)
+			// Disconnected with a reconnect code, no reply.
+			require.Empty(t, rwWrapper.replies)
 
-			// The rejected refresh must keep the subscription's expiration.
-			client.mu.RLock()
-			channelContext := client.channels["test"]
-			client.mu.RUnlock()
-			require.Equal(t, subExpireAt, channelContext.expireAt)
+			select {
+			case <-time.After(5 * time.Second):
+				require.Fail(t, "timeout waiting for client close")
+			case code := <-disconnected:
+				require.Equal(t, DisconnectSubExpired.Code, code)
+			}
 		})
 	}
 }
