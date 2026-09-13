@@ -2473,13 +2473,14 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 
 		nowUnix := time.Now().Unix()
 		expireAt := min(reply.ExpireAt, nowUnix+maxTTLSeconds)
+		// Expired must be checked explicitly: a reply with Expired set carries no
+		// ExpireAt, and applying it would store zero expireAt and disable expiration.
+		if reply.Expired || (expireAt > 0 && expireAt < nowUnix) {
+			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubRefresh, cmd, ErrorExpired, started, rw)
+			return
+		}
 		if expireAt > 0 {
 			res.Expires = true
-
-			if expireAt < nowUnix {
-				c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubRefresh, cmd, ErrorExpired, started, rw)
-				return
-			}
 			res.Ttl = uint32(expireAt - nowUnix)
 		}
 

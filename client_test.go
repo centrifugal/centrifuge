@@ -3551,6 +3551,74 @@ func TestClientSideSubRefresh(t *testing.T) {
 	require.Nil(t, rwWrapper.replies[0].Error)
 }
 
+func TestClientSideSubRefreshExpired(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name  string
+		reply SubRefreshReply
+	}{
+		{name: "expired_flag", reply: SubRefreshReply{Expired: true}},
+		{name: "expire_at_in_past", reply: SubRefreshReply{ExpireAt: time.Now().Unix() - 60}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			node := defaultNodeNoHandlers()
+			defer func() { _ = node.Shutdown(context.Background()) }()
+
+			transport := newTestTransport(func() {})
+			ctx := context.Background()
+			newCtx := SetCredentials(ctx, &Credentials{
+				UserID:   "42",
+				ExpireAt: time.Now().Unix() + 60,
+			})
+			client, _ := newClient(newCtx, node, transport)
+
+			node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+				return ConnectReply{
+					ClientSideRefresh: true,
+				}, nil
+			})
+
+			subExpireAt := time.Now().Unix() + 10
+
+			node.OnConnect(func(client *Client) {
+				client.OnSubscribe(func(_ SubscribeEvent, cb SubscribeCallback) {
+					cb(SubscribeReply{
+						Options: SubscribeOptions{
+							ExpireAt: subExpireAt,
+						},
+						ClientSideRefresh: true,
+					}, nil)
+				})
+				client.OnSubRefresh(func(_ SubRefreshEvent, cb SubRefreshCallback) {
+					cb(tc.reply, nil)
+				})
+			})
+
+			connectClientV2(t, client)
+			subscribeClientV2(t, client, "test")
+
+			rwWrapper := testReplyWriterWrapper()
+			err := client.handleSubRefresh(&protocol.SubRefreshRequest{
+				Channel: "test",
+				Token:   "expired_token",
+			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+			require.NoError(t, err)
+			require.NotNil(t, rwWrapper.replies[0].Error)
+			require.Equal(t, ErrorExpired.Code, rwWrapper.replies[0].Error.Code)
+
+			// The rejected refresh must keep the subscription's expiration.
+			client.mu.RLock()
+			channelContext := client.channels["test"]
+			client.mu.RUnlock()
+			require.Equal(t, subExpireAt, channelContext.expireAt)
+		})
+	}
+}
+
 func TestClientSideSubRefreshUnexpected(t *testing.T) {
 	t.Parallel()
 	node := defaultNodeNoHandlers()
