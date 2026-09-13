@@ -3608,7 +3608,7 @@ func TestClientSideSubRefreshExpired(t *testing.T) {
 			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 			require.NoError(t, err)
 			require.NotNil(t, rwWrapper.replies[0].Error)
-			require.Equal(t, ErrorExpired.Code, rwWrapper.replies[0].Error.Code)
+			require.Equal(t, ErrorTokenExpired.Code, rwWrapper.replies[0].Error.Code)
 
 			// The rejected refresh must keep the subscription's expiration.
 			client.mu.RLock()

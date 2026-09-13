@@ -2475,8 +2475,10 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 		expireAt := min(reply.ExpireAt, nowUnix+maxTTLSeconds)
 		// Expired must be checked explicitly: a reply with Expired set carries no
 		// ExpireAt, and applying it would store zero expireAt and disable expiration.
+		// Client-side refresh always carries a token, so reply with ErrorTokenExpired:
+		// the client gets a new token and retries, as it does on subscribe.
 		if reply.Expired || (expireAt > 0 && expireAt < nowUnix) {
-			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubRefresh, cmd, ErrorExpired, started, rw)
+			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubRefresh, cmd, ErrorTokenExpired, started, rw)
 			return
 		}
 		if expireAt > 0 {
