@@ -2011,7 +2011,10 @@ func TestRuntimeStability_SlowRefreshHandler(t *testing.T) {
 			// Simulates a refresh proxy HTTP call running inline.
 			time.Sleep(refreshDuration)
 			refreshes.Add(1)
-			cb(RefreshReply{ExpireAt: time.Now().Unix() + 1}, nil)
+			// ExpireAt is in whole seconds, so now+1 can be reached by the time
+			// the reply is handled if a second boundary passes in between, and
+			// the connection is then closed as expired.
+			cb(RefreshReply{ExpireAt: time.Now().Unix() + 2}, nil)
 		})
 	})
 	require.NoError(t, node.Run())
