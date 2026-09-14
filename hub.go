@@ -6,9 +6,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/filter"
+	"github.com/centrifugal/centrifuge/internal/fossilutf8"
 
 	"github.com/centrifugal/protocol"
 	"github.com/segmentio/encoding/json"
@@ -961,17 +963,40 @@ type preparedData struct {
 	// For keyed channel lazy delta encoding (set by buildPreparedPollData).
 	keyedDeltaPatch       []byte // raw fossil delta data (patch or full data if patch >= full)
 	keyedDeltaIsReal      bool   // true when the patch is a real delta (smaller than full)
+	keyedDeltaJSONSafe    bool   // true when JSON clients can apply the patch, see createFossilDelta
 	keyedDeltaPrevVersion uint64 // version corresponding to the delta's base data (entry.version BEFORE the publish)
+}
+
+// createFossilDelta creates a fossil delta from prevData to data, or returns nil
+// if full data must be sent instead. JSON clients get delta data as a JSON
+// string, which can only carry valid UTF-8, so for them the delta is aligned to
+// character boundaries: a change inside a multi-byte character splits it.
+//
+// A JSON client also holds prevData as it arrived in a JSON string, where each
+// byte that isn't valid UTF-8 became U+FFFD, so a delta copying from prevData
+// creates wrong data there: JSON clients get full data unless prevData is valid
+// UTF-8. data needs no check: a delta which is valid UTF-8 creates it byte for
+// byte, and alignment fails if data isn't valid UTF-8 around an insert.
+func createFossilDelta(prevData, data []byte, isJSON bool) []byte {
+	if isJSON && !utf8.Valid(prevData) {
+		return nil
+	}
+	patch := fdelta.Create(prevData, data)
+	if isJSON {
+		patch = fossilutf8.Align(patch, data)
+	}
+	if patch == nil || len(patch) >= len(data) {
+		return nil
+	}
+	return patch
 }
 
 func getDeltaPub(prevPub *Publication, fullPub *protocol.Publication, key preparedKey) *protocol.Publication {
 	deltaPub := fullPub
 	if prevPub != nil && key.DeltaType == DeltaTypeFossil {
-		patch := fdelta.Create(prevPub.Data, fullPub.Data)
-		delta := true
-		deltaData := patch
-		if len(patch) >= len(fullPub.Data) {
-			delta = false
+		deltaData := createFossilDelta(prevPub.Data, fullPub.Data, key.ProtocolType == protocol.TypeJSON)
+		delta := deltaData != nil
+		if !delta {
 			deltaData = fullPub.Data
 		}
 		if key.ProtocolType == protocol.TypeJSON {

@@ -9,8 +9,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/centrifugal/centrifuge/internal/epoch"
+	"github.com/centrifugal/centrifuge/internal/fossilutf8"
 	"github.com/centrifugal/protocol"
 	"github.com/cespare/xxhash/v2"
 	fdelta "github.com/shadowspore/fossil-delta"
@@ -1848,6 +1850,19 @@ func buildPreparedPollData(pub *protocol.Publication, prevData []byte, prevVersi
 		return preparedData{}
 	}
 	patch := fdelta.Create(prevData, pub.Data)
+	// The patch is shared by clients of all protocols. JSON clients can apply it
+	// only if prevData is valid UTF-8 (see createFossilDelta): then align it to
+	// character boundaries so it can be sent as a JSON string too. Otherwise
+	// keyedWritePublication sends data in full to JSON clients.
+	// TODO: check and align lazily in keyedHub.broadcastToKey, once for the first
+	// JSON subscriber, so channels without JSON subscribers don't pay for it.
+	jsonSafe := false
+	if utf8.Valid(prevData) {
+		if aligned := fossilutf8.Align(patch, pub.Data); aligned != nil {
+			patch = aligned
+			jsonSafe = true
+		}
+	}
 	isReal := len(patch) < len(pub.Data)
 	deltaData := patch
 	if !isReal {
@@ -1857,6 +1872,7 @@ func buildPreparedPollData(pub *protocol.Publication, prevData []byte, prevVersi
 		deltaSub:              true,
 		keyedDeltaPatch:       deltaData,
 		keyedDeltaIsReal:      isReal,
+		keyedDeltaJSONSafe:    jsonSafe,
 		keyedDeltaPrevVersion: prevVersion,
 	}
 }

@@ -22,7 +22,6 @@ import (
 	"github.com/centrifugal/protocol"
 	"github.com/google/uuid"
 	"github.com/segmentio/encoding/json"
-	fdelta "github.com/shadowspore/fossil-delta"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -4700,11 +4699,9 @@ func (c *Client) makeRecoveredPubsDeltaFossil(recoveredPubs []*protocol.Publicat
 	// RecoveryModeCache case this won't be used since there is only one publication max recovered.
 	for i := 1; i < len(recoveredPubs); i++ {
 		pub := recoveredPubs[i]
-		patch := fdelta.Create(prevPub.Data, pub.Data)
-		delta := true
-		deltaData := patch
-		if len(patch) >= len(pub.Data) {
-			delta = false
+		deltaData := createFossilDelta(prevPub.Data, pub.Data, c.transport.Protocol() == ProtocolTypeJSON)
+		delta := deltaData != nil
+		if !delta {
 			deltaData = pub.Data
 		}
 		if c.transport.Protocol() == ProtocolTypeJSON {
@@ -4754,11 +4751,9 @@ func (c *Client) makeRecoveredMapPubsDeltaFossil(recoveredPubs []*protocol.Publi
 			continue
 		}
 		// Subsequent occurrence — compute per-key delta.
-		patch := fdelta.Create(prev.Data, pub.Data)
-		delta := true
-		deltaData := patch
-		if len(patch) >= len(pub.Data) {
-			delta = false
+		deltaData := createFossilDelta(prev.Data, pub.Data, isJSON)
+		delta := deltaData != nil
+		if !delta {
 			deltaData = pub.Data
 		}
 		if isJSON {

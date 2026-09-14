@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/centrifugal/centrifuge/internal/controlpb"
 	"github.com/centrifugal/centrifuge/internal/controlproto"
@@ -874,6 +876,86 @@ func TestHubBroadcastDeltaInvalidJSONDisconnectsClient(t *testing.T) {
 		t.Fatal("client was not disconnected: the delta JSON encode error did not propagate to broadcastPublication")
 	}
 	require.Equal(t, DisconnectInappropriateProtocol.Code, transport.disconnect.Code)
+}
+
+// A JSON client gets delta data as a JSON string, which can only carry valid
+// UTF-8: a fossil delta for a change inside a multi-byte character, which splits
+// the character, must be aligned to character boundaries.
+func TestHubBroadcastPublicationDeltaJSONSplitCharacter(t *testing.T) {
+	t.Parallel()
+	n := deltaTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := newTestTransport(cancel)
+	transport.sink = make(chan []byte, 100)
+	transport.setProtocolType(ProtocolTypeJSON)
+	transport.setProtocolVersion(ProtocolVersion2)
+	const channel = "test-delta-split-character"
+	newTestSubscribedClientWithTransportDelta(t, ctx, n, transport, "42", channel, DeltaTypeFossil)
+
+	// é is C3 A9 and è is C3 A8: the delta between these payloads copies C3 and
+	// inserts A8.
+	body := strings.Repeat("shared-body-", 12)
+	prevData := []byte(`{"text":"` + body + `é"}`)
+	data := []byte(`{"text":"` + body + `è"}`)
+	res, err := n.History(channel)
+	require.NoError(t, err)
+	require.NoError(t, n.hub.broadcastPublication(
+		channel, StreamPosition{Offset: 1, Epoch: res.StreamPosition.Epoch},
+		&Publication{Data: prevData, Offset: 1}, nil, nil, ChannelBatchConfig{},
+	))
+	require.NoError(t, n.hub.broadcastPublication(
+		channel, StreamPosition{Offset: 2, Epoch: res.StreamPosition.Epoch},
+		&Publication{Data: data, Offset: 2}, &Publication{Data: prevData, Offset: 1}, nil, ChannelBatchConfig{},
+	))
+
+	var pub *protocol.Publication
+	timeout := time.After(2 * time.Second)
+	for pub == nil {
+		select {
+		case frame := <-transport.sink:
+			// A frame may carry several newline-delimited JSON replies.
+			for _, line := range bytes.Split(bytes.TrimSpace(frame), []byte("\n")) {
+				reply := decodeReply(t, protocol.TypeJSON, line)
+				if reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Offset == 2 {
+					pub = reply.Push.Pub
+				}
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for the publication at offset 2")
+		}
+	}
+	require.True(t, pub.Delta)
+	var delta string
+	require.NoError(t, json.Unmarshal(pub.Data, &delta))
+	applied, err := fdelta.Apply(prevData, []byte(delta))
+	require.NoError(t, err)
+	require.Equal(t, data, applied)
+}
+
+// A JSON client holds data as it arrived in a JSON string, where each byte that
+// isn't valid UTF-8 became U+FFFD: it gets full data unless the previous data is
+// valid UTF-8, even if the delta itself is valid UTF-8.
+func TestCreateFossilDelta_JSONInvalidUTF8(t *testing.T) {
+	t.Parallel()
+	body := strings.Repeat("shared-body-", 12)
+	for _, tc := range []struct {
+		name     string
+		prevData string
+		data     string
+	}{
+		{name: "invalid prev data", prevData: "\xff" + body + "-old", data: body + "-new"},
+		{name: "invalid byte copied", prevData: body + "\xff" + body + "-old", data: body + "\xff" + body + "-new"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			patch := createFossilDelta([]byte(tc.prevData), []byte(tc.data), false)
+			require.NotNil(t, patch)
+			require.True(t, utf8.Valid(patch), "the test case must create a delta which is valid UTF-8")
+			require.Nil(t, createFossilDelta([]byte(tc.prevData), []byte(tc.data), true))
+		})
+	}
 }
 
 func TestHubBroadcastJoin(t *testing.T) {

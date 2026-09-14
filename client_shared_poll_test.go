@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/centrifugal/protocol"
 	"github.com/segmentio/encoding/json"
@@ -2286,6 +2287,35 @@ func TestBuildPreparedPollData_LargePatch(t *testing.T) {
 	}
 }
 
+func TestBuildPreparedPollData_JSONSafe(t *testing.T) {
+	t.Parallel()
+	body := strings.Repeat("shared-body-", 12)
+	for _, tc := range []struct {
+		name     string
+		prevData string
+		data     string
+		jsonSafe bool
+	}{
+		{name: "split character", prevData: body + "é", data: body + "è", jsonSafe: true},
+		{name: "invalid prev data", prevData: "\xff" + body + "-old", data: body + "-new"},
+		{name: "invalid byte copied", prevData: body + "\xff" + body + "-old", data: body + "\xff" + body + "-new"},
+		{name: "invalid byte inserted", prevData: body + "-old", data: body + "\xa8\xff"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prep := buildPreparedPollData(&protocol.Publication{Data: []byte(tc.data)}, []byte(tc.prevData), 1)
+			require.True(t, prep.keyedDeltaIsReal)
+			require.Equal(t, tc.jsonSafe, prep.keyedDeltaJSONSafe)
+			if tc.jsonSafe {
+				require.True(t, utf8.Valid(prep.keyedDeltaPatch))
+			}
+			// Clients of other protocols apply the patch in any case.
+			applied, err := fdelta.Apply([]byte(tc.prevData), prep.keyedDeltaPatch)
+			require.NoError(t, err)
+			require.Equal(t, tc.data, string(applied))
+		})
+	}
+}
+
 // setupSharedPollHandlersWithExpiry sets up handlers where OnTrack returns the given ExpireAt.
 func setupSharedPollHandlersWithExpiry(node *Node, expireAt int64) {
 	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
@@ -3357,6 +3387,127 @@ func TestSharedPollCachedData_DeltaReconstructsJSON(t *testing.T) {
 	require.NoError(t, err, "v2 delta failed to apply against the cached base")
 	require.Equal(t, dataV2, applied,
 		"v2 did not reconstruct from the cached base — cached item was not delivered in the delta base format")
+}
+
+// A JSON client gets delta data as a JSON string, which can only carry valid
+// UTF-8: a keyed delta for a change inside a multi-byte character, which splits
+// the character, must be aligned to character boundaries.
+func TestSharedPollCachedData_DeltaJSONSplitCharacter(t *testing.T) {
+	t.Parallel()
+	// é is C3 A9 and è is C3 A8: the delta between these payloads copies C3 and
+	// inserts A8.
+	body := strings.Repeat("shared-body-", 12)
+	testSharedPollCachedDataDeltaJSON(t, []byte(`{"value":"`+body+`é"}`), []byte(`{"value":"`+body+`è"}`), nil)
+}
+
+// A JSON client holds data as it arrived in a JSON string, where each byte that
+// isn't valid UTF-8 became U+FFFD: it must get full data instead of a delta
+// copying from such data, even if the delta itself is valid UTF-8.
+func TestSharedPollCachedData_DeltaJSONInvalidUTF8(t *testing.T) {
+	t.Parallel()
+	body := strings.Repeat("shared-body-", 12)
+	testSharedPollCachedDataDeltaJSON(t,
+		[]byte(`{"value":"`+body+"\xff"+body+`-old"}`),
+		[]byte(`{"value":"`+body+"\xff"+body+`-new"}`),
+		[]byte(`{"value":"`+body+"�"+body+`-new"}`),
+	)
+}
+
+// testSharedPollCachedDataDeltaJSON delivers dataV1 and then dataV2 to a JSON
+// delta client and checks the publication of dataV2: full data equal to
+// wantFull, or a delta creating dataV2 if wantFull is nil.
+func testSharedPollCachedDataDeltaJSON(t *testing.T, dataV1, dataV2, wantFull []byte) {
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:           30 * time.Second,
+		RefreshBatchSize:          100,
+		MaxKeysPerConnection:      100,
+		KeepLatestData:            true,
+		Mode:                      SharedPollModeVersioned,
+		NotificationBatchMaxSize:  50,
+		NotificationBatchMaxDelay: 50 * time.Millisecond,
+	})
+	setupSharedPollDeltaHandlers(node)
+
+	version := atomic.Int64{}
+	version.Store(1)
+	dataVal := atomic.Value{}
+	dataVal.Store(dataV1)
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "key1", Data: dataVal.Load().([]byte), Version: uint64(version.Load())},
+			},
+		}, nil
+	})
+
+	// Client1 (no sink) tracks key1 → populate cache at v1.
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{{Key: "key1", Version: 0}})
+	require.Eventually(t, func() bool {
+		node.sharedPollManager.mu.RLock()
+		s := node.sharedPollManager.channels["test:channel"]
+		node.sharedPollManager.mu.RUnlock()
+		if s == nil {
+			return false
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		entry := s.itemIndex["key1"]
+		return entry != nil && entry.version >= 1 && entry.data != nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Client2 (JSON, delta, sink) tracks key1 at v0 → receives cached v1 in reply.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	transport2 := newTestTransport(cancel2)
+	transport2.setProtocolVersion(ProtocolVersion2)
+	transport2.setProtocolType(ProtocolTypeJSON)
+	sink2 := make(chan []byte, 100)
+	transport2.sink = sink2
+	newCtx2 := SetCredentials(ctx2, &Credentials{UserID: "user2"})
+	client2, _ := newClient(newCtx2, node, transport2)
+	connectClientV2(t, client2)
+	subscribeSharedPollClientDelta(t, client2, "test:channel")
+	result := trackSharedPollClientWithReply(t, client2, "test:channel", []*protocol.KeyedItem{{Key: "key1", Version: 0}})
+	require.NotNil(t, result)
+	require.Len(t, result.Items, 1)
+
+	// Bump to v2 and trigger a notification cycle so client2 gets v2.
+	version.Store(2)
+	dataVal.Store(dataV2)
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{{Key: "key_trigger", Version: 0}})
+	require.Eventually(t, func() bool {
+		client2.mu.RLock()
+		defer client2.mu.RUnlock()
+		ks := client2.keyed.trackedKeys["test:channel"]["key1"]
+		return ks != nil && ks.version >= 2
+	}, 5*time.Second, 10*time.Millisecond)
+
+	var v2 *protocol.Publication
+	timeout := time.After(2 * time.Second)
+	for v2 == nil {
+		select {
+		case d := <-sink2:
+			reply := decodeReply(t, protocol.TypeJSON, d)
+			if reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 2 {
+				v2 = reply.Push.Pub
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for v2 publication")
+		}
+	}
+	require.Equal(t, wantFull == nil, v2.Delta)
+	var data string
+	require.NoError(t, json.Unmarshal(v2.Data, &data))
+	if wantFull != nil {
+		require.Equal(t, string(wantFull), data)
+		return
+	}
+	applied, err := fdelta.Apply(dataV1, []byte(data))
+	require.NoError(t, err)
+	require.Equal(t, dataV2, applied)
 }
 
 func TestSharedPollCachedData_DeltaReadyPartialKeys(t *testing.T) {
