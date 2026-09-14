@@ -4703,7 +4703,7 @@ func (c *Client) makeRecoveredPubsDeltaFossil(recoveredPubs []*protocol.Publicat
 		patch := fdelta.Create(prevPub.Data, pub.Data)
 		delta := true
 		deltaData := patch
-		if len(patch) >= len(pub.Data) {
+		if len(patch) >= len(pub.Data) || (c.transport.Protocol() == ProtocolTypeJSON && !validJSONDelta(patch)) {
 			delta = false
 			deltaData = pub.Data
 		}
@@ -4757,7 +4757,7 @@ func (c *Client) makeRecoveredMapPubsDeltaFossil(recoveredPubs []*protocol.Publi
 		patch := fdelta.Create(prev.Data, pub.Data)
 		delta := true
 		deltaData := patch
-		if len(patch) >= len(pub.Data) {
+		if len(patch) >= len(pub.Data) || (isJSON && !validJSONDelta(patch)) {
 			delta = false
 			deltaData = pub.Data
 		}

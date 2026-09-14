@@ -1745,6 +1745,60 @@ func TestFossilRecoveredPubs(t *testing.T) {
 	require.Equal(t, []byte("This is a message to test Fossil: I just subscribed to channel"), data2)
 }
 
+// A JSON client gets delta data as a JSON string, which can only carry valid
+// UTF-8. A fossil delta for a change inside a multi-byte character isn't valid
+// UTF-8, so recovery must send such a publication in full.
+func TestFossilRecoveredPubsJSONInvalidUTF8Delta(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClientV2Protocol(t, node, "42", ProtocolTypeJSON)
+
+	// é is C3 A9 and è is C3 A8: the delta between the first two payloads
+	// inserts a lone continuation byte. The delta to the third one only inserts
+	// ASCII.
+	body := strings.Repeat("shared-body-", 12)
+	payloads := [][]byte{
+		[]byte(`{"text":"` + body + `é"}`),
+		[]byte(`{"text":"` + body + `è"}`),
+		[]byte(`{"text":"` + body + `è-ascii"}`),
+	}
+
+	for _, tc := range []struct {
+		name  string
+		build func([]*protocol.Publication) []*protocol.Publication
+	}{
+		{name: "stream", build: client.makeRecoveredPubsDeltaFossil},
+		{name: "map", build: client.makeRecoveredMapPubsDeltaFossil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recovered := make([]*protocol.Publication, 0, len(payloads))
+			for i, p := range payloads {
+				recovered = append(recovered, &protocol.Publication{Offset: uint64(i + 1), Key: "k", Data: p})
+			}
+			pubs := tc.build(recovered)
+			require.Len(t, pubs, 3)
+			require.False(t, pubs[1].Delta, "a delta that isn't valid UTF-8 must be sent in full to a JSON client")
+			require.True(t, pubs[2].Delta, "a valid UTF-8 delta must still be sent as a delta")
+
+			// Reconstruct like an SDK: unescape the JSON string, then apply deltas.
+			var base []byte
+			for i, pub := range pubs {
+				var s string
+				require.NoError(t, json.Unmarshal(pub.Data, &s))
+				if pub.Delta {
+					applied, err := fdelta.Apply(base, []byte(s))
+					require.NoError(t, err, "publication %d", i+1)
+					base = applied
+				} else {
+					base = []byte(s)
+				}
+				require.Equal(t, payloads[i], base, "publication %d", i+1)
+			}
+		})
+	}
+}
+
 // readSinkPublication drains the transport sink until it finds a pushed
 // publication with the given offset, decoding each frame as a bare Protobuf
 // Reply (matches how the client writer encodes single pushes).

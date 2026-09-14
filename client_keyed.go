@@ -838,12 +838,17 @@ func (c *Client) keyedWritePublication(channel string, key string, pubVersion ui
 	var encodedDelta []byte
 	if deltaPossible {
 		deltaData := prep.keyedDeltaPatch
+		isRealDelta := prep.keyedDeltaIsReal
+		if isJSON && isRealDelta && !validJSONDelta(deltaData) {
+			deltaData = pub.Data
+			isRealDelta = false
+		}
 		if isJSON {
 			deltaData = json.Escape(convert.BytesToString(deltaData))
 		}
 		deltaPub := &protocol.Publication{
 			Data:    deltaData,
-			Delta:   prep.keyedDeltaIsReal,
+			Delta:   isRealDelta,
 			Key:     pub.Key,
 			Version: pub.Version,
 		}

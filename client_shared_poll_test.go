@@ -3359,6 +3359,104 @@ func TestSharedPollCachedData_DeltaReconstructsJSON(t *testing.T) {
 		"v2 did not reconstruct from the cached base — cached item was not delivered in the delta base format")
 }
 
+// A JSON client gets delta data as a JSON string, which can only carry valid
+// UTF-8: a keyed delta for a change inside a multi-byte character must be sent
+// as full data instead.
+func TestSharedPollCachedData_DeltaJSONInvalidUTF8SentFull(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
+		RefreshInterval:           30 * time.Second,
+		RefreshBatchSize:          100,
+		MaxKeysPerConnection:      100,
+		KeepLatestData:            true,
+		Mode:                      SharedPollModeVersioned,
+		NotificationBatchMaxSize:  50,
+		NotificationBatchMaxDelay: 50 * time.Millisecond,
+	})
+	setupSharedPollDeltaHandlers(node)
+
+	// é is C3 A9 and è is C3 A8: the delta between these payloads is much smaller
+	// than the data but inserts a lone continuation byte.
+	body := strings.Repeat("shared-body-", 12)
+	dataV1 := []byte(`{"value":"` + body + `é"}`)
+	dataV2 := []byte(`{"value":"` + body + `è"}`)
+
+	version := atomic.Int64{}
+	version.Store(1)
+	dataVal := atomic.Value{}
+	dataVal.Store(dataV1)
+	node.OnSharedPoll(func(ctx context.Context, event SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{
+			Items: []SharedPollRefreshItem{
+				{Key: "key1", Data: dataVal.Load().([]byte), Version: uint64(version.Load())},
+			},
+		}, nil
+	})
+
+	// Client1 (no sink) tracks key1 → populate cache at v1.
+	client1 := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client1)
+	subscribeSharedPollClient(t, client1, "test:channel")
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{{Key: "key1", Version: 0}})
+	require.Eventually(t, func() bool {
+		node.sharedPollManager.mu.RLock()
+		s := node.sharedPollManager.channels["test:channel"]
+		node.sharedPollManager.mu.RUnlock()
+		if s == nil {
+			return false
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		entry := s.itemIndex["key1"]
+		return entry != nil && entry.version >= 1 && entry.data != nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Client2 (JSON, delta, sink) tracks key1 at v0 → receives cached v1 in reply.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	transport2 := newTestTransport(cancel2)
+	transport2.setProtocolVersion(ProtocolVersion2)
+	transport2.setProtocolType(ProtocolTypeJSON)
+	sink2 := make(chan []byte, 100)
+	transport2.sink = sink2
+	newCtx2 := SetCredentials(ctx2, &Credentials{UserID: "user2"})
+	client2, _ := newClient(newCtx2, node, transport2)
+	connectClientV2(t, client2)
+	subscribeSharedPollClientDelta(t, client2, "test:channel")
+	result := trackSharedPollClientWithReply(t, client2, "test:channel", []*protocol.KeyedItem{{Key: "key1", Version: 0}})
+	require.NotNil(t, result)
+	require.Len(t, result.Items, 1)
+
+	// Bump to v2 and trigger a notification cycle so client2 gets v2.
+	version.Store(2)
+	dataVal.Store(dataV2)
+	trackSharedPollClient(t, client1, "test:channel", []*protocol.KeyedItem{{Key: "key_trigger", Version: 0}})
+	require.Eventually(t, func() bool {
+		client2.mu.RLock()
+		defer client2.mu.RUnlock()
+		ks := client2.keyed.trackedKeys["test:channel"]["key1"]
+		return ks != nil && ks.version >= 2
+	}, 5*time.Second, 10*time.Millisecond)
+
+	var v2 *protocol.Publication
+	timeout := time.After(2 * time.Second)
+	for v2 == nil {
+		select {
+		case d := <-sink2:
+			reply := decodeReply(t, protocol.TypeJSON, d)
+			if reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 2 {
+				v2 = reply.Push.Pub
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for v2 publication")
+		}
+	}
+	require.False(t, v2.Delta, "a delta that isn't valid UTF-8 must be sent in full to a JSON client")
+	var full string
+	require.NoError(t, json.Unmarshal(v2.Data, &full))
+	require.Equal(t, dataV2, []byte(full))
+}
+
 func TestSharedPollCachedData_DeltaReadyPartialKeys(t *testing.T) {
 	t.Parallel()
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
