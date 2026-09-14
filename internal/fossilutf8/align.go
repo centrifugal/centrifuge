@@ -27,10 +27,11 @@ var digitValues = func() (values [256]int8) {
 // multi-byte character, leaving a partial character in the adjacent insert.
 // Align moves such boundaries to character boundaries, shortening the copy and
 // extending the insert, which keeps the output of the delta and its checksum.
-// A delta that is already valid UTF-8 is returned as is.
+// A delta that is already valid UTF-8 is returned as is, even if target isn't
+// valid UTF-8 in the copied ranges.
 //
 // It returns nil if patch can't be aligned: it's malformed or target isn't
-// valid UTF-8.
+// valid UTF-8 around an insert.
 func Align(patch, target []byte) []byte {
 	if utf8.Valid(patch) {
 		return patch

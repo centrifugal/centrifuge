@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/centrifugal/protocol"
 	"github.com/segmentio/encoding/json"
@@ -2286,6 +2287,35 @@ func TestBuildPreparedPollData_LargePatch(t *testing.T) {
 	}
 }
 
+func TestBuildPreparedPollData_JSONSafe(t *testing.T) {
+	t.Parallel()
+	body := strings.Repeat("shared-body-", 12)
+	for _, tc := range []struct {
+		name     string
+		prevData string
+		data     string
+		jsonSafe bool
+	}{
+		{name: "split character", prevData: body + "é", data: body + "è", jsonSafe: true},
+		{name: "invalid prev data", prevData: "\xff" + body + "-old", data: body + "-new"},
+		{name: "invalid byte copied", prevData: body + "\xff" + body + "-old", data: body + "\xff" + body + "-new"},
+		{name: "invalid byte inserted", prevData: body + "-old", data: body + "\xa8\xff"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prep := buildPreparedPollData(&protocol.Publication{Data: []byte(tc.data)}, []byte(tc.prevData), 1)
+			require.True(t, prep.keyedDeltaIsReal)
+			require.Equal(t, tc.jsonSafe, prep.keyedDeltaJSONSafe)
+			if tc.jsonSafe {
+				require.True(t, utf8.Valid(prep.keyedDeltaPatch))
+			}
+			// Clients of other protocols apply the patch in any case.
+			applied, err := fdelta.Apply([]byte(tc.prevData), prep.keyedDeltaPatch)
+			require.NoError(t, err)
+			require.Equal(t, tc.data, string(applied))
+		})
+	}
+}
+
 // setupSharedPollHandlersWithExpiry sets up handlers where OnTrack returns the given ExpireAt.
 func setupSharedPollHandlersWithExpiry(node *Node, expireAt int64) {
 	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
@@ -3364,6 +3394,29 @@ func TestSharedPollCachedData_DeltaReconstructsJSON(t *testing.T) {
 // the character, must be aligned to character boundaries.
 func TestSharedPollCachedData_DeltaJSONSplitCharacter(t *testing.T) {
 	t.Parallel()
+	// é is C3 A9 and è is C3 A8: the delta between these payloads copies C3 and
+	// inserts A8.
+	body := strings.Repeat("shared-body-", 12)
+	testSharedPollCachedDataDeltaJSON(t, []byte(`{"value":"`+body+`é"}`), []byte(`{"value":"`+body+`è"}`), nil)
+}
+
+// A JSON client holds data as it arrived in a JSON string, where each byte that
+// isn't valid UTF-8 became U+FFFD: it must get full data instead of a delta
+// copying from such data, even if the delta itself is valid UTF-8.
+func TestSharedPollCachedData_DeltaJSONInvalidUTF8(t *testing.T) {
+	t.Parallel()
+	body := strings.Repeat("shared-body-", 12)
+	testSharedPollCachedDataDeltaJSON(t,
+		[]byte(`{"value":"`+body+"\xff"+body+`-old"}`),
+		[]byte(`{"value":"`+body+"\xff"+body+`-new"}`),
+		[]byte(`{"value":"`+body+"�"+body+`-new"}`),
+	)
+}
+
+// testSharedPollCachedDataDeltaJSON delivers dataV1 and then dataV2 to a JSON
+// delta client and checks the publication of dataV2: full data equal to
+// wantFull, or a delta creating dataV2 if wantFull is nil.
+func testSharedPollCachedDataDeltaJSON(t *testing.T, dataV1, dataV2, wantFull []byte) {
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
 		RefreshInterval:           30 * time.Second,
 		RefreshBatchSize:          100,
@@ -3374,12 +3427,6 @@ func TestSharedPollCachedData_DeltaJSONSplitCharacter(t *testing.T) {
 		NotificationBatchMaxDelay: 50 * time.Millisecond,
 	})
 	setupSharedPollDeltaHandlers(node)
-
-	// é is C3 A9 and è is C3 A8: the delta between these payloads copies C3 and
-	// inserts A8.
-	body := strings.Repeat("shared-body-", 12)
-	dataV1 := []byte(`{"value":"` + body + `é"}`)
-	dataV2 := []byte(`{"value":"` + body + `è"}`)
 
 	version := atomic.Int64{}
 	version.Store(1)
@@ -3451,10 +3498,14 @@ func TestSharedPollCachedData_DeltaJSONSplitCharacter(t *testing.T) {
 			t.Fatal("timeout waiting for v2 publication")
 		}
 	}
-	require.True(t, v2.Delta)
-	var delta string
-	require.NoError(t, json.Unmarshal(v2.Data, &delta))
-	applied, err := fdelta.Apply(dataV1, []byte(delta))
+	require.Equal(t, wantFull == nil, v2.Delta)
+	var data string
+	require.NoError(t, json.Unmarshal(v2.Data, &data))
+	if wantFull != nil {
+		require.Equal(t, string(wantFull), data)
+		return
+	}
+	applied, err := fdelta.Apply(dataV1, []byte(data))
 	require.NoError(t, err)
 	require.Equal(t, dataV2, applied)
 }

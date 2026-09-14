@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/centrifugal/centrifuge/internal/epoch"
 	"github.com/centrifugal/centrifuge/internal/fossilutf8"
@@ -1849,15 +1850,18 @@ func buildPreparedPollData(pub *protocol.Publication, prevData []byte, prevVersi
 		return preparedData{}
 	}
 	patch := fdelta.Create(prevData, pub.Data)
-	// The patch is shared by clients of all protocols: align it to character
-	// boundaries so it can be sent as a JSON string too. Data that isn't valid
-	// UTF-8 can't be aligned, keyedWritePublication sends it in full to JSON
-	// clients.
-	// TODO: align lazily in keyedHub.broadcastToKey, once for the first JSON
-	// subscriber, so channels without JSON subscribers don't pay for trying to
-	// align data that isn't valid UTF-8, e.g. binary Protobuf payloads.
-	if aligned := fossilutf8.Align(patch, pub.Data); aligned != nil {
-		patch = aligned
+	// The patch is shared by clients of all protocols. JSON clients can apply it
+	// only if prevData is valid UTF-8 (see createFossilDelta): then align it to
+	// character boundaries so it can be sent as a JSON string too. Otherwise
+	// keyedWritePublication sends data in full to JSON clients.
+	// TODO: check and align lazily in keyedHub.broadcastToKey, once for the first
+	// JSON subscriber, so channels without JSON subscribers don't pay for it.
+	jsonSafe := false
+	if utf8.Valid(prevData) {
+		if aligned := fossilutf8.Align(patch, pub.Data); aligned != nil {
+			patch = aligned
+			jsonSafe = true
+		}
 	}
 	isReal := len(patch) < len(pub.Data)
 	deltaData := patch
@@ -1868,6 +1872,7 @@ func buildPreparedPollData(pub *protocol.Publication, prevData []byte, prevVersi
 		deltaSub:              true,
 		keyedDeltaPatch:       deltaData,
 		keyedDeltaIsReal:      isReal,
+		keyedDeltaJSONSafe:    jsonSafe,
 		keyedDeltaPrevVersion: prevVersion,
 	}
 }

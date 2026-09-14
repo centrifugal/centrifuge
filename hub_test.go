@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/centrifugal/centrifuge/internal/controlpb"
 	"github.com/centrifugal/centrifuge/internal/controlproto"
@@ -932,6 +933,29 @@ func TestHubBroadcastPublicationDeltaJSONSplitCharacter(t *testing.T) {
 	applied, err := fdelta.Apply(prevData, []byte(delta))
 	require.NoError(t, err)
 	require.Equal(t, data, applied)
+}
+
+// A JSON client holds data as it arrived in a JSON string, where each byte that
+// isn't valid UTF-8 became U+FFFD: it gets full data unless the previous data is
+// valid UTF-8, even if the delta itself is valid UTF-8.
+func TestCreateFossilDelta_JSONInvalidUTF8(t *testing.T) {
+	t.Parallel()
+	body := strings.Repeat("shared-body-", 12)
+	for _, tc := range []struct {
+		name     string
+		prevData string
+		data     string
+	}{
+		{name: "invalid prev data", prevData: "\xff" + body + "-old", data: body + "-new"},
+		{name: "invalid byte copied", prevData: body + "\xff" + body + "-old", data: body + "\xff" + body + "-new"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			patch := createFossilDelta([]byte(tc.prevData), []byte(tc.data), false)
+			require.NotNil(t, patch)
+			require.True(t, utf8.Valid(patch), "the test case must create a delta which is valid UTF-8")
+			require.Nil(t, createFossilDelta([]byte(tc.prevData), []byte(tc.data), true))
+		})
+	}
 }
 
 func TestHubBroadcastJoin(t *testing.T) {
