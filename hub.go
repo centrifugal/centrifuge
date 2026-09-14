@@ -6,10 +6,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/filter"
+	"github.com/centrifugal/centrifuge/internal/fossilutf8"
 
 	"github.com/centrifugal/protocol"
 	"github.com/segmentio/encoding/json"
@@ -965,22 +965,27 @@ type preparedData struct {
 	keyedDeltaPrevVersion uint64 // version corresponding to the delta's base data (entry.version BEFORE the publish)
 }
 
-// validJSONDelta reports whether a fossil delta can be sent to a JSON client.
-// JSON clients get delta data as a JSON string, which can only carry valid
-// UTF-8: a delta that isn't, e.g. for a change inside a multi-byte character,
-// would be corrupted by escaping, so the full data must be sent instead.
-func validJSONDelta(patch []byte) bool {
-	return utf8.Valid(patch)
+// createFossilDelta creates a fossil delta from prevData to data, or returns nil
+// if full data must be sent instead. JSON clients get delta data as a JSON
+// string, which can only carry valid UTF-8, so for them the delta is aligned to
+// character boundaries: a change inside a multi-byte character splits it.
+func createFossilDelta(prevData, data []byte, isJSON bool) []byte {
+	patch := fdelta.Create(prevData, data)
+	if isJSON {
+		patch = fossilutf8.Align(patch, data)
+	}
+	if patch == nil || len(patch) >= len(data) {
+		return nil
+	}
+	return patch
 }
 
 func getDeltaPub(prevPub *Publication, fullPub *protocol.Publication, key preparedKey) *protocol.Publication {
 	deltaPub := fullPub
 	if prevPub != nil && key.DeltaType == DeltaTypeFossil {
-		patch := fdelta.Create(prevPub.Data, fullPub.Data)
-		delta := true
-		deltaData := patch
-		if len(patch) >= len(fullPub.Data) || (key.ProtocolType == protocol.TypeJSON && !validJSONDelta(patch)) {
-			delta = false
+		deltaData := createFossilDelta(prevPub.Data, fullPub.Data, key.ProtocolType == protocol.TypeJSON)
+		delta := deltaData != nil
+		if !delta {
 			deltaData = fullPub.Data
 		}
 		if key.ProtocolType == protocol.TypeJSON {

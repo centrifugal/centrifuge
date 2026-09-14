@@ -1746,22 +1746,20 @@ func TestFossilRecoveredPubs(t *testing.T) {
 }
 
 // A JSON client gets delta data as a JSON string, which can only carry valid
-// UTF-8. A fossil delta for a change inside a multi-byte character isn't valid
-// UTF-8, so recovery must send such a publication in full.
-func TestFossilRecoveredPubsJSONInvalidUTF8Delta(t *testing.T) {
+// UTF-8: a fossil delta for a change inside a multi-byte character, which splits
+// the character, must be aligned to character boundaries in recovery too.
+func TestFossilRecoveredPubsJSONSplitCharacter(t *testing.T) {
 	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClientV2Protocol(t, node, "42", ProtocolTypeJSON)
 
-	// é is C3 A9 and è is C3 A8: the delta between the first two payloads
-	// inserts a lone continuation byte. The delta to the third one only inserts
-	// ASCII.
+	// é is C3 A9 and è is C3 A8: the delta between these payloads copies C3 and
+	// inserts A8.
 	body := strings.Repeat("shared-body-", 12)
 	payloads := [][]byte{
 		[]byte(`{"text":"` + body + `é"}`),
 		[]byte(`{"text":"` + body + `è"}`),
-		[]byte(`{"text":"` + body + `è-ascii"}`),
 	}
 
 	for _, tc := range []struct {
@@ -1777,9 +1775,8 @@ func TestFossilRecoveredPubsJSONInvalidUTF8Delta(t *testing.T) {
 				recovered = append(recovered, &protocol.Publication{Offset: uint64(i + 1), Key: "k", Data: p})
 			}
 			pubs := tc.build(recovered)
-			require.Len(t, pubs, 3)
-			require.False(t, pubs[1].Delta, "a delta that isn't valid UTF-8 must be sent in full to a JSON client")
-			require.True(t, pubs[2].Delta, "a valid UTF-8 delta must still be sent as a delta")
+			require.Len(t, pubs, 2)
+			require.True(t, pubs[1].Delta)
 
 			// Reconstruct like an SDK: unescape the JSON string, then apply deltas.
 			var base []byte

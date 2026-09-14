@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"time"
+	"unicode/utf8"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
 
@@ -839,7 +840,10 @@ func (c *Client) keyedWritePublication(channel string, key string, pubVersion ui
 	if deltaPossible {
 		deltaData := prep.keyedDeltaPatch
 		isRealDelta := prep.keyedDeltaIsReal
-		if isJSON && isRealDelta && !validJSONDelta(deltaData) {
+		// A JSON client gets delta data as a JSON string, which can only carry
+		// valid UTF-8: buildPreparedPollData can't align the patch to character
+		// boundaries if data isn't valid UTF-8.
+		if isJSON && isRealDelta && !utf8.Valid(deltaData) {
 			deltaData = pub.Data
 			isRealDelta = false
 		}

@@ -878,9 +878,9 @@ func TestHubBroadcastDeltaInvalidJSONDisconnectsClient(t *testing.T) {
 }
 
 // A JSON client gets delta data as a JSON string, which can only carry valid
-// UTF-8: a fossil delta for a change inside a multi-byte character must be sent
-// as full data instead.
-func TestHubBroadcastPublicationDeltaJSONInvalidUTF8(t *testing.T) {
+// UTF-8: a fossil delta for a change inside a multi-byte character, which splits
+// the character, must be aligned to character boundaries.
+func TestHubBroadcastPublicationDeltaJSONSplitCharacter(t *testing.T) {
 	t.Parallel()
 	n := deltaTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -891,11 +891,11 @@ func TestHubBroadcastPublicationDeltaJSONInvalidUTF8(t *testing.T) {
 	transport.sink = make(chan []byte, 100)
 	transport.setProtocolType(ProtocolTypeJSON)
 	transport.setProtocolVersion(ProtocolVersion2)
-	const channel = "test-delta-invalid-utf8"
+	const channel = "test-delta-split-character"
 	newTestSubscribedClientWithTransportDelta(t, ctx, n, transport, "42", channel, DeltaTypeFossil)
 
-	// é is C3 A9 and è is C3 A8: the delta between these payloads is much smaller
-	// than the data but inserts a lone continuation byte.
+	// é is C3 A9 and è is C3 A8: the delta between these payloads copies C3 and
+	// inserts A8.
 	body := strings.Repeat("shared-body-", 12)
 	prevData := []byte(`{"text":"` + body + `é"}`)
 	data := []byte(`{"text":"` + body + `è"}`)
@@ -926,10 +926,12 @@ func TestHubBroadcastPublicationDeltaJSONInvalidUTF8(t *testing.T) {
 			t.Fatal("timeout waiting for the publication at offset 2")
 		}
 	}
-	require.False(t, pub.Delta, "a delta that isn't valid UTF-8 must be sent in full to a JSON client")
-	var s string
-	require.NoError(t, json.Unmarshal(pub.Data, &s))
-	require.Equal(t, data, []byte(s))
+	require.True(t, pub.Delta)
+	var delta string
+	require.NoError(t, json.Unmarshal(pub.Data, &delta))
+	applied, err := fdelta.Apply(prevData, []byte(delta))
+	require.NoError(t, err)
+	require.Equal(t, data, applied)
 }
 
 func TestHubBroadcastJoin(t *testing.T) {

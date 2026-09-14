@@ -3360,9 +3360,9 @@ func TestSharedPollCachedData_DeltaReconstructsJSON(t *testing.T) {
 }
 
 // A JSON client gets delta data as a JSON string, which can only carry valid
-// UTF-8: a keyed delta for a change inside a multi-byte character must be sent
-// as full data instead.
-func TestSharedPollCachedData_DeltaJSONInvalidUTF8SentFull(t *testing.T) {
+// UTF-8: a keyed delta for a change inside a multi-byte character, which splits
+// the character, must be aligned to character boundaries.
+func TestSharedPollCachedData_DeltaJSONSplitCharacter(t *testing.T) {
 	t.Parallel()
 	node := newTestNodeWithSharedPoll(t, SharedPollChannelOptions{
 		RefreshInterval:           30 * time.Second,
@@ -3375,8 +3375,8 @@ func TestSharedPollCachedData_DeltaJSONInvalidUTF8SentFull(t *testing.T) {
 	})
 	setupSharedPollDeltaHandlers(node)
 
-	// é is C3 A9 and è is C3 A8: the delta between these payloads is much smaller
-	// than the data but inserts a lone continuation byte.
+	// é is C3 A9 and è is C3 A8: the delta between these payloads copies C3 and
+	// inserts A8.
 	body := strings.Repeat("shared-body-", 12)
 	dataV1 := []byte(`{"value":"` + body + `é"}`)
 	dataV2 := []byte(`{"value":"` + body + `è"}`)
@@ -3451,10 +3451,12 @@ func TestSharedPollCachedData_DeltaJSONInvalidUTF8SentFull(t *testing.T) {
 			t.Fatal("timeout waiting for v2 publication")
 		}
 	}
-	require.False(t, v2.Delta, "a delta that isn't valid UTF-8 must be sent in full to a JSON client")
-	var full string
-	require.NoError(t, json.Unmarshal(v2.Data, &full))
-	require.Equal(t, dataV2, []byte(full))
+	require.True(t, v2.Delta)
+	var delta string
+	require.NoError(t, json.Unmarshal(v2.Data, &delta))
+	applied, err := fdelta.Apply(dataV1, []byte(delta))
+	require.NoError(t, err)
+	require.Equal(t, dataV2, applied)
 }
 
 func TestSharedPollCachedData_DeltaReadyPartialKeys(t *testing.T) {
