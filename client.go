@@ -4568,9 +4568,16 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 	// Append publications from subscribe reply (e.g., initial full state).
 	if len(reply.Publications) > 0 && len(res.Publications) == 0 {
+		// With fossil delta over JSON a client gets publication data as a JSON
+		// string, as makeRecoveredPubsDeltaFossil and live publications send it.
+		jsonDelta := res.Delta && req.Delta == string(DeltaTypeFossil) && c.transport.Protocol() == ProtocolTypeJSON
 		protoPubs := make([]*protocol.Publication, 0, len(reply.Publications))
 		for _, pub := range reply.Publications {
-			protoPubs = append(protoPubs, pubToProto(pub))
+			protoPub := pubToProto(pub)
+			if jsonDelta {
+				protoPub.Data = json.Escape(convert.BytesToString(pub.Data))
+			}
+			protoPubs = append(protoPubs, protoPub)
 		}
 		res.Publications = protoPubs
 	}
