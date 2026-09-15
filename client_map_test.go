@@ -4328,6 +4328,56 @@ func TestMapSubscribe_ServerTagsFilter_LiveDelivery(t *testing.T) {
 	require.False(t, salesFound, "sales_item should be filtered out")
 }
 
+// Delta compression isn't used together with tags filters for map subscriptions
+// either: with a server tags filter delta isn't negotiated, and the state isn't
+// JSON-escaped for a delta the client won't use.
+func TestMapSubscribe_ServerTagsFilter_DeltaNotNegotiated(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	setTestMapChannelOptionsConverging(node)
+
+	channel := "test_server_tags_delta"
+	_, err := broker.Publish(context.Background(), channel, "eng_item", MapPublishOptions{
+		Data: []byte(`{"v":"eng"}`),
+		Tags: map[string]string{"team": "eng"},
+	})
+	require.NoError(t, err)
+
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{Credentials: &Credentials{UserID: "user1"}}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Type:              SubscriptionTypeMap,
+					AllowedDeltaTypes: []DeltaType{DeltaTypeFossil},
+					ServerTagsFilter:  &FilterNode{Key: "team", Cmp: "eq", Val: "eng"},
+				},
+			}, nil)
+		})
+	})
+
+	transport := newTestTransport(func() {})
+	transport.setProtocolVersion(ProtocolVersion2)
+	transport.setProtocolType(ProtocolTypeJSON)
+	newCtx := SetCredentials(context.Background(), &Credentials{UserID: "user1"})
+	client, _ := newClient(newCtx, node, transport)
+	connectClientV2(t, client)
+
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+		Delta:   string(DeltaTypeFossil),
+	})
+	require.Equal(t, MapPhaseLive, result.Phase)
+	require.False(t, result.Delta)
+	require.Len(t, result.State, 1)
+	require.Equal(t, `{"v":"eng"}`, string(result.State[0].Data))
+}
+
 func TestMapSubscribe_ServerAndClientTagsFilter_AND(t *testing.T) {
 	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)

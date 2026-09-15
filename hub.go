@@ -234,7 +234,7 @@ func (h *Hub) removeSub(ch string, c *Client, subGen uint64) (bool, bool, bool) 
 	return h.subShards[index(ch, numHubShards)].removeSub(ch, c, subGen)
 }
 
-func (h *Hub) updateServerTagsFilter(ch string, clientID string, tf *tagsFilter) (bool, bool) {
+func (h *Hub) updateServerTagsFilter(ch string, clientID string, tf *tagsFilter) (bool, bool, bool) {
 	return h.subShards[index(ch, numHubShards)].updateServerTagsFilter(ch, clientID, tf)
 }
 
@@ -856,28 +856,30 @@ func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
 }
 
 // updateServerTagsFilter updates the server-side tags filter for a specific
-// client subscription. Returns (found, changed) where changed is true only
-// if the filter hash differs from the current one.
-func (s *subShard) updateServerTagsFilter(ch string, clientID string, tf *tagsFilter) (bool, bool) {
+// client subscription. Returns (found, changed, usesDelta) where changed is true
+// only if the filter hash differs from the current one, and usesDelta is true if
+// the subscription negotiated delta compression.
+func (s *subShard) updateServerTagsFilter(ch string, clientID string, tf *tagsFilter) (bool, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	chSubs, ok := s.subs[ch]
 	if !ok {
-		return false, false
+		return false, false, false
 	}
 	sub, ok := chSubs[clientID]
 	if !ok {
-		return false, false
+		return false, false, false
 	}
+	usesDelta := sub.deltaType != deltaTypeNone
 	if sub.serverTagsFilter != nil && sub.serverTagsFilter.hash == tf.hash {
-		return true, false
+		return true, false, usesDelta
 	}
 	if sub.serverTagsFilter == nil && tf == nil {
-		return true, false
+		return true, false, usesDelta
 	}
 	sub.serverTagsFilter = tf
 	chSubs[clientID] = sub
-	return true, true
+	return true, true, usesDelta
 }
 
 func (s *subShard) removeSubID(ch string) {

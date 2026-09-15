@@ -796,6 +796,142 @@ func TestClientSubscribeDeltaNotAllowed(t *testing.T) {
 	require.False(t, res.Delta)
 }
 
+// Delta compression isn't used together with tags filters. The server delivered
+// publications filtered out for a delta subscriber (to keep its chain of deltas),
+// bypassing the filter; with a client or server tags filter delta must not be
+// negotiated.
+func TestClientSubscribeDeltaNotNegotiatedWithTagsFilter(t *testing.T) {
+	t.Parallel()
+	fossil := []DeltaType{DeltaTypeFossil}
+	tests := []struct {
+		name      string
+		options   SubscribeOptions
+		reqFilter *protocol.FilterNode
+		wantDelta bool
+	}{
+		{name: "no_filter", options: SubscribeOptions{AllowedDeltaTypes: fossil}, wantDelta: true},
+		{name: "client_tags_filter", options: SubscribeOptions{AllowedDeltaTypes: fossil, AllowTagsFilter: true}, reqFilter: &protocol.FilterNode{Key: "team", Cmp: "eq", Val: "eng"}},
+		{name: "server_tags_filter", options: SubscribeOptions{AllowedDeltaTypes: fossil, ServerTagsFilter: &FilterNode{Key: "team", Cmp: "eq", Val: "eng"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := defaultNodeNoHandlers()
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			node.OnConnect(func(c *Client) {
+				c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+					cb(SubscribeReply{Options: tt.options}, nil)
+				})
+			})
+			client := newTestClientV2(t, node, "u")
+			connectClientV2(t, client)
+			rw := testReplyWriterWrapper()
+			require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
+				Channel: "ch", Delta: string(DeltaTypeFossil), Tf: tt.reqFilter,
+			}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+			require.Len(t, rw.replies, 1)
+			require.Nil(t, rw.replies[0].Error)
+			require.Equal(t, tt.wantDelta, rw.replies[0].Subscribe.Delta)
+		})
+	}
+}
+
+// A subscriber requesting delta got the publications its server tags filter
+// excludes.
+func TestClientSubscribeDeltaWithServerTagsFilterGetsFilteredPublications(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{
+				EnableRecovery:    true,
+				AllowedDeltaTypes: []DeltaType{DeltaTypeFossil},
+				ServerTagsFilter:  &FilterNode{Key: "team", Cmp: "eq", Val: "eng"},
+			}}, nil)
+		})
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := newTestTransport(cancel)
+	transport.sink = make(chan []byte, 100)
+	transport.setProtocolType(ProtocolTypeJSON)
+	transport.setProtocolVersion(ProtocolVersion2)
+	client := newTestConnectedClientWithTransport(t, ctx, node, transport, "u")
+	rw := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "ch", Delta: string(DeltaTypeFossil),
+	}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+	require.Len(t, rw.replies, 1)
+	require.Nil(t, rw.replies[0].Error)
+
+	for _, team := range []string{"sales", "eng"} {
+		_, err := node.Publish("ch", []byte(`{"team":"`+team+`"}`),
+			WithHistory(10, time.Minute), WithTags(map[string]string{"team": team}), WithDelta(true))
+		require.NoError(t, err)
+	}
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case data := <-transport.sink:
+			require.NotContains(t, string(data), "sales", "publication excluded by the server tags filter delivered")
+			if strings.Contains(string(data), "eng") {
+				return
+			}
+		case <-timeout:
+			require.Fail(t, "timeout waiting for the eng publication")
+		}
+	}
+}
+
+// A sub refresh setting a server tags filter on a subscription with delta
+// compression hot-swapped the filter, which isn't applied to delta subscribers.
+// The subscription must resubscribe instead, which doesn't negotiate delta.
+func TestSubRefreshServerTagsFilterResubscribesDeltaSubscription(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{ClientSideRefresh: true, Credentials: &Credentials{UserID: "user1"}}, nil
+	})
+	unsubscribeCh := make(chan UnsubscribeEvent, 1)
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					ExpireAt:          time.Now().Unix() + 60,
+					AllowedDeltaTypes: []DeltaType{DeltaTypeFossil},
+				},
+				ClientSideRefresh: true,
+			}, nil)
+		})
+		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+			cb(SubRefreshReply{
+				ExpireAt:         time.Now().Unix() + 60,
+				ServerTagsFilter: &FilterNode{Key: "team", Cmp: "eq", Val: "eng"},
+			}, nil)
+		})
+		client.OnUnsubscribe(func(e UnsubscribeEvent) { unsubscribeCh <- e })
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+	rw := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "ch", Delta: string(DeltaTypeFossil),
+	}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+	require.Len(t, rw.replies, 1)
+	require.True(t, rw.replies[0].Subscribe.Delta)
+
+	refreshRW := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubRefresh(&protocol.SubRefreshRequest{
+		Channel: "ch", Token: "new_token",
+	}, &protocol.Command{}, time.Now(), refreshRW.rw))
+	select {
+	case e := <-unsubscribeCh:
+		require.Equal(t, UnsubscribeCodeInsufficient, e.Code)
+	case <-time.After(time.Second):
+		require.Fail(t, "delta subscription not resubscribed after the server tags filter was set")
+	}
+}
+
 func TestClientSubscribeUnknownDelta(t *testing.T) {
 	t.Parallel()
 	n := deltaTestNode()

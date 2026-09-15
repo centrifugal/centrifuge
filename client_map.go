@@ -533,7 +533,7 @@ func (c *Client) handleMapStatePhase(
 	}
 	// JSON-escape state data for delta-enabled JSON transport so the client can
 	// store exact bytes for subsequent delta application.
-	deltaWillBeEnabled := req.Delta != "" && state != nil && slices.Contains(state.options.AllowedDeltaTypes, DeltaType(req.Delta))
+	deltaWillBeEnabled := req.Delta != "" && state != nil && state.tagsFilter == nil && state.serverTagsFilter == nil && slices.Contains(state.options.AllowedDeltaTypes, DeltaType(req.Delta))
 	res.State = escapeStateForDelta(stateProtos, deltaWillBeEnabled, c.transport.Protocol() == ProtocolTypeJSON)
 
 	return c.writeMapSubscribeReply(channel, cmd, res, started, rw)
@@ -671,9 +671,10 @@ func (c *Client) handleMapTransitionToLive(
 		sub.serverTagsFilter = params.serverTagsFilterFromState
 	}
 
-	// Negotiate delta type if requested.
+	// Negotiate delta type if requested. Delta compression isn't used together
+	// with tags filters, as for stream subscriptions (see subscribeCmd).
 	var deltaEnabled bool
-	if req.Delta != "" {
+	if req.Delta != "" && sub.tagsFilter == nil && sub.serverTagsFilter == nil {
 		dt := DeltaType(req.Delta)
 		if slices.Contains(opts.AllowedDeltaTypes, dt) {
 			deltaEnabled = true
@@ -1189,7 +1190,7 @@ func (c *Client) handleMapStreamPhase(
 	}
 	// JSON-escape stream publication data for delta-enabled JSON transport so the client
 	// can store exact bytes for subsequent delta application.
-	deltaWillBeEnabled := req.Delta != "" && state != nil && slices.Contains(state.options.AllowedDeltaTypes, DeltaType(req.Delta))
+	deltaWillBeEnabled := req.Delta != "" && state != nil && state.tagsFilter == nil && state.serverTagsFilter == nil && slices.Contains(state.options.AllowedDeltaTypes, DeltaType(req.Delta))
 	res.Publications = escapeStateForDelta(protoPubs, deltaWillBeEnabled, c.transport.Protocol() == ProtocolTypeJSON)
 
 	return c.writeMapSubscribeReply(channel, cmd, res, started, rw)

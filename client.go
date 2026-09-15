@@ -2507,10 +2507,19 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 				filter: reply.ServerTagsFilter,
 				hash:   filter.Hash(reply.ServerTagsFilter),
 			}
-			_, changed := c.node.hub.updateServerTagsFilter(channel, c.ID(), newTf)
+			_, changed, usesDelta := c.node.hub.updateServerTagsFilter(channel, c.ID(), newTf)
 			if changed && isMapSub {
 				c.Unsubscribe(channel, Unsubscribe{
 					Code:   UnsubscribeCodeStateInvalidated,
+					Reason: "server tags filter changed",
+				})
+				return
+			}
+			if changed && usesDelta {
+				// Delta compression isn't used together with tags filters (see
+				// subscribeCmd): the subscription resubscribes, without delta.
+				c.Unsubscribe(channel, Unsubscribe{
+					Code:   UnsubscribeCodeInsufficient,
 					Reason: "server tags filter changed",
 				})
 				return
@@ -4297,7 +4306,10 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		c.pubSubSync.StartBuffering(channel)
 	}
 
-	if req.Delta != "" {
+	// Delta compression isn't used together with tags filters: publications
+	// filtered out for a subscriber would break the chain of deltas it applies,
+	// so a subscription with a client or server tags filter gets full data.
+	if req.Delta != "" && sub.tagsFilter == nil && sub.serverTagsFilter == nil {
 		dt := DeltaType(req.Delta)
 		if slices.Contains(reply.Options.AllowedDeltaTypes, dt) {
 			res.Delta = true

@@ -2556,7 +2556,7 @@ func TestSubShard_UpdateServerTagsFilter_NotFound(t *testing.T) {
 	shard := hub.subShards[0]
 
 	// Channel not in shard at all → both returns false.
-	found, changed := shard.updateServerTagsFilter("ghost-channel", "anyone", nil)
+	found, changed, _ := shard.updateServerTagsFilter("ghost-channel", "anyone", nil)
 	require.False(t, found)
 	require.False(t, changed)
 
@@ -2568,21 +2568,21 @@ func TestSubShard_UpdateServerTagsFilter_NotFound(t *testing.T) {
 	t.Cleanup(func() { _ = client.close(DisconnectForceNoReconnect) })
 
 	chShard := hub.subShards[index("test-tags-channel", numHubShards)]
-	_, _ = chShard.updateServerTagsFilter("test-tags-channel", "no-such-client", nil)
+	_, _, _ = chShard.updateServerTagsFilter("test-tags-channel", "no-such-client", nil)
 
 	// Same client, no existing filter, new filter is also nil → both-nil no-op.
-	found, changed = chShard.updateServerTagsFilter("test-tags-channel", client.uid, nil)
+	found, changed, _ = chShard.updateServerTagsFilter("test-tags-channel", client.uid, nil)
 	require.True(t, found)
 	require.False(t, changed)
 
 	// Now set a real filter and assert it changed.
 	tf := &tagsFilter{filter: &FilterNode{Key: "k", Cmp: "eq", Val: "v"}}
-	found, changed = chShard.updateServerTagsFilter("test-tags-channel", client.uid, tf)
+	found, changed, _ = chShard.updateServerTagsFilter("test-tags-channel", client.uid, tf)
 	require.True(t, found)
 	require.True(t, changed)
 
 	// Same hash again — no-op.
-	found, changed = chShard.updateServerTagsFilter("test-tags-channel", client.uid, tf)
+	found, changed, _ = chShard.updateServerTagsFilter("test-tags-channel", client.uid, tf)
 	require.True(t, found)
 	require.False(t, changed)
 }
