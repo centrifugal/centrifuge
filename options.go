@@ -191,7 +191,7 @@ type SubscribeOptions struct {
 	// position can't preserve continuity (there is no baseline to compare against), and the
 	// cache-style "deliver latest" semantics don't map onto a stream. To recover a stream
 	// subscription use the client recover flag/position, or SubscribeOptions.RecoverSince for a
-	// specific position; to deliver an initial backlog use SubscribeReply.Publications.
+	// specific position.
 	// AutoCacheRecover is also ignored for map subscriptions.
 	AutoCacheRecover bool
 
