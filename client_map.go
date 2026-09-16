@@ -749,6 +749,10 @@ func (c *Client) handleMapTransitionToLive(
 			}))
 			return ErrorInternal
 		}
+		if mapStreamHasGap(params.sincePosition.Offset, streamResult) {
+			rollback(true)
+			return ErrorUnrecoverablePosition
+		}
 		pubs := streamResult.Publications
 		streamPos = streamResult.Position
 
@@ -1138,6 +1142,10 @@ func (c *Client) handleMapStreamPhase(
 		c.cleanupMapSubscribing(channel)
 		return ErrorInternal
 	}
+	if mapStreamHasGap(req.Offset, streamResult) {
+		c.cleanupMapSubscribing(channel)
+		return ErrorUnrecoverablePosition
+	}
 	pubs := streamResult.Publications
 	streamPos := streamResult.Position
 
@@ -1193,6 +1201,17 @@ func (c *Client) handleMapStreamPhase(
 	res.Publications = escapeStateForDelta(protoPubs, deltaWillBeEnabled, c.transport.Protocol() == ProtocolTypeJSON)
 
 	return c.writeMapSubscribeReply(channel, cmd, res, started, rw)
+}
+
+// mapStreamHasGap reports whether a forward stream read since sinceOffset lost
+// entries. Node.MapStreamRead already rejects gaps for offsets > 0, but lets
+// offset 0 through (API reads treat it as "from the retained start"). For a
+// subscriber offset 0 is a real position, so check here too.
+func mapStreamHasGap(sinceOffset uint64, res MapStreamResult) bool {
+	if len(res.Publications) == 0 {
+		return res.Position.Offset > sinceOffset
+	}
+	return res.Publications[0].Offset > sinceOffset+1
 }
 
 func (c *Client) getMapPageSize(req *protocol.SubscribeRequest, chOpts MapChannelOptions) int {

@@ -1775,6 +1775,56 @@ func TestNode_MapStreamReadUnrecoverablePosition(t *testing.T) {
 	require.ErrorIs(t, err, ErrorUnrecoverablePosition)
 }
 
+func TestNode_MapStreamReadExpiredStream(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:   MapModeRecoverable,
+			KeyTTL: 60 * time.Second,
+		}
+	}
+
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+
+	ctx := context.Background()
+	ch := "test_expired_stream"
+
+	var epoch string
+	for i := 1; i <= 3; i++ {
+		res, err := mapBroker.Publish(ctx, ch, fmt.Sprintf("key_%d", i), MapPublishOptions{Data: []byte(`{}`)})
+		require.NoError(t, err)
+		epoch = res.Position.Epoch
+	}
+	clearMemoryMapStream(t, mapBroker, ch)
+
+	// Entries after offset 1 are gone while top is 3.
+	_, err = node.MapStreamRead(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{Since: &StreamPosition{Offset: 1, Epoch: epoch}, Limit: 10},
+	})
+	require.ErrorIs(t, err, ErrorUnrecoverablePosition)
+
+	// Already at top: nothing lost.
+	res, err := node.MapStreamRead(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{Since: &StreamPosition{Offset: 3, Epoch: epoch}, Limit: 10},
+	})
+	require.NoError(t, err)
+	require.Empty(t, res.Publications)
+	require.Equal(t, uint64(3), res.Position.Offset)
+
+	// Offset 0 keeps "read from retained start" semantics for API callers.
+	res, err = node.MapStreamRead(ctx, ch, MapReadStreamOptions{
+		Filter: StreamFilter{Since: &StreamPosition{Offset: 0, Epoch: epoch}, Limit: 10},
+	})
+	require.NoError(t, err)
+	require.Empty(t, res.Publications)
+	require.Equal(t, uint64(3), res.Position.Offset)
+}
+
 func TestNode_MapRemoveEmptyKey(t *testing.T) {
 	t.Parallel()
 	node := defaultTestNode()
