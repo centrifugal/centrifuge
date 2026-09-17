@@ -6,11 +6,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/filter"
 	"github.com/centrifugal/centrifuge/internal/fossilutf8"
+	"github.com/centrifugal/centrifuge/internal/lazyutf8"
 
 	"github.com/centrifugal/protocol"
 	"github.com/segmentio/encoding/json"
@@ -977,11 +977,19 @@ type preparedData struct {
 // creates wrong data there: JSON clients get full data unless prevData is valid
 // UTF-8. data needs no check: a delta which is valid UTF-8 creates it byte for
 // byte, and alignment fails if data isn't valid UTF-8 around an insert.
-func createFossilDelta(prevData, data []byte, isJSON bool) []byte {
-	if isJSON && !utf8.Valid(prevData) {
+//
+// The validity of prevData arrives as a lazyutf8.Validator rather than being
+// checked here, because one broadcast reaches this for every distinct encoding
+// combination among a channel's subscribers, and for the broker's and the
+// node's previous publication separately. Scanning once per broadcast instead
+// of once per call matters on payloads carrying non-ASCII text, where the scan
+// costs about as much as building the delta. A channel with no JSON
+// subscribers never asks, and so never scans at all.
+func createFossilDelta(prev *lazyutf8.Validator, data []byte, isJSON bool) []byte {
+	if isJSON && !prev.Valid() {
 		return nil
 	}
-	patch := fdelta.Create(prevData, data)
+	patch := fdelta.Create(prev.Bytes(), data)
 	if isJSON {
 		patch = fossilutf8.Align(patch, data)
 	}
@@ -991,10 +999,10 @@ func createFossilDelta(prevData, data []byte, isJSON bool) []byte {
 	return patch
 }
 
-func getDeltaPub(prevPub *Publication, fullPub *protocol.Publication, key preparedKey) *protocol.Publication {
+func getDeltaPub(prevPub *Publication, prevUTF8 *lazyutf8.Validator, fullPub *protocol.Publication, key preparedKey) *protocol.Publication {
 	deltaPub := fullPub
 	if prevPub != nil && key.DeltaType == DeltaTypeFossil {
-		deltaData := createFossilDelta(prevPub.Data, fullPub.Data, key.ProtocolType == protocol.TypeJSON)
+		deltaData := createFossilDelta(prevUTF8, fullPub.Data, key.ProtocolType == protocol.TypeJSON)
 		delta := deltaData != nil
 		if !delta {
 			deltaData = fullPub.Data
@@ -1146,6 +1154,27 @@ func (s *subShard) broadcastPublication(
 		preparedDataByKey map[preparedKey]preparedData
 	)
 
+	// Whether a previous payload is valid UTF-8 decides whether JSON
+	// subscribers can be sent a delta at all, and the answer cannot change
+	// during a broadcast. Deciding it here rather than inside
+	// createFossilDelta means each payload is scanned at most once, however
+	// many encoding combinations the channel's subscribers use, and not at all
+	// when none of them is a JSON subscriber taking deltas.
+	//
+	// The broker's and the node's previous publication are usually the same
+	// one, so they share a validator and the payload is scanned once rather
+	// than twice.
+	var brokerPrevUTF8, localPrevUTF8 lazyutf8.Validator
+	if prevPub != nil {
+		brokerPrevUTF8 = lazyutf8.New(prevPub.Data)
+	}
+	localPrevUTF8Ref := &localPrevUTF8
+	if localPrevPub == prevPub {
+		localPrevUTF8Ref = &brokerPrevUTF8
+	} else if localPrevPub != nil {
+		localPrevUTF8 = lazyutf8.New(localPrevPub.Data)
+	}
+
 	var filteredPub *protocol.Publication
 
 	s.mu.RLock()
@@ -1206,9 +1235,9 @@ func (s *subShard) broadcastPublication(
 		if !prepDataFound {
 			var brokerDeltaPub *protocol.Publication
 			if fullPub.Offset > 0 {
-				brokerDeltaPub = getDeltaPub(prevPub, fullPub, key)
+				brokerDeltaPub = getDeltaPub(prevPub, &brokerPrevUTF8, fullPub, key)
 			}
-			localDeltaPub := getDeltaPub(localPrevPub, fullPub, key)
+			localDeltaPub := getDeltaPub(localPrevPub, localPrevUTF8Ref, fullPub, key)
 
 			var brokerDeltaData []byte
 			var localDeltaData []byte

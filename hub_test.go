@@ -15,6 +15,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/controlpb"
 	"github.com/centrifugal/centrifuge/internal/controlproto"
 	"github.com/centrifugal/centrifuge/internal/convert"
+	"github.com/centrifugal/centrifuge/internal/lazyutf8"
 
 	"github.com/centrifugal/protocol"
 	"github.com/segmentio/encoding/json"
@@ -950,10 +951,12 @@ func TestCreateFossilDelta_JSONInvalidUTF8(t *testing.T) {
 		{name: "invalid byte copied", prevData: body + "\xff" + body + "-old", data: body + "\xff" + body + "-new"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			patch := createFossilDelta([]byte(tc.prevData), []byte(tc.data), false)
+			prevBinary := lazyutf8.New([]byte(tc.prevData))
+			patch := createFossilDelta(&prevBinary, []byte(tc.data), false)
 			require.NotNil(t, patch)
 			require.True(t, utf8.Valid(patch), "the test case must create a delta which is valid UTF-8")
-			require.Nil(t, createFossilDelta([]byte(tc.prevData), []byte(tc.data), true))
+			prevJSON := lazyutf8.New([]byte(tc.prevData))
+			require.Nil(t, createFossilDelta(&prevJSON, []byte(tc.data), true))
 		})
 	}
 }
@@ -2035,7 +2038,8 @@ func TestGetDeltaPubPreservesMapFields(t *testing.T) {
 		DeltaType:    DeltaTypeFossil,
 		ProtocolType: protocol.TypeJSON,
 	}
-	result := getDeltaPub(prevPubData, fullPub, key)
+	prevUTF8 := lazyutf8.New(prevPubData.Data)
+	result := getDeltaPub(prevPubData, &prevUTF8, fullPub, key)
 	require.Equal(t, "user:1", result.Key)
 	require.Equal(t, int64(42), result.Score)
 	require.False(t, result.Removed)
@@ -2044,7 +2048,8 @@ func TestGetDeltaPubPreservesMapFields(t *testing.T) {
 	require.Equal(t, map[string]string{"tag1": "val1"}, result.Tags)
 
 	// Test 2: JSON+Fossil without prevPub (full data with JSON escaping).
-	result = getDeltaPub(nil, fullPub, key)
+	var noPrev lazyutf8.Validator
+	result = getDeltaPub(nil, &noPrev, fullPub, key)
 	require.Equal(t, "user:1", result.Key)
 	require.Equal(t, int64(42), result.Score)
 	require.False(t, result.Removed)
@@ -2058,7 +2063,8 @@ func TestGetDeltaPubPreservesMapFields(t *testing.T) {
 		DeltaType:    DeltaTypeFossil,
 		ProtocolType: protocol.TypeProtobuf,
 	}
-	result = getDeltaPub(prevPubData, fullPub, keyProto)
+	prevUTF8Proto := lazyutf8.New(prevPubData.Data)
+	result = getDeltaPub(prevPubData, &prevUTF8Proto, fullPub, keyProto)
 	require.Equal(t, "user:1", result.Key)
 	require.Equal(t, int64(42), result.Score)
 	// Protobuf delta data should NOT be JSON-escaped.
@@ -2072,7 +2078,8 @@ func TestGetDeltaPubPreservesMapFields(t *testing.T) {
 		Removed: true,
 		Channel: "map_channel",
 	}
-	result = getDeltaPub(nil, removedPub, key)
+	var noPrevRemoved lazyutf8.Validator
+	result = getDeltaPub(nil, &noPrevRemoved, removedPub, key)
 	require.True(t, result.Removed)
 	require.Equal(t, "user:2", result.Key)
 }
@@ -2930,4 +2937,116 @@ func TestBroadcastJoinLeave_ProtobufClient(t *testing.T) {
 		&ClientInfo{ClientID: "joiner", UserID: "u2"}, ChannelBatchConfig{}))
 	require.NoError(t, n.hub.broadcastLeave("joinleave:protobuf",
 		&ClientInfo{ClientID: "joiner", UserID: "u2"}, ChannelBatchConfig{}))
+}
+
+// A broadcast reaches createFossilDelta once per distinct encoding combination
+// among a channel's subscribers, and for the broker's and the node's previous
+// publication. Sharing one validator across those means the previous payload
+// is read once instead of once per call, which matters on payloads carrying
+// non-ASCII text where the scan costs about as much as building the delta.
+func TestCreateFossilDeltaScansPrevPayloadOnce(t *testing.T) {
+	t.Parallel()
+	body := strings.Repeat("Съешь же ещё этих мягких французских булок. ", 64)
+	prev := lazyutf8.New([]byte(`{"text":"` + body + `","n":1}`))
+	data := []byte(`{"text":"` + body + `","n":2}`)
+
+	require.False(t, prev.Scanned(), "must not scan before anything asks")
+
+	for range 5 {
+		require.NotNil(t, createFossilDelta(&prev, data, true))
+		require.True(t, prev.Scanned())
+	}
+}
+
+// And a channel whose subscribers all use a binary protocol never asks, so it
+// never pays for the scan at all.
+func TestCreateFossilDeltaSkipsScanForBinaryProtocol(t *testing.T) {
+	t.Parallel()
+	body := strings.Repeat("Съешь же ещё этих мягких французских булок. ", 64)
+	prev := lazyutf8.New([]byte(`{"text":"` + body + `","n":1}`))
+	data := []byte(`{"text":"` + body + `","n":2}`)
+
+	require.NotNil(t, createFossilDelta(&prev, data, false))
+	require.False(t, prev.Scanned(), "a binary protocol must not trigger a UTF-8 scan")
+}
+
+func TestGetDeltaPubSkipsScanForProtobuf(t *testing.T) {
+	t.Parallel()
+	prev := &Publication{Data: []byte(`{"text":"тест","n":1}`)}
+	full := &protocol.Publication{Offset: 2, Data: []byte(`{"text":"тест","n":2}`)}
+
+	v := lazyutf8.New(prev.Data)
+	getDeltaPub(prev, &v, full, preparedKey{
+		DeltaType:    DeltaTypeFossil,
+		ProtocolType: protocol.TypeProtobuf,
+	})
+	require.False(t, v.Scanned())
+
+	v = lazyutf8.New(prev.Data)
+	getDeltaPub(prev, &v, full, preparedKey{
+		DeltaType:    DeltaTypeFossil,
+		ProtocolType: protocol.TypeJSON,
+	})
+	require.True(t, v.Scanned())
+}
+
+// What sharing the validator buys. The "PerCall" variant is what the code did
+// before: a fresh scan for every encoding combination a broadcast reaches.
+func benchmarkDeltaPubKeys(b *testing.B, shared bool, payload []byte, keys int) {
+	b.Helper()
+	prev := &Publication{Data: payload}
+	full := &protocol.Publication{Offset: 2, Data: append(append([]byte(nil), payload[:len(payload)-3]...), "9}"...)}
+
+	combos := make([]preparedKey, keys)
+	for i := range combos {
+		combos[i] = preparedKey{
+			DeltaType:    DeltaTypeFossil,
+			ProtocolType: protocol.TypeJSON,
+			UseID:        i%2 == 0,
+			WasFiltered:  i%4 >= 2,
+		}
+	}
+
+	// A broadcast reaches getDeltaPub twice for each distinct encoding
+	// combination: once for the broker's previous publication and once for the
+	// node's, which are usually the same one.
+	b.SetBytes(int64(len(payload)))
+	b.ReportAllocs()
+	for b.Loop() {
+		if shared {
+			v := lazyutf8.New(prev.Data)
+			for _, key := range combos {
+				sinkPub = getDeltaPub(prev, &v, full, key)
+				sinkPub = getDeltaPub(prev, &v, full, key)
+			}
+		} else {
+			for _, key := range combos {
+				brokerV := lazyutf8.New(prev.Data)
+				sinkPub = getDeltaPub(prev, &brokerV, full, key)
+				localV := lazyutf8.New(prev.Data)
+				sinkPub = getDeltaPub(prev, &localV, full, key)
+			}
+		}
+	}
+}
+
+var sinkPub *protocol.Publication
+
+func BenchmarkGetDeltaPubUTF8Scan(b *testing.B) {
+	ascii := []byte(`{"text":"` + strings.Repeat("plain ascii payload body. ", 640) + `","n":1}`)
+	multibyte := []byte(`{"text":"` + strings.Repeat("Съешь же ещё этих мягких булок 🟢. ", 240) + `","n":1}`)
+
+	for _, p := range []struct {
+		name string
+		data []byte
+	}{{"ascii", ascii}, {"multibyte", multibyte}} {
+		for _, keys := range []int{1, 2, 4} {
+			b.Run(fmt.Sprintf("%s/%dkeys/shared", p.name, keys), func(b *testing.B) {
+				benchmarkDeltaPubKeys(b, true, p.data, keys)
+			})
+			b.Run(fmt.Sprintf("%s/%dkeys/percall", p.name, keys), func(b *testing.B) {
+				benchmarkDeltaPubKeys(b, false, p.data, keys)
+			})
+		}
+	}
 }
