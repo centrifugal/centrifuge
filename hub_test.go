@@ -3051,3 +3051,121 @@ func BenchmarkGetDeltaPubUTF8Scan(b *testing.B) {
 		}
 	}
 }
+
+// The UTF-8 validator for the broker's previous publication and the one for
+// the node's previous publication are built once per broadcast and handed to
+// getDeltaPub alongside the publication they describe. Pairing them the wrong
+// way round would decide a JSON delta on the wrong payload's validity, and
+// nothing about the sizes or the happy path would reveal it — the two are
+// normally the same publication.
+//
+// A publication with no offset takes the localPrevPub path in
+// writePublication, and the broker delta is not computed at all for offset 0,
+// so this drives the two validators apart and checks that the local decision
+// follows localPrevPub's bytes rather than prevPub's.
+func TestHubBroadcastDeltaPrevValidatorsNotSwapped(t *testing.T) {
+	t.Parallel()
+
+	// Large enough that a delta against the base is genuinely smaller than
+	// the payload — createFossilDelta discards deltas that are not.
+	filler := strings.Repeat("x", 512)
+	base := `{"filler": "` + filler + `", "data": "broadcast_data"}`
+	payload := `{"filler": "` + filler + `", "data": "brand_new_payload"}`
+
+	validBase := &Publication{Data: []byte(base)}
+	invalidBase := &Publication{Data: []byte(`{"filler": "` + filler + `", "data": "` + "\xff\xfe" + `"}`)}
+
+	for _, tc := range []struct {
+		name         string
+		prevPub      *Publication
+		localPrevPub *Publication
+		wantDelta    bool
+	}{
+		{
+			// Local base is not valid UTF-8, so no JSON delta is possible
+			// even though the broker's base would have allowed one.
+			name:         "local base invalid",
+			prevPub:      validBase,
+			localPrevPub: invalidBase,
+			wantDelta:    false,
+		},
+		{
+			// Mirror image: the local base is fine, so a delta must be sent
+			// regardless of the broker base being invalid.
+			name:         "broker base invalid",
+			prevPub:      invalidBase,
+			localPrevPub: validBase,
+			wantDelta:    true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			n := deltaTestNodeNoRecovery()
+			defer func() { _ = n.Shutdown(context.Background()) }()
+
+			ctx, cancelFn := context.WithCancel(context.Background())
+			transport := newTestTransport(cancelFn)
+			transport.sink = make(chan []byte, 100)
+			transport.setProtocolType(ProtocolTypeJSON)
+			transport.setProtocolVersion(ProtocolVersion2)
+			newTestSubscribedClientWithTransportDelta(
+				t, ctx, n, transport, "42", "test_channel", DeltaTypeFossil)
+
+			// First publication arms flagDeltaAllowed on the connection.
+			require.NoError(t, n.hub.broadcastPublication(
+				"test_channel", StreamPosition{},
+				&Publication{Data: []byte(base)},
+				nil, nil, ChannelBatchConfig{},
+			))
+			waitSinkContains(t, transport, "broadcast_data")
+
+			require.NoError(t, n.hub.broadcastPublication(
+				"test_channel", StreamPosition{},
+				&Publication{Data: []byte(payload)},
+				tc.prevPub, tc.localPrevPub, ChannelBatchConfig{},
+			))
+
+			data := waitSinkPublication(t, transport)
+			gotFull := strings.Contains(data, "brand_new_payload")
+			if tc.wantDelta {
+				require.False(t, gotFull, "expected a delta, got the full payload: %s", data)
+				require.Contains(t, data, `"delta":true`, "delta payload must be flagged")
+			} else {
+				require.True(t, gotFull, "expected the full payload, got: %s", data)
+				require.NotContains(t, data, `"delta":true`, "full payload must not be flagged as delta")
+			}
+		})
+	}
+}
+
+// waitSinkContains drains the transport sink until a frame mentioning want
+// arrives, failing the test if none does.
+func waitSinkContains(t *testing.T, transport *testTransport, want string) {
+	t.Helper()
+	for {
+		select {
+		case data := <-transport.sink:
+			if strings.Contains(string(data), want) {
+				return
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("no frame containing %q in sink", want)
+		}
+	}
+}
+
+// waitSinkPublication returns the next publication frame written to the sink.
+func waitSinkPublication(t *testing.T, transport *testTransport) string {
+	t.Helper()
+	for {
+		select {
+		case data := <-transport.sink:
+			s := string(data)
+			if strings.Contains(s, `"pub"`) {
+				return s
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no publication frame in sink")
+		}
+	}
+}
