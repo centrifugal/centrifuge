@@ -3016,21 +3016,22 @@ func benchmarkDeltaPubKeys(b *testing.B, shared bool, payload []byte, keys int) 
 		if shared {
 			v := lazyutf8.New(prev.Data)
 			for _, key := range combos {
-				sinkPub = getDeltaPub(prev, &v, full, key)
-				sinkPub = getDeltaPub(prev, &v, full, key)
+				sinkBroker = getDeltaPub(prev, &v, full, key)
+				sinkLocal = getDeltaPub(prev, &v, full, key)
 			}
 		} else {
 			for _, key := range combos {
 				brokerV := lazyutf8.New(prev.Data)
-				sinkPub = getDeltaPub(prev, &brokerV, full, key)
+				sinkBroker = getDeltaPub(prev, &brokerV, full, key)
 				localV := lazyutf8.New(prev.Data)
-				sinkPub = getDeltaPub(prev, &localV, full, key)
+				sinkLocal = getDeltaPub(prev, &localV, full, key)
 			}
 		}
 	}
 }
 
-var sinkPub *protocol.Publication
+// Both results are kept, so neither call can be optimised away.
+var sinkBroker, sinkLocal *protocol.Publication
 
 func BenchmarkGetDeltaPubUTF8Scan(b *testing.B) {
 	ascii := []byte(`{"text":"` + strings.Repeat("plain ascii payload body. ", 640) + `","n":1}`)
