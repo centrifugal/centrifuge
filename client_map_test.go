@@ -5990,3 +5990,100 @@ func TestMapSubscribe_ExpirationStreamRecovery(t *testing.T) {
 	require.True(t, result.Expires)
 	require.Greater(t, result.Ttl, uint32(0))
 }
+
+// clearMemoryMapStream empties a channel's stream the way the StreamTTL sweeper
+// does: entries are dropped while top offset and epoch are kept.
+func clearMemoryMapStream(t *testing.T, broker *MemoryMapBroker, channel string) {
+	t.Helper()
+	broker.mapHub.Lock()
+	defer broker.mapHub.Unlock()
+	ch, ok := broker.mapHub.channels[channel]
+	require.True(t, ok)
+	require.NotNil(t, ch.stream)
+	ch.stream.Clear()
+}
+
+// Recovery from an offset whose following entries expired from the stream must
+// not report recovered=true with an empty catch-up — keys published meanwhile
+// would be silently lost.
+func TestMapSubscribe_RecoveryAfterStreamExpired(t *testing.T) {
+	t.Parallel()
+	for _, offset := range []uint64{0, 1} {
+		t.Run(fmt.Sprintf("offset_%d", offset), func(t *testing.T) {
+			t.Parallel()
+			node, broker := newTestNodeWithMapBroker(t)
+			setTestMapChannelOptionsConverging(node)
+
+			channel := "test_recovery_stream_expired"
+			ctx := context.Background()
+
+			var epoch string
+			for _, key := range []string{"k1", "k2", "k3"} {
+				res, err := broker.Publish(ctx, channel, key, MapPublishOptions{Data: []byte(`{}`)})
+				require.NoError(t, err)
+				epoch = res.Position.Epoch
+			}
+			clearMemoryMapStream(t, broker, channel)
+
+			node.OnConnect(func(client *Client) {
+				client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+					cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+				})
+			})
+
+			client := newTestConnectedClientV2(t, node, "user1")
+			protoErr := subscribeMapClientExpectError(t, client, &protocol.SubscribeRequest{
+				Channel: channel,
+				Type:    int32(SubscriptionTypeMap),
+				Phase:   MapPhaseLive,
+				Offset:  offset,
+				Epoch:   epoch,
+				Recover: true,
+			})
+			require.Equal(t, ErrorUnrecoverablePosition.Code, protoErr.Code)
+		})
+	}
+}
+
+// STREAM pagination over an expired stream must fail instead of echoing the
+// same offset back with an empty page, which makes the client spin forever.
+func TestMapSubscribe_StreamPhaseAfterStreamExpired(t *testing.T) {
+	t.Parallel()
+	for _, offset := range []uint64{0, 1} {
+		t.Run(fmt.Sprintf("offset_%d", offset), func(t *testing.T) {
+			t.Parallel()
+			node, broker := newTestNodeWithMapBroker(t)
+			setTestMapChannelOptionsConverging(node)
+
+			channel := "test_stream_phase_stream_expired"
+			ctx := context.Background()
+
+			var epoch string
+			for i := 0; i < 10; i++ {
+				res, err := broker.Publish(ctx, channel, fmt.Sprintf("k%d", i), MapPublishOptions{Data: []byte(`{}`)})
+				require.NoError(t, err)
+				epoch = res.Position.Epoch
+			}
+			clearMemoryMapStream(t, broker, channel)
+
+			node.OnConnect(func(client *Client) {
+				client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+					cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+				})
+			})
+
+			client := newTestConnectedClientV2(t, node, "user1")
+			// Gap larger than page size 2 keeps the request in STREAM phase.
+			protoErr := subscribeMapClientExpectError(t, client, &protocol.SubscribeRequest{
+				Channel: channel,
+				Type:    int32(SubscriptionTypeMap),
+				Phase:   MapPhaseStream,
+				Offset:  offset,
+				Epoch:   epoch,
+				Limit:   2,
+				Recover: true,
+			})
+			require.Equal(t, ErrorUnrecoverablePosition.Code, protoErr.Code)
+		})
+	}
+}

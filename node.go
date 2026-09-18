@@ -2291,6 +2291,13 @@ func (n *Node) MapStreamRead(ctx context.Context, ch string, opts MapReadStreamO
 		len(result.Publications) > 0 && result.Publications[0].Offset > opts.Filter.Since.Offset+1 {
 		return MapStreamResult{}, ErrorUnrecoverablePosition
 	}
+	// An empty page while the top is ahead of the requested offset means every
+	// entry after it is gone: stream expired (memory sweeper, Redis stream key
+	// TTL) while top and epoch survived in meta.
+	if !opts.Filter.Reverse && opts.Filter.Since != nil && opts.Filter.Since.Offset > 0 && opts.Filter.Limit != 0 &&
+		len(result.Publications) == 0 && result.Position.Offset > opts.Filter.Since.Offset {
+		return MapStreamResult{}, ErrorUnrecoverablePosition
+	}
 
 	return result, nil
 }
