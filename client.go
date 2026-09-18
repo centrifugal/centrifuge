@@ -14,6 +14,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/bpool"
 	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/filter"
+	"github.com/centrifugal/centrifuge/internal/lazyutf8"
 	"github.com/centrifugal/centrifuge/internal/queue"
 	"github.com/centrifugal/centrifuge/internal/recovery"
 	"github.com/centrifugal/centrifuge/internal/saferand"
@@ -4709,14 +4710,18 @@ func (c *Client) makeRecoveredPubsDeltaFossil(recoveredPubs []*protocol.Publicat
 	}
 	// Probably during recovery we should not make deltas? This is something to investigate, in
 	// RecoveryModeCache case this won't be used since there is only one publication max recovered.
+	isJSON := c.transport.Protocol() == ProtocolTypeJSON
 	for i := 1; i < len(recoveredPubs); i++ {
 		pub := recoveredPubs[i]
-		deltaData := createFossilDelta(prevPub.Data, pub.Data, c.transport.Protocol() == ProtocolTypeJSON)
+		// Each recovered publication is the base for the next one, so every
+		// payload is scanned at most once across the whole recovery.
+		prevUTF8 := lazyutf8.New(prevPub.Data)
+		deltaData := createFossilDelta(&prevUTF8, pub.Data, isJSON)
 		delta := deltaData != nil
 		if !delta {
 			deltaData = pub.Data
 		}
-		if c.transport.Protocol() == ProtocolTypeJSON {
+		if isJSON {
 			deltaData = json.Escape(convert.BytesToString(deltaData))
 		}
 		deltaPub := &protocol.Publication{
@@ -4763,7 +4768,8 @@ func (c *Client) makeRecoveredMapPubsDeltaFossil(recoveredPubs []*protocol.Publi
 			continue
 		}
 		// Subsequent occurrence — compute per-key delta.
-		deltaData := createFossilDelta(prev.Data, pub.Data, isJSON)
+		prevUTF8 := lazyutf8.New(prev.Data)
+		deltaData := createFossilDelta(&prevUTF8, pub.Data, isJSON)
 		delta := deltaData != nil
 		if !delta {
 			deltaData = pub.Data
