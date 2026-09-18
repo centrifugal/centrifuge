@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	cel.dev/cel-go v0.32.0
 	github.com/FZambia/eagle v0.2.0
+	github.com/centrifugal/fdelta v0.0.2
 	github.com/centrifugal/protocol v0.22.1
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/google/uuid v1.6.0
@@ -15,7 +16,6 @@ require (
 	github.com/quagmt/udecimal v1.10.1
 	github.com/redis/rueidis v1.0.77
 	github.com/segmentio/encoding v0.5.4
-	github.com/shadowspore/fossil-delta v0.0.0-20241213113458-1d797d70cbe3
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/sync v0.23.0
 	google.golang.org/protobuf v1.36.12

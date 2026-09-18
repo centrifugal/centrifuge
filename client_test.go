@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/filter"
+	"github.com/centrifugal/fdelta"
 	"github.com/centrifugal/protocol"
-	fdelta "github.com/shadowspore/fossil-delta"
 	"github.com/stretchr/testify/require"
 )
 

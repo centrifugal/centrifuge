@@ -13,9 +13,9 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/epoch"
 	"github.com/centrifugal/centrifuge/internal/fossilutf8"
+	"github.com/centrifugal/fdelta"
 	"github.com/centrifugal/protocol"
 	"github.com/cespare/xxhash/v2"
-	fdelta "github.com/shadowspore/fossil-delta"
 )
 
 // notifChCapacity bounds the per-channel notification queue used by
