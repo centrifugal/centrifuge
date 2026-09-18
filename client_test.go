@@ -932,6 +932,52 @@ func TestSubRefreshServerTagsFilterResubscribesDeltaSubscription(t *testing.T) {
 	}
 }
 
+// Publications from SubscribeReply were sent with raw data to a JSON client with
+// fossil delta, which expects the data of such a subscription as a JSON string,
+// as recovered and live publications are sent.
+func TestClientSubscribeReplyPublicationsWithDelta(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		protocol ProtocolType
+		delta    bool
+		wantData string
+	}{
+		{name: "json_delta", protocol: ProtocolTypeJSON, delta: true, wantData: `"{\"state\":\"full\"}"`},
+		{name: "json_no_delta", protocol: ProtocolTypeJSON, wantData: `{"state":"full"}`},
+		{name: "protobuf_delta", protocol: ProtocolTypeProtobuf, delta: true, wantData: `{"state":"full"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := defaultNodeNoHandlers()
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			node.OnConnect(func(c *Client) {
+				c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+					cb(SubscribeReply{
+						Options:      SubscribeOptions{AllowedDeltaTypes: []DeltaType{DeltaTypeFossil}},
+						Publications: []*Publication{{Data: []byte(`{"state":"full"}`)}},
+					}, nil)
+				})
+			})
+			transport := newTestTransport(func() {})
+			transport.setProtocolType(tt.protocol)
+			transport.setProtocolVersion(ProtocolVersion2)
+			client := newTestConnectedClientWithTransport(t, context.Background(), node, transport, "u")
+			req := &protocol.SubscribeRequest{Channel: "ch"}
+			if tt.delta {
+				req.Delta = string(DeltaTypeFossil)
+			}
+			rw := testReplyWriterWrapper()
+			require.NoError(t, client.handleSubscribe(req, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+			res := extractSubscribeResult(rw.replies)
+			require.Equal(t, tt.delta, res.Delta)
+			require.Len(t, res.Publications, 1)
+			require.False(t, res.Publications[0].Delta)
+			require.Equal(t, tt.wantData, string(res.Publications[0].Data))
+		})
+	}
+}
+
 func TestClientSubscribeUnknownDelta(t *testing.T) {
 	t.Parallel()
 	n := deltaTestNode()
