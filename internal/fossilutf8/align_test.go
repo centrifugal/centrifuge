@@ -8,7 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	fdelta "github.com/shadowspore/fossil-delta"
+	"github.com/centrifugal/fdelta"
 	"github.com/stretchr/testify/require"
 )
 

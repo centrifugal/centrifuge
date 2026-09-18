@@ -17,9 +17,9 @@ import (
 	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/lazyutf8"
 
+	"github.com/centrifugal/fdelta"
 	"github.com/centrifugal/protocol"
 	"github.com/segmentio/encoding/json"
-	fdelta "github.com/shadowspore/fossil-delta"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1522,6 +1522,54 @@ func BenchmarkDeltaFossil(b *testing.B) {
 		if len(testBenchmarkDeltaFossilPatch) == 0 {
 			b.Fatal("empty fossil patch")
 		}
+	}
+}
+
+// benchmarkDeltaPayload builds a JSON document of about n bytes and the same
+// document with one field changed -- the shape a publication takes when a
+// delta is worth sending at all.
+func benchmarkDeltaPayload(n int) (prev, next []byte) {
+	var buf bytes.Buffer
+	buf.WriteString(`{"items":[`)
+	for i := 0; buf.Len() < n; i++ {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		fmt.Fprintf(&buf, `{"id":%d,"name":"item-%d","status":"idle","value":%d.%02d}`, i, i, i*7%1000, i%100)
+	}
+	buf.WriteString(`]}`)
+	prev = buf.Bytes()
+	next = bytes.Replace(prev, []byte(`"status":"idle"`), []byte(`"status":"busy"`), 1)
+	return prev, next
+}
+
+// BenchmarkCreateFossilDelta measures the whole server-side delta path -- the
+// encoder, the UTF-8 alignment and the size check -- across payload sizes,
+// rather than the encoder alone. Encoding cost is linear in the payload, so
+// the large sizes are where a change in the library shows up.
+func BenchmarkCreateFossilDelta(b *testing.B) {
+	for _, size := range []int{1 << 10, 4 << 10, 16 << 10, 64 << 10} {
+		prev, next := benchmarkDeltaPayload(size)
+		b.Run(fmt.Sprintf("%dKiB", len(next)>>10), func(b *testing.B) {
+			for _, tc := range []struct {
+				name   string
+				isJSON bool
+			}{{"json", true}, {"protobuf", false}} {
+				b.Run(tc.name, func(b *testing.B) {
+					b.SetBytes(int64(len(next)))
+					b.ReportAllocs()
+					var patch []byte
+					for b.Loop() {
+						v := lazyutf8.New(prev)
+						patch = createFossilDelta(&v, next, tc.isJSON)
+					}
+					if len(patch) == 0 {
+						b.Fatal("empty fossil patch")
+					}
+					b.ReportMetric(float64(len(patch)), "delta_bytes")
+				})
+			}
+		})
 	}
 }
 

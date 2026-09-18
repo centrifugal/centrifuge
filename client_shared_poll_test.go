@@ -13,9 +13,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/centrifugal/fdelta"
 	"github.com/centrifugal/protocol"
 	"github.com/segmentio/encoding/json"
-	fdelta "github.com/shadowspore/fossil-delta"
 	"github.com/stretchr/testify/require"
 )
 

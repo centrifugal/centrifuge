@@ -12,9 +12,9 @@ import (
 	"github.com/centrifugal/centrifuge/internal/fossilutf8"
 	"github.com/centrifugal/centrifuge/internal/lazyutf8"
 
+	"github.com/centrifugal/fdelta"
 	"github.com/centrifugal/protocol"
 	"github.com/segmentio/encoding/json"
-	fdelta "github.com/shadowspore/fossil-delta"
 )
 
 const numHubShards = 64
