@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
@@ -641,9 +642,10 @@ func (c *Client) handleMapTransitionToLive(
 	// rest of the file uses (buffer → hub → reservation). Identity-matched on
 	// ourState and subGen so it is a no-op for state a concurrent resubscribe
 	// owns.
-	rollback := func(stopBuffering bool) {
-		if stopBuffering {
-			c.pubSubSync.StopBuffering(channel)
+	var pubSubBuf *recovery.Buffer[pendingPublication]
+	rollback := func(cancelBuffering bool) {
+		if cancelBuffering {
+			c.pubSubSync.CancelBuffering(pubSubBuf)
 		}
 		_ = c.node.removeSubscription(channel, c, subGen)
 		c.cleanupMapSubscribingState(channel, ourState)
@@ -683,12 +685,12 @@ func (c *Client) handleMapTransitionToLive(
 	}
 
 	// Start coordination: buffer -> add subscription -> read stream -> merge.
-	c.pubSubSync.StartBuffering(channel)
+	pubSubBuf = c.pubSubSync.StartBuffering(channel, c.node.config.ClientQueueMaxSize)
 
 	chanID, err := c.node.addSubscription(channel, sub)
 	if err != nil {
 		// addSubscription failed, so there is no hub entry to remove here.
-		c.pubSubSync.StopBuffering(channel)
+		c.pubSubSync.CancelBuffering(pubSubBuf)
 		c.cleanupMapSubscribingState(channel, ourState)
 		c.node.logger.log(newErrorLogEntry(err, "error adding map subscription", map[string]any{
 			"channel": channel, "user": c.user, "client": c.uid,
@@ -784,8 +786,14 @@ func (c *Client) handleMapTransitionToLive(
 			recoveredPubs = append(recoveredPubs, pubToProto(pub))
 		}
 
-		// Lock buffer and read buffered publications.
-		bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
+		// Sync point: read buffered publications, queue the following ones.
+		bufferedPubs := c.pubSubSync.ReadBuffered(pubSubBuf)
+		if isInTest && strings.HasPrefix(channel, testChannelRecoveryOrderingPrefix) { // Only for tests.
+			if testAtSyncPoint != nil {
+				testAtSyncPoint(channel)
+			}
+			time.Sleep(testSyncPointDelay)
+		}
 
 		// Merge recovered and buffered publications.
 		var maxSeenOffset uint64
@@ -837,7 +845,7 @@ func (c *Client) handleMapTransitionToLive(
 		}
 	} else if params.allowStreamless {
 		// Streamless mode: use buffered publications directly (no stream read, no merge).
-		bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
+		bufferedPubs := c.pubSubSync.ReadBuffered(pubSubBuf)
 		recoveredPubs = bufferedPubs
 
 		// Apply server tags filter to buffered publications. Buffered live pubs are
@@ -947,7 +955,7 @@ func (c *Client) handleMapTransitionToLive(
 	subscribingCh, committed := c.commitSubscription(channel, channelContext, reservationMap)
 	if !committed {
 		c.releaseSubscribeCommandReply(protoReply)
-		c.pubSubSync.StopBuffering(channel)
+		c.pubSubSync.CancelBuffering(pubSubBuf)
 		return ErrorInternal
 	}
 	if subscribingCh != nil {
@@ -963,8 +971,11 @@ func (c *Client) handleMapTransitionToLive(
 		c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel, c)
 	}
 
-	// Stop buffering after response written.
-	c.pubSubSync.StopBuffering(channel)
+	// The reply is written, so the publications queued since the sync point can
+	// follow it.
+	if c.pubSubSync.StopBuffering(pubSubBuf, c.writePendingPublication) {
+		go c.handleInsufficientState(channel, false)
+	}
 
 	// Add presence and join handling.
 	c.setupMapPresenceAndJoin(channel, opts)
