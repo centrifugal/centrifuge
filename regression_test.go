@@ -1481,14 +1481,13 @@ func minAllocsPerRun(attempts, runs int, f func()) float64 {
 // client_recovery_deadlock_test.go
 // ===========================================================================
 
-// TestSubConsistency_NoDeadlockRecoveryCloseBroadcast guards the lock order
-// between a recovering subscribe's close-path and the broadcast path.
+// TestSubConsistency_NoDeadlockRecoveryCloseBroadcast guards a recovering
+// subscribe's close-path against the broadcast path.
 //
-// A positioned/recovering subscribe holds pubBufferMu (LockBufferAndReadBuffered)
-// until StopBuffering. commitSubscription's closed-path (client closed mid
-// subscribe) removes the hub entry, which takes subShard.mu — and the broadcast
-// path holds subShard.mu while taking pubBufferMu (SyncPublication). Removing the
-// hub entry with the buffer still locked inverts that order and deadlocks.
+// commitSubscription's closed-path (client closed mid subscribe) removes the hub
+// entry, which takes subShard.mu, while the broadcast path holds subShard.mu and
+// syncs the publication with the subscribe (SyncPublication). When the sync
+// waited for the subscribe to finish, that deadlocked; now it never waits.
 //
 // Here recovery is enabled, a subscribe races close, and broadcasters publish to
 // the same channel continuously. A deadlocking implementation hangs; the timeout
@@ -1646,8 +1645,10 @@ func TestBroadcastFiltered_MultipleKeys_NoNilBufferedPub(t *testing.T) {
 	subscribeClientV2(t, pbClient, ch)
 
 	// Enter the buffering window for both so the broadcast is buffered, not sent.
-	jsonClient.pubSubSync.StartBuffering(ch)
-	pbClient.pubSubSync.StartBuffering(ch)
+	bufs := map[*Client]*recovery.Buffer[pendingPublication]{
+		jsonClient: jsonClient.pubSubSync.StartBuffering(ch, 0),
+		pbClient:   pbClient.pubSubSync.StartBuffering(ch, 0),
+	}
 
 	// Broadcast a publication excluded by the server tags filter (team=sales).
 	err := node.hub.broadcastPublication(
@@ -1660,13 +1661,13 @@ func TestBroadcastFiltered_MultipleKeys_NoNilBufferedPub(t *testing.T) {
 
 	// Neither buffer may contain a nil publication, and merging must not panic.
 	for _, c := range []*Client{jsonClient, pbClient} {
-		buffered := c.pubSubSync.LockBufferAndReadBuffered(ch)
+		buffered, _ := c.pubSubSync.ReadBuffered(bufs[c], "", 0)
 		for _, p := range buffered {
 			require.NotNil(t, p, "filtered broadcast buffered a nil publication (missing filteredPub marker)")
 		}
 		_, _, ok := recovery.MergePublications(nil, buffered)
 		require.True(t, ok)
-		c.pubSubSync.StopBuffering(ch)
+		c.pubSubSync.StopBuffering(bufs[c], c.writePendingPublication)
 	}
 }
 
