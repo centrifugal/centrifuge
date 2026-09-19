@@ -20,8 +20,22 @@ import (
 	"github.com/centrifugal/centrifuge/internal/filter"
 	"github.com/centrifugal/protocol"
 	fdelta "github.com/shadowspore/fossil-delta"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// setIsInTest sets isInTest for the test.
+func setIsInTest(t testing.TB) {
+	prev := isInTest.Load()
+	isInTest.Store(true)
+	t.Cleanup(func() { isInTest.Store(prev) })
+}
+
+// setTestAtSyncPoint sets testAtSyncPoint for the test.
+func setTestAtSyncPoint(t testing.TB, f func(channel string)) {
+	testAtSyncPoint.Store(&f)
+	t.Cleanup(func() { testAtSyncPoint.Store(nil) })
+}
 
 func newClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 	c, _, err := NewClient(ctx, n, t)
@@ -6158,9 +6172,7 @@ func publishUntil(node *Node, ch string, stop <-chan struct{}) {
 // blocked on that buffer with the shard's read lock held, and the second subscription waited
 // for the shard's write lock for ever (the test hook delays it by a second).
 func TestClientConnectRecoverySubscriptionsSameHubShard(t *testing.T) {
-	prev := isInTest
-	isInTest = true
-	defer func() { isInTest = prev }()
+	setIsInTest(t)
 
 	ch1, ch2 := testChannelConnectRecoverySameShard1, testChannelConnectRecoverySameShard2
 	require.Equal(t, index(ch1, numHubShards), index(ch2, numHubShards))
@@ -6206,9 +6218,7 @@ func TestClientConnectRecoverySubscriptionsSameHubShard(t *testing.T) {
 // with the recovery buffer locked (the test hook holds it there for a second): its read lock of
 // the shard queued behind a writer, which queued behind a publication blocked on that buffer.
 func TestClientSubscribeJoinRecoverySameHubShard(t *testing.T) {
-	prev := isInTest
-	isInTest = true
-	defer func() { isInTest = prev }()
+	setIsInTest(t)
 
 	ch := testChannelSubscribeJoinRecovery
 	var other string
@@ -6393,9 +6403,7 @@ func recoveryOrderingPassesFilter(offset uint64) bool {
 // once and in offset order, and, with fossil delta, patches that apply to the data it
 // has.
 func TestClientRecoveryOrderingUnderPublications(t *testing.T) {
-	prev := isInTest
-	isInTest = true
-	defer func() { isInTest = prev }()
+	setIsInTest(t)
 
 	for _, tc := range recoveryOrderingCases() {
 		t.Run(tc.name, func(t *testing.T) {
@@ -6562,7 +6570,7 @@ func testRecoveryOrdering(t *testing.T, tc recoveryOrderingCase) {
 	// At the sync point a burst of publications is queued for sure, whatever the
 	// publisher below manages meanwhile.
 	const numAtSyncPoint = 20
-	testAtSyncPoint = func(channel string) {
+	setTestAtSyncPoint(t, func(channel string) {
 		if channel != ch {
 			return
 		}
@@ -6579,8 +6587,7 @@ func testRecoveryOrdering(t *testing.T, tc recoveryOrderingCase) {
 		if err := node.hub.broadcastPublication(ch, StreamPosition{Offset: numPrePublished, Epoch: epoch}, late, nil, nil, ChannelBatchConfig{}); err != nil {
 			t.Error(err)
 		}
-	}
-	defer func() { testAtSyncPoint = nil }()
+	})
 
 	stop := make(chan struct{})
 	published := make(chan struct{})
@@ -6722,9 +6729,7 @@ func testRecoveryOrdering(t *testing.T, tc recoveryOrderingCase) {
 // sync point the subscribe fails, after it the client is resubscribed (a server-side
 // subscription is disconnected).
 func TestClientRecoveryQueueOverflowInsufficientState(t *testing.T) {
-	prev := isInTest
-	isInTest = true
-	defer func() { isInTest = prev }()
+	setIsInTest(t)
 
 	for _, when := range []string{"before_sync_point", "after_sync_point"} {
 		for _, mode := range []string{"client_side", "connect", "server_subscribe", "map"} {
@@ -6786,12 +6791,11 @@ func testRecoveryOverflow(t *testing.T, mode string, when string) {
 	require.NoError(t, err)
 	node.SetMapBroker(&streamReadMapBroker{MemoryMapBroker: mapBroker, aroundRead: aroundRead})
 	if when == "after_sync_point" {
-		testAtSyncPoint = func(channel string) {
+		setTestAtSyncPoint(t, func(channel string) {
 			if channel == ch {
 				burst()
 			}
-		}
-		defer func() { testAtSyncPoint = nil }()
+		})
 	}
 
 	opts := SubscribeOptions{EnableRecovery: true}
@@ -6956,9 +6960,7 @@ func closeClientAndWait(c *Client) {
 // buffer: a leaked one would queue the channel's publications forever. After the
 // failure the client subscribes again and must get publications.
 func TestClientRecoveringSubscribeFailureCancelsBuffering(t *testing.T) {
-	prev := isInTest
-	isInTest = true
-	defer func() { isInTest = prev }()
+	setIsInTest(t)
 
 	type env struct {
 		node      *Node
@@ -7184,12 +7186,11 @@ func TestClientRecoveringSubscribeFailureCancelsBuffering(t *testing.T) {
 			client := newTestConnectedClientWithTransport(t, context.Background(), node, transport, "42")
 			e.client = client
 
-			testAtSyncPoint = func(channel string) {
+			setTestAtSyncPoint(t, func(channel string) {
 				if channel == e.channel && e.atSyncPoint != nil {
 					e.atSyncPoint()
 				}
-			}
-			defer func() { testAtSyncPoint = nil }()
+			})
 			rw := testReplyWriterWrapper()
 			err = client.handleSubscribe(e.request, &protocol.Command{Id: 2}, time.Now(), rw.rw)
 			require.NoError(t, err)
@@ -7235,9 +7236,7 @@ func TestClientRecoveringSubscribeFailureCancelsBuffering(t *testing.T) {
 // push must not come before the subscribe push or the recovered publications:
 // otherwise the client considers itself subscribed after the unsubscribe.
 func TestClientServerSubscribeConcurrentUnsubscribeOrder(t *testing.T) {
-	prev := isInTest
-	isInTest = true
-	defer func() { isInTest = prev }()
+	setIsInTest(t)
 
 	ch := testChannelRecoveryOrderingPrefix + "_unsubscribe"
 	node := defaultNodeNoHandlers()
@@ -7258,15 +7257,14 @@ func TestClientServerSubscribeConcurrentUnsubscribeOrder(t *testing.T) {
 	// The unsubscribe starts at the sync point, and waits for the subscribe
 	// (the test hook holds the subscribe there for 100ms).
 	unsubscribed := make(chan struct{})
-	testAtSyncPoint = func(channel string) {
+	setTestAtSyncPoint(t, func(channel string) {
 		if channel == ch {
 			go func() {
 				defer close(unsubscribed)
 				client.Unsubscribe(ch)
 			}()
 		}
-	}
-	defer func() { testAtSyncPoint = nil }()
+	})
 	require.NoError(t, client.Subscribe(ch, WithRecovery(true),
 		WithRecoverSince(&StreamPosition{Offset: res.Offset - 2, Epoch: res.Epoch})))
 	<-unsubscribed
@@ -7325,9 +7323,7 @@ func TestClientConnectSubscriptionFailureCancelsBuffering(t *testing.T) {
 // A server-side subscription whose client closes while it is at its sync point is
 // rolled back, and must drop its buffer.
 func TestClientServerSideSubscriptionClosedAtSyncPointCancelsBuffering(t *testing.T) {
-	prev := isInTest
-	isInTest = true
-	defer func() { isInTest = prev }()
+	setIsInTest(t)
 
 	for _, mode := range []string{"connect", "server_subscribe"} {
 		t.Run(mode, func(t *testing.T) {
@@ -7348,12 +7344,11 @@ func TestClientServerSideSubscriptionClosedAtSyncPointCancelsBuffering(t *testin
 			if mode == "server_subscribe" {
 				connectClientV2(t, client)
 			}
-			testAtSyncPoint = func(channel string) {
+			setTestAtSyncPoint(t, func(channel string) {
 				if channel == ch {
 					closeClientAndWait(client)
 				}
-			}
-			defer func() { testAtSyncPoint = nil }()
+			})
 			if mode == "connect" {
 				err = client.connectCmd(&protocol.ConnectRequest{
 					Subs: map[string]*protocol.SubscribeRequest{ch: {Recover: true, Offset: sp.Offset, Epoch: sp.Epoch}},
@@ -7372,14 +7367,18 @@ func TestClientServerSideSubscriptionClosedAtSyncPointCancelsBuffering(t *testin
 // frame, into subscription generations: each starts with a subscribe result (a
 // subscribe reply or push) and holds the publications of the channel after it.
 type recoveryStreamReader struct {
-	t       *testing.T
-	ch      string
-	mu      sync.Mutex
-	frames  [][]byte
-	parsed  int
-	gens    [][]uint64 // Publication offsets per generation.
-	unsubs  int        // Unsubscribe replies and pushes seen.
-	maxSeen uint64
+	t  *testing.T
+	ch string
+	// ownDisconnect is the code of the disconnects the test makes itself, others
+	// fail it.
+	ownDisconnect uint32
+	mu            sync.Mutex
+	frames        [][]byte
+	parsed        int
+	gens          [][]uint64 // Publication offsets per generation.
+	pending       []uint64   // Publications of map pages before the LIVE result.
+	unsubs        int        // Unsubscribe replies and pushes seen.
+	maxSeen       uint64
 }
 
 func (r *recoveryStreamReader) add(frame []byte) {
@@ -7404,9 +7403,22 @@ func (r *recoveryStreamReader) sync() {
 			require.NoError(r.t, err)
 			var pubs []*protocol.Publication
 			switch {
+			case reply.Subscribe != nil && reply.Subscribe.Type == subscribeResultTypeMap && reply.Subscribe.Phase != MapPhaseLive:
+				// A page of map state or stream: the generation starts with the
+				// LIVE result, the publications of stream pages come first in it.
+				for _, pub := range reply.Subscribe.Publications {
+					r.pending = append(r.pending, pub.Offset)
+					r.maxSeen = max(r.maxSeen, pub.Offset)
+				}
 			case reply.Subscribe != nil:
-				r.gens = append(r.gens, nil)
+				r.gens = append(r.gens, r.pending)
+				r.pending = nil
 				pubs = reply.Subscribe.Publications
+			case reply.Connect != nil:
+				if res := reply.Connect.Subs[r.ch]; res != nil {
+					r.gens = append(r.gens, nil)
+					pubs = res.Publications
+				}
 			case reply.Unsubscribe != nil:
 				r.unsubs++
 			case reply.Push == nil || reply.Push.Channel != r.ch:
@@ -7421,7 +7433,9 @@ func (r *recoveryStreamReader) sync() {
 				require.NotEmpty(r.t, r.gens, "publication before the first subscribe result")
 				pubs = []*protocol.Publication{reply.Push.Pub}
 			case reply.Push.Disconnect != nil:
-				require.Fail(r.t, "client disconnected", "code %d", reply.Push.Disconnect.Code)
+				if reply.Push.Disconnect.Code != r.ownDisconnect || r.ownDisconnect == 0 {
+					require.Fail(r.t, "client disconnected", "code %d", reply.Push.Disconnect.Code)
+				}
 			}
 			for _, pub := range pubs {
 				g := len(r.gens) - 1
@@ -7434,33 +7448,407 @@ func (r *recoveryStreamReader) sync() {
 	}
 }
 
-// Clients keep unsubscribing and subscribing again with recovery from the last
-// offset they got, client-side or with Client.Subscribe, while publications come
-// and each subscription spends a while between its sync point and StopBuffering.
-// Each generation must start right after the offset it recovers from and go on in
-// order, no client may be resubscribed with insufficient state, and overall a
-// client must get every publication.
-func TestClientRecoveryResubscribeContinuity(t *testing.T) {
-	prev, prevDelay := isInTest, testSyncPointDelay
-	isInTest, testSyncPointDelay = true, time.Millisecond
-	defer func() { isInTest, testSyncPointDelay = prev, prevDelay }()
+// laggingDelivery delivers broker events to the node later than they happen, as
+// PUB/SUB does under load: each after a random delay of up to maxLag, in the order
+// they came. A publication is in history before it is delivered, so a subscribe can
+// read it there first, which is what a late delivery then has to be synced with.
+type laggingDelivery struct {
+	maxLag time.Duration
+	mu     sync.Mutex
+	rnd    *rand.Rand
+	last   time.Time
+	events chan laggedEvent
+	done   chan struct{}
+}
 
+type laggedEvent struct {
+	at      time.Time
+	deliver func()
+}
+
+func newLaggingDelivery(maxLag time.Duration) *laggingDelivery {
+	l := &laggingDelivery{
+		maxLag: maxLag,
+		rnd:    rand.New(rand.NewSource(time.Now().UnixNano())),
+		events: make(chan laggedEvent, 1<<16),
+		done:   make(chan struct{}),
+	}
+	go func() {
+		defer close(l.done)
+		for e := range l.events {
+			if d := time.Until(e.at); d > 0 {
+				time.Sleep(d)
+			}
+			e.deliver()
+		}
+	}()
+	return l
+}
+
+func (l *laggingDelivery) push(deliver func()) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	at := time.Now().Add(time.Duration(l.rnd.Int63n(int64(l.maxLag) + 1)))
+	if at.Before(l.last) {
+		at = l.last // Never ahead of an earlier event.
+	}
+	l.last = at
+	l.events <- laggedEvent{at: at, deliver: deliver}
+}
+
+// close delivers what is left and stops.
+func (l *laggingDelivery) close() {
+	close(l.events)
+	<-l.done
+}
+
+func (l *laggingDelivery) wrap(h BrokerEventHandler) BrokerEventHandler {
+	return &laggingEventHandler{l: l, h: h}
+}
+
+type laggingEventHandler struct {
+	l *laggingDelivery
+	h BrokerEventHandler
+}
+
+func (h *laggingEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, useDelta bool, prevPub *Publication) error {
+	h.l.push(func() { _ = h.h.HandlePublication(ch, pub, sp, useDelta, prevPub) })
+	return nil
+}
+
+func (h *laggingEventHandler) HandleJoin(ch string, info *ClientInfo) error {
+	h.l.push(func() { _ = h.h.HandleJoin(ch, info) })
+	return nil
+}
+
+func (h *laggingEventHandler) HandleLeave(ch string, info *ClientInfo) error {
+	h.l.push(func() { _ = h.h.HandleLeave(ch, info) })
+	return nil
+}
+
+type laggingBroker struct {
+	*MemoryBroker
+	lag *laggingDelivery
+}
+
+func (b *laggingBroker) RegisterBrokerEventHandler(h BrokerEventHandler) error {
+	return b.MemoryBroker.RegisterBrokerEventHandler(b.lag.wrap(h))
+}
+
+type laggingMapBroker struct {
+	*MemoryMapBroker
+	lag *laggingDelivery
+}
+
+func (b *laggingMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
+	return b.MemoryMapBroker.RegisterEventHandler(b.lag.wrap(h))
+}
+
+// Clients keep unsubscribing and subscribing again with recovery from the last
+// offset they got (stream subscriptions client-side or with Client.Subscribe, map
+// subscriptions going LIVE), while publications come and each subscription spends a
+// while between its sync point and StopBuffering. Publications reach the node right
+// away, or late (after they are in history), as PUB/SUB under load. Each generation
+// must start right after the offset it recovers from and go on in order, no client
+// may be resubscribed with insufficient state, and overall a client must get every
+// publication.
+func TestClientRecoveryResubscribeContinuity(t *testing.T) {
+	setIsInTest(t)
+	testSyncPointDelay.Store(int64(time.Millisecond))
+	t.Cleanup(func() { testSyncPointDelay.Store(0) })
+
+	for _, kind := range []string{"stream", "map", "connect"} {
+		for _, delivery := range []string{"direct", "lagging"} {
+			t.Run(kind+"_"+delivery, func(t *testing.T) {
+				if kind == "connect" {
+					testRecoveryConnectContinuity(t, delivery == "lagging")
+					return
+				}
+				testRecoveryContinuity(t, kind == "map", delivery == "lagging")
+			})
+		}
+	}
+}
+
+// Clients keep connecting with several recoverable channels in ConnectReply
+// Subscriptions (two of them in one hub shard), each recovering from the last
+// offset it got there, and closing again, while publications come into all of them.
+func testRecoveryConnectContinuity(t *testing.T, lagging bool) {
+	const numClients = 4
+	const duration = 1500 * time.Millisecond
+	a := testChannelRecoveryOrderingPrefix + "_continuity_connect_a"
+	b := a
+	for i := 0; index(b, numHubShards) != index(a, numHubShards) || b == a; i++ {
+		b = testChannelRecoveryOrderingPrefix + "_continuity_connect_b" + strconv.Itoa(i)
+	}
+	channels := []string{a, b, testChannelRecoveryOrderingPrefix + "_continuity_connect_c"}
+
+	node, err := New(Config{
+		LogLevel:                        LogLevelTrace,
+		LogHandler:                      func(entry LogEntry) {},
+		ClientChannelPositionMaxTimeLag: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	if lagging {
+		lag := newLaggingDelivery(5 * time.Millisecond)
+		defer lag.close()
+		node.SetBroker(&laggingBroker{MemoryBroker: memBroker, lag: lag})
+	} else {
+		node.SetBroker(memBroker)
+	}
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		subscriptions := make(map[string]SubscribeOptions, len(channels))
+		for _, ch := range channels {
+			subscriptions[ch] = SubscribeOptions{EnableRecovery: true}
+		}
+		return ConnectReply{Credentials: &Credentials{UserID: "42"}, Subscriptions: subscriptions}, nil
+	})
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	starts := make(map[string]uint64, len(channels))
+	for _, ch := range channels {
+		res, err := node.Publish(ch, []byte(`{}`), WithHistory(100000, time.Minute))
+		require.NoError(t, err)
+		starts[ch] = res.Offset
+	}
+	epochs := make(map[string]string, len(channels))
+	for _, ch := range channels {
+		res, err := node.History(ch, WithLimit(0))
+		require.NoError(t, err)
+		epochs[ch] = res.Epoch
+	}
+
+	var lastOffsets sync.Map // Channel to its last offset.
+	stop := make(chan struct{})
+	published := make(chan struct{})
+	go func() {
+		defer close(published)
+		for n := 0; ; n++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			ch := channels[n%len(channels)]
+			res, err := node.Publish(ch, []byte(`{}`), WithHistory(100000, time.Minute))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			lastOffsets.Store(ch, res.Offset)
+			time.Sleep(100 * time.Microsecond)
+		}
+	}()
+
+	type channelRun struct {
+		reader   *recoveryStreamReader
+		recovers []uint64
+	}
+	runs := make([]map[string]*channelRun, numClients)
+	finals := make([]*testTransport, numClients) // The connection each client ends with.
+	var wg sync.WaitGroup
+	deadline := time.Now().Add(duration)
+	for i := range runs {
+		runs[i] = make(map[string]*channelRun, len(channels))
+		for _, ch := range channels {
+			runs[i][ch] = &channelRun{reader: &recoveryStreamReader{t: t, ch: ch, ownDisconnect: DisconnectForceNoReconnect.Code}}
+		}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rnd := rand.New(rand.NewSource(int64(i)))
+			recoverFrom := make(map[string]uint64, len(channels))
+			for ch, start := range starts {
+				recoverFrom[ch] = start
+			}
+			for gen := 0; ; gen++ {
+				transport := newTestTransport(func() {})
+				sink := make(chan []byte, 4096)
+				transport.sink = sink
+				read := make(chan struct{})
+				go func() {
+					defer close(read)
+					for frame := range sink {
+						for _, run := range runs[i] {
+							run.reader.add(frame)
+						}
+					}
+				}()
+				client := newTestClientCustomTransport(t, context.Background(), node, transport, "42")
+				subs := make(map[string]*protocol.SubscribeRequest, len(channels))
+				for _, ch := range channels {
+					runs[i][ch].recovers = append(runs[i][ch].recovers, recoverFrom[ch])
+					subs[ch] = &protocol.SubscribeRequest{Recover: true, Offset: recoverFrom[ch], Epoch: epochs[ch]}
+				}
+				if err := client.connectCmd(&protocol.ConnectRequest{Subs: subs}, &protocol.Command{Id: 1}, time.Now(), testReplyWriterWrapper().rw); err != nil {
+					t.Errorf("client %d: connect: %v", i, err)
+					return
+				}
+				client.triggerConnect()
+				for _, ch := range channels {
+					reader := runs[i][ch].reader
+					started := time.Now()
+					for reader.sync(); len(reader.gens) != gen+1; reader.sync() {
+						if t.Failed() {
+							return
+						}
+						if time.Since(started) > 5*time.Second {
+							t.Errorf("client %d: no connect result for %s", i, ch)
+							return
+						}
+						time.Sleep(100 * time.Microsecond)
+					}
+				}
+				// What was published by now must reach this connection: nothing may
+				// get lost within it (a later reconnect would recover it silently).
+				targets := make(map[string]uint64, len(channels))
+				for _, ch := range channels {
+					if v, ok := lastOffsets.Load(ch); ok {
+						targets[ch] = v.(uint64)
+					}
+				}
+				if time.Now().After(deadline) {
+					finals[i] = transport
+					return // Stay connected till the end.
+				}
+				time.Sleep(time.Duration(rnd.Intn(3000)) * time.Microsecond)
+				for _, ch := range channels {
+					reader := runs[i][ch].reader
+					started := time.Now()
+					for reader.sync(); reader.maxSeen < targets[ch]; reader.sync() {
+						if t.Failed() {
+							return
+						}
+						if time.Since(started) > 5*time.Second {
+							t.Errorf("client %d: connection %d lost publications of %s: got up to %d, published %d", i, gen, ch, reader.maxSeen, targets[ch])
+							return
+						}
+						time.Sleep(100 * time.Microsecond)
+					}
+				}
+				// Once closed, the connection writes nothing more: what the client
+				// got before is all it has to recover from.
+				_ = client.close(DisconnectForceNoReconnect)
+				close(sink)
+				<-read
+				// The server must not have closed it first (insufficient state).
+				if code := transport.disconnect.Code; code != DisconnectForceNoReconnect.Code {
+					t.Errorf("client %d: connection %d closed by the server with code %d", i, gen, code)
+					return
+				}
+				for _, ch := range channels {
+					reader := runs[i][ch].reader
+					reader.sync()
+					recoverFrom[ch] = max(reader.maxSeen, starts[ch])
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(stop)
+	<-published
+
+	for i, clientRuns := range runs {
+		require.NotNil(t, finals[i])
+		finals[i].mu.Lock()
+		closed, code := finals[i].closed, finals[i].disconnect.Code
+		finals[i].mu.Unlock()
+		require.False(t, closed, "client %d: last connection closed by the server with code %d", i, code)
+		for _, ch := range channels {
+			run := clientRuns[ch]
+			v, _ := lastOffsets.Load(ch)
+			last := v.(uint64)
+			require.Eventually(t, func() bool {
+				run.reader.sync()
+				return run.reader.maxSeen >= last
+			}, 5*time.Second, 10*time.Millisecond, "client %d did not get the last publication of %s", i, ch)
+			gens := run.reader.gens
+			require.Len(t, gens, len(run.recovers))
+			require.Greater(t, len(gens), 5, "client %d reconnected too few times", i)
+			seen := make(map[uint64]bool)
+			for g, offsets := range gens {
+				if len(offsets) == 0 {
+					continue
+				}
+				require.Equal(t, run.recovers[g]+1, offsets[0], "client %d %s connection %d must start right after its recovery offset", i, ch, g)
+				for j := 1; j < len(offsets); j++ {
+					require.Equal(t, offsets[j-1]+1, offsets[j], "client %d %s connection %d must be contiguous", i, ch, g)
+				}
+				for _, offset := range offsets {
+					seen[offset] = true
+				}
+			}
+			for offset := starts[ch] + 1; offset <= last; offset++ {
+				require.True(t, seen[offset], "client %d missed publication %d of %s", i, offset, ch)
+			}
+		}
+		t.Logf("client %d: %d connections", i, len(clientRuns[a].reader.gens))
+	}
+}
+
+func testRecoveryContinuity(t *testing.T, mapMode bool, lagging bool) {
 	const numClients = 6
 	const duration = 1500 * time.Millisecond
 	ch := testChannelRecoveryOrderingPrefix + "_continuity"
 
-	node := defaultNodeNoHandlers()
-	defer func() { _ = node.Shutdown(context.Background()) }()
+	node, err := New(Config{
+		LogLevel:                        LogLevelTrace,
+		LogHandler:                      func(entry LogEntry) {},
+		ClientChannelPositionMaxTimeLag: 5 * time.Second,
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{Mode: MapModeRecoverable, KeyTTL: time.Minute, MinPageSize: 1}
+			},
+		},
+	})
+	require.NoError(t, err)
+	memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	memMapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	if lagging {
+		lag := newLaggingDelivery(5 * time.Millisecond)
+		defer lag.close()
+		node.SetBroker(&laggingBroker{MemoryBroker: memBroker, lag: lag})
+		node.SetMapBroker(&laggingMapBroker{MemoryMapBroker: memMapBroker, lag: lag})
+	} else {
+		node.SetBroker(memBroker)
+		node.SetMapBroker(memMapBroker)
+	}
+	opts := SubscribeOptions{EnableRecovery: true}
+	if mapMode {
+		opts = SubscribeOptions{Type: SubscriptionTypeMap}
+	}
 	node.OnConnect(func(c *Client) {
 		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true}}, nil)
+			cb(SubscribeReply{Options: opts}, nil)
 		})
 		c.OnUnsubscribe(func(e UnsubscribeEvent) {})
 	})
-	res, err := node.Publish(ch, []byte(`{}`), WithHistory(100000, time.Minute))
-	require.NoError(t, err)
-	epoch := res.Epoch
-	start := res.Offset
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	var numPublished atomic.Int64
+	publish := func() (StreamPosition, error) {
+		n := numPublished.Add(1)
+		if mapMode {
+			res, err := node.MapPublish(context.Background(), ch, "k"+strconv.Itoa(int(n%10)), MapPublishOptions{Data: []byte(`{}`)})
+			return res.Position, err
+		}
+		res, err := node.Publish(ch, []byte(`{}`), WithHistory(100000, time.Minute))
+		return res.StreamPosition, err
+	}
+	// All map keys exist from the start, so a map state never fits into one page.
+	var sp StreamPosition
+	for i := 0; i < 20; i++ {
+		sp, err = publish()
+		require.NoError(t, err)
+	}
+	epoch := sp.Epoch
+	start := sp.Offset
 
 	var lastOffset atomic.Uint64
 	lastOffset.Store(start)
@@ -7474,12 +7862,12 @@ func TestClientRecoveryResubscribeContinuity(t *testing.T) {
 				return
 			default:
 			}
-			r, err := node.Publish(ch, []byte(`{}`), WithHistory(100000, time.Minute))
+			sp, err := publish()
 			if err != nil {
 				t.Error(err)
 				return
 			}
-			lastOffset.Store(r.Offset)
+			lastOffset.Store(sp.Offset)
 			time.Sleep(100 * time.Microsecond)
 		}
 	}()
@@ -7487,7 +7875,10 @@ func TestClientRecoveryResubscribeContinuity(t *testing.T) {
 	type clientRun struct {
 		reader   *recoveryStreamReader
 		client   *Client
-		recovers []uint64 // Offset each generation recovers from.
+		recovers []uint64 // Offset each generation recovers from (or has state at).
+		states   []bool   // Whether each generation came from map state.
+		stateAt  uint64   // Offset of the latest map state the client got.
+		streamed int      // Map state generations which went LIVE through the stream.
 	}
 	runs := make([]*clientRun, numClients)
 	var wg sync.WaitGroup
@@ -7510,20 +7901,110 @@ func TestClientRecoveryResubscribeContinuity(t *testing.T) {
 			defer wg.Done()
 			rnd := rand.New(rand.NewSource(int64(i)))
 			recoverFrom := start
+			var stateAt uint64 // Offset of the latest map state the client got.
 			var cmdID uint32 = 1
-			waitFor := func(cond func() bool) {
+			// waitFor waits for what the client gets, and reports whether it came.
+			waitFor := func(what string, cond func() bool) bool {
+				started := time.Now()
 				for !cond() {
 					if t.Failed() {
-						return
+						return false
+					}
+					if time.Since(started) > 5*time.Second {
+						t.Errorf("client %d: no %s", i, what)
+						return false
 					}
 					time.Sleep(100 * time.Microsecond)
 					reader.sync()
 				}
+				return true
+			}
+			// streamToLive reads map stream pages from offset till the subscription
+			// goes LIVE, and reports whether it did.
+			streamToLive := func(offset uint64, epoch string) bool {
+				for page := 0; page < 10000; page++ {
+					cmdID++
+					req := &protocol.SubscribeRequest{Channel: ch, Type: int32(SubscriptionTypeMap), Phase: MapPhaseStream, Offset: offset, Epoch: epoch, Limit: 3}
+					rw := testReplyWriterWrapper()
+					if err := client.handleSubscribe(req, &protocol.Command{Id: cmdID}, time.Now(), rw.rw); err != nil {
+						t.Error(err)
+						return false
+					}
+					if len(rw.replies) != 1 || rw.replies[0].Error != nil || rw.replies[0].Subscribe == nil {
+						t.Errorf("client %d: stream page %d failed: %v", i, page, rw.replies)
+						return false
+					}
+					res := rw.replies[0].Subscribe
+					if res.Phase == MapPhaseLive {
+						run.streamed++
+						return true
+					}
+					offset = res.Offset
+				}
+				t.Errorf("client %d: stream never went live", i)
+				return false
 			}
 			for gen := 0; ; gen++ {
-				serverSide := rnd.Intn(2) == 0
-				run.recovers = append(run.recovers, recoverFrom)
-				if serverSide {
+				serverSide := !mapMode && rnd.Intn(2) == 0
+				fromState := mapMode && rnd.Intn(2) == 0
+				if fromState {
+					// Map state page by page (always more than one), then LIVE with
+					// the publications since the state.
+					var cursor, stateEpoch string
+					var frozen uint64
+					// Slow pagination lets the stream go ahead meanwhile, so the state
+					// ends with stream pages before LIVE.
+					slow := rnd.Intn(3) == 0
+					for page := 0; ; page++ {
+						if slow && page > 0 {
+							time.Sleep(time.Millisecond)
+						}
+						cmdID++
+						req := &protocol.SubscribeRequest{Channel: ch, Type: int32(SubscriptionTypeMap), Phase: MapPhaseState, Limit: 3}
+						if page > 0 {
+							req.Cursor, req.Offset, req.Epoch = cursor, frozen, stateEpoch
+						}
+						rw := testReplyWriterWrapper()
+						if err := client.handleSubscribe(req, &protocol.Command{Id: cmdID}, time.Now(), rw.rw); err != nil {
+							t.Error(err)
+							return
+						}
+						if len(rw.replies) != 1 || rw.replies[0].Error != nil || rw.replies[0].Subscribe == nil {
+							t.Errorf("client %d: state page %d failed: %v", i, page, rw.replies)
+							return
+						}
+						res := rw.replies[0].Subscribe
+						if page == 0 {
+							if res.Phase == MapPhaseLive {
+								t.Errorf("client %d: state went live on the first page", i)
+								return
+							}
+							frozen, stateEpoch = res.Offset, res.Epoch
+						}
+						if res.Phase == MapPhaseLive {
+							break
+						}
+						if res.Cursor == "" {
+							// The last state page, but the stream went too far meanwhile:
+							// catch up with stream pages till LIVE.
+							if !streamToLive(frozen, stateEpoch) {
+								return
+							}
+							break
+						}
+						cursor = res.Cursor
+					}
+					run.recovers = append(run.recovers, frozen)
+					run.states = append(run.states, true)
+					stateAt = frozen
+					run.stateAt = frozen
+				} else {
+					run.recovers = append(run.recovers, recoverFrom)
+					run.states = append(run.states, false)
+				}
+				if fromState {
+					// Subscribed already.
+				} else if serverSide {
 					if err := client.Subscribe(ch, WithRecovery(true),
 						WithRecoverSince(&StreamPosition{Offset: recoverFrom, Epoch: epoch})); err != nil {
 						t.Error(err)
@@ -7531,18 +8012,29 @@ func TestClientRecoveryResubscribeContinuity(t *testing.T) {
 					}
 				} else {
 					cmdID++
-					if err := client.handleSubscribe(&protocol.SubscribeRequest{
-						Channel: ch, Recover: true, Offset: recoverFrom, Epoch: epoch,
-					}, &protocol.Command{Id: cmdID}, time.Now(), testReplyWriterWrapper().rw); err != nil {
+					req := &protocol.SubscribeRequest{Channel: ch, Recover: true, Offset: recoverFrom, Epoch: epoch}
+					if mapMode {
+						req.Type = int32(SubscriptionTypeMap)
+						req.Phase = MapPhaseLive
+					}
+					if err := client.handleSubscribe(req, &protocol.Command{Id: cmdID}, time.Now(), testReplyWriterWrapper().rw); err != nil {
 						t.Error(err)
 						return
 					}
 				}
-				waitFor(func() bool { return len(reader.gens) == gen+1 })
+				if !waitFor("subscribe result", func() bool { return len(reader.gens) == gen+1 }) {
+					return
+				}
+				// What was published by now must reach this subscription: nothing
+				// may get lost within it (the next one would recover it silently).
+				target := lastOffset.Load()
 				if time.Now().After(deadline) {
 					return // Stay subscribed till the end.
 				}
 				time.Sleep(time.Duration(rnd.Intn(3000)) * time.Microsecond)
+				if !waitFor(fmt.Sprintf("publications up to %d", target), func() bool { return max(reader.maxSeen, stateAt) >= target }) {
+					return
+				}
 				unsubs := reader.unsubs
 				if serverSide {
 					client.Unsubscribe(ch)
@@ -7554,11 +8046,10 @@ func TestClientRecoveryResubscribeContinuity(t *testing.T) {
 						return
 					}
 				}
-				waitFor(func() bool { return reader.unsubs > unsubs })
-				recoverFrom = reader.maxSeen
-				if recoverFrom < start {
-					recoverFrom = start
+				if !waitFor("unsubscribe", func() bool { return reader.unsubs > unsubs }) {
+					return
 				}
+				recoverFrom = max(reader.maxSeen, stateAt, start)
 			}
 		}(i)
 	}
@@ -7568,15 +8059,29 @@ func TestClientRecoveryResubscribeContinuity(t *testing.T) {
 	last := lastOffset.Load()
 
 	for i, run := range runs {
-		require.Eventually(t, func() bool {
+		if !assert.Eventually(t, func() bool {
 			run.reader.sync()
-			return run.reader.maxSeen >= last
-		}, 5*time.Second, 10*time.Millisecond, "client %d did not get the last publication", i)
+			return max(run.reader.maxSeen, run.stateAt) >= last
+		}, 5*time.Second, 10*time.Millisecond, "client %d did not get the last publication", i) {
+			g := len(run.reader.gens) - 1
+			var tail []uint64
+			if g >= 0 {
+				tail = run.reader.gens[g][max(0, len(run.reader.gens[g])-5):]
+			}
+			t.Fatalf("client %d: maxSeen %d, stateAt %d, last %d, generations %d, last from state %v, recovers from %d, tail %v, subscribed %v",
+				i, run.reader.maxSeen, run.stateAt, last, len(run.reader.gens), run.states[len(run.states)-1], run.recovers[len(run.recovers)-1], tail, run.client.IsSubscribed(ch))
+		}
 		gens := run.reader.gens
 		require.Len(t, gens, len(run.recovers))
 		require.Greater(t, len(gens), 5, "client %d resubscribed too few times", i)
 		seen := make(map[uint64]bool)
 		for g, offsets := range gens {
+			if run.states[g] {
+				// The state covers everything up to the offset it is at.
+				for offset := start + 1; offset <= run.recovers[g]; offset++ {
+					seen[offset] = true
+				}
+			}
 			if len(offsets) == 0 {
 				continue
 			}
@@ -7591,7 +8096,13 @@ func TestClientRecoveryResubscribeContinuity(t *testing.T) {
 		for offset := start + 1; offset <= last; offset++ {
 			require.True(t, seen[offset], "client %d missed publication %d", i, offset)
 		}
-		t.Logf("client %d: %d subscriptions", i, len(gens))
+		numStates := 0
+		for _, fromState := range run.states {
+			if fromState {
+				numStates++
+			}
+		}
+		t.Logf("client %d: %d subscriptions, %d from map state (%d through the stream)", i, len(gens), numStates, run.streamed)
 	}
 	t.Logf("%d publications", last-start)
 }
@@ -7602,9 +8113,7 @@ func TestClientRecoveryResubscribeContinuity(t *testing.T) {
 // queued publication makes the client resubscribe when it is written. Either way the
 // client must not get the publication and stay subscribed.
 func TestClientRecoveryStreamChangesDuringSubscribe(t *testing.T) {
-	prev := isInTest
-	isInTest = true
-	defer func() { isInTest = prev }()
+	setIsInTest(t)
 
 	tests := []struct {
 		name  string
@@ -7666,12 +8175,11 @@ func TestClientRecoveryStreamChangesDuringSubscribe(t *testing.T) {
 			require.NoError(t, err)
 			node.SetMapBroker(&streamReadMapBroker{MemoryMapBroker: mapBroker, aroundRead: aroundRead})
 			if tt.when == "after_sync_point" {
-				testAtSyncPoint = func(channel string) {
+				setTestAtSyncPoint(t, func(channel string) {
 					if channel == ch {
 						changed()
 					}
-				}
-				defer func() { testAtSyncPoint = nil }()
+				})
 			}
 
 			opts := SubscribeOptions{EnableRecovery: true}
@@ -7885,9 +8393,7 @@ func TestClientRecoveryEmptyEpochRead(t *testing.T) {
 // until the subscribe result is written, so nothing of the channel comes before it.
 // After that such publications are delivered as usual.
 func TestClientRecoveryPublicationsWithoutOffsetDuringSubscribe(t *testing.T) {
-	prev := isInTest
-	isInTest = true
-	defer func() { isInTest = prev }()
+	setIsInTest(t)
 
 	for _, mode := range []string{"client_side", "connect", "server_subscribe"} {
 		t.Run(mode, func(t *testing.T) {
@@ -7911,12 +8417,11 @@ func TestClientRecoveryPublicationsWithoutOffsetDuringSubscribe(t *testing.T) {
 				return pubs, sp, err
 			}
 			node.SetBroker(broker)
-			testAtSyncPoint = func(channel string) {
+			setTestAtSyncPoint(t, func(channel string) {
 				if channel == ch {
 					publishWithoutOffset("at_sync_point")
 				}
-			}
-			defer func() { testAtSyncPoint = nil }()
+			})
 			node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
 				reply := ConnectReply{Credentials: &Credentials{UserID: "42"}}
 				if mode == "connect" {

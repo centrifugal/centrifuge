@@ -788,11 +788,8 @@ func (c *Client) handleMapTransitionToLive(
 
 		// Sync point: read buffered publications, queue the following ones.
 		bufferedPubs, canMerge := c.pubSubSync.ReadBuffered(pubSubBuf, streamPos.Epoch, streamPos.Offset)
-		if isInTest && strings.HasPrefix(channel, testChannelRecoveryOrderingPrefix) { // Only for tests.
-			if testAtSyncPoint != nil {
-				testAtSyncPoint(channel)
-			}
-			time.Sleep(testSyncPointDelay)
+		if isInTest.Load() && strings.HasPrefix(channel, testChannelRecoveryOrderingPrefix) { // Only for tests.
+			testSyncPoint(channel)
 		}
 
 		if !canMerge {

@@ -2187,7 +2187,7 @@ func TestRedisMemoryUsage(t *testing.T) {
 // If there is a deadlock – test will hang.
 func TestRedisClientSubscribeRecoveryServerSubs(t *testing.T) {
 	t.Parallel()
-	isInTest = true
+	isInTest.Store(true)
 	doneCh := make(chan struct{})
 	defer close(doneCh)
 	node := nodeWithRedisBroker(t, true, false, 6379)

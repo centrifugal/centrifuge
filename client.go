@@ -3081,8 +3081,9 @@ func (c *Client) cancelServerSideBuffering(subCtxMap map[string]subscribeContext
 }
 
 // isInTest may be true during Centrifuge test run. We use it to inject code required to
-// cover various edge case scenarios.
-var isInTest = false
+// cover various edge case scenarios. Atomic: tests set it while goroutines of earlier
+// tests may still read it.
+var isInTest atomic.Bool
 
 const (
 	testChannelRedisClientSubscribeRecoveryDeadlock1 = "TestRedisClientSubscribeRecoveryDeadlock1"
@@ -3098,11 +3099,24 @@ const (
 
 // testAtSyncPoint (if set) runs for subscriptions to channels with
 // testChannelRecoveryOrderingPrefix at their sync point, and then they stay there
-// for testSyncPointDelay.
+// for testSyncPointDelay (100ms if zero).
 var (
-	testAtSyncPoint    func(channel string)
-	testSyncPointDelay = 100 * time.Millisecond
+	testAtSyncPoint    atomic.Pointer[func(channel string)]
+	testSyncPointDelay atomic.Int64
 )
+
+// testSyncPoint runs at the sync point of subscriptions to channels with
+// testChannelRecoveryOrderingPrefix (only in tests).
+func testSyncPoint(channel string) {
+	if f := testAtSyncPoint.Load(); f != nil {
+		(*f)(channel)
+	}
+	delay := time.Duration(testSyncPointDelay.Load())
+	if delay == 0 {
+		delay = 100 * time.Millisecond
+	}
+	time.Sleep(delay)
+}
 
 // connectCmd handles connect command from client - client must send connect
 // command immediately after establishing connection with server.
@@ -3448,7 +3462,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 					subCmd.Epoch = subReq.Epoch
 					subCmd.Delta = subReq.Delta
 				}
-				if isInTest && (ch == testChannelRedisClientSubscribeRecoveryDeadlock2 || ch == testChannelConnectRecoverySameShard2) { // Only for tests.
+				if isInTest.Load() && (ch == testChannelRedisClientSubscribeRecoveryDeadlock2 || ch == testChannelConnectRecoverySameShard2) { // Only for tests.
 					select {
 					case <-time.After(time.Second):
 					case <-c.Context().Done():
@@ -3854,7 +3868,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 		return nil
 	}
 	if subCtx.clientInfo != nil {
-		if isInTest && channel == testChannelSubscribeJoinRecovery { // Only for tests.
+		if isInTest.Load() && channel == testChannelSubscribeJoinRecovery { // Only for tests.
 			select {
 			case <-time.After(time.Second):
 			case <-c.Context().Done():
@@ -4595,11 +4609,8 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		res.Offset = latestOffset
 
 		bufferedPubs, canMerge := c.pubSubSync.ReadBuffered(pubSubBuf, latestEpoch, latestOffset)
-		if isInTest && strings.HasPrefix(channel, testChannelRecoveryOrderingPrefix) { // Only for tests.
-			if testAtSyncPoint != nil {
-				testAtSyncPoint(channel)
-			}
-			time.Sleep(testSyncPointDelay)
+		if isInTest.Load() && strings.HasPrefix(channel, testChannelRecoveryOrderingPrefix) { // Only for tests.
+			testSyncPoint(channel)
 		}
 		if !canMerge {
 			// Too many publications came while the client subscribed, or the stream
