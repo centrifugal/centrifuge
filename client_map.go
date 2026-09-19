@@ -787,12 +787,19 @@ func (c *Client) handleMapTransitionToLive(
 		}
 
 		// Sync point: read buffered publications, queue the following ones.
-		bufferedPubs := c.pubSubSync.ReadBuffered(pubSubBuf)
+		bufferedPubs, sameEpoch := c.pubSubSync.ReadBuffered(pubSubBuf, streamPos.Epoch)
 		if isInTest && strings.HasPrefix(channel, testChannelRecoveryOrderingPrefix) { // Only for tests.
 			if testAtSyncPoint != nil {
 				testAtSyncPoint(channel)
 			}
 			time.Sleep(testSyncPointDelay)
+		}
+
+		if !sameEpoch {
+			// The stream changed its epoch after it was read: publications of the
+			// new one can't be merged with it.
+			rollback(true)
+			return &DisconnectInsufficientState
 		}
 
 		// Merge recovered and buffered publications.
@@ -845,7 +852,8 @@ func (c *Client) handleMapTransitionToLive(
 		}
 	} else if params.allowStreamless {
 		// Streamless mode: use buffered publications directly (no stream read, no merge).
-		bufferedPubs := c.pubSubSync.ReadBuffered(pubSubBuf)
+		// Nothing was read to check the epoch of buffered publications against.
+		bufferedPubs, _ := c.pubSubSync.ReadBuffered(pubSubBuf, "")
 		recoveredPubs = bufferedPubs
 
 		// Apply server tags filter to buffered publications. Buffered live pubs are

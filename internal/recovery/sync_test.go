@@ -16,6 +16,12 @@ type testSync = PubSubSync[func()]
 
 func call(write func()) { write() }
 
+// read returns the publications buffered till the sync point.
+func read(s *testSync, b *Buffer[func()]) []*protocol.Publication {
+	pubs, _ := s.ReadBuffered(b, "")
+	return pubs
+}
+
 // recorder is what a client writes, in order.
 type recorder struct {
 	mu      sync.Mutex
@@ -39,7 +45,7 @@ func (r *recorder) get() []uint64 {
 // publish is what the broadcast path does: sync the publication, or write it.
 func (r *recorder) publish(s *testSync, channel string, offset uint64, size int) {
 	pub := &protocol.Publication{Offset: offset}
-	if s.Buffering() && s.SyncPublication(channel, pub, size, r.write(offset)) {
+	if s.Buffering() && s.SyncPublication(channel, pub, "", size, r.write(offset)) {
 		return
 	}
 	r.write(offset)()
@@ -67,8 +73,8 @@ func TestPubSubSyncPhases(t *testing.T) {
 	r.publish(s, "other", 100, 1)
 	require.Equal(t, []uint64{1, 100}, r.get(), "only the buffering channel is synced")
 
-	require.Equal(t, []uint64{2}, offsetsOf(s.ReadBuffered(b)))
-	require.Nil(t, s.ReadBuffered(b), "a second sync point returns nothing")
+	require.Equal(t, []uint64{2}, offsetsOf(read(s, b)))
+	require.Nil(t, read(s, b), "a second sync point returns nothing")
 
 	r.publish(s, "ch", 3, 1)
 	r.publish(s, "ch", 4, 1)
@@ -92,7 +98,7 @@ func TestPubSubSyncCancel(t *testing.T) {
 	r := &recorder{}
 	b := s.StartBuffering("ch", 0)
 	r.publish(s, "ch", 1, 1)
-	s.ReadBuffered(b)
+	s.ReadBuffered(b, "")
 	r.publish(s, "ch", 2, 1)
 	s.CancelBuffering(b)
 	require.Empty(t, r.get(), "cancel drops the queue")
@@ -120,7 +126,7 @@ func TestPubSubSyncOverflow(t *testing.T) {
 	s := &testSync{}
 	r := &recorder{}
 	b := s.StartBuffering("ch", 10)
-	s.ReadBuffered(b)
+	s.ReadBuffered(b, "")
 	r.publish(s, "ch", 1, 6)
 	r.publish(s, "ch", 2, 6) // Over the limit: the queue is dropped.
 	r.publish(s, "ch", 3, 1) // Dropped as well, it would leave a gap.
@@ -141,7 +147,7 @@ func TestPubSubSyncNewerBufferForChannel(t *testing.T) {
 	s.CancelBuffering(older)
 	require.True(t, s.Buffering())
 	r.publish(s, "ch", 1, 1)
-	require.Equal(t, []uint64{1}, offsetsOf(s.ReadBuffered(newer)))
+	require.Equal(t, []uint64{1}, offsetsOf(read(s, newer)))
 	r.publish(s, "ch", 2, 1)
 	require.False(t, s.StopBuffering(older, call))
 	require.Empty(t, r.get())
@@ -156,8 +162,8 @@ func TestPubSubSyncPublicationWhileFlushing(t *testing.T) {
 	s := &testSync{}
 	r := &recorder{}
 	b := s.StartBuffering("ch", 0)
-	s.ReadBuffered(b)
-	s.SyncPublication("ch", &protocol.Publication{Offset: 1}, 1, func() {
+	s.ReadBuffered(b, "")
+	s.SyncPublication("ch", &protocol.Publication{Offset: 1}, "", 1, func() {
 		r.write(1)()
 		r.publish(s, "ch", 3, 1)
 	})
@@ -175,7 +181,7 @@ func TestPubSubSyncCancelWithConcurrentPublisher(t *testing.T) {
 		s := &testSync{}
 		r := &recorder{}
 		b := s.StartBuffering("ch", 0)
-		s.ReadBuffered(b)
+		s.ReadBuffered(b, "")
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
@@ -202,11 +208,11 @@ func TestPubSubSyncLongQueueOrder(t *testing.T) {
 	s := &testSync{}
 	r := &recorder{}
 	b := s.StartBuffering("ch", 0)
-	s.ReadBuffered(b)
+	s.ReadBuffered(b, "")
 	const n = 300
 	for offset := uint64(1); offset <= n; offset++ {
 		if offset == 100 {
-			s.SyncPublication("ch", &protocol.Publication{Offset: offset}, 1, func() {
+			s.SyncPublication("ch", &protocol.Publication{Offset: offset}, "", 1, func() {
 				r.write(100)()
 				r.publish(s, "ch", n+1, 1)
 			})
@@ -228,7 +234,7 @@ func TestPubSubSyncLongQueueOverflow(t *testing.T) {
 	s := &testSync{}
 	r := &recorder{}
 	b := s.StartBuffering("ch", 200)
-	s.ReadBuffered(b)
+	s.ReadBuffered(b, "")
 	for offset := uint64(1); offset <= 300; offset++ {
 		r.publish(s, "ch", offset, 1)
 	}
@@ -236,9 +242,43 @@ func TestPubSubSyncLongQueueOverflow(t *testing.T) {
 	require.Empty(t, r.get())
 }
 
+func TestPubSubSyncEpochAtSyncPoint(t *testing.T) {
+	// Publications collected before the sync point can only be merged with history
+	// of their own epoch.
+	tests := []struct {
+		name        string
+		collected   []string // Epochs of the collected publications.
+		historyFrom string
+		ok          bool
+	}{
+		{name: "same", collected: []string{"a", "a"}, historyFrom: "a", ok: true},
+		{name: "other", collected: []string{"b"}, historyFrom: "a", ok: false},
+		{name: "changed_while_collecting", collected: []string{"a", "b"}, historyFrom: "a", ok: false},
+		{name: "changed_back", collected: []string{"b", "a"}, historyFrom: "a", ok: false},
+		{name: "unknown_history_epoch", collected: []string{"b", "b"}, historyFrom: "", ok: true},
+		{name: "unknown_history_epoch_changed_while_collecting", collected: []string{"b", "c"}, historyFrom: "", ok: false},
+		{name: "nothing_collected", historyFrom: "a", ok: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &testSync{}
+			b := s.StartBuffering("ch", 0)
+			for i, epoch := range tt.collected {
+				require.True(t, s.SyncPublication("ch", &protocol.Publication{Offset: uint64(i + 1)}, epoch, 1, func() {}))
+			}
+			pubs, ok := s.ReadBuffered(b, tt.historyFrom)
+			require.Len(t, pubs, len(tt.collected))
+			require.Equal(t, tt.ok, ok)
+			s.CancelBuffering(b)
+		})
+	}
+}
+
 func TestPubSubSyncNilBuffer(t *testing.T) {
 	s := &testSync{}
-	require.Nil(t, s.ReadBuffered(nil))
+	pubs, ok := s.ReadBuffered(nil, "epoch")
+	require.Nil(t, pubs)
+	require.True(t, ok)
 	require.False(t, s.StopBuffering(nil, call))
 	s.CancelBuffering(nil)
 }
@@ -291,7 +331,7 @@ func TestPubSubSyncOrderUnderConcurrentPublisher(t *testing.T) {
 		subscribed = true
 		hubMu.Unlock()
 		waitDelivered(3)
-		buffered := offsetsOf(s.ReadBuffered(b))
+		buffered := offsetsOf(read(s, b))
 		waitDelivered(delivered.Load() + 3)
 		require.Empty(t, r.get(), "nothing is written before StopBuffering")
 		s.StopBuffering(b, call)
@@ -316,7 +356,7 @@ func BenchmarkPubSubSyncNotBuffering(b *testing.B) {
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			if s.Buffering() && s.SyncPublication("ch", pub, 1, func() {}) {
+			if s.Buffering() && s.SyncPublication("ch", pub, "", 1, func() {}) {
 				b.Fatal("synced")
 			}
 		}
@@ -331,7 +371,7 @@ func BenchmarkPubSubSyncOtherChannelBuffering(b *testing.B) {
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			if s.Buffering() && s.SyncPublication("ch", pub, 1, func() {}) {
+			if s.Buffering() && s.SyncPublication("ch", pub, "", 1, func() {}) {
 				b.Fatal("synced")
 			}
 		}
@@ -353,10 +393,10 @@ func BenchmarkPubSubSyncSubscribeCycle(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				buf := s.StartBuffering("ch", 0)
-				s.SyncPublication("ch", pub, 1, benchItem{})
-				_ = s.ReadBuffered(buf)
+				s.SyncPublication("ch", pub, "", 1, benchItem{})
+				_, _ = s.ReadBuffered(buf, "")
 				for j := 0; j < queued; j++ {
-					s.SyncPublication("ch", pub, 1, benchItem{})
+					s.SyncPublication("ch", pub, "", 1, benchItem{})
 				}
 				s.StopBuffering(buf, write)
 			}

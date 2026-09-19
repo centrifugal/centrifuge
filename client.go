@@ -4594,12 +4594,19 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		res.Epoch = latestEpoch
 		res.Offset = latestOffset
 
-		bufferedPubs := c.pubSubSync.ReadBuffered(pubSubBuf)
+		bufferedPubs, sameEpoch := c.pubSubSync.ReadBuffered(pubSubBuf, latestEpoch)
 		if isInTest && strings.HasPrefix(channel, testChannelRecoveryOrderingPrefix) { // Only for tests.
 			if testAtSyncPoint != nil {
 				testAtSyncPoint(channel)
 			}
 			time.Sleep(testSyncPointDelay)
+		}
+		if !sameEpoch {
+			// The stream changed its epoch while the client subscribed: publications
+			// of the new one can't be merged with the history of the old one.
+			c.pubSubSync.CancelBuffering(pubSubBuf)
+			ctx.disconnect = &DisconnectInsufficientState
+			return ctx
 		}
 		var okMerge bool
 		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
@@ -5122,7 +5129,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 		if prep.wasFiltered {
 			syncPub = prep.filteredPub
 		}
-		if c.pubSubSync.SyncPublication(ch, syncPub, len(prep.fullData), pendingPublication{
+		if c.pubSubSync.SyncPublication(ch, syncPub, sp.Epoch, len(prep.fullData), pendingPublication{
 			channel: ch, pub: pub, prep: prep, sp: sp, maxLagExceeded: maxLagExceeded, batchConfig: batchConfig,
 		}) {
 			return nil

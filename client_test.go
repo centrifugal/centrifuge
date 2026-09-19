@@ -6341,6 +6341,8 @@ type recoveryOrderingCase struct {
 	serverFilter bool
 	// cache uses RecoveryModeCache: only the latest publication is recovered.
 	cache bool
+	// positioned subscribes with positioning and without recovery.
+	positioned bool
 }
 
 func recoveryOrderingCases() []recoveryOrderingCase {
@@ -6370,6 +6372,10 @@ func recoveryOrderingCases() []recoveryOrderingCase {
 		recoveryOrderingCase{name: "client_side_cache", mode: "client_side", protoType: ProtocolTypeJSON, cache: true},
 		recoveryOrderingCase{name: "client_side_cache_delta", mode: "client_side", protoType: ProtocolTypeJSON, cache: true, delta: true},
 		recoveryOrderingCase{name: "connect_cache", mode: "connect", protoType: ProtocolTypeProtobuf, cache: true},
+		recoveryOrderingCase{name: "client_side_positioned", mode: "client_side", protoType: ProtocolTypeJSON, positioned: true},
+		recoveryOrderingCase{name: "client_side_positioned_delta", mode: "client_side", protoType: ProtocolTypeJSON, positioned: true, delta: true},
+		recoveryOrderingCase{name: "connect_positioned", mode: "connect", protoType: ProtocolTypeProtobuf, positioned: true},
+		recoveryOrderingCase{name: "server_subscribe_positioned", mode: "server_subscribe", protoType: ProtocolTypeJSON, positioned: true},
 	)
 }
 
@@ -6404,6 +6410,9 @@ func testRecoveryOrdering(t *testing.T, tc recoveryOrderingCase) {
 
 	ch := testChannelRecoveryOrderingPrefix + "_" + tc.name
 	opts := SubscribeOptions{EnableRecovery: true}
+	if tc.positioned {
+		opts = SubscribeOptions{EnablePositioning: true}
+	}
 	if tc.delta {
 		opts.AllowedDeltaTypes = []DeltaType{DeltaTypeFossil}
 	}
@@ -6437,10 +6446,38 @@ func testRecoveryOrdering(t *testing.T, tc recoveryOrderingCase) {
 	}
 	node, err := New(config)
 	require.NoError(t, err)
+	// Once armed, the stream read of the subscribe is surrounded by publications:
+	// one before it (in the history read and in the buffer, so it must come once)
+	// and one after it (only in the buffer).
+	var publish func() (StreamPosition, error)
+	var injectArmed atomic.Bool
+	var injected atomic.Int32
+	aroundRead := func(channel string, read func()) {
+		if channel != ch || !injectArmed.CompareAndSwap(true, false) {
+			read()
+			return
+		}
+		if _, err := publish(); err != nil {
+			t.Error(err)
+		}
+		read()
+		if _, err := publish(); err != nil {
+			t.Error(err)
+		}
+		injected.Add(1)
+	}
+	memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	historyBroker := &faultyHistoryBroker{MemoryBroker: memBroker}
+	historyBroker.history = func(channel string, opts HistoryOptions) (pubs []*Publication, sp StreamPosition, err error) {
+		aroundRead(channel, func() { pubs, sp, err = memBroker.History(channel, opts) })
+		return pubs, sp, err
+	}
+	node.SetBroker(historyBroker)
 	if tc.mode == "map" {
 		mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 		require.NoError(t, err)
-		node.SetMapBroker(mapBroker)
+		node.SetMapBroker(&streamReadMapBroker{MemoryMapBroker: mapBroker, aroundRead: aroundRead})
 	}
 	require.NoError(t, node.Run())
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -6449,7 +6486,7 @@ func testRecoveryOrdering(t *testing.T, tc recoveryOrderingCase) {
 	// advance and goes into its data.
 	var lastOffset atomic.Uint64
 	var publishMu sync.Mutex
-	publish := func() (StreamPosition, error) {
+	publish = func() (StreamPosition, error) {
 		publishMu.Lock()
 		defer publishMu.Unlock()
 		offset := lastOffset.Load() + 1
@@ -6528,6 +6565,13 @@ func testRecoveryOrdering(t *testing.T, tc recoveryOrderingCase) {
 				return
 			}
 		}
+		// A late PUB/SUB delivery of a publication from history: the client must
+		// not get it, since it is at or below its position.
+		late := &Publication{Offset: numPrePublished, Key: "k0", Data: []byte(`{"late":"duplicate"}`),
+			Tags: map[string]string{"n": "pass"}}
+		if err := node.hub.broadcastPublication(ch, StreamPosition{Offset: numPrePublished, Epoch: epoch}, late, nil, nil, ChannelBatchConfig{}); err != nil {
+			t.Error(err)
+		}
 	}
 	defer func() { testAtSyncPoint = nil }()
 
@@ -6549,16 +6593,21 @@ func testRecoveryOrdering(t *testing.T, tc recoveryOrderingCase) {
 		}
 	}()
 
+	subReq := &protocol.SubscribeRequest{Recover: true, Offset: recoverFrom, Epoch: epoch, Delta: deltaType}
+	if tc.positioned {
+		subReq = &protocol.SubscribeRequest{Delta: deltaType}
+	}
 	var cmdID uint32
+	if tc.mode != "connect" {
+		connectClientV2(t, client)
+	}
+	injectArmed.Store(true)
 	switch tc.mode {
 	case "client_side":
-		connectClientV2(t, client)
 		cmdID = 2
-		require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
-			Channel: ch, Recover: true, Offset: recoverFrom, Epoch: epoch, Delta: deltaType,
-		}, &protocol.Command{Id: cmdID}, time.Now(), testReplyWriterWrapper().rw))
+		subReq.Channel = ch
+		require.NoError(t, client.handleSubscribe(subReq, &protocol.Command{Id: cmdID}, time.Now(), testReplyWriterWrapper().rw))
 	case "map":
-		connectClientV2(t, client)
 		cmdID = 2
 		require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
 			Channel: ch, Type: int32(SubscriptionTypeMap), Phase: MapPhaseLive,
@@ -6566,15 +6615,17 @@ func testRecoveryOrdering(t *testing.T, tc recoveryOrderingCase) {
 		}, &protocol.Command{Id: cmdID}, time.Now(), testReplyWriterWrapper().rw))
 	case "connect":
 		require.NoError(t, client.connectCmd(&protocol.ConnectRequest{
-			Subs: map[string]*protocol.SubscribeRequest{
-				ch: {Recover: true, Offset: recoverFrom, Epoch: epoch, Delta: deltaType},
-			},
+			Subs: map[string]*protocol.SubscribeRequest{ch: subReq},
 		}, &protocol.Command{Id: 1}, time.Now(), testReplyWriterWrapper().rw))
 	case "server_subscribe":
-		connectClientV2(t, client)
-		require.NoError(t, client.Subscribe(ch, WithRecovery(true),
-			WithRecoverSince(&StreamPosition{Offset: recoverFrom, Epoch: epoch})))
+		if tc.positioned {
+			require.NoError(t, client.Subscribe(ch, WithPositioning(true)))
+		} else {
+			require.NoError(t, client.Subscribe(ch, WithRecovery(true),
+				WithRecoverSince(&StreamPosition{Offset: recoverFrom, Epoch: epoch})))
+		}
 	}
+	require.Equal(t, int32(1), injected.Load(), "publications around the stream read")
 
 	// Keep publishing after the subscription is in place.
 	time.Sleep(100 * time.Millisecond)
@@ -6598,16 +6649,24 @@ func testRecoveryOrdering(t *testing.T, tc recoveryOrderingCase) {
 	}, 5*time.Second, 10*time.Millisecond)
 
 	require.NotNil(t, res)
-	if tc.mode == "server_subscribe" {
+	first := uint64(recoverFrom + 1)
+	switch {
+	case tc.positioned:
+		// No recovery: the result has the position at the sync point, including
+		// the publications buffered till then, and the following ones come after.
+		require.True(t, res.Positioned)
+		require.Empty(t, res.Publications)
+		require.Greater(t, res.Offset, uint64(numPrePublished))
+		first = res.Offset + 1
+	case tc.mode == "server_subscribe":
 		// The subscribe push has no Recovered field: the recovered
 		// publications follow it as separate pushes.
 		require.Equal(t, uint64(recoverFrom), res.Offset)
-	} else {
+	default:
 		require.True(t, res.Recovered)
 	}
 
 	var want []uint64
-	first := uint64(recoverFrom + 1)
 	if tc.cache {
 		// Recovery starts from the latest publication, the ones before it are
 		// skipped. Without delta the result only has the latest one of those
@@ -6769,6 +6828,17 @@ func TestClientRecoveryQueueOverflowInsufficientState(t *testing.T) {
 			require.False(t, transport.closed)
 		})
 	}
+}
+
+// streamReadMapBroker runs aroundRead around each stream read of a map channel.
+type streamReadMapBroker struct {
+	*MemoryMapBroker
+	aroundRead func(channel string, read func())
+}
+
+func (b *streamReadMapBroker) ReadStream(ctx context.Context, ch string, opts MapReadStreamOptions) (res MapStreamResult, err error) {
+	b.aroundRead(ch, func() { res, err = b.MemoryMapBroker.ReadStream(ctx, ch, opts) })
+	return res, err
 }
 
 // faultyHistoryBroker lets a test change what History returns, and make Subscribe fail.
@@ -7477,4 +7547,288 @@ func TestClientRecoveryResubscribeContinuity(t *testing.T) {
 		t.Logf("client %d: %d subscriptions", i, len(gens))
 	}
 	t.Logf("%d publications", last-start)
+}
+
+// The stream changes while a client subscribes with recovery: its epoch changes, or a
+// publication comes with too much lag. Before the sync point, publications of another
+// epoch can't be merged with the history read, so the subscribe fails. After it, the
+// queued publication makes the client resubscribe when it is written. Either way the
+// client must not get the publication and stay subscribed.
+func TestClientRecoveryStreamChangesDuringSubscribe(t *testing.T) {
+	prev := isInTest
+	isInTest = true
+	defer func() { isInTest = prev }()
+
+	tests := []struct {
+		name  string
+		mode  string // "client_side", "connect" or "map".
+		when  string // "before_sync_point" or "after_sync_point".
+		lag   bool   // The publication is lagging instead of being from another epoch.
+		fails bool   // The subscribe itself fails.
+	}{
+		{name: "epoch_before_sync_point_client_side", mode: "client_side", when: "before_sync_point", fails: true},
+		{name: "epoch_before_sync_point_connect", mode: "connect", when: "before_sync_point", fails: true},
+		{name: "epoch_before_sync_point_map", mode: "map", when: "before_sync_point", fails: true},
+		{name: "epoch_after_sync_point_client_side", mode: "client_side", when: "after_sync_point"},
+		{name: "epoch_after_sync_point_connect", mode: "connect", when: "after_sync_point"},
+		{name: "lag_after_sync_point_client_side", mode: "client_side", when: "after_sync_point", lag: true},
+		{name: "lag_after_sync_point_connect", mode: "connect", when: "after_sync_point", lag: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := testChannelRecoveryOrderingPrefix + "_stream_change_" + tt.name
+			node, err := New(Config{
+				LogLevel:                        LogLevelTrace,
+				LogHandler:                      func(entry LogEntry) {},
+				ClientChannelPositionMaxTimeLag: 5 * time.Second,
+				Map: MapConfig{
+					GetMapChannelOptions: func(channel string) MapChannelOptions {
+						return MapChannelOptions{Mode: MapModeRecoverable, KeyTTL: time.Minute, MinPageSize: 1}
+					},
+				},
+			})
+			require.NoError(t, err)
+
+			// changed broadcasts the publication which doesn't fit the stream, right
+			// after the offset the stream is at.
+			var top StreamPosition
+			changed := func() {
+				pub := &Publication{Offset: top.Offset + 1, Key: "k", Data: []byte(`{"stream":"changed"}`)}
+				sp := StreamPosition{Offset: top.Offset + 1, Epoch: "another"}
+				if tt.lag {
+					sp.Epoch = top.Epoch
+					pub.Time = time.Now().Add(-time.Minute).UnixMilli()
+				}
+				require.NoError(t, node.hub.broadcastPublication(ch, sp, pub, nil, nil, ChannelBatchConfig{}))
+			}
+			aroundRead := func(channel string, read func()) {
+				read()
+				if channel == ch && tt.when == "before_sync_point" {
+					changed()
+				}
+			}
+			memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+			require.NoError(t, err)
+			broker := &faultyHistoryBroker{MemoryBroker: memBroker}
+			broker.history = func(channel string, opts HistoryOptions) (pubs []*Publication, sp StreamPosition, err error) {
+				aroundRead(channel, func() { pubs, sp, err = memBroker.History(channel, opts) })
+				return pubs, sp, err
+			}
+			node.SetBroker(broker)
+			mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+			require.NoError(t, err)
+			node.SetMapBroker(&streamReadMapBroker{MemoryMapBroker: mapBroker, aroundRead: aroundRead})
+			if tt.when == "after_sync_point" {
+				testAtSyncPoint = func(channel string) {
+					if channel == ch {
+						changed()
+					}
+				}
+				defer func() { testAtSyncPoint = nil }()
+			}
+
+			opts := SubscribeOptions{EnableRecovery: true}
+			if tt.mode == "map" {
+				opts = SubscribeOptions{Type: SubscriptionTypeMap}
+			}
+			unsubscribed := make(chan uint32, 1)
+			node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+				reply := ConnectReply{Credentials: &Credentials{UserID: "42"}}
+				if tt.mode == "connect" {
+					reply.Subscriptions = map[string]SubscribeOptions{ch: opts}
+				}
+				return reply, nil
+			})
+			node.OnConnect(func(c *Client) {
+				c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+					cb(SubscribeReply{Options: opts}, nil)
+				})
+				c.OnUnsubscribe(func(e UnsubscribeEvent) {
+					select {
+					case unsubscribed <- e.Code:
+					default:
+					}
+				})
+			})
+			require.NoError(t, node.Run())
+			defer func() { _ = node.Shutdown(context.Background()) }()
+
+			for i := 0; i < 3; i++ {
+				if tt.mode == "map" {
+					res, err := node.MapPublish(context.Background(), ch, "k", MapPublishOptions{Data: []byte(`{}`)})
+					require.NoError(t, err)
+					top = res.Position
+				} else {
+					res, err := node.Publish(ch, []byte(`{}`), WithHistory(100, time.Minute))
+					require.NoError(t, err)
+					top = res.StreamPosition
+				}
+			}
+
+			transport := newTestTransport(func() {})
+			sink := make(chan []byte, 1024)
+			transport.sink = sink
+			client := newTestClientCustomTransport(t, context.Background(), node, transport, "42")
+			req := &protocol.SubscribeRequest{Channel: ch, Recover: true, Offset: top.Offset - 1, Epoch: top.Epoch}
+			switch tt.mode {
+			case "connect":
+				err = client.connectCmd(&protocol.ConnectRequest{Subs: map[string]*protocol.SubscribeRequest{ch: req}},
+					&protocol.Command{Id: 1}, time.Now(), testReplyWriterWrapper().rw)
+				if tt.fails {
+					var disconnect *Disconnect
+					require.ErrorAs(t, err, &disconnect)
+					require.Equal(t, DisconnectInsufficientState.Code, disconnect.Code)
+				} else {
+					require.NoError(t, err)
+				}
+			default:
+				connectClientV2(t, client)
+				if tt.mode == "map" {
+					req.Type = int32(SubscriptionTypeMap)
+					req.Phase = MapPhaseLive
+				}
+				require.NoError(t, client.handleSubscribe(req, &protocol.Command{Id: 2}, time.Now(), testReplyWriterWrapper().rw))
+			}
+
+			switch {
+			case tt.fails && tt.mode != "connect", !tt.fails && tt.mode == "connect":
+				// The client is disconnected with insufficient state.
+				select {
+				case <-transport.closeCh:
+					require.Equal(t, DisconnectInsufficientState.Code, transport.disconnect.Code)
+				case <-time.After(5 * time.Second):
+					require.Fail(t, "client not disconnected")
+				}
+			case !tt.fails:
+				select {
+				case code := <-unsubscribed:
+					require.Equal(t, UnsubscribeCodeInsufficient, code)
+				case <-time.After(5 * time.Second):
+					require.Fail(t, "client not resubscribed")
+				}
+			}
+			for _, frame := range drainSink(sink) {
+				require.NotContains(t, string(frame), "changed", "publication which doesn't fit the stream delivered")
+			}
+		})
+	}
+}
+
+// The history read of a recovering subscribe knows no epoch yet (a lagging replica),
+// and publications with the real epoch come before the sync point. They are merged,
+// and the client takes the epoch of the stream from the following ones. If they are
+// from two epochs, the stream was reset meanwhile: the subscribe fails.
+func TestClientRecoveryEmptyEpochRead(t *testing.T) {
+	for _, mode := range []string{"client_side", "connect"} {
+		for _, mixed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s_mixed_%v", mode, mixed), func(t *testing.T) {
+				ch := "empty_epoch_read"
+				node, err := New(Config{LogLevel: LogLevelTrace, LogHandler: func(entry LogEntry) {}})
+				require.NoError(t, err)
+				memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+				require.NoError(t, err)
+				broker := &faultyHistoryBroker{MemoryBroker: memBroker}
+				var readDone atomic.Bool
+				broker.history = func(channel string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
+					if channel != ch || !readDone.CompareAndSwap(false, true) {
+						return memBroker.History(channel, opts)
+					}
+					res, err := node.Publish(ch, []byte(`{"n":"buffered"}`), WithHistory(100, time.Minute))
+					if err != nil {
+						return nil, StreamPosition{}, err
+					}
+					if mixed {
+						sp := StreamPosition{Offset: res.Offset + 1, Epoch: "another"}
+						pub := &Publication{Offset: res.Offset + 1, Data: []byte(`{"n":"another"}`)}
+						if err := node.hub.broadcastPublication(ch, sp, pub, nil, nil, ChannelBatchConfig{}); err != nil {
+							return nil, StreamPosition{}, err
+						}
+					}
+					return nil, StreamPosition{}, nil
+				}
+				node.SetBroker(broker)
+				node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+					reply := ConnectReply{Credentials: &Credentials{UserID: "42"}}
+					if mode == "connect" {
+						reply.Subscriptions = map[string]SubscribeOptions{ch: {EnableRecovery: true}}
+					}
+					return reply, nil
+				})
+				unsubscribed := make(chan uint32, 1)
+				node.OnConnect(func(c *Client) {
+					c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+						cb(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true}}, nil)
+					})
+					c.OnUnsubscribe(func(e UnsubscribeEvent) {
+						select {
+						case unsubscribed <- e.Code:
+						default:
+						}
+					})
+				})
+				require.NoError(t, node.Run())
+				defer func() { _ = node.Shutdown(context.Background()) }()
+
+				transport := newTestTransport(func() {})
+				sink := make(chan []byte, 1024)
+				transport.sink = sink
+				client := newTestClientCustomTransport(t, context.Background(), node, transport, "42")
+				req := &protocol.SubscribeRequest{Channel: ch, Recover: true}
+				if mode == "connect" {
+					err = client.connectCmd(&protocol.ConnectRequest{Subs: map[string]*protocol.SubscribeRequest{ch: req}},
+						&protocol.Command{Id: 1}, time.Now(), testReplyWriterWrapper().rw)
+					if mixed {
+						var disconnect *Disconnect
+						require.ErrorAs(t, err, &disconnect)
+						require.Equal(t, DisconnectInsufficientState.Code, disconnect.Code)
+						return
+					}
+					require.NoError(t, err)
+				} else {
+					connectClientV2(t, client)
+					require.NoError(t, client.handleSubscribe(req, &protocol.Command{Id: 2}, time.Now(), testReplyWriterWrapper().rw))
+					if mixed {
+						select {
+						case <-transport.closeCh:
+							require.Equal(t, DisconnectInsufficientState.Code, transport.disconnect.Code)
+						case <-time.After(5 * time.Second):
+							require.Fail(t, "client not disconnected")
+						}
+						return
+					}
+				}
+				require.True(t, readDone.Load())
+
+				var epoch string
+				for i := 0; i < 2; i++ {
+					res, err := node.Publish(ch, []byte(fmt.Sprintf(`{"n":"live%d"}`, i)), WithHistory(100, time.Minute))
+					require.NoError(t, err)
+					epoch = res.Epoch
+				}
+				var got []string
+				require.Eventually(t, func() bool {
+					for _, frame := range drainSink(sink) {
+						for _, n := range []string{"buffered", "live0", "live1"} {
+							if strings.Contains(string(frame), `\"n\":\"`+n) || strings.Contains(string(frame), `"n":"`+n) {
+								got = append(got, n)
+							}
+						}
+					}
+					return len(got) >= 3
+				}, 2*time.Second, 10*time.Millisecond)
+				require.Equal(t, []string{"buffered", "live0", "live1"}, got)
+				select {
+				case code := <-unsubscribed:
+					require.Fail(t, "client unsubscribed", "code %d", code)
+				default:
+				}
+				require.True(t, client.IsSubscribed(ch))
+				client.mu.RLock()
+				position := client.channels[ch].streamPosition
+				client.mu.RUnlock()
+				require.Equal(t, epoch, position.Epoch, "the client takes the epoch of the stream")
+				require.Equal(t, uint64(3), position.Offset)
+			})
+		}
+	}
 }
