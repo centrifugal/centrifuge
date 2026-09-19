@@ -11,6 +11,8 @@ For a subscription with positioning or recovery (stream and map paths):
 3. Commit, write the result, then `StopBuffering`. It writes the publications queued meanwhile; if it returns true, resubscribe the client with insufficient state.
 4. Every other exit calls `CancelBuffering`. A leaked buffer queues the channel's publications forever.
 
+Publications without offset can't be synced: they are dropped until the result is written.
+
 Nothing of the channel goes to the client before its result, and nothing of an unsubscribe before the result and recovered publications. Recovered publications are always delivered.
 
 Guarded by `TestClientRecovery*`, `TestClientRecoveringSubscribeFailureCancelsBuffering`, the leak check in `TestMain` and `internal/recovery` tests.

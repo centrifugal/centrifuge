@@ -547,7 +547,6 @@ func (c *Client) handleMapStatePhase(
 type mapTransitionToLiveParams struct {
 	sincePosition             StreamPosition // Stream position to read from
 	statePubs                 []*Publication // State publications for the response (nil when not applicable)
-	allowStreamless           bool           // Whether streamless mode is allowed
 	isRecovery                bool           // Whether this is a recovery (sets WasRecovering/Recovered)
 	tagsFilterFromState       *tagsFilter    // Inherited client tags filter from prior phase
 	serverTagsFilterFromState *tagsFilter    // Inherited server tags filter from prior phase
@@ -684,7 +683,11 @@ func (c *Client) handleMapTransitionToLive(
 		}
 	}
 
-	// Start coordination: buffer -> add subscription -> read stream -> merge.
+	positioning := opts.EnablePositioning || opts.EnableRecovery
+
+	// Start coordination: buffer -> add subscription -> read stream -> merge. A
+	// streamless subscription has nothing to merge: its publications, which have no
+	// offset, are dropped until its reply is written.
 	pubSubBuf = c.pubSubSync.StartBuffering(channel, c.node.config.ClientQueueMaxSize)
 
 	chanID, err := c.node.addSubscription(channel, sub)
@@ -701,8 +704,6 @@ func (c *Client) handleMapTransitionToLive(
 		}
 		return ErrorInternal
 	}
-
-	positioning := opts.EnablePositioning || opts.EnableRecovery
 
 	var recoveredPubs []*protocol.Publication
 	var latestOffset uint64
@@ -847,42 +848,9 @@ func (c *Client) handleMapTransitionToLive(
 		if deltaEnabled && req.Delta == string(DeltaTypeFossil) {
 			recoveredPubs = c.makeRecoveredMapPubsDeltaFossil(recoveredPubs)
 		}
-	} else if params.allowStreamless {
-		// Streamless mode: use buffered publications directly (no stream read, no merge).
-		// Nothing was read to check buffered publications against.
-		bufferedPubs, canMerge := c.pubSubSync.ReadBuffered(pubSubBuf, "", 0)
-		if !canMerge {
-			rollback(true)
-			return &DisconnectInsufficientState
-		}
-		recoveredPubs = bufferedPubs
-
-		// Apply server tags filter to buffered publications. Buffered live pubs are
-		// captured before per-subscriber filtering, so the server filter must be
-		// applied here (AND semantics) or streamless recovery leaks server-filtered
-		// publications.
-		if sub.serverTagsFilter != nil {
-			filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
-			for _, pub := range recoveredPubs {
-				match, _ := filter.Match(sub.serverTagsFilter.filter, pub.Tags)
-				if match {
-					filteredPubs = append(filteredPubs, pub)
-				}
-			}
-			recoveredPubs = filteredPubs
-		}
-		// Apply client tags filter to buffered publications.
-		if sub.tagsFilter != nil {
-			filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
-			for _, pub := range recoveredPubs {
-				match, _ := filter.Match(sub.tagsFilter.filter, pub.Tags)
-				if match {
-					filteredPubs = append(filteredPubs, pub)
-				}
-			}
-			recoveredPubs = filteredPubs
-		}
 	}
+	// A streamless subscription (no stream: state then LIVE, or LIVE directly) has
+	// nothing to merge, and clients don't read the publications of its result.
 
 	// Convert state publications to protocol format (if any).
 	isJSON := c.transport.Protocol() == ProtocolTypeJSON
@@ -967,11 +935,18 @@ func (c *Client) handleMapTransitionToLive(
 		c.pubSubSync.CancelBuffering(pubSubBuf)
 		return ErrorInternal
 	}
-	if subscribingCh != nil {
-		close(subscribingCh)
+	if isInTest.Load() && strings.HasPrefix(channel, testChannelRecoveryOrderingPrefix) { // Only for tests.
+		if f := testAfterMapCommit.Load(); f != nil {
+			(*f)(channel)
+		}
 	}
 
 	c.writeEncodedCommandReply(channel, protocol.FrameTypeSubscribe, cmd, protoReply, rw)
+	// Only now release an unsubscribe waiting for this subscribe: its push must not
+	// come before the reply, the client would consider itself subscribed after it.
+	if subscribingCh != nil {
+		close(subscribingCh)
+	}
 	c.handleCommandFinished(cmd, protocol.FrameTypeSubscribe, nil, protoReply, started, "")
 	c.releaseSubscribeCommandReply(protoReply)
 	c.node.metrics.incActionCount(params.metricsAction, channel)
@@ -1007,7 +982,6 @@ func (c *Client) handleMapStateToLive(
 	return c.handleMapTransitionToLive(req, reply, state.options, state.isPresence, cmd, started, rw, mapTransitionToLiveParams{
 		sincePosition:             statePos,
 		statePubs:                 statePubs,
-		allowStreamless:           true,
 		isRecovery:                false,
 		tagsFilterFromState:       state.tagsFilter,
 		serverTagsFilterFromState: state.serverTagsFilter,
@@ -1274,7 +1248,6 @@ func (c *Client) handleMapStreamToLive(
 	return c.handleMapTransitionToLive(req, reply, state.options, state.isPresence, cmd, started, rw, mapTransitionToLiveParams{
 		sincePosition:             StreamPosition{Offset: req.Offset, Epoch: req.Epoch},
 		statePubs:                 nil,
-		allowStreamless:           false,
 		isRecovery:                true,
 		tagsFilterFromState:       state.tagsFilter,
 		serverTagsFilterFromState: state.serverTagsFilter,
@@ -1370,7 +1343,6 @@ func (c *Client) handleMapRecoveryJoin(
 	return c.handleMapTransitionToLive(req, reply, opts, isPresence, cmd, started, rw, mapTransitionToLiveParams{
 		sincePosition:             StreamPosition{Offset: req.Offset, Epoch: req.Epoch},
 		statePubs:                 nil,
-		allowStreamless:           false,
 		isRecovery:                true,
 		tagsFilterFromState:       tagsFilterFromState,
 		serverTagsFilterFromState: serverTagsFilterFromState,

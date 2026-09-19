@@ -3103,6 +3103,9 @@ const (
 var (
 	testAtSyncPoint    atomic.Pointer[func(channel string)]
 	testSyncPointDelay atomic.Int64
+	// testAfterMapCommit (if set) runs for map subscriptions to channels with
+	// testChannelRecoveryOrderingPrefix between their commit and their reply.
+	testAfterMapCommit atomic.Pointer[func(channel string)]
 )
 
 // testSyncPoint runs at the sync point of subscriptions to channels with
@@ -5090,58 +5093,10 @@ func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, d
 }
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool, batchConfig ChannelBatchConfig) error {
-	if pub.Offset == 0 {
-		if c.pubSubSync.Buffering() && c.pubSubSync.Pending(ch) {
-			// A subscribe with positioning or recovery is in progress: nothing of
-			// the channel may come before its result, and a publication without
-			// offset can't be synced with it.
-			return nil
-		}
-		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
-			return nil
-		}
-
-		// For publications without offset, if filtering is needed, we can skip them
-		// early since there's no position tracking to maintain.
-		if prep.wasFiltered && !prep.deltaSub {
-			return nil
-		}
-
-		if prep.deltaSub {
-			// For this path (no Offset) delta may come from channel medium layer, so that we can use it
-			// here if allowed for the connection.
-			c.mu.RLock()
-			channelContext, ok := c.channels[ch]
-			if !ok {
-				c.mu.RUnlock()
-				return nil
-			}
-			deltaAllowed := channelHasFlag(channelContext.flags, flagDeltaAllowed)
-			c.mu.RUnlock()
-
-			if deltaAllowed {
-				if c.node.logEnabled(LogLevelTrace) {
-					c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
-				}
-				return c.writeEncodedPushData(prep.localDeltaData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
-			}
-			// Set flagDeltaAllowed so subsequent pubs use delta.
-			c.mu.Lock()
-			if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
-				chCtx.flags |= flagDeltaAllowed
-				c.channels[ch] = chCtx
-			}
-			c.mu.Unlock()
-		}
-
-		if c.node.logEnabled(LogLevelTrace) {
-			c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
-		}
-		return c.writeEncodedPushData(prep.fullData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
-	}
 	if c.pubSubSync.Buffering() {
 		// The client may be subscribing to ch: the publication goes to its recovery
-		// buffer, or is queued until the subscription's result is written.
+		// buffer, or is queued until the subscription's result is written (or, without
+		// offset, dropped till then).
 		syncPub := pub
 		if prep.wasFiltered {
 			syncPub = prep.filteredPub
@@ -5152,8 +5107,57 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 			return nil
 		}
 	}
+	if pub.Offset == 0 {
+		return c.writeOffsetlessPublication(ch, pub, prep, batchConfig)
+	}
 	_ = c.writePublicationUpdatePosition(ch, pub, prep, sp, maxLagExceeded, batchConfig)
 	return nil
+}
+
+// writeOffsetlessPublication writes a publication without offset: there is no
+// position to check or update.
+func (c *Client) writeOffsetlessPublication(ch string, pub *protocol.Publication, prep preparedData, batchConfig ChannelBatchConfig) error {
+	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
+		return nil
+	}
+
+	// For publications without offset, if filtering is needed, we can skip them
+	// early since there's no position tracking to maintain.
+	if prep.wasFiltered && !prep.deltaSub {
+		return nil
+	}
+
+	if prep.deltaSub {
+		// For this path (no Offset) delta may come from channel medium layer, so that we can use it
+		// here if allowed for the connection.
+		c.mu.RLock()
+		channelContext, ok := c.channels[ch]
+		if !ok {
+			c.mu.RUnlock()
+			return nil
+		}
+		deltaAllowed := channelHasFlag(channelContext.flags, flagDeltaAllowed)
+		c.mu.RUnlock()
+
+		if deltaAllowed {
+			if c.node.logEnabled(LogLevelTrace) {
+				c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
+			}
+			return c.writeEncodedPushData(prep.localDeltaData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+		}
+		// Set flagDeltaAllowed so subsequent pubs use delta.
+		c.mu.Lock()
+		if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
+			chCtx.flags |= flagDeltaAllowed
+			c.channels[ch] = chCtx
+		}
+		c.mu.Unlock()
+	}
+
+	if c.node.logEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
+	}
+	return c.writeEncodedPushData(prep.fullData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
 }
 
 // pendingPublication is a publication queued between the sync point of a

@@ -7320,6 +7320,95 @@ func TestClientConnectSubscriptionFailureCancelsBuffering(t *testing.T) {
 	require.False(t, client.pubSubSync.Buffering(), "recovery buffer leaked")
 }
 
+// A server-side unsubscribe which comes while a map subscription is in progress waits
+// for it. The map subscription is committed before its reply is written; the
+// unsubscribe must not go ahead (and its push reach the client) before that reply.
+func TestClientMapSubscribeConcurrentUnsubscribeOrder(t *testing.T) {
+	setIsInTest(t)
+	testSyncPointDelay.Store(int64(time.Millisecond))
+	t.Cleanup(func() { testSyncPointDelay.Store(0) })
+
+	ch := testChannelRecoveryOrderingPrefix + "_map_unsubscribe"
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{Mode: MapModeRecoverable, KeyTTL: time.Minute, MinPageSize: 1}
+			},
+		},
+	})
+	require.NoError(t, err)
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+		})
+		c.OnUnsubscribe(func(UnsubscribeEvent) {})
+	})
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	res, err := node.MapPublish(context.Background(), ch, "key", MapPublishOptions{Data: []byte(`{}`)})
+	require.NoError(t, err)
+
+	transport := newTestTransport(func() {})
+	sink := make(chan []byte, 1024)
+	transport.sink = sink
+	client := newTestConnectedClientWithTransport(t, context.Background(), node, transport, "42")
+	drainSink(sink)
+
+	// The unsubscribe starts at the sync point and waits for the subscribe. After
+	// the commit there is a pause before the reply is written, which it must not use.
+	unsubscribed := make(chan struct{})
+	setTestAtSyncPoint(t, func(channel string) {
+		if channel == ch {
+			go func() {
+				defer close(unsubscribed)
+				client.Unsubscribe(ch)
+			}()
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+	afterCommit := func(channel string) {
+		if channel == ch {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	testAfterMapCommit.Store(&afterCommit)
+	t.Cleanup(func() { testAfterMapCommit.Store(nil) })
+
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: ch, Type: int32(SubscriptionTypeMap), Phase: MapPhaseLive,
+		Recover: true, Offset: res.Position.Offset, Epoch: res.Position.Epoch,
+	}, &protocol.Command{Id: 2}, time.Now(), testReplyWriterWrapper().rw))
+	<-unsubscribed
+
+	var order []string
+	require.Eventually(t, func() bool {
+		for _, frame := range drainSink(sink) {
+			decoder := newReplyDecoder(protocol.TypeJSON, frame)
+			for {
+				reply, err := decoder.Decode()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				require.NoError(t, err)
+				switch {
+				case reply.Id == 2 && reply.Subscribe != nil:
+					order = append(order, "subscribe")
+				case reply.Push != nil && reply.Push.Channel == ch && reply.Push.Unsubscribe != nil:
+					order = append(order, "unsubscribe")
+				}
+			}
+		}
+		return len(order) == 2
+	}, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, []string{"subscribe", "unsubscribe"}, order)
+	require.False(t, client.IsSubscribed(ch))
+}
+
 // A server-side subscription whose client closes while it is at its sync point is
 // rolled back, and must drop its buffer.
 func TestClientServerSideSubscriptionClosedAtSyncPointCancelsBuffering(t *testing.T) {
@@ -8488,4 +8577,113 @@ func TestClientRecoveryPublicationsWithoutOffsetDuringSubscribe(t *testing.T) {
 			require.True(t, client.IsSubscribed(ch))
 		})
 	}
+}
+
+// subscribeHookMapBroker runs onSubscribe when the node subscribes to a map channel.
+type subscribeHookMapBroker struct {
+	*MemoryMapBroker
+	onSubscribe func(channels ...string)
+}
+
+func (b *subscribeHookMapBroker) Subscribe(channels ...string) error {
+	if b.onSubscribe != nil {
+		b.onSubscribe(channels...)
+	}
+	return b.MemoryMapBroker.Subscribe(channels...)
+}
+
+// Publications into an ephemeral (streamless) map channel have no offset, so they
+// can't be synced with a subscribe in progress. They must not reach the client before
+// its subscribe result (clients drop them then): they are dropped until the result is
+// written, and the following ones are delivered as usual.
+func TestClientMapEphemeralDropsPublicationsDuringSubscribe(t *testing.T) {
+	setIsInTest(t)
+	for _, route := range []string{"live", "state_then_live"} {
+		t.Run(route, func(t *testing.T) {
+			testMapEphemeralDropsPublicationsDuringSubscribe(t, route)
+		})
+	}
+}
+
+func testMapEphemeralDropsPublicationsDuringSubscribe(t *testing.T, route string) {
+	ch := testChannelRecoveryOrderingPrefix + "_ephemeral_" + route
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{Mode: MapModeEphemeral, KeyTTL: time.Minute, MinPageSize: 1}
+			},
+		},
+	})
+	require.NoError(t, err)
+	memMapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	publish := func(n string) {
+		_, err := node.MapPublish(context.Background(), ch, "key-"+n, MapPublishOptions{Data: []byte(`{"n":"` + n + `"}`)})
+		require.NoError(t, err)
+	}
+	var armed atomic.Bool
+	node.SetMapBroker(&subscribeHookMapBroker{MemoryMapBroker: memMapBroker, onSubscribe: func(channels ...string) {
+		// The subscription is in the hub already, before its sync point.
+		if slices.Contains(channels, ch) && armed.CompareAndSwap(true, false) {
+			publish("collected")
+		}
+	}})
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+		})
+	})
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	transport := newTestTransport(func() {})
+	sink := make(chan []byte, 1024)
+	transport.sink = sink
+	client := newTestConnectedClientWithTransport(t, context.Background(), node, transport, "42")
+	drainSink(sink)
+	afterCommit := func(channel string) {
+		if channel == ch {
+			publish("during") // After the commit, before the reply.
+		}
+	}
+	testAfterMapCommit.Store(&afterCommit)
+	t.Cleanup(func() { testAfterMapCommit.Store(nil) })
+
+	armed.Store(true)
+	req := &protocol.SubscribeRequest{Channel: ch, Type: int32(SubscriptionTypeMap), Phase: MapPhaseLive}
+	if route == "state_then_live" {
+		// A single page of state, which goes LIVE right away.
+		req.Phase, req.Limit = MapPhaseState, 100
+	}
+	require.NoError(t, client.handleSubscribe(req, &protocol.Command{Id: 2}, time.Now(), testReplyWriterWrapper().rw))
+	require.False(t, armed.Load())
+	publish("after")
+
+	// What the client gets for the channel, in order.
+	var got []string
+	require.Eventually(t, func() bool {
+		for _, frame := range drainSink(sink) {
+			decoder := newReplyDecoder(protocol.TypeJSON, frame)
+			for {
+				reply, err := decoder.Decode()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				require.NoError(t, err)
+				switch {
+				case reply.Id == 2 && reply.Subscribe != nil:
+					got = append(got, "result")
+					for _, pub := range reply.Subscribe.Publications {
+						got = append(got, "result:"+string(pub.Data))
+					}
+				case reply.Push != nil && reply.Push.Channel == ch && reply.Push.Pub != nil:
+					got = append(got, string(reply.Push.Pub.Data))
+				}
+			}
+		}
+		return slices.Contains(got, `{"n":"after"}`)
+	}, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, []string{"result", `{"n":"after"}`}, got)
 }

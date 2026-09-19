@@ -22,6 +22,9 @@ import (
 //  3. StopBuffering is called by the subscriber once its result is written. It
 //     writes the queued publications in order, and lets the following ones through.
 //
+// A publication without offset can't be synced: it is dropped until the result is
+// written (StopBuffering starts).
+//
 // SyncPublication never waits for the subscriber. A publication is broadcast with
 // its channel's hub shard lock held, and the subscriber may need that lock (or wait
 // for something which does) before it gets to StopBuffering.
@@ -114,9 +117,10 @@ func (s *PubSubSync[T]) Buffering() bool {
 
 // SyncPublication takes a publication of the given epoch into the channel's buffer
 // if the channel is buffering: in phase 1 pub is collected, in phase 2 item is
-// queued, and size counts towards the limit of each. It returns false if the channel
-// isn't buffering, and then the caller writes the publication itself. It never
-// blocks for long.
+// queued, and size counts towards the limit of each (a publication without offset is
+// dropped instead, till the result is written). It returns false if the channel isn't
+// buffering, and then the caller writes the publication itself. It never blocks for
+// long.
 func (s *PubSubSync[T]) SyncPublication(channel string, pub *protocol.Publication, epoch string, size int, item T) bool {
 	s.mu.RLock()
 	b, ok := s.buffers[channel]
@@ -126,6 +130,10 @@ func (s *PubSubSync[T]) SyncPublication(channel string, pub *protocol.Publicatio
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if pub.Offset == 0 {
+		// Can't be synced: dropped, unless the result is written already.
+		return b.phase != phaseStopped && !b.stopping
+	}
 	switch b.phase {
 	case phaseCollecting:
 		if b.pubsOverflowed {
@@ -232,23 +240,6 @@ func (s *PubSubSync[T]) StopBuffering(b *Buffer[T], write func(T)) (overflowed b
 			}
 		}
 	}
-}
-
-// Pending reports whether a subscribe to the channel is in progress and has not
-// written its result yet: from StartBuffering until StopBuffering starts.
-func (s *PubSubSync[T]) Pending(channel string) bool {
-	if !s.Buffering() {
-		return false
-	}
-	s.mu.RLock()
-	b, ok := s.buffers[channel]
-	s.mu.RUnlock()
-	if !ok {
-		return false
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.phase != phaseStopped && !b.stopping
 }
 
 // CancelBuffering drops everything buffered for a subscribe attempt which failed.

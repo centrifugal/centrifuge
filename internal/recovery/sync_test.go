@@ -170,27 +170,25 @@ func TestPubSubSyncCollectOverflow(t *testing.T) {
 	require.Equal(t, []uint64{4}, r.get())
 }
 
-func TestPubSubSyncPending(t *testing.T) {
+func TestPubSubSyncWithoutOffset(t *testing.T) {
+	// A publication without offset can't be synced: it is dropped till the result is
+	// written (StopBuffering starts), then written as usual.
 	s := &testSync{}
-	require.False(t, s.Pending("ch"))
+	r := &recorder{}
 	b := s.StartBuffering("ch", 0)
-	require.True(t, s.Pending("ch"))
-	require.False(t, s.Pending("other"))
+	r.publish(s, "ch", 0, 1)
 	s.ReadBuffered(b, "", 0)
-	require.True(t, s.Pending("ch"))
-	// Not while the queue is written: the result is written by then.
-	var pendingWhileWriting bool
+	r.publish(s, "ch", 0, 1)
+	var whileWriting []uint64
 	s.SyncPublication("ch", &protocol.Publication{Offset: 1}, "", 1, func() {
-		pendingWhileWriting = s.Pending("ch")
+		r.write(1)()
+		r.publish(s, "ch", 0, 1) // The result is written by now.
+		whileWriting = r.get()
 	})
-	s.StopBuffering(b, call)
-	require.False(t, pendingWhileWriting)
-	require.False(t, s.Pending("ch"))
-
-	b = s.StartBuffering("ch", 0)
-	require.True(t, s.Pending("ch"))
-	s.CancelBuffering(b)
-	require.False(t, s.Pending("ch"))
+	require.False(t, s.StopBuffering(b, call))
+	require.Equal(t, []uint64{1, 0}, whileWriting)
+	r.publish(s, "ch", 0, 1)
+	require.Equal(t, []uint64{1, 0, 0}, r.get())
 }
 
 func TestPubSubSyncNewerBufferForChannel(t *testing.T) {
