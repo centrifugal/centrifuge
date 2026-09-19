@@ -18,7 +18,7 @@ func call(write func()) { write() }
 
 // read returns the publications buffered till the sync point.
 func read(s *testSync, b *Buffer[func()]) []*protocol.Publication {
-	pubs, _ := s.ReadBuffered(b, "")
+	pubs, _ := s.ReadBuffered(b, "", 0)
 	return pubs
 }
 
@@ -98,7 +98,7 @@ func TestPubSubSyncCancel(t *testing.T) {
 	r := &recorder{}
 	b := s.StartBuffering("ch", 0)
 	r.publish(s, "ch", 1, 1)
-	s.ReadBuffered(b, "")
+	s.ReadBuffered(b, "", 0)
 	r.publish(s, "ch", 2, 1)
 	s.CancelBuffering(b)
 	require.Empty(t, r.get(), "cancel drops the queue")
@@ -126,7 +126,7 @@ func TestPubSubSyncOverflow(t *testing.T) {
 	s := &testSync{}
 	r := &recorder{}
 	b := s.StartBuffering("ch", 10)
-	s.ReadBuffered(b, "")
+	s.ReadBuffered(b, "", 0)
 	r.publish(s, "ch", 1, 6)
 	r.publish(s, "ch", 2, 6) // Over the limit: the queue is dropped.
 	r.publish(s, "ch", 3, 1) // Dropped as well, it would leave a gap.
@@ -137,6 +137,21 @@ func TestPubSubSyncOverflow(t *testing.T) {
 	require.Equal(t, []uint64{4}, r.get())
 }
 
+func TestPubSubSyncCollectedCoveredByRead(t *testing.T) {
+	// Collected publications at or below the position read are covered by the read:
+	// a late one (seen in history before its PUB/SUB delivery) is left out.
+	s := &testSync{}
+	r := &recorder{}
+	b := s.StartBuffering("ch", 0)
+	for _, offset := range []uint64{3, 5, 6, 7} {
+		r.publish(s, "ch", offset, 1)
+	}
+	pubs, ok := s.ReadBuffered(b, "", 5)
+	require.True(t, ok)
+	require.Equal(t, []uint64{6, 7}, offsetsOf(pubs))
+	s.CancelBuffering(b)
+}
+
 func TestPubSubSyncCollectOverflow(t *testing.T) {
 	// Collected publications which don't fit into the limit can't be merged.
 	s := &testSync{}
@@ -145,7 +160,7 @@ func TestPubSubSyncCollectOverflow(t *testing.T) {
 	r.publish(s, "ch", 1, 6)
 	r.publish(s, "ch", 2, 6) // Over the limit: the collected ones are dropped.
 	r.publish(s, "ch", 3, 1) // Dropped as well, it would leave a gap.
-	pubs, ok := s.ReadBuffered(b, "")
+	pubs, ok := s.ReadBuffered(b, "", 0)
 	require.False(t, ok)
 	require.Empty(t, pubs)
 	require.Empty(t, r.get())
@@ -161,7 +176,7 @@ func TestPubSubSyncPending(t *testing.T) {
 	b := s.StartBuffering("ch", 0)
 	require.True(t, s.Pending("ch"))
 	require.False(t, s.Pending("other"))
-	s.ReadBuffered(b, "")
+	s.ReadBuffered(b, "", 0)
 	require.True(t, s.Pending("ch"))
 	// Not while the queue is written: the result is written by then.
 	var pendingWhileWriting bool
@@ -203,7 +218,7 @@ func TestPubSubSyncPublicationWhileFlushing(t *testing.T) {
 	s := &testSync{}
 	r := &recorder{}
 	b := s.StartBuffering("ch", 0)
-	s.ReadBuffered(b, "")
+	s.ReadBuffered(b, "", 0)
 	s.SyncPublication("ch", &protocol.Publication{Offset: 1}, "", 1, func() {
 		r.write(1)()
 		r.publish(s, "ch", 3, 1)
@@ -222,7 +237,7 @@ func TestPubSubSyncCancelWithConcurrentPublisher(t *testing.T) {
 		s := &testSync{}
 		r := &recorder{}
 		b := s.StartBuffering("ch", 0)
-		s.ReadBuffered(b, "")
+		s.ReadBuffered(b, "", 0)
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
@@ -249,7 +264,7 @@ func TestPubSubSyncLongQueueOrder(t *testing.T) {
 	s := &testSync{}
 	r := &recorder{}
 	b := s.StartBuffering("ch", 0)
-	s.ReadBuffered(b, "")
+	s.ReadBuffered(b, "", 0)
 	const n = 300
 	for offset := uint64(1); offset <= n; offset++ {
 		if offset == 100 {
@@ -275,7 +290,7 @@ func TestPubSubSyncLongQueueOverflow(t *testing.T) {
 	s := &testSync{}
 	r := &recorder{}
 	b := s.StartBuffering("ch", 200)
-	s.ReadBuffered(b, "")
+	s.ReadBuffered(b, "", 0)
 	for offset := uint64(1); offset <= 300; offset++ {
 		r.publish(s, "ch", offset, 1)
 	}
@@ -307,7 +322,7 @@ func TestPubSubSyncEpochAtSyncPoint(t *testing.T) {
 			for i, epoch := range tt.collected {
 				require.True(t, s.SyncPublication("ch", &protocol.Publication{Offset: uint64(i + 1)}, epoch, 1, func() {}))
 			}
-			pubs, ok := s.ReadBuffered(b, tt.historyFrom)
+			pubs, ok := s.ReadBuffered(b, tt.historyFrom, 0)
 			require.Len(t, pubs, len(tt.collected))
 			require.Equal(t, tt.ok, ok)
 			s.CancelBuffering(b)
@@ -317,7 +332,7 @@ func TestPubSubSyncEpochAtSyncPoint(t *testing.T) {
 
 func TestPubSubSyncNilBuffer(t *testing.T) {
 	s := &testSync{}
-	pubs, ok := s.ReadBuffered(nil, "epoch")
+	pubs, ok := s.ReadBuffered(nil, "epoch", 0)
 	require.Nil(t, pubs)
 	require.True(t, ok)
 	require.False(t, s.StopBuffering(nil, call))
@@ -435,7 +450,7 @@ func BenchmarkPubSubSyncSubscribeCycle(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				buf := s.StartBuffering("ch", 0)
 				s.SyncPublication("ch", pub, "", 1, benchItem{})
-				_, _ = s.ReadBuffered(buf, "")
+				_, _ = s.ReadBuffered(buf, "", 0)
 				for j := 0; j < queued; j++ {
 					s.SyncPublication("ch", pub, "", 1, benchItem{})
 				}

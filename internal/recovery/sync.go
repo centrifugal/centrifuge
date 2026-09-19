@@ -165,12 +165,16 @@ func (s *PubSubSync[T]) SyncPublication(channel string, pub *protocol.Publicatio
 }
 
 // ReadBuffered is the sync point: it returns the publications collected in phase 1
-// and starts phase 2. ok is false if they can't be merged into the subscribe
-// result: they didn't fit into the limit, or one is from another epoch than epoch,
-// the epoch of the history the subscriber read. They are compared with an empty
-// epoch (the read knew nothing about the stream, a lagging replica) only among
-// themselves: they must all be from one.
-func (s *PubSubSync[T]) ReadBuffered(b *Buffer[T], epoch string) (pubs []*protocol.Publication, ok bool) {
+// and starts phase 2. epoch and offset are the stream position the subscriber read.
+//
+// Collected publications at or below offset are left out: the read covers them, and
+// a late one (a PUB/SUB delivery which comes after the read saw it in history) must
+// not be delivered twice. ok is false if the collected publications can't be merged
+// into the subscribe result: they didn't fit into the limit, or one is from another
+// epoch than epoch. They are compared with an empty epoch (the read knew nothing
+// about the stream, a lagging replica) only among themselves: they must all be from
+// one.
+func (s *PubSubSync[T]) ReadBuffered(b *Buffer[T], epoch string, offset uint64) (pubs []*protocol.Publication, ok bool) {
 	if b == nil {
 		return nil, true
 	}
@@ -179,8 +183,16 @@ func (s *PubSubSync[T]) ReadBuffered(b *Buffer[T], epoch string) (pubs []*protoc
 	if b.phase != phaseCollecting {
 		return nil, true
 	}
-	pubs = b.pubs
-	ok = !b.pubsOverflowed && (len(pubs) == 0 || (!b.mixedEpochs && (epoch == "" || b.epoch == epoch)))
+	ok = !b.pubsOverflowed && (len(b.pubs) == 0 || (!b.mixedEpochs && (epoch == "" || b.epoch == epoch)))
+	pubs = b.pubs[:0] // The buffer's own slice, filtered in place.
+	for _, pub := range b.pubs {
+		if pub.Offset > offset {
+			pubs = append(pubs, pub)
+		}
+	}
+	if len(pubs) == 0 {
+		pubs = nil
+	}
 	b.pubs = nil
 	b.phase = phaseQueueing
 	return pubs, ok

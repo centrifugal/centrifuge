@@ -6450,6 +6450,7 @@ func testRecoveryOrdering(t *testing.T, tc recoveryOrderingCase) {
 	// one before it (in the history read and in the buffer, so it must come once)
 	// and one after it (only in the buffer).
 	var publish func() (StreamPosition, error)
+	var epoch string
 	var injectArmed atomic.Bool
 	var injected atomic.Int32
 	aroundRead := func(channel string, read func()) {
@@ -6462,6 +6463,13 @@ func testRecoveryOrdering(t *testing.T, tc recoveryOrderingCase) {
 		}
 		read()
 		if _, err := publish(); err != nil {
+			t.Error(err)
+		}
+		// A late PUB/SUB delivery of a publication the client already has: before
+		// the sync point it must not get into the result.
+		late := &Publication{Offset: recoverFrom, Key: "k0", Data: []byte(`{"late":"before_sync_point"}`),
+			Tags: map[string]string{"n": "pass"}}
+		if err := node.hub.broadcastPublication(ch, StreamPosition{Offset: recoverFrom, Epoch: epoch}, late, nil, nil, ChannelBatchConfig{}); err != nil {
 			t.Error(err)
 		}
 		injected.Add(1)
@@ -6516,7 +6524,6 @@ func testRecoveryOrdering(t *testing.T, tc recoveryOrderingCase) {
 		lastOffset.Store(sp.Offset)
 		return sp, nil
 	}
-	var epoch string
 	for i := 0; i < numPrePublished; i++ {
 		sp, err := publish()
 		require.NoError(t, err)

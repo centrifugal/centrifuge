@@ -4594,7 +4594,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		res.Epoch = latestEpoch
 		res.Offset = latestOffset
 
-		bufferedPubs, canMerge := c.pubSubSync.ReadBuffered(pubSubBuf, latestEpoch)
+		bufferedPubs, canMerge := c.pubSubSync.ReadBuffered(pubSubBuf, latestEpoch, latestOffset)
 		if isInTest && strings.HasPrefix(channel, testChannelRecoveryOrderingPrefix) { // Only for tests.
 			if testAtSyncPoint != nil {
 				testAtSyncPoint(channel)

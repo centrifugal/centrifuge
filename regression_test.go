@@ -1661,7 +1661,7 @@ func TestBroadcastFiltered_MultipleKeys_NoNilBufferedPub(t *testing.T) {
 
 	// Neither buffer may contain a nil publication, and merging must not panic.
 	for _, c := range []*Client{jsonClient, pbClient} {
-		buffered, _ := c.pubSubSync.ReadBuffered(bufs[c], "")
+		buffered, _ := c.pubSubSync.ReadBuffered(bufs[c], "", 0)
 		for _, p := range buffered {
 			require.NotNil(t, p, "filtered broadcast buffered a nil publication (missing filteredPub marker)")
 		}

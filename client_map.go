@@ -787,7 +787,7 @@ func (c *Client) handleMapTransitionToLive(
 		}
 
 		// Sync point: read buffered publications, queue the following ones.
-		bufferedPubs, canMerge := c.pubSubSync.ReadBuffered(pubSubBuf, streamPos.Epoch)
+		bufferedPubs, canMerge := c.pubSubSync.ReadBuffered(pubSubBuf, streamPos.Epoch, streamPos.Offset)
 		if isInTest && strings.HasPrefix(channel, testChannelRecoveryOrderingPrefix) { // Only for tests.
 			if testAtSyncPoint != nil {
 				testAtSyncPoint(channel)
@@ -852,8 +852,8 @@ func (c *Client) handleMapTransitionToLive(
 		}
 	} else if params.allowStreamless {
 		// Streamless mode: use buffered publications directly (no stream read, no merge).
-		// Nothing was read to check the epoch of buffered publications against.
-		bufferedPubs, canMerge := c.pubSubSync.ReadBuffered(pubSubBuf, "")
+		// Nothing was read to check buffered publications against.
+		bufferedPubs, canMerge := c.pubSubSync.ReadBuffered(pubSubBuf, "", 0)
 		if !canMerge {
 			rollback(true)
 			return &DisconnectInsufficientState
