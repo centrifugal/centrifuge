@@ -16,7 +16,7 @@ import (
 //  1. From StartBuffering until ReadBuffered (the sync point) publications are
 //     collected. ReadBuffered returns them, and the subscriber merges them with
 //     what it read from history into its subscribe result, unless one of them is
-//     from another epoch than that history.
+//     from another epoch than that history, or they didn't fit into the limit.
 //  2. From ReadBuffered until StopBuffering publications are queued: the
 //     subscription is not committed yet, and its result is not written.
 //  3. StopBuffering is called by the subscriber once its result is written. It
@@ -49,16 +49,23 @@ type Buffer[T any] struct {
 	channel      string
 	maxQueueSize int
 	mu           sync.Mutex
-	phase        bufferPhase
 	pubs         []*protocol.Publication
-	// epoch of the collected publications, and whether they have more than one.
-	epoch       string
-	mixedEpochs bool
+	pubsSize     int
+	// epoch of the collected publications.
+	epoch string
 	// queue holds the items of phase 2 in chunks, so that growing it never copies
 	// them. Chunks double in size up to maxQueueChunk items.
-	queue      [][]T
-	queueSize  int
-	overflowed bool
+	queue     [][]T
+	queueSize int
+	phase     bufferPhase
+	// pubsOverflowed is set when the collected publications don't fit into the
+	// limit: they are dropped then. overflowed is the same for the queue.
+	pubsOverflowed bool
+	overflowed     bool
+	// mixedEpochs is set when the collected publications have more than one epoch.
+	mixedEpochs bool
+	// stopping is set once StopBuffering starts: the result is written then.
+	stopping bool
 }
 
 const (
@@ -81,8 +88,8 @@ func (b *Buffer[T]) enqueue(item T) {
 
 // StartBuffering starts phase 1 for the channel. It must be called before the
 // subscription is added to the hub, so that no publication for it is missed.
-// maxQueueSize limits the size of the data of the publications queued in phase 2,
-// zero means no limit.
+// maxQueueSize limits the size of the data of the publications collected in phase
+// 1, and of those queued in phase 2, zero means no limit.
 func (s *PubSubSync[T]) StartBuffering(channel string, maxQueueSize int) *Buffer[T] {
 	b := &Buffer[T]{channel: channel, maxQueueSize: maxQueueSize}
 	s.mu.Lock()
@@ -107,7 +114,7 @@ func (s *PubSubSync[T]) Buffering() bool {
 
 // SyncPublication takes a publication of the given epoch into the channel's buffer
 // if the channel is buffering: in phase 1 pub is collected, in phase 2 item is
-// queued, and size counts towards the queue limit. It returns false if the channel
+// queued, and size counts towards the limit of each. It returns false if the channel
 // isn't buffering, and then the caller writes the publication itself. It never
 // blocks for long.
 func (s *PubSubSync[T]) SyncPublication(channel string, pub *protocol.Publication, epoch string, size int, item T) bool {
@@ -121,6 +128,16 @@ func (s *PubSubSync[T]) SyncPublication(channel string, pub *protocol.Publicatio
 	defer b.mu.Unlock()
 	switch b.phase {
 	case phaseCollecting:
+		if b.pubsOverflowed {
+			return true
+		}
+		b.pubsSize += size
+		if b.maxQueueSize > 0 && b.pubsSize > b.maxQueueSize {
+			// Too much to keep. The subscriber learns about it from ReadBuffered.
+			b.pubsOverflowed = true
+			b.pubs = nil
+			return true
+		}
 		if len(b.pubs) == 0 {
 			b.epoch = epoch
 		} else if epoch != b.epoch {
@@ -148,10 +165,11 @@ func (s *PubSubSync[T]) SyncPublication(channel string, pub *protocol.Publicatio
 }
 
 // ReadBuffered is the sync point: it returns the publications collected in phase 1
-// and starts phase 2. epoch is the epoch of the history the subscriber read: ok is
-// false if a collected publication is from another one, then they can't be merged
-// with it. They are compared with an empty epoch (the read knew nothing about the
-// stream, a lagging replica) only among themselves: they must all be from one.
+// and starts phase 2. ok is false if they can't be merged into the subscribe
+// result: they didn't fit into the limit, or one is from another epoch than epoch,
+// the epoch of the history the subscriber read. They are compared with an empty
+// epoch (the read knew nothing about the stream, a lagging replica) only among
+// themselves: they must all be from one.
 func (s *PubSubSync[T]) ReadBuffered(b *Buffer[T], epoch string) (pubs []*protocol.Publication, ok bool) {
 	if b == nil {
 		return nil, true
@@ -162,7 +180,7 @@ func (s *PubSubSync[T]) ReadBuffered(b *Buffer[T], epoch string) (pubs []*protoc
 		return nil, true
 	}
 	pubs = b.pubs
-	ok = len(pubs) == 0 || (!b.mixedEpochs && (epoch == "" || b.epoch == epoch))
+	ok = !b.pubsOverflowed && (len(pubs) == 0 || (!b.mixedEpochs && (epoch == "" || b.epoch == epoch)))
 	b.pubs = nil
 	b.phase = phaseQueueing
 	return pubs, ok
@@ -179,6 +197,7 @@ func (s *PubSubSync[T]) StopBuffering(b *Buffer[T], write func(T)) (overflowed b
 	}
 	for {
 		b.mu.Lock()
+		b.stopping = true
 		if b.phase == phaseStopped {
 			b.mu.Unlock()
 			return false
@@ -201,6 +220,23 @@ func (s *PubSubSync[T]) StopBuffering(b *Buffer[T], write func(T)) (overflowed b
 			}
 		}
 	}
+}
+
+// Pending reports whether a subscribe to the channel is in progress and has not
+// written its result yet: from StartBuffering until StopBuffering starts.
+func (s *PubSubSync[T]) Pending(channel string) bool {
+	if !s.Buffering() {
+		return false
+	}
+	s.mu.RLock()
+	b, ok := s.buffers[channel]
+	s.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.phase != phaseStopped && !b.stopping
 }
 
 // CancelBuffering drops everything buffered for a subscribe attempt which failed.

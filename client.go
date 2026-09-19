@@ -4594,16 +4594,16 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		res.Epoch = latestEpoch
 		res.Offset = latestOffset
 
-		bufferedPubs, sameEpoch := c.pubSubSync.ReadBuffered(pubSubBuf, latestEpoch)
+		bufferedPubs, canMerge := c.pubSubSync.ReadBuffered(pubSubBuf, latestEpoch)
 		if isInTest && strings.HasPrefix(channel, testChannelRecoveryOrderingPrefix) { // Only for tests.
 			if testAtSyncPoint != nil {
 				testAtSyncPoint(channel)
 			}
 			time.Sleep(testSyncPointDelay)
 		}
-		if !sameEpoch {
-			// The stream changed its epoch while the client subscribed: publications
-			// of the new one can't be merged with the history of the old one.
+		if !canMerge {
+			// Too many publications came while the client subscribed, or the stream
+			// changed its epoch meanwhile: they can't be merged with the history.
 			c.pubSubSync.CancelBuffering(pubSubBuf)
 			ctx.disconnect = &DisconnectInsufficientState
 			return ctx
@@ -5080,6 +5080,12 @@ func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, d
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool, batchConfig ChannelBatchConfig) error {
 	if pub.Offset == 0 {
+		if c.pubSubSync.Buffering() && c.pubSubSync.Pending(ch) {
+			// A subscribe with positioning or recovery is in progress: nothing of
+			// the channel may come before its result, and a publication without
+			// offset can't be synced with it.
+			return nil
+		}
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			return nil
 		}

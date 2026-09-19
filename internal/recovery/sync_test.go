@@ -137,6 +137,47 @@ func TestPubSubSyncOverflow(t *testing.T) {
 	require.Equal(t, []uint64{4}, r.get())
 }
 
+func TestPubSubSyncCollectOverflow(t *testing.T) {
+	// Collected publications which don't fit into the limit can't be merged.
+	s := &testSync{}
+	r := &recorder{}
+	b := s.StartBuffering("ch", 10)
+	r.publish(s, "ch", 1, 6)
+	r.publish(s, "ch", 2, 6) // Over the limit: the collected ones are dropped.
+	r.publish(s, "ch", 3, 1) // Dropped as well, it would leave a gap.
+	pubs, ok := s.ReadBuffered(b, "")
+	require.False(t, ok)
+	require.Empty(t, pubs)
+	require.Empty(t, r.get())
+	// The limit of the queue is its own.
+	r.publish(s, "ch", 4, 6)
+	require.False(t, s.StopBuffering(b, call))
+	require.Equal(t, []uint64{4}, r.get())
+}
+
+func TestPubSubSyncPending(t *testing.T) {
+	s := &testSync{}
+	require.False(t, s.Pending("ch"))
+	b := s.StartBuffering("ch", 0)
+	require.True(t, s.Pending("ch"))
+	require.False(t, s.Pending("other"))
+	s.ReadBuffered(b, "")
+	require.True(t, s.Pending("ch"))
+	// Not while the queue is written: the result is written by then.
+	var pendingWhileWriting bool
+	s.SyncPublication("ch", &protocol.Publication{Offset: 1}, "", 1, func() {
+		pendingWhileWriting = s.Pending("ch")
+	})
+	s.StopBuffering(b, call)
+	require.False(t, pendingWhileWriting)
+	require.False(t, s.Pending("ch"))
+
+	b = s.StartBuffering("ch", 0)
+	require.True(t, s.Pending("ch"))
+	s.CancelBuffering(b)
+	require.False(t, s.Pending("ch"))
+}
+
 func TestPubSubSyncNewerBufferForChannel(t *testing.T) {
 	// A newer subscribe attempt to the channel replaces the buffer in the map;
 	// stopping or cancelling the older one must not touch it.

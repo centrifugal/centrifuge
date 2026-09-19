@@ -6708,125 +6708,165 @@ func testRecoveryOrdering(t *testing.T, tc recoveryOrderingCase) {
 	}
 }
 
-// Publications which come between a subscription's sync point and StopBuffering are
-// queued. If they don't fit into ClientQueueMaxSize, they are dropped and the client
-// resubscribes with insufficient state (a server-side subscription is disconnected),
-// instead of missing them silently.
+// Publications which come while a client subscribes with recovery are kept: until the
+// sync point to merge them into the result, after it to write them after the result.
+// If they don't fit into ClientQueueMaxSize, they are dropped, and the client is made
+// to resubscribe with insufficient state instead of missing them silently: before the
+// sync point the subscribe fails, after it the client is resubscribed (a server-side
+// subscription is disconnected).
 func TestClientRecoveryQueueOverflowInsufficientState(t *testing.T) {
 	prev := isInTest
 	isInTest = true
 	defer func() { isInTest = prev }()
 
-	for _, mode := range []string{"client_side", "connect", "server_subscribe", "map"} {
-		t.Run(mode, func(t *testing.T) {
-			ch := testChannelRecoveryOrderingPrefix + "_overflow_" + mode
-			node, err := New(Config{
-				LogLevel:           LogLevelTrace,
-				LogHandler:         func(entry LogEntry) {},
-				ClientQueueMaxSize: 1000,
-				Map: MapConfig{
-					GetMapChannelOptions: func(channel string) MapChannelOptions {
-						return MapChannelOptions{Mode: MapModeRecoverable, KeyTTL: time.Minute, MinPageSize: 1}
-					},
-				},
+	for _, when := range []string{"before_sync_point", "after_sync_point"} {
+		for _, mode := range []string{"client_side", "connect", "server_subscribe", "map"} {
+			t.Run(when+"_"+mode, func(t *testing.T) {
+				testRecoveryOverflow(t, mode, when)
 			})
-			require.NoError(t, err)
-			if mode == "map" {
-				mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
-				require.NoError(t, err)
-				node.SetMapBroker(mapBroker)
-			}
-			opts := SubscribeOptions{EnableRecovery: true}
-			if mode == "map" {
-				opts = SubscribeOptions{Type: SubscriptionTypeMap}
-			}
-			unsubscribed := make(chan uint32, 1)
-			node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
-				reply := ConnectReply{Credentials: &Credentials{UserID: "42"}}
-				if mode == "connect" {
-					reply.Subscriptions = map[string]SubscribeOptions{ch: opts}
-				}
-				return reply, nil
-			})
-			node.OnConnect(func(c *Client) {
-				c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
-					cb(SubscribeReply{Options: opts}, nil)
-				})
-				c.OnUnsubscribe(func(e UnsubscribeEvent) {
-					select {
-					case unsubscribed <- e.Code:
-					default:
-					}
-				})
-			})
-			require.NoError(t, node.Run())
-			defer func() { _ = node.Shutdown(context.Background()) }()
+		}
+	}
+}
 
-			data := []byte(`{"data":"` + strings.Repeat("x", 200) + `"}`)
-			publish := func() (StreamPosition, error) {
-				if mode == "map" {
-					res, err := node.MapPublish(context.Background(), ch, "key", MapPublishOptions{Data: data})
-					return res.Position, err
-				}
-				res, err := node.Publish(ch, data, WithHistory(1000, time.Minute))
-				return res.StreamPosition, err
-			}
-			sp, err := publish()
-			require.NoError(t, err)
+func testRecoveryOverflow(t *testing.T, mode string, when string) {
+	ch := testChannelRecoveryOrderingPrefix + "_overflow_" + when + "_" + mode
+	node, err := New(Config{
+		LogLevel:           LogLevelTrace,
+		LogHandler:         func(entry LogEntry) {},
+		ClientQueueMaxSize: 1000,
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{Mode: MapModeRecoverable, KeyTTL: time.Minute, MinPageSize: 1}
+			},
+		},
+	})
+	require.NoError(t, err)
 
-			transport := newTestTransport(func() {})
-			client := newTestClientCustomTransport(t, context.Background(), node, transport, "42")
-			if mode != "connect" {
-				connectClientV2(t, client)
+	data := []byte(`{"data":"` + strings.Repeat("x", 200) + `"}`)
+	publish := func() (StreamPosition, error) {
+		if mode == "map" {
+			res, err := node.MapPublish(context.Background(), ch, "key", MapPublishOptions{Data: data})
+			return res.Position, err
+		}
+		res, err := node.Publish(ch, data, WithHistory(1000, time.Minute))
+		return res.StreamPosition, err
+	}
+	// Far more than 1000 bytes, and nothing after it: no later publication reveals
+	// the gap, only the overflow can.
+	burst := func() {
+		for i := 0; i < 10; i++ {
+			if _, err := publish(); err != nil {
+				t.Error(err)
 			}
-			// At the sync point, publish far more than 1000 bytes, and nothing
-			// after it: no later publication reveals the gap, only the overflow can.
-			testAtSyncPoint = func(channel string) {
-				if channel != ch {
-					return
-				}
-				for i := 0; i < 10; i++ {
-					_, _ = publish()
-				}
+		}
+	}
+	var armed atomic.Bool
+	aroundRead := func(channel string, read func()) {
+		read()
+		if channel == ch && when == "before_sync_point" && armed.CompareAndSwap(true, false) {
+			burst()
+		}
+	}
+	memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	broker := &faultyHistoryBroker{MemoryBroker: memBroker}
+	broker.history = func(channel string, opts HistoryOptions) (pubs []*Publication, sp StreamPosition, err error) {
+		aroundRead(channel, func() { pubs, sp, err = memBroker.History(channel, opts) })
+		return pubs, sp, err
+	}
+	node.SetBroker(broker)
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(&streamReadMapBroker{MemoryMapBroker: mapBroker, aroundRead: aroundRead})
+	if when == "after_sync_point" {
+		testAtSyncPoint = func(channel string) {
+			if channel == ch {
+				burst()
 			}
-			defer func() { testAtSyncPoint = nil }()
-			switch mode {
-			case "client_side", "map":
-				req := &protocol.SubscribeRequest{Channel: ch, Recover: true, Offset: sp.Offset, Epoch: sp.Epoch}
-				if mode == "map" {
-					req.Type = int32(SubscriptionTypeMap)
-					req.Phase = MapPhaseLive
-				}
-				rw := testReplyWriterWrapper()
-				require.NoError(t, client.handleSubscribe(req, &protocol.Command{Id: 2}, time.Now(), rw.rw))
-				require.Len(t, rw.replies, 1)
-				require.Nil(t, rw.replies[0].Error)
-			case "connect":
-				require.NoError(t, client.connectCmd(&protocol.ConnectRequest{
-					Subs: map[string]*protocol.SubscribeRequest{ch: {Recover: true, Offset: sp.Offset, Epoch: sp.Epoch}},
-				}, &protocol.Command{Id: 1}, time.Now(), testReplyWriterWrapper().rw))
-				client.triggerConnect()
-			case "server_subscribe":
-				require.NoError(t, client.Subscribe(ch, WithRecovery(true), WithRecoverSince(&sp)))
-			}
+		}
+		defer func() { testAtSyncPoint = nil }()
+	}
 
-			if mode == "connect" || mode == "server_subscribe" {
-				select {
-				case <-transport.closeCh:
-					require.Equal(t, DisconnectInsufficientState.Code, transport.disconnect.Code)
-				case <-time.After(5 * time.Second):
-					require.Fail(t, "client not disconnected after the queue overflowed")
-				}
-				return
-			}
-			select {
-			case code := <-unsubscribed:
-				require.Equal(t, UnsubscribeCodeInsufficient, code)
-			case <-time.After(5 * time.Second):
-				require.Fail(t, "client not resubscribed after the queue overflowed")
-			}
-			require.False(t, transport.closed)
+	opts := SubscribeOptions{EnableRecovery: true}
+	if mode == "map" {
+		opts = SubscribeOptions{Type: SubscriptionTypeMap}
+	}
+	unsubscribed := make(chan uint32, 1)
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		reply := ConnectReply{Credentials: &Credentials{UserID: "42"}}
+		if mode == "connect" {
+			reply.Subscriptions = map[string]SubscribeOptions{ch: opts}
+		}
+		return reply, nil
+	})
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: opts}, nil)
 		})
+		c.OnUnsubscribe(func(e UnsubscribeEvent) {
+			select {
+			case unsubscribed <- e.Code:
+			default:
+			}
+		})
+	})
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	sp, err := publish()
+	require.NoError(t, err)
+
+	transport := newTestTransport(func() {})
+	client := newTestClientCustomTransport(t, context.Background(), node, transport, "42")
+	if mode != "connect" {
+		connectClientV2(t, client)
+	}
+	armed.Store(true)
+	var subscribeErr error
+	switch mode {
+	case "client_side", "map":
+		req := &protocol.SubscribeRequest{Channel: ch, Recover: true, Offset: sp.Offset, Epoch: sp.Epoch}
+		if mode == "map" {
+			req.Type = int32(SubscriptionTypeMap)
+			req.Phase = MapPhaseLive
+		}
+		rw := testReplyWriterWrapper()
+		require.NoError(t, client.handleSubscribe(req, &protocol.Command{Id: 2}, time.Now(), rw.rw))
+		if when == "after_sync_point" {
+			require.Len(t, rw.replies, 1)
+			require.Nil(t, rw.replies[0].Error)
+		}
+	case "connect":
+		subscribeErr = client.connectCmd(&protocol.ConnectRequest{
+			Subs: map[string]*protocol.SubscribeRequest{ch: {Recover: true, Offset: sp.Offset, Epoch: sp.Epoch}},
+		}, &protocol.Command{Id: 1}, time.Now(), testReplyWriterWrapper().rw)
+		client.triggerConnect()
+	case "server_subscribe":
+		subscribeErr = client.Subscribe(ch, WithRecovery(true), WithRecoverSince(&sp))
+	}
+
+	switch {
+	case when == "before_sync_point" && (mode == "connect" || mode == "server_subscribe"):
+		// The subscribe fails with insufficient state, the caller gets it.
+		var disconnect *Disconnect
+		require.ErrorAs(t, subscribeErr, &disconnect)
+		require.Equal(t, DisconnectInsufficientState.Code, disconnect.Code)
+	case when == "before_sync_point", mode == "connect" || mode == "server_subscribe":
+		require.NoError(t, subscribeErr)
+		select {
+		case <-transport.closeCh:
+			require.Equal(t, DisconnectInsufficientState.Code, transport.disconnect.Code)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "client not disconnected after the overflow")
+		}
+	default:
+		select {
+		case code := <-unsubscribed:
+			require.Equal(t, UnsubscribeCodeInsufficient, code)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "client not resubscribed after the overflow")
+		}
+		require.False(t, transport.closed)
 	}
 }
 
@@ -7830,5 +7870,110 @@ func TestClientRecoveryEmptyEpochRead(t *testing.T) {
 				require.Equal(t, uint64(3), position.Offset)
 			})
 		}
+	}
+}
+
+// A publication without offset (published without history) into a channel which a
+// client subscribes to with recovery can't be synced with the recovery: it is dropped
+// until the subscribe result is written, so nothing of the channel comes before it.
+// After that such publications are delivered as usual.
+func TestClientRecoveryPublicationsWithoutOffsetDuringSubscribe(t *testing.T) {
+	prev := isInTest
+	isInTest = true
+	defer func() { isInTest = prev }()
+
+	for _, mode := range []string{"client_side", "connect", "server_subscribe"} {
+		t.Run(mode, func(t *testing.T) {
+			ch := testChannelRecoveryOrderingPrefix + "_without_offset_" + mode
+			node, err := New(Config{LogLevel: LogLevelTrace, LogHandler: func(entry LogEntry) {}})
+			require.NoError(t, err)
+			publishWithoutOffset := func(n string) {
+				res, err := node.Publish(ch, []byte(`{"n":"`+n+`"}`))
+				require.NoError(t, err)
+				require.Zero(t, res.Offset)
+			}
+			memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+			require.NoError(t, err)
+			broker := &faultyHistoryBroker{MemoryBroker: memBroker}
+			var armed atomic.Bool
+			broker.history = func(channel string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
+				pubs, sp, err := memBroker.History(channel, opts)
+				if channel == ch && armed.CompareAndSwap(true, false) {
+					publishWithoutOffset("before_sync_point")
+				}
+				return pubs, sp, err
+			}
+			node.SetBroker(broker)
+			testAtSyncPoint = func(channel string) {
+				if channel == ch {
+					publishWithoutOffset("at_sync_point")
+				}
+			}
+			defer func() { testAtSyncPoint = nil }()
+			node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+				reply := ConnectReply{Credentials: &Credentials{UserID: "42"}}
+				if mode == "connect" {
+					reply.Subscriptions = map[string]SubscribeOptions{ch: {EnableRecovery: true}}
+				}
+				return reply, nil
+			})
+			node.OnConnect(func(c *Client) {
+				c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+					cb(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true}}, nil)
+				})
+			})
+			require.NoError(t, node.Run())
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			res, err := node.Publish(ch, []byte(`{"n":"history"}`), WithHistory(100, time.Minute))
+			require.NoError(t, err)
+
+			transport := newTestTransport(func() {})
+			sink := make(chan []byte, 1024)
+			transport.sink = sink
+			client := newTestClientCustomTransport(t, context.Background(), node, transport, "42")
+			req := &protocol.SubscribeRequest{Channel: ch, Recover: true, Offset: res.Offset, Epoch: res.Epoch}
+			if mode != "connect" {
+				connectClientV2(t, client)
+				drainSink(sink)
+			}
+			armed.Store(true)
+			switch mode {
+			case "client_side":
+				require.NoError(t, client.handleSubscribe(req, &protocol.Command{Id: 2}, time.Now(), testReplyWriterWrapper().rw))
+			case "connect":
+				require.NoError(t, client.connectCmd(&protocol.ConnectRequest{Subs: map[string]*protocol.SubscribeRequest{ch: req}},
+					&protocol.Command{Id: 1}, time.Now(), testReplyWriterWrapper().rw))
+			case "server_subscribe":
+				require.NoError(t, client.Subscribe(ch, WithRecovery(true), WithRecoverSince(&res.StreamPosition)))
+			}
+			require.False(t, armed.Load())
+			publishWithoutOffset("after_subscribe")
+
+			// What the client gets for the channel, in order.
+			var got []string
+			require.Eventually(t, func() bool {
+				for _, frame := range drainSink(sink) {
+					decoder := newReplyDecoder(protocol.TypeJSON, frame)
+					for {
+						reply, err := decoder.Decode()
+						if errors.Is(err, io.EOF) {
+							break
+						}
+						require.NoError(t, err)
+						switch {
+						case reply.Subscribe != nil,
+							reply.Connect != nil && reply.Connect.Subs[ch] != nil,
+							reply.Push != nil && reply.Push.Channel == ch && reply.Push.Subscribe != nil:
+							got = append(got, "result")
+						case reply.Push != nil && reply.Push.Pub != nil:
+							got = append(got, string(reply.Push.Pub.Data))
+						}
+					}
+				}
+				return slices.Contains(got, `{"n":"after_subscribe"}`)
+			}, 2*time.Second, 10*time.Millisecond)
+			require.Equal(t, []string{"result", `{"n":"after_subscribe"}`}, got)
+			require.True(t, client.IsSubscribed(ch))
+		})
 	}
 }
