@@ -5317,7 +5317,7 @@ func TestMapSubscribe_LivePhase_StateEpochMismatch(t *testing.T) {
 
 // TestMapSubscribe_Streamless_StateToLive_ClientTagsFilter covers the
 // streamless-with-tags-filter branch in handleMapTransitionToLive
-// (allowStreamless==true && sub.tagsFilter != nil).
+// (no positioning && sub.tagsFilter != nil).
 func TestMapSubscribe_Streamless_StateToLive_ClientTagsFilter(t *testing.T) {
 	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
