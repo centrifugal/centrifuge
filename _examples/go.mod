@@ -41,6 +41,7 @@ require (
 	github.com/bytedance/gopkg v0.1.4 // indirect
 	github.com/bytedance/sonic v1.15.3 // indirect
 	github.com/bytedance/sonic/loader v0.5.2 // indirect
+	github.com/centrifugal/fdelta v0.0.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/x/ansi v0.11.8 // indirect
