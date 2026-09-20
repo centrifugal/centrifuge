@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -297,7 +298,7 @@ type Client struct {
 	channels         map[string]ChannelContext
 	messageWriter    *writer
 	perChannelWriter *perChannelWriter
-	pubSubSync       *recovery.PubSubSync
+	pubSubSync       recovery.PubSubSync[pendingPublication]
 	uid              string
 	session          string
 	user             string
@@ -370,7 +371,6 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 		node:          n,
 		transport:     t,
 		channels:      make(map[string]ChannelContext),
-		pubSubSync:    recovery.NewPubSubSync(),
 		status:        statusConnecting,
 		eventHub:      &clientEventHub{},
 		connectedAtMS: time.Now().UnixMilli(),
@@ -3072,20 +3072,54 @@ func (c *Client) handleSend(req *protocol.SendRequest, cmd *protocol.Command, st
 	return nil
 }
 
-func (c *Client) unlockServerSideSubscriptions(subCtxMap map[string]subscribeContext) {
-	for channel := range subCtxMap {
-		c.pubSubSync.StopBuffering(channel)
+// cancelServerSideBuffering drops the publications buffered for connect-time
+// subscriptions when the connect fails.
+func (c *Client) cancelServerSideBuffering(subCtxMap map[string]subscribeContext) {
+	for _, subCtx := range subCtxMap {
+		c.pubSubSync.CancelBuffering(subCtx.pubSubBuffer)
 	}
 }
 
 // isInTest may be true during Centrifuge test run. We use it to inject code required to
-// cover various edge case scenarios.
-var isInTest = false
+// cover various edge case scenarios. Atomic: tests set it while goroutines of earlier
+// tests may still read it.
+var isInTest atomic.Bool
 
 const (
 	testChannelRedisClientSubscribeRecoveryDeadlock1 = "TestRedisClientSubscribeRecoveryDeadlock1"
 	testChannelRedisClientSubscribeRecoveryDeadlock2 = "TestRedisClientSubscribeRecoveryDeadlock2"
+	// Two channels of one hub shard (index 36 of numHubShards).
+	testChannelConnectRecoverySameShard1 = "TestConnectRecoverySameHubShard1"
+	testChannelConnectRecoverySameShard2 = "TestConnectRecoverySameHubShard21"
+	testChannelSubscribeJoinRecovery     = "TestSubscribeJoinRecovery"
+	// Subscriptions to channels with this prefix stay between their sync point and
+	// StopBuffering for a while, so that publications get queued meanwhile.
+	testChannelRecoveryOrderingPrefix = "TestRecoveryOrdering"
 )
+
+// testAtSyncPoint (if set) runs for subscriptions to channels with
+// testChannelRecoveryOrderingPrefix at their sync point, and then they stay there
+// for testSyncPointDelay (100ms if zero).
+var (
+	testAtSyncPoint    atomic.Pointer[func(channel string)]
+	testSyncPointDelay atomic.Int64
+	// testAfterMapCommit (if set) runs for map subscriptions to channels with
+	// testChannelRecoveryOrderingPrefix between their commit and their reply.
+	testAfterMapCommit atomic.Pointer[func(channel string)]
+)
+
+// testSyncPoint runs at the sync point of subscriptions to channels with
+// testChannelRecoveryOrderingPrefix (only in tests).
+func testSyncPoint(channel string) {
+	if f := testAtSyncPoint.Load(); f != nil {
+		(*f)(channel)
+	}
+	delay := time.Duration(testSyncPointDelay.Load())
+	if delay == 0 {
+		delay = 100 * time.Millisecond
+	}
+	time.Sleep(delay)
+}
 
 // connectCmd handles connect command from client - client must send connect
 // command immediately after establishing connection with server.
@@ -3431,7 +3465,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 					subCmd.Epoch = subReq.Epoch
 					subCmd.Delta = subReq.Delta
 				}
-				if isInTest && ch == testChannelRedisClientSubscribeRecoveryDeadlock2 { // Only for tests.
+				if isInTest.Load() && (ch == testChannelRedisClientSubscribeRecoveryDeadlock2 || ch == testChannelConnectRecoverySameShard2) { // Only for tests.
 					select {
 					case <-time.After(time.Second):
 					case <-c.Context().Done():
@@ -3453,7 +3487,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		wg.Wait()
 
 		if subDisconnect != nil || subError != nil {
-			c.unlockServerSideSubscriptions(subCtxMap)
+			c.cancelServerSideBuffering(subCtxMap)
 			c.rollbackConnectServerSideSubs(subCtxMap, reservedGens)
 			if subDisconnect != nil {
 				return subDisconnect
@@ -3467,7 +3501,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		if !hasFlag(c.transport.DisabledPushFlags(), PushFlagConnect) {
 			protoReply, err := c.getConnectPushReply(res)
 			if err != nil {
-				c.unlockServerSideSubscriptions(subCtxMap)
+				c.cancelServerSideBuffering(subCtxMap)
 				c.rollbackConnectServerSideSubs(subCtxMap, reservedGens)
 				c.node.logger.log(newErrorLogEntry(err, "error encoding connect", map[string]any{"error": err.Error()}))
 				return DisconnectServerError
@@ -3491,7 +3525,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	} else {
 		protoReply, err := c.getConnectCommandReply(res)
 		if err != nil {
-			c.unlockServerSideSubscriptions(subCtxMap)
+			c.cancelServerSideBuffering(subCtxMap)
 			c.rollbackConnectServerSideSubs(subCtxMap, reservedGens)
 			c.node.logger.log(newErrorLogEntry(err, "error encoding connect", map[string]any{"error": err.Error()}))
 			return DisconnectServerError
@@ -3538,14 +3572,24 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		close(sc)
 	}
 
-	c.unlockServerSideSubscriptions(subCtxMap)
+	// The connect reply is written, so the publications queued since each
+	// subscription's sync point can follow it. Subscriptions which are rolled back
+	// below drop theirs: their channel may already belong to another subscription.
+	for channel, subCtx := range subCtxMap {
+		if closedDuringConnect || lostReservations[channel] {
+			c.pubSubSync.CancelBuffering(subCtx.pubSubBuffer)
+			continue
+		}
+		if c.pubSubSync.StopBuffering(subCtx.pubSubBuffer, c.writePendingPublication) {
+			go c.handleInsufficientState(channel, true)
+		}
+	}
 
 	// Roll back connect-time subscriptions whose reservation was lost: remove the
 	// hub entry this attempt registered (gen-matched, no-op if the unsubscribe
-	// already removed it) and its pre-commit presence entry. Runs after
-	// unlockServerSideSubscriptions so buffers are released before subShard locks
-	// are taken. The connection is already being force-closed by the unsubscribe
-	// timeout path that consumed the reservation.
+	// already removed it) and its pre-commit presence entry. The connection is
+	// already being force-closed by the unsubscribe timeout path that consumed
+	// the reservation.
 	for channel := range lostReservations {
 		_ = c.node.removeSubscription(channel, c, reservedGens[channel])
 		c.removeSubscribePresence(channel, subCtxMap[channel].channelContext.flags)
@@ -3555,8 +3599,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		// The client closed while connect was applying these server-side
 		// subscriptions. close() snapshotted c.channels before they were installed,
 		// so it did not tear down their hub registrations — they would leak. Roll
-		// them back here (subLocks are released above, so removeSubscription can
-		// take them). Mirrors commitSubscription's closed path, including the
+		// them back here. Mirrors commitSubscription's closed path, including the
 		// pre-commit presence entry subscribeCmd added for each channel.
 		for channel, subCtx := range subCtxMap {
 			_ = c.node.removeSubscription(channel, c, reservedGens[channel])
@@ -3797,7 +3840,15 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 		c.onSubscribeErrorGen(subCmd.Channel, subGen)
 		return subCtx.err
 	}
-	defer c.pubSubSync.StopBuffering(channel)
+	// Drops the publications buffered for the subscription on the paths which
+	// return before it is stopped below. Does nothing after that.
+	defer c.pubSubSync.CancelBuffering(subCtx.pubSubBuffer)
+	// The subscribe push and the recovered publications go before the commit, as
+	// the reply of a client-side subscribe does: an unsubscribe waits for the
+	// subscribe until the commit, so its push can't come before them. A write
+	// error means the client is closing, the commit rolls back then.
+	subscribePushDisabled := hasFlag(c.transport.DisabledPushFlags(), PushFlagSubscribe)
+	writeErr := c.writeSubscribePush(channel, subCtx.result, subscribePushDisabled)
 	// Commit the reservation into c.channels, or roll back the hub entry if the
 	// client closed mid-subscribe. Same commit the map path uses. The reservation
 	// guaranteed no competing subscribe ran, so c.channels and the hub entry
@@ -3809,19 +3860,62 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	if subscribingCh != nil {
 		close(subscribingCh)
 	}
-	if hasFlag(c.transport.DisabledPushFlags(), PushFlagSubscribe) {
+	if writeErr != nil {
+		return writeErr
+	}
+	// Publications which came since the sync point follow the recovered ones.
+	if c.pubSubSync.StopBuffering(subCtx.pubSubBuffer, c.writePendingPublication) {
+		go c.handleInsufficientState(channel, true)
+	}
+	if subscribePushDisabled {
 		return nil
 	}
-	replyData, err := c.getSubscribePushReply(channel, subCtx.result)
-	if err != nil {
-		return err
-	}
-	err = c.writeEncodedPushData(replyData, channel, "", protocol.FrameTypePushSubscribe, ChannelBatchConfig{})
-	if err != nil {
-		return err
-	}
 	if subCtx.clientInfo != nil {
+		if isInTest.Load() && channel == testChannelSubscribeJoinRecovery { // Only for tests.
+			select {
+			case <-time.After(time.Second):
+			case <-c.Context().Done():
+			}
+		}
 		c.publishJoinAndPresence(channel, subCtx.channelContext, subCtx.clientInfo)
+	}
+	return nil
+}
+
+// writeSubscribePush writes the subscribe push of a subscription made with
+// Client.Subscribe (unless disabled), and then the publications recovered for it,
+// in order.
+//
+// TODO: send the recovered publications in the subscribe push, together with
+// Recovered and WasRecovering, once protocol.Subscribe has fields for them, as
+// the subscribe reply and the connect reply do.
+func (c *Client) writeSubscribePush(channel string, res *protocol.SubscribeResult, pushDisabled bool) error {
+	if !pushDisabled {
+		replyData, err := c.getSubscribePushReply(channel, res)
+		if err != nil {
+			return err
+		}
+		err = c.writeEncodedPushData(replyData, channel, "", protocol.FrameTypePushSubscribe, ChannelBatchConfig{})
+		if err != nil {
+			return err
+		}
+	}
+	if len(res.Publications) == 0 || hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
+		return nil
+	}
+	for _, pub := range res.Publications {
+		push := &protocol.Push{Channel: channel, Pub: pub}
+		if c.node.logEnabled(LogLevelTrace) {
+			c.traceOutPush(push)
+		}
+		data, err := c.encodeReply(&protocol.Reply{Push: push})
+		if err != nil {
+			return err
+		}
+		err = c.writeEncodedPushData(data, channel, pub.Key, protocol.FrameTypePushPublication, ChannelBatchConfig{})
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -3958,6 +4052,10 @@ type subscribeContext struct {
 	err            *Error
 	disconnect     *Disconnect
 	channelContext ChannelContext
+	// pubSubBuffer is set for a successful server-side subscription with
+	// positioning or recovery. The caller stops it once the subscription is
+	// committed and the result is written, or cancels it.
+	pubSubBuffer *recovery.Buffer[pendingPublication]
 }
 
 // publicationFiltered reports whether a publication with the given tags is
@@ -4131,11 +4229,9 @@ func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind res
 	if reservationLost {
 		// The entry (if any) belongs to a different subscription attempt — do not
 		// touch it or its subscribingCh. Roll back only what this attempt owns:
-		// its recovery buffer and its hub entry (gen-matched, so a no-op if the
-		// unsubscribe already removed it). StopBuffering-before-removeSubscription
-		// ordering as in the closed path below.
+		// its hub entry (gen-matched, so a no-op if the unsubscribe already
+		// removed it). The caller cancels its recovery buffer.
 		c.mu.Unlock()
-		c.pubSubSync.StopBuffering(channel)
 		_ = c.node.removeSubscription(channel, c, ctx.subGen)
 		if kind == reservationChannels {
 			// The normal path adds node-level presence before the commit; the
@@ -4153,13 +4249,7 @@ func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind res
 			delete(c.channels, channel)
 		}
 		c.mu.Unlock()
-		// Release the recovery buffer before removing the hub entry. A positioned/
-		// recovering subscribe holds pubBufferMu (LockBufferAndReadBuffered) until
-		// StopBuffering, and removeSubscription takes subShard.mu; the broadcast
-		// path holds subShard.mu while taking pubBufferMu, so removing the hub entry
-		// with the buffer still locked inverts that order and deadlocks. StopBuffering
-		// is idempotent, so calling it here (and again in the caller) is safe.
-		c.pubSubSync.StopBuffering(channel)
+		// The caller cancels the recovery buffer.
 		_ = c.node.removeSubscription(channel, c, ctx.subGen)
 		if kind == reservationChannels {
 			// Presence was added before the commit on the normal path, and close()
@@ -4299,12 +4389,15 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	}
 	hasServerTagsFilter := reply.Options.ServerTagsFilter != nil
 
+	// Publications which come while the client subscribes are synced with the
+	// recovery (see recovery.PubSubSync). Every failure path below cancels the
+	// buffer. On success it is stopped after the result is written: here for
+	// client-side subscriptions, by the caller (through ctx.pubSubBuffer) for
+	// server-side ones.
+	var pubSubBuf *recovery.Buffer[pendingPublication]
 	needPubSubSync := reply.Options.EnablePositioning || reply.Options.EnableRecovery
 	if needPubSubSync {
-		// Start syncing recovery and PUB/SUB.
-		// The important thing is to call StopBuffering for this channel
-		// after response with Publications written to connection.
-		c.pubSubSync.StartBuffering(channel)
+		pubSubBuf = c.pubSubSync.StartBuffering(channel, c.node.config.ClientQueueMaxSize)
 	}
 
 	// Delta compression isn't used together with tags filters: publications
@@ -4323,7 +4416,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		_, ok := c.channels[channel]
 		if !ok || c.status == statusClosed {
 			c.mu.Unlock()
-			c.pubSubSync.StopBuffering(channel)
+			c.pubSubSync.CancelBuffering(pubSubBuf)
 			c.node.logger.log(newLogEntry(LogLevelInfo, "client closed or unsubscribed before adding subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
 			ctx.disconnect = &DisconnectServerError
 			return ctx
@@ -4333,7 +4426,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	chanID, err := c.node.addSubscription(channel, sub)
 	if err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error adding subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-		c.pubSubSync.StopBuffering(channel)
+		c.pubSubSync.CancelBuffering(pubSubBuf)
 		var clientErr *Error
 		if errors.As(err, &clientErr) && !errors.Is(clientErr, ErrorInternal) {
 			return errorDisconnectContext(clientErr, nil)
@@ -4349,7 +4442,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		_, ok := c.channels[channel]
 		if !ok || c.status == statusClosed {
 			c.mu.Unlock()
-			c.pubSubSync.StopBuffering(channel)
+			c.pubSubSync.CancelBuffering(pubSubBuf)
 			c.node.logger.log(newLogEntry(LogLevelInfo, "client closed or unsubscribed after adding subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
 			ctx.disconnect = &DisconnectServerError
 			return ctx
@@ -4364,7 +4457,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		presenceAdded = true
 		if err != nil {
 			c.node.logger.log(newErrorLogEntry(err, "error adding presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-			c.pubSubSync.StopBuffering(channel)
+			c.pubSubSync.CancelBuffering(pubSubBuf)
 			ctx.disconnect = &DisconnectServerError
 			return ctx
 		}
@@ -4388,7 +4481,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 	if reply.Options.EnablePositioning || reply.Options.EnableRecovery {
 		handleErr := func(err error) subscribeContext {
-			c.pubSubSync.StopBuffering(channel)
+			c.pubSubSync.CancelBuffering(pubSubBuf)
 			var clientErr *Error
 			if errors.As(err, &clientErr) && !errors.Is(clientErr, ErrorInternal) {
 				return errorDisconnectContext(clientErr, nil)
@@ -4466,7 +4559,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 				if err != nil {
 					if errors.Is(err, ErrorUnrecoverablePosition) {
 						if req.Flag&subscriptionFlagRejectUnrecovered != 0 {
-							c.pubSubSync.StopBuffering(channel)
+							c.pubSubSync.CancelBuffering(pubSubBuf)
 							return errorDisconnectContext(ErrorUnrecoverablePosition, nil)
 						}
 						// Result contains stream position in case of ErrorUnrecoverablePosition
@@ -4485,7 +4578,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					var recovered bool
 					recoveredPubs, recovered = isStreamRecovered(historyResult, cmdOffset, cmdEpoch, sub.tagsFilter, sub.serverTagsFilter)
 					if !recovered && req.Flag&subscriptionFlagRejectUnrecovered != 0 {
-						c.pubSubSync.StopBuffering(channel)
+						c.pubSubSync.CancelBuffering(pubSubBuf)
 						return errorDisconnectContext(ErrorUnrecoverablePosition, nil)
 					}
 					res.Recovered = recovered
@@ -4518,11 +4611,21 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		res.Epoch = latestEpoch
 		res.Offset = latestOffset
 
-		bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
+		bufferedPubs, canMerge := c.pubSubSync.ReadBuffered(pubSubBuf, latestEpoch, latestOffset)
+		if isInTest.Load() && strings.HasPrefix(channel, testChannelRecoveryOrderingPrefix) { // Only for tests.
+			testSyncPoint(channel)
+		}
+		if !canMerge {
+			// Too many publications came while the client subscribed, or the stream
+			// changed its epoch meanwhile: they can't be merged with the history.
+			c.pubSubSync.CancelBuffering(pubSubBuf)
+			ctx.disconnect = &DisconnectInsufficientState
+			return ctx
+		}
 		var okMerge bool
 		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
 		if !okMerge {
-			c.pubSubSync.StopBuffering(channel)
+			c.pubSubSync.CancelBuffering(pubSubBuf)
 			ctx.disconnect = &DisconnectInsufficientState
 			return ctx
 		}
@@ -4600,7 +4703,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		protoReply, err := c.getSubscribeCommandReply(res)
 		if err != nil {
 			c.node.logger.log(newErrorLogEntry(err, "error encoding subscribe", map[string]any{"error": err.Error()}))
-			c.pubSubSync.StopBuffering(channel) // Will be called later in case of server side sub.
+			c.pubSubSync.CancelBuffering(pubSubBuf)
 			ctx.disconnect = &DisconnectServerError
 			return ctx
 		}
@@ -4666,11 +4769,10 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		// so the caller runs onSubscribeErrorGen.
 		subscribingCh, committed := c.commitSubscription(channel, channelContext, reservationChannels)
 		if !committed {
-			// Client closed mid-subscribe. Release the recovery/PUB-SUB buffer
-			// StartBuffering opened above before aborting — every other return path
-			// in subscribeCmd pairs StartBuffering with StopBuffering, and the
-			// success path below does too.
-			c.pubSubSync.StopBuffering(channel)
+			// Client closed mid-subscribe. Drop the recovery/PUB-SUB buffer
+			// StartBuffering opened above before aborting, as every other failure
+			// path in subscribeCmd does.
+			c.pubSubSync.CancelBuffering(pubSubBuf)
 			ctx.disconnect = &DisconnectServerError
 			return ctx
 		}
@@ -4684,9 +4786,11 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			// racing unsubscribe cannot double-close it.
 			defer close(subscribingCh)
 		}
-		// Stop syncing recovery and PUB/SUB.
-		// In case of server side subscription we will do this later.
-		c.pubSubSync.StopBuffering(channel)
+		// The reply is written, so the publications queued since the sync point
+		// can follow it. In case of server side subscription the caller does this.
+		if c.pubSubSync.StopBuffering(pubSubBuf, c.writePendingPublication) {
+			go c.handleInsufficientState(channel, false)
+		}
 	}
 
 	if c.node.logger.enabled(LogLevelDebug) {
@@ -4696,6 +4800,9 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	ctx.result = res
 	ctx.clientInfo = info
 	ctx.channelContext = channelContext
+	if serverSide {
+		ctx.pubSubBuffer = pubSubBuf
+	}
 	return ctx
 }
 
@@ -4986,57 +5093,86 @@ func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, d
 }
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool, batchConfig ChannelBatchConfig) error {
+	if c.pubSubSync.Buffering() {
+		// The client may be subscribing to ch: the publication goes to its recovery
+		// buffer, or is queued until the subscription's result is written (or, without
+		// offset, dropped till then).
+		syncPub := pub
+		if prep.wasFiltered {
+			syncPub = prep.filteredPub
+		}
+		if c.pubSubSync.SyncPublication(ch, syncPub, sp.Epoch, len(prep.fullData), pendingPublication{
+			channel: ch, pub: pub, prep: prep, sp: sp, maxLagExceeded: maxLagExceeded, batchConfig: batchConfig,
+		}) {
+			return nil
+		}
+	}
 	if pub.Offset == 0 {
-		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
-			return nil
-		}
-
-		// For publications without offset, if filtering is needed, we can skip them
-		// early since there's no position tracking to maintain.
-		if prep.wasFiltered && !prep.deltaSub {
-			return nil
-		}
-
-		if prep.deltaSub {
-			// For this path (no Offset) delta may come from channel medium layer, so that we can use it
-			// here if allowed for the connection.
-			c.mu.RLock()
-			channelContext, ok := c.channels[ch]
-			if !ok {
-				c.mu.RUnlock()
-				return nil
-			}
-			deltaAllowed := channelHasFlag(channelContext.flags, flagDeltaAllowed)
-			c.mu.RUnlock()
-
-			if deltaAllowed {
-				if c.node.logEnabled(LogLevelTrace) {
-					c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
-				}
-				return c.writeEncodedPushData(prep.localDeltaData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
-			}
-			// Set flagDeltaAllowed so subsequent pubs use delta.
-			c.mu.Lock()
-			if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
-				chCtx.flags |= flagDeltaAllowed
-				c.channels[ch] = chCtx
-			}
-			c.mu.Unlock()
-		}
-
-		if c.node.logEnabled(LogLevelTrace) {
-			c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
-		}
-		return c.writeEncodedPushData(prep.fullData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+		return c.writeOffsetlessPublication(ch, pub, prep, batchConfig)
 	}
-	syncPub := pub
-	if prep.wasFiltered {
-		syncPub = prep.filteredPub
-	}
-	c.pubSubSync.SyncPublication(ch, syncPub, func() {
-		_ = c.writePublicationUpdatePosition(ch, pub, prep, sp, maxLagExceeded, batchConfig)
-	})
+	_ = c.writePublicationUpdatePosition(ch, pub, prep, sp, maxLagExceeded, batchConfig)
 	return nil
+}
+
+// writeOffsetlessPublication writes a publication without offset: there is no
+// position to check or update.
+func (c *Client) writeOffsetlessPublication(ch string, pub *protocol.Publication, prep preparedData, batchConfig ChannelBatchConfig) error {
+	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
+		return nil
+	}
+
+	// For publications without offset, if filtering is needed, we can skip them
+	// early since there's no position tracking to maintain.
+	if prep.wasFiltered && !prep.deltaSub {
+		return nil
+	}
+
+	if prep.deltaSub {
+		// For this path (no Offset) delta may come from channel medium layer, so that we can use it
+		// here if allowed for the connection.
+		c.mu.RLock()
+		channelContext, ok := c.channels[ch]
+		if !ok {
+			c.mu.RUnlock()
+			return nil
+		}
+		deltaAllowed := channelHasFlag(channelContext.flags, flagDeltaAllowed)
+		c.mu.RUnlock()
+
+		if deltaAllowed {
+			if c.node.logEnabled(LogLevelTrace) {
+				c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
+			}
+			return c.writeEncodedPushData(prep.localDeltaData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+		}
+		// Set flagDeltaAllowed so subsequent pubs use delta.
+		c.mu.Lock()
+		if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
+			chCtx.flags |= flagDeltaAllowed
+			c.channels[ch] = chCtx
+		}
+		c.mu.Unlock()
+	}
+
+	if c.node.logEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
+	}
+	return c.writeEncodedPushData(prep.fullData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+}
+
+// pendingPublication is a publication queued between the sync point of a
+// subscription and StopBuffering, with what writing it needs.
+type pendingPublication struct {
+	channel        string
+	pub            *protocol.Publication
+	prep           preparedData
+	sp             StreamPosition
+	maxLagExceeded bool
+	batchConfig    ChannelBatchConfig
+}
+
+func (c *Client) writePendingPublication(q pendingPublication) {
+	_ = c.writePublicationUpdatePosition(q.channel, q.pub, q.prep, q.sp, q.maxLagExceeded, q.batchConfig)
 }
 
 func (c *Client) writeJoin(ch string, join *protocol.Join, data []byte, batchConfig ChannelBatchConfig) error {
