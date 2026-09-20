@@ -709,6 +709,9 @@ func (c *Client) handleMapTransitionToLive(
 	var latestOffset uint64
 	streamPos := params.sincePosition
 
+	// Only a positioned subscription has a stream to read and merge the buffered
+	// publications with. A streamless one (state then LIVE, or LIVE directly) has
+	// nothing to merge, and clients don't read the publications of its result.
 	if positioning {
 		// Positioned mode: read stream from sincePosition to catch any updates.
 		chOpts, _ := c.node.resolveMapChannelOptions(channel)
@@ -849,8 +852,6 @@ func (c *Client) handleMapTransitionToLive(
 			recoveredPubs = c.makeRecoveredMapPubsDeltaFossil(recoveredPubs)
 		}
 	}
-	// A streamless subscription (no stream: state then LIVE, or LIVE directly) has
-	// nothing to merge, and clients don't read the publications of its result.
 
 	// Convert state publications to protocol format (if any).
 	isJSON := c.transport.Protocol() == ProtocolTypeJSON
