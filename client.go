@@ -4397,7 +4397,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	var pubSubBuf *recovery.Buffer[pendingPublication]
 	needPubSubSync := reply.Options.EnablePositioning || reply.Options.EnableRecovery
 	if needPubSubSync {
-		pubSubBuf = c.pubSubSync.StartBuffering(channel, c.node.config.ClientQueueMaxSize)
+		pubSubBuf = c.pubSubSync.StartBuffering(channel)
 	}
 
 	// Delta compression isn't used together with tags filters: publications
@@ -5103,7 +5103,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 		}
 		if c.pubSubSync.SyncPublication(ch, syncPub, sp.Epoch, len(prep.fullData), pendingPublication{
 			channel: ch, pub: pub, prep: prep, sp: sp, maxLagExceeded: maxLagExceeded, batchConfig: batchConfig,
-		}) {
+		}, c.pubSubSyncLimit()) {
 			return nil
 		}
 	}
@@ -5158,6 +5158,13 @@ func (c *Client) writeOffsetlessPublication(ch string, pub *protocol.Publication
 		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
 	}
 	return c.writeEncodedPushData(prep.fullData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+}
+
+// pubSubSyncLimit is the limit of what the client's recovery buffers hold: the
+// same as of its write queue, where the buffered publications go, and together
+// with it.
+func (c *Client) pubSubSyncLimit() recovery.Limit {
+	return recovery.Limit{MaxSize: c.node.config.ClientQueueMaxSize, Queued: c.messageWriter.messages}
 }
 
 // pendingPublication is a publication queued between the sync point of a

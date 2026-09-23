@@ -22,8 +22,11 @@ import (
 //  3. StopBuffering is called by the subscriber once its result is written. It
 //     writes the queued publications in order, and lets the following ones through.
 //
-// A publication without offset can't be synced: it is dropped until the result is
-// written (StopBuffering starts).
+// A publication without offset can't be synced: it is dropped until StopBuffering
+// has written the queue.
+//
+// All buffers of a PubSubSync share one limit (see Limit): it bounds what a
+// connection holds while it subscribes, however many channels it subscribes to.
 //
 // SyncPublication never waits for the subscriber. A publication is broadcast with
 // its channel's hub shard lock held, and the subscriber may need that lock (or wait
@@ -34,8 +37,25 @@ type PubSubSync[T any] struct {
 	// numBuffers is the number of buffers in the map, so that broadcasts to a
 	// client which is not subscribing don't take the mutex.
 	numBuffers atomic.Int32
-	mu         sync.RWMutex
-	buffers    map[string]*Buffer[T] // Made on first use: most clients never need it.
+	// held is the size of the data of the publications all buffers hold, counted
+	// only with a limit.
+	held    atomic.Int64
+	mu      sync.RWMutex
+	buffers map[string]*Buffer[T] // Made on first use: most clients never need it.
+}
+
+// Limit is the limit of the size of the data of the publications all buffers of a
+// PubSubSync hold, together with what Queued (if not nil) reports: the connection's
+// write queue, where the buffered publications go. A publication over the limit
+// overflows the buffer it comes to. A MaxSize of zero means no limit.
+type Limit struct {
+	MaxSize int
+	Queued  Sizer
+}
+
+// Sizer reports the size of the data a connection has queued for writing.
+type Sizer interface {
+	Size() int
 }
 
 type bufferPhase uint8
@@ -49,16 +69,18 @@ const (
 // Buffer is the state of one subscribe attempt to a channel. A nil *Buffer is valid
 // in all PubSubSync methods and means nothing is buffered.
 type Buffer[T any] struct {
-	channel      string
-	maxQueueSize int
-	mu           sync.Mutex
-	pubs         []*protocol.Publication
-	pubsSize     int
+	channel string
+	mu      sync.Mutex
+	pubs    []*protocol.Publication
+	// pubsSize is the size of the collected publications: they are held (merged
+	// into the subscribe result) until StopBuffering.
+	pubsSize int
 	// epoch of the collected publications.
 	epoch string
 	// queue holds the items of phase 2 in chunks, so that growing it never copies
 	// them. Chunks double in size up to maxQueueChunk items.
-	queue     [][]T
+	queue [][]T
+	// queueSize is the size of the queued items which are not written yet.
 	queueSize int
 	phase     bufferPhase
 	// pubsOverflowed is set when the collected publications don't fit into the
@@ -67,8 +89,6 @@ type Buffer[T any] struct {
 	overflowed     bool
 	// mixedEpochs is set when the collected publications have more than one epoch.
 	mixedEpochs bool
-	// stopping is set once StopBuffering starts: the result is written then.
-	stopping bool
 }
 
 const (
@@ -91,10 +111,8 @@ func (b *Buffer[T]) enqueue(item T) {
 
 // StartBuffering starts phase 1 for the channel. It must be called before the
 // subscription is added to the hub, so that no publication for it is missed.
-// maxQueueSize limits the size of the data of the publications collected in phase
-// 1, and of those queued in phase 2, zero means no limit.
-func (s *PubSubSync[T]) StartBuffering(channel string, maxQueueSize int) *Buffer[T] {
-	b := &Buffer[T]{channel: channel, maxQueueSize: maxQueueSize}
+func (s *PubSubSync[T]) StartBuffering(channel string) *Buffer[T] {
+	b := &Buffer[T]{channel: channel}
 	s.mu.Lock()
 	if s.buffers == nil {
 		s.buffers = make(map[string]*Buffer[T])
@@ -117,11 +135,11 @@ func (s *PubSubSync[T]) Buffering() bool {
 
 // SyncPublication takes a publication of the given epoch into the channel's buffer
 // if the channel is buffering: in phase 1 pub is collected, in phase 2 item is
-// queued, and size counts towards the limit of each (a publication without offset is
-// dropped instead, till the result is written). It returns false if the channel isn't
+// queued, and size counts towards limit (a publication without offset is dropped
+// instead, till the queue is written). It returns false if the channel isn't
 // buffering, and then the caller writes the publication itself. It never blocks for
 // long.
-func (s *PubSubSync[T]) SyncPublication(channel string, pub *protocol.Publication, epoch string, size int, item T) bool {
+func (s *PubSubSync[T]) SyncPublication(channel string, pub *protocol.Publication, epoch string, size int, item T, limit Limit) bool {
 	s.mu.RLock()
 	b, ok := s.buffers[channel]
 	s.mu.RUnlock()
@@ -131,21 +149,25 @@ func (s *PubSubSync[T]) SyncPublication(channel string, pub *protocol.Publicatio
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if pub.Offset == 0 {
-		// Can't be synced: dropped, unless the result is written already.
-		return b.phase != phaseStopped && !b.stopping
+		// Can't be synced: dropped until the queue is written. Written right away
+		// earlier, it could come before the queued publications.
+		return b.phase != phaseStopped
 	}
 	switch b.phase {
 	case phaseCollecting:
 		if b.pubsOverflowed {
 			return true
 		}
-		b.pubsSize += size
-		if b.maxQueueSize > 0 && b.pubsSize > b.maxQueueSize {
+		counted, ok := limit.reserve(&s.held, size)
+		if !ok {
 			// Too much to keep. The subscriber learns about it from ReadBuffered.
 			b.pubsOverflowed = true
 			b.pubs = nil
+			s.release(b.pubsSize)
+			b.pubsSize = 0
 			return true
 		}
+		b.pubsSize += counted
 		if len(b.pubs) == 0 {
 			b.epoch = epoch
 		} else if epoch != b.epoch {
@@ -157,19 +179,56 @@ func (s *PubSubSync[T]) SyncPublication(channel string, pub *protocol.Publicatio
 		if b.overflowed {
 			return true
 		}
-		b.queueSize += size
-		if b.maxQueueSize > 0 && b.queueSize > b.maxQueueSize {
+		counted, ok := limit.reserve(&s.held, size)
+		if !ok {
 			// Too much to keep. The subscriber learns about it from StopBuffering.
 			b.overflowed = true
 			b.queue = nil
+			s.release(b.queueSize)
+			b.queueSize = 0
 			return true
 		}
+		b.queueSize += counted
 		b.enqueue(item)
 		return true
 	default:
 		// Stopped: everything queued has been written already.
 		return false
 	}
+}
+
+// reserve counts size into held, unless it doesn't fit into the limit. It returns
+// what it counted: nothing without a limit. Not generic, and with the check for no
+// limit inlined, so that without a limit it costs nothing.
+func (l Limit) reserve(held *atomic.Int64, size int) (counted int, ok bool) {
+	if l.MaxSize <= 0 {
+		return 0, true
+	}
+	return l.reserveSlow(held, size)
+}
+
+func (l Limit) reserveSlow(held *atomic.Int64, size int) (counted int, ok bool) {
+	total := int(held.Add(int64(size)))
+	if l.Queued != nil {
+		total += l.Queued.Size()
+	}
+	if total > l.MaxSize {
+		held.Add(-int64(size))
+		return 0, false
+	}
+	return size, true
+}
+
+func (s *PubSubSync[T]) release(size int) {
+	if size != 0 {
+		s.held.Add(-int64(size))
+	}
+}
+
+// Held returns the size of the data of the publications all buffers hold (counted
+// only with a limit).
+func (s *PubSubSync[T]) Held() int {
+	return int(s.held.Load())
 }
 
 // ReadBuffered is the sync point: it returns the publications collected in phase 1
@@ -217,28 +276,32 @@ func (s *PubSubSync[T]) StopBuffering(b *Buffer[T], write func(T)) (overflowed b
 	}
 	for {
 		b.mu.Lock()
-		b.stopping = true
 		if b.phase == phaseStopped {
 			b.mu.Unlock()
 			return false
 		}
+		// The result is written: the collected publications are in the write queue.
+		s.release(b.pubsSize)
+		b.pubsSize = 0
 		if len(b.queue) == 0 {
 			// Only once the queue is empty: a publication which comes while the
 			// previous batch is written must be queued behind it.
 			overflowed = b.overflowed
-			b.stopLocked()
+			s.stopLocked(b)
 			b.mu.Unlock()
 			s.remove(b)
 			return overflowed
 		}
-		queue := b.queue
-		b.queue = nil
+		queue, queueSize := b.queue, b.queueSize
+		b.queue, b.queueSize = nil, 0
 		b.mu.Unlock()
 		for _, chunk := range queue {
 			for _, item := range chunk {
 				write(item)
 			}
 		}
+		// Counted until it is in the write queue, so never left out of the limit.
+		s.release(queueSize)
 	}
 }
 
@@ -253,12 +316,14 @@ func (s *PubSubSync[T]) CancelBuffering(b *Buffer[T]) {
 		b.mu.Unlock()
 		return
 	}
-	b.stopLocked()
+	s.stopLocked(b)
 	b.mu.Unlock()
 	s.remove(b)
 }
 
-func (b *Buffer[T]) stopLocked() {
+func (s *PubSubSync[T]) stopLocked(b *Buffer[T]) {
+	s.release(b.pubsSize + b.queueSize)
+	b.pubsSize, b.queueSize = 0, 0
 	b.phase = phaseStopped
 	b.pubs = nil
 	b.queue = nil
