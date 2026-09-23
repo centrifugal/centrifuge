@@ -13,7 +13,7 @@ For a subscription with positioning or recovery (stream and map paths):
 
 Publications without offset can't be synced: they are dropped until `StopBuffering` has written the queue.
 
-All buffers of a client share one limit, `ClientQueueMaxSize`, together with its write queue (`recovery.Limit`): it bounds what a connection holds while it subscribes, however many channels it subscribes to.
+All buffers of a client share one limit, `ClientQueueMaxSize`, counted separately from its write queue: it bounds what a connection holds while it subscribes, however many channels it subscribes to.
 
 Nothing of the channel goes to the client before its result, and nothing of an unsubscribe before the result and recovered publications. Recovered publications are always delivered.
 

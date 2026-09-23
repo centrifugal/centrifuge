@@ -26,7 +26,7 @@ func read(s *testSync, b *Buffer[func()]) []*protocol.Publication {
 type recorder struct {
 	mu      sync.Mutex
 	offsets []uint64
-	limit   Limit
+	limit   int
 }
 
 func (r *recorder) write(offset uint64) func() {
@@ -125,7 +125,7 @@ func TestPubSubSyncStopWithoutSyncPoint(t *testing.T) {
 
 func TestPubSubSyncOverflow(t *testing.T) {
 	s := &testSync{}
-	r := &recorder{limit: Limit{MaxSize: 10}}
+	r := &recorder{limit: 10}
 	b := s.StartBuffering("ch")
 	s.ReadBuffered(b, "", 0)
 	r.publish(s, "ch", 1, 6)
@@ -157,7 +157,7 @@ func TestPubSubSyncCollectedCoveredByRead(t *testing.T) {
 func TestPubSubSyncCollectOverflow(t *testing.T) {
 	// Collected publications which don't fit into the limit can't be merged.
 	s := &testSync{}
-	r := &recorder{limit: Limit{MaxSize: 10}}
+	r := &recorder{limit: 10}
 	b := s.StartBuffering("ch")
 	r.publish(s, "ch", 1, 6)
 	r.publish(s, "ch", 2, 6) // Over the limit: the collected ones are dropped.
@@ -185,7 +185,7 @@ func TestPubSubSyncWithoutOffset(t *testing.T) {
 	s.SyncPublication("ch", &protocol.Publication{Offset: 1}, "", 1, func() {
 		r.write(1)()
 		r.publish(s, "ch", 0, 1) // Dropped: publication 2 is still queued.
-	}, Limit{})
+	}, 0)
 	r.publish(s, "ch", 2, 1)
 	require.False(t, s.StopBuffering(b, call))
 	require.Equal(t, []uint64{1, 2}, r.get())
@@ -222,7 +222,7 @@ func TestPubSubSyncPublicationWhileFlushing(t *testing.T) {
 	s.SyncPublication("ch", &protocol.Publication{Offset: 1}, "", 1, func() {
 		r.write(1)()
 		r.publish(s, "ch", 3, 1)
-	}, Limit{})
+	}, 0)
 	r.publish(s, "ch", 2, 1)
 	require.False(t, s.StopBuffering(b, call))
 	require.Equal(t, []uint64{1, 2, 3}, r.get())
@@ -271,7 +271,7 @@ func TestPubSubSyncLongQueueOrder(t *testing.T) {
 			s.SyncPublication("ch", &protocol.Publication{Offset: offset}, "", 1, func() {
 				r.write(100)()
 				r.publish(s, "ch", n+1, 1)
-			}, Limit{})
+			}, 0)
 			continue
 		}
 		r.publish(s, "ch", offset, 1)
@@ -288,7 +288,7 @@ func TestPubSubSyncLongQueueOrder(t *testing.T) {
 func TestPubSubSyncLongQueueOverflow(t *testing.T) {
 	// Overflow in the middle of a long queue drops all of it.
 	s := &testSync{}
-	r := &recorder{limit: Limit{MaxSize: 200}}
+	r := &recorder{limit: 200}
 	b := s.StartBuffering("ch")
 	s.ReadBuffered(b, "", 0)
 	for offset := uint64(1); offset <= 300; offset++ {
@@ -298,16 +298,11 @@ func TestPubSubSyncLongQueueOverflow(t *testing.T) {
 	require.Empty(t, r.get())
 }
 
-// sizer is a write queue of a fixed size.
-type sizer int
-
-func (s sizer) Size() int { return int(s) }
-
 func TestPubSubSyncLimitSharedByBuffers(t *testing.T) {
 	// The limit is for all buffers together: a publication which fits into the
 	// limit of one buffer overflows the one it comes to if the others hold the rest.
 	s := &testSync{}
-	r := &recorder{limit: Limit{MaxSize: 10}}
+	r := &recorder{limit: 10}
 	a := s.StartBuffering("a")
 	b := s.StartBuffering("b")
 	r.publish(s, "a", 1, 6) // Collected: held until the result is written.
@@ -325,24 +320,11 @@ func TestPubSubSyncLimitSharedByBuffers(t *testing.T) {
 	require.Zero(t, s.Held())
 }
 
-func TestPubSubSyncLimitWithWriteQueue(t *testing.T) {
-	// What the write queue holds counts towards the limit.
-	s := &testSync{}
-	r := &recorder{limit: Limit{MaxSize: 10, Queued: sizer(8)}}
-	b := s.StartBuffering("ch")
-	s.ReadBuffered(b, "", 0)
-	r.publish(s, "ch", 1, 2)
-	r.publish(s, "ch", 2, 1) // 8 + 2 + 1 > 10.
-	require.True(t, s.StopBuffering(b, call))
-	require.Empty(t, r.get())
-	require.Zero(t, s.Held())
-}
-
 func TestPubSubSyncLimitWhileWritingQueue(t *testing.T) {
 	// A queued publication counts until it is written: meanwhile the ones that come
-	// count on top of it. Once written, it doesn't count any more.
+	// count on top of it. Once written, it doesn't count any more, nor does the result.
 	s := &testSync{}
-	r := &recorder{limit: Limit{MaxSize: 10}}
+	r := &recorder{limit: 10}
 	b := s.StartBuffering("ch")
 	r.publish(s, "ch", 1, 3) // Collected, in the result.
 	s.ReadBuffered(b, "", 0)
@@ -350,7 +332,7 @@ func TestPubSubSyncLimitWhileWritingQueue(t *testing.T) {
 	s.SyncPublication("ch", &protocol.Publication{Offset: 2}, "", 5, func() {
 		r.write(2)()
 		heldWhileWriting = s.Held()
-		r.publish(s, "ch", 3, 5) // 5 + 5 fits, the result is in the write queue.
+		r.publish(s, "ch", 3, 5) // 5 + 5 fits, the result is written.
 	}, r.limit)
 	require.Equal(t, 8, s.Held())
 	require.False(t, s.StopBuffering(b, call))
@@ -362,7 +344,7 @@ func TestPubSubSyncLimitWhileWritingQueue(t *testing.T) {
 func TestPubSubSyncLimitPublicationOverLimit(t *testing.T) {
 	// A publication bigger than the limit overflows even an empty buffer.
 	s := &testSync{}
-	r := &recorder{limit: Limit{MaxSize: 10}}
+	r := &recorder{limit: 10}
 	b := s.StartBuffering("ch")
 	r.publish(s, "ch", 1, 11)
 	_, ok := s.ReadBuffered(b, "", 0)
@@ -373,7 +355,7 @@ func TestPubSubSyncLimitPublicationOverLimit(t *testing.T) {
 
 func TestPubSubSyncLimitReleasedOnCancel(t *testing.T) {
 	s := &testSync{}
-	r := &recorder{limit: Limit{MaxSize: 10}}
+	r := &recorder{limit: 10}
 	b := s.StartBuffering("ch")
 	r.publish(s, "ch", 1, 4)
 	s.ReadBuffered(b, "", 0)
@@ -410,7 +392,7 @@ func TestPubSubSyncEpochAtSyncPoint(t *testing.T) {
 			s := &testSync{}
 			b := s.StartBuffering("ch")
 			for i, epoch := range tt.collected {
-				require.True(t, s.SyncPublication("ch", &protocol.Publication{Offset: uint64(i + 1)}, epoch, 1, func() {}, Limit{}))
+				require.True(t, s.SyncPublication("ch", &protocol.Publication{Offset: uint64(i + 1)}, epoch, 1, func() {}, 0))
 			}
 			pubs, ok := s.ReadBuffered(b, tt.historyFrom, 0)
 			require.Len(t, pubs, len(tt.collected))
@@ -502,7 +484,7 @@ func BenchmarkPubSubSyncNotBuffering(b *testing.B) {
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			if s.Buffering() && s.SyncPublication("ch", pub, "", 1, func() {}, Limit{}) {
+			if s.Buffering() && s.SyncPublication("ch", pub, "", 1, func() {}, 0) {
 				b.Fatal("synced")
 			}
 		}
@@ -517,7 +499,7 @@ func BenchmarkPubSubSyncOtherChannelBuffering(b *testing.B) {
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			if s.Buffering() && s.SyncPublication("ch", pub, "", 1, func() {}, Limit{}) {
+			if s.Buffering() && s.SyncPublication("ch", pub, "", 1, func() {}, 0) {
 				b.Fatal("synced")
 			}
 		}
@@ -534,17 +516,17 @@ func BenchmarkPubSubSyncSubscribeCycle(b *testing.B) {
 	for _, queued := range []int{0, 10, 100} {
 		for _, limited := range []bool{false, true} {
 			name := "queued_" + strconv.Itoa(queued)
-			var limit Limit
+			limit := 0
 			if limited {
 				name += "_limited"
-				limit = Limit{MaxSize: 1 << 20, Queued: sizer(0)}
+				limit = 1 << 20
 			}
 			benchmarkPubSubSyncSubscribeCycle(b, name, pub, queued, limit)
 		}
 	}
 }
 
-func benchmarkPubSubSyncSubscribeCycle(b *testing.B, name string, pub *protocol.Publication, queued int, limit Limit) {
+func benchmarkPubSubSyncSubscribeCycle(b *testing.B, name string, pub *protocol.Publication, queued int, limit int) {
 	b.Run(name, func(b *testing.B) {
 		s := &PubSubSync[benchItem]{}
 		var written int

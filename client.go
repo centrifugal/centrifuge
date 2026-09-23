@@ -5103,7 +5103,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 		}
 		if c.pubSubSync.SyncPublication(ch, syncPub, sp.Epoch, len(prep.fullData), pendingPublication{
 			channel: ch, pub: pub, prep: prep, sp: sp, maxLagExceeded: maxLagExceeded, batchConfig: batchConfig,
-		}, c.pubSubSyncLimit()) {
+		}, c.node.config.ClientQueueMaxSize) {
 			return nil
 		}
 	}
@@ -5158,13 +5158,6 @@ func (c *Client) writeOffsetlessPublication(ch string, pub *protocol.Publication
 		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
 	}
 	return c.writeEncodedPushData(prep.fullData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
-}
-
-// pubSubSyncLimit is the limit of what the client's recovery buffers hold: the
-// same as of its write queue, where the buffered publications go, and together
-// with it.
-func (c *Client) pubSubSyncLimit() recovery.Limit {
-	return recovery.Limit{MaxSize: c.node.config.ClientQueueMaxSize, Queued: c.messageWriter.messages}
 }
 
 // pendingPublication is a publication queued between the sync point of a

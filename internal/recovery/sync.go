@@ -25,8 +25,9 @@ import (
 // A publication without offset can't be synced: it is dropped until StopBuffering
 // has written the queue.
 //
-// All buffers of a PubSubSync share one limit (see Limit): it bounds what a
-// connection holds while it subscribes, however many channels it subscribes to.
+// All buffers of a PubSubSync share one limit, passed to SyncPublication: it bounds
+// what a connection holds while it subscribes, however many channels it subscribes
+// to.
 //
 // SyncPublication never waits for the subscriber. A publication is broadcast with
 // its channel's hub shard lock held, and the subscriber may need that lock (or wait
@@ -42,20 +43,6 @@ type PubSubSync[T any] struct {
 	held    atomic.Int64
 	mu      sync.RWMutex
 	buffers map[string]*Buffer[T] // Made on first use: most clients never need it.
-}
-
-// Limit is the limit of the size of the data of the publications all buffers of a
-// PubSubSync hold, together with what Queued (if not nil) reports: the connection's
-// write queue, where the buffered publications go. A publication over the limit
-// overflows the buffer it comes to. A MaxSize of zero means no limit.
-type Limit struct {
-	MaxSize int
-	Queued  Sizer
-}
-
-// Sizer reports the size of the data a connection has queued for writing.
-type Sizer interface {
-	Size() int
 }
 
 type bufferPhase uint8
@@ -135,11 +122,14 @@ func (s *PubSubSync[T]) Buffering() bool {
 
 // SyncPublication takes a publication of the given epoch into the channel's buffer
 // if the channel is buffering: in phase 1 pub is collected, in phase 2 item is
-// queued, and size counts towards limit (a publication without offset is dropped
-// instead, till the queue is written). It returns false if the channel isn't
-// buffering, and then the caller writes the publication itself. It never blocks for
-// long.
-func (s *PubSubSync[T]) SyncPublication(channel string, pub *protocol.Publication, epoch string, size int, item T, limit Limit) bool {
+// queued (a publication without offset is dropped instead, till the queue is
+// written). It returns false if the channel isn't buffering, and then the caller
+// writes the publication itself. It never blocks for long.
+//
+// size counts towards maxSize, the limit of the size of the data of the
+// publications all buffers hold, zero means no limit. A publication over it
+// overflows the buffer it comes to.
+func (s *PubSubSync[T]) SyncPublication(channel string, pub *protocol.Publication, epoch string, size int, item T, maxSize int) bool {
 	s.mu.RLock()
 	b, ok := s.buffers[channel]
 	s.mu.RUnlock()
@@ -158,7 +148,7 @@ func (s *PubSubSync[T]) SyncPublication(channel string, pub *protocol.Publicatio
 		if b.pubsOverflowed {
 			return true
 		}
-		counted, ok := limit.reserve(&s.held, size)
+		counted, ok := reserve(&s.held, size, maxSize)
 		if !ok {
 			// Too much to keep. The subscriber learns about it from ReadBuffered.
 			b.pubsOverflowed = true
@@ -179,7 +169,7 @@ func (s *PubSubSync[T]) SyncPublication(channel string, pub *protocol.Publicatio
 		if b.overflowed {
 			return true
 		}
-		counted, ok := limit.reserve(&s.held, size)
+		counted, ok := reserve(&s.held, size, maxSize)
 		if !ok {
 			// Too much to keep. The subscriber learns about it from StopBuffering.
 			b.overflowed = true
@@ -197,22 +187,13 @@ func (s *PubSubSync[T]) SyncPublication(channel string, pub *protocol.Publicatio
 	}
 }
 
-// reserve counts size into held, unless it doesn't fit into the limit. It returns
-// what it counted: nothing without a limit. Not generic, and with the check for no
-// limit inlined, so that without a limit it costs nothing.
-func (l Limit) reserve(held *atomic.Int64, size int) (counted int, ok bool) {
-	if l.MaxSize <= 0 {
+// reserve counts size into held, unless it doesn't fit into maxSize. It returns
+// what it counted: nothing without a limit. Not generic, so that it is inlined.
+func reserve(held *atomic.Int64, size int, maxSize int) (counted int, ok bool) {
+	if maxSize <= 0 {
 		return 0, true
 	}
-	return l.reserveSlow(held, size)
-}
-
-func (l Limit) reserveSlow(held *atomic.Int64, size int) (counted int, ok bool) {
-	total := int(held.Add(int64(size)))
-	if l.Queued != nil {
-		total += l.Queued.Size()
-	}
-	if total > l.MaxSize {
+	if held.Add(int64(size)) > int64(maxSize) {
 		held.Add(-int64(size))
 		return 0, false
 	}
@@ -280,7 +261,7 @@ func (s *PubSubSync[T]) StopBuffering(b *Buffer[T], write func(T)) (overflowed b
 			b.mu.Unlock()
 			return false
 		}
-		// The result is written: the collected publications are in the write queue.
+		// The result is written: the collected publications are not held here any more.
 		s.release(b.pubsSize)
 		b.pubsSize = 0
 		if len(b.queue) == 0 {
@@ -300,7 +281,7 @@ func (s *PubSubSync[T]) StopBuffering(b *Buffer[T], write func(T)) (overflowed b
 				write(item)
 			}
 		}
-		// Counted until it is in the write queue, so never left out of the limit.
+		// Counted until written, so never left out of the limit.
 		s.release(queueSize)
 	}
 }
