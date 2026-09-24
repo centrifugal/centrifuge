@@ -1646,8 +1646,8 @@ func TestBroadcastFiltered_MultipleKeys_NoNilBufferedPub(t *testing.T) {
 
 	// Enter the buffering window for both so the broadcast is buffered, not sent.
 	bufs := map[*Client]*recovery.Buffer[pendingPublication]{
-		jsonClient: jsonClient.pubSubSync.StartBuffering(ch, 0),
-		pbClient:   pbClient.pubSubSync.StartBuffering(ch, 0),
+		jsonClient: jsonClient.pubSubSync.StartBuffering(ch),
+		pbClient:   pbClient.pubSubSync.StartBuffering(ch),
 	}
 
 	// Broadcast a publication excluded by the server tags filter (team=sales).

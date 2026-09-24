@@ -11,7 +11,9 @@ For a subscription with positioning or recovery (stream and map paths):
 3. Commit, write the result, then `StopBuffering`. It writes the publications queued meanwhile; if it returns true, resubscribe the client with insufficient state.
 4. Every other exit calls `CancelBuffering`. A leaked buffer queues the channel's publications forever.
 
-Publications without offset can't be synced: they are dropped until the result is written.
+Publications without offset can't be synced: they are dropped until `StopBuffering` has written the queue.
+
+All buffers of a client share one limit, `ClientQueueMaxSize`, counted separately from its write queue: it bounds what a connection holds while it subscribes, however many channels it subscribes to.
 
 Nothing of the channel goes to the client before its result, and nothing of an unsubscribe before the result and recovered publications. Recovered publications are always delivered.
 

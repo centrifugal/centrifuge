@@ -4397,7 +4397,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	var pubSubBuf *recovery.Buffer[pendingPublication]
 	needPubSubSync := reply.Options.EnablePositioning || reply.Options.EnableRecovery
 	if needPubSubSync {
-		pubSubBuf = c.pubSubSync.StartBuffering(channel, c.node.config.ClientQueueMaxSize)
+		pubSubBuf = c.pubSubSync.StartBuffering(channel)
 	}
 
 	// Delta compression isn't used together with tags filters: publications
@@ -5103,7 +5103,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 		}
 		if c.pubSubSync.SyncPublication(ch, syncPub, sp.Epoch, len(prep.fullData), pendingPublication{
 			channel: ch, pub: pub, prep: prep, sp: sp, maxLagExceeded: maxLagExceeded, batchConfig: batchConfig,
-		}) {
+		}, c.node.config.ClientQueueMaxSize) {
 			return nil
 		}
 	}

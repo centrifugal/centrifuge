@@ -688,7 +688,7 @@ func (c *Client) handleMapTransitionToLive(
 	// Start coordination: buffer -> add subscription -> read stream -> merge. A
 	// streamless subscription has nothing to merge: its publications, which have no
 	// offset, are dropped until its reply is written.
-	pubSubBuf = c.pubSubSync.StartBuffering(channel, c.node.config.ClientQueueMaxSize)
+	pubSubBuf = c.pubSubSync.StartBuffering(channel)
 
 	chanID, err := c.node.addSubscription(channel, sub)
 	if err != nil {

@@ -62,13 +62,14 @@ func (r *clientRegistry) add(c *Client) {
 
 // withLeakedRecoveryBuffers returns the clients which still have a recovery buffer
 // when no subscribe is in progress any more: every subscribe attempt must stop or
-// cancel its buffer, a leaked one queues the channel's publications forever.
+// cancel its buffer, a leaked one queues the channel's publications forever. So is
+// one which still counts publications towards the client's limit.
 func (r *clientRegistry) withLeakedRecoveryBuffers() []*Client {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var leaked []*Client
 	for _, c := range r.clients {
-		if c.pubSubSync.Buffering() {
+		if c.pubSubSync.Buffering() || c.pubSubSync.Held() != 0 {
 			leaked = append(leaked, c)
 		}
 	}
@@ -6878,6 +6879,84 @@ func testRecoveryOverflow(t *testing.T, mode string, when string) {
 			require.Fail(t, "client not resubscribed after the overflow")
 		}
 		require.False(t, transport.closed)
+	}
+}
+
+// ClientQueueMaxSize limits what a client holds, not what each of its subscriptions
+// does: publications queued for two connect-time subscriptions, which each fit into
+// the limit, overflow it together.
+func TestClientRecoveryQueueLimitSharedBySubscriptions(t *testing.T) {
+	setIsInTest(t)
+	for _, together := range []bool{false, true} {
+		t.Run(fmt.Sprintf("together_%v", together), func(t *testing.T) {
+			testRecoveryQueueLimitShared(t, together)
+		})
+	}
+}
+
+func testRecoveryQueueLimitShared(t *testing.T, together bool) {
+	prefix := testChannelRecoveryOrderingPrefix + "_shared_limit_" + strconv.FormatBool(together)
+	channels := []string{prefix + "_a"}
+	if together {
+		channels = append(channels, prefix+"_b")
+	}
+	node, err := New(Config{
+		LogLevel:           LogLevelTrace,
+		LogHandler:         func(entry LogEntry) {},
+		ClientQueueMaxSize: 2000,
+	})
+	require.NoError(t, err)
+
+	// About 1300 bytes a publication, one queued for each channel: one fits into the
+	// limit of the buffers, two don't. The write queue has its own limit, so one
+	// written after the connect reply (about 400 bytes) must fit into it too, even
+	// if the reply isn't written to the connection yet.
+	data := []byte(`{"data":"` + strings.Repeat("x", 1200) + `"}`)
+	setTestAtSyncPoint(t, func(channel string) {
+		if !strings.HasPrefix(channel, prefix) {
+			return
+		}
+		if _, err := node.Publish(channel, data, WithHistory(1000, time.Minute)); err != nil {
+			t.Error(err)
+		}
+	})
+
+	subs := make(map[string]SubscribeOptions, len(channels))
+	for _, ch := range channels {
+		subs[ch] = SubscribeOptions{EnableRecovery: true}
+	}
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{Credentials: &Credentials{UserID: "42"}, Subscriptions: subs}, nil
+	})
+	node.OnConnect(func(c *Client) {})
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	reqSubs := make(map[string]*protocol.SubscribeRequest, len(channels))
+	for _, ch := range channels {
+		res, err := node.Publish(ch, data, WithHistory(1000, time.Minute))
+		require.NoError(t, err)
+		reqSubs[ch] = &protocol.SubscribeRequest{Recover: true, Offset: res.Offset, Epoch: res.Epoch}
+	}
+
+	transport := newTestTransport(func() {})
+	client := newTestClientCustomTransport(t, context.Background(), node, transport, "42")
+	require.NoError(t, client.connectCmd(&protocol.ConnectRequest{Subs: reqSubs}, &protocol.Command{Id: 1}, time.Now(), testReplyWriterWrapper().rw))
+	client.triggerConnect()
+
+	if !together {
+		select {
+		case <-transport.closeCh:
+			require.Fail(t, "client disconnected", "code %d", transport.disconnect.Code)
+		case <-time.After(500 * time.Millisecond):
+		}
+		return
+	}
+	select {
+	case <-transport.closeCh:
+		require.Equal(t, DisconnectInsufficientState.Code, transport.disconnect.Code)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "client not disconnected after the overflow")
 	}
 }
 
