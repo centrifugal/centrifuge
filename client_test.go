@@ -6903,20 +6903,21 @@ func testRecoveryQueueLimitShared(t *testing.T, together bool) {
 	node, err := New(Config{
 		LogLevel:           LogLevelTrace,
 		LogHandler:         func(entry LogEntry) {},
-		ClientQueueMaxSize: 1000,
+		ClientQueueMaxSize: 2000,
 	})
 	require.NoError(t, err)
 
-	// About 300 bytes a publication: two of them fit into the limit, four don't.
-	data := []byte(`{"data":"` + strings.Repeat("x", 200) + `"}`)
+	// About 1300 bytes a publication, one queued for each channel: one fits into the
+	// limit of the buffers, two don't. The write queue has its own limit, so one
+	// written after the connect reply (about 400 bytes) must fit into it too, even
+	// if the reply isn't written to the connection yet.
+	data := []byte(`{"data":"` + strings.Repeat("x", 1200) + `"}`)
 	setTestAtSyncPoint(t, func(channel string) {
 		if !strings.HasPrefix(channel, prefix) {
 			return
 		}
-		for i := 0; i < 2; i++ {
-			if _, err := node.Publish(channel, data, WithHistory(1000, time.Minute)); err != nil {
-				t.Error(err)
-			}
+		if _, err := node.Publish(channel, data, WithHistory(1000, time.Minute)); err != nil {
+			t.Error(err)
 		}
 	})
 
