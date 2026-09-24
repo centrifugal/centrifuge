@@ -14,3 +14,5 @@ _examples/map_demo/map_demo
 _examples/dictionary_compression/dictionary_compression
 _examples/native_histograms_otel/native_histograms_otel
 .claude
+*.test
+*.prof

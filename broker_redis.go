@@ -397,14 +397,8 @@ func (r *defaultBrokerPubSubRunner) run(s *shardWrapper, h BrokerEventHandler) e
 }
 
 var (
-	//go:embed internal/redis_lua/broker_publish_idempotent.lua
-	publishIdempotentSource string
-
 	//go:embed internal/redis_lua/broker_history_add_list.lua
 	addHistoryListSource string
-
-	//go:embed internal/redis_lua/broker_history_add_stream.lua
-	addHistoryStreamSource string
 
 	//go:embed internal/redis_lua/broker_history_list.lua
 	historyListSource string
