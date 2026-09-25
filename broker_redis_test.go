@@ -367,6 +367,14 @@ func TestRedisBrokerPublishNoPubSub(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, res.StreamPosition.Offset > 0)
+
+	// An idempotent publication without history has nothing to publish to,
+	// which must not be reported as a failure - neither the first time nor
+	// when the result is found remembered.
+	for i := 0; i < 2; i++ {
+		_, err = b.Publish("channel", []byte(`{}`), PublishOptions{IdempotencyKey: "key"})
+		require.NoError(t, err, "attempt %d", i)
+	}
 }
 
 func TestRedisBrokerPublishIdempotent(t *testing.T) {
@@ -3205,4 +3213,119 @@ func TestRedisBrokerIdempotentPublishDuringSlotMigration(t *testing.T) {
 	require.False(t, res.Suppressed, "the failed publication must not have been remembered")
 	require.Eventually(t, func() bool { return len(received()) > 0 }, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, []string{"after"}, received())
+}
+
+// TestRedisRejectsChannelStartingWithBrace checks the Redis broker (without
+// sharded PUB/SUB) and presence manager in Redis Cluster refuse a channel whose
+// name starts with "}", with a bad request error.
+//
+// Their keys carry the channel as a hash tag, and for such a name the tag is
+// empty, so Redis put one channel's keys in different slots and building a
+// call which uses several of them panicked.
+func TestRedisRejectsChannelStartingWithBrace(t *testing.T) {
+	// A node each: the helpers run the node they are given, and a node runs once.
+	newNode := func() *Node {
+		node := testNode(t)
+		t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+		return node
+	}
+	b := NewTestRedisBrokerCluster(t, newNode(), getUniquePrefix(), true, 7001)
+	defer stopRedisBroker(b)
+	require.False(t, b.useShardedPubSub(b.shards[0].shard))
+	pm := NewTestRedisPresenceManagerClusterWithPrefix(t, newNode(), getUniquePrefix(), false, 7001)
+	defer stopRedisPresenceManager(pm)
+
+	const ch = "}x"
+	history := PublishOptions{HistorySize: 10, HistoryTTL: time.Minute}
+	calls := map[string]func() error{
+		"Publish":         func() error { _, err := b.Publish(ch, []byte("{}"), PublishOptions{}); return err },
+		"Publish history": func() error { _, err := b.Publish(ch, []byte("{}"), history); return err },
+		"PublishJoin":     func() error { return b.PublishJoin(ch, &ClientInfo{}) },
+		"PublishLeave":    func() error { return b.PublishLeave(ch, &ClientInfo{}) },
+		"Subscribe":       func() error { return b.Subscribe(ch) },
+		"Subscribe many":  func() error { return b.Subscribe("fine", ch) },
+		"History":         func() error { _, _, err := b.History(ch, HistoryOptions{}); return err },
+		"RemoveHistory":   func() error { return b.RemoveHistory(ch) },
+		"AddPresence":     func() error { return pm.AddPresence(ch, "uid", &ClientInfo{ClientID: "uid"}) },
+		"RemovePresence":  func() error { return pm.RemovePresence(ch, "uid", "") },
+		"Presence":        func() error { _, err := pm.Presence(ch); return err },
+		"PresenceStats":   func() error { _, err := pm.PresenceStats(ch); return err },
+	}
+	for name, call := range calls {
+		err := call()
+		require.ErrorIs(t, err, errRedisUnsupportedChannel, name)
+		var clientErr *Error
+		require.ErrorAs(t, err, &clientErr, name)
+		require.Equal(t, ErrorBadRequest.Code, clientErr.Code, name)
+	}
+}
+
+// TestRedisSingleChannelStartingWithBrace checks a channel whose name starts
+// with "}" keeps working outside Redis Cluster, where keys have no slots.
+func TestRedisSingleChannelStartingWithBrace(t *testing.T) {
+	node := testNode(t)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	b := newTestRedisBroker(t, node, true, false, 6379)
+	defer stopRedisBroker(b)
+
+	const ch = "}x"
+	res, err := b.Publish(ch, []byte("{}"), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute})
+	require.NoError(t, err)
+	pubs, sp, err := b.History(ch, HistoryOptions{Filter: HistoryFilter{Limit: -1}})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+	require.Equal(t, res.StreamPosition, sp)
+}
+
+// TestRedisShardedChannelStartingWithBrace checks a channel whose name starts
+// with "}" keeps working with sharded PUB/SUB, whose keys are tagged by
+// partition rather than by channel.
+func TestRedisShardedChannelStartingWithBrace(t *testing.T) {
+	node := testNode(t)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	s, err := NewRedisShard(node, RedisShardConfig{
+		ClusterAddresses: []string{"localhost:7001", "localhost:7002", "localhost:7003"},
+		IOTimeout:        10 * time.Second,
+	})
+	require.NoError(t, err)
+	b, err := NewRedisBroker(node, RedisBrokerConfig{
+		Prefix: getUniquePrefix(), Shards: []*RedisShard{s}, NumShardedPubSubPartitions: 4,
+	})
+	require.NoError(t, err)
+	require.NoError(t, b.RegisterBrokerEventHandler(&testBrokerEventHandler{}))
+	defer stopRedisBroker(b)
+
+	const ch = "}x"
+	res, err := b.Publish(ch, []byte("{}"), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute})
+	require.NoError(t, err)
+	pubs, sp, err := b.History(ch, HistoryOptions{Filter: HistoryFilter{Limit: -1}})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+	require.Equal(t, res.StreamPosition, sp)
+}
+
+// TestRedisClusterChannelWithBraceInside checks a "}" further into a channel
+// name still works in Redis Cluster: the hash tag stops at it, the same way
+// for every key of the channel, so they still share a slot.
+func TestRedisClusterChannelWithBraceInside(t *testing.T) {
+	// A node each: the helpers run the node they are given, and a node runs once.
+	brokerNode, presenceNode := testNode(t), testNode(t)
+	defer func() { _ = brokerNode.Shutdown(context.Background()) }()
+	defer func() { _ = presenceNode.Shutdown(context.Background()) }()
+	b := NewTestRedisBrokerCluster(t, brokerNode, getUniquePrefix(), true, 7001)
+	defer stopRedisBroker(b)
+	pm := NewTestRedisPresenceManagerClusterWithPrefix(t, presenceNode, getUniquePrefix(), false, 7001)
+	defer stopRedisPresenceManager(pm)
+
+	const ch = "a}b"
+	res, err := b.Publish(ch, []byte("{}"), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute})
+	require.NoError(t, err)
+	pubs, sp, err := b.History(ch, HistoryOptions{Filter: HistoryFilter{Limit: -1}})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+	require.Equal(t, res.StreamPosition, sp)
+	require.NoError(t, pm.AddPresence(ch, "uid", &ClientInfo{ClientID: "uid"}))
+	presence, err := pm.Presence(ch)
+	require.NoError(t, err)
+	require.Len(t, presence, 1)
 }

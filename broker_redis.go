@@ -26,6 +26,38 @@ var (
 	errPubSubConnUnavailable = errors.New("redis: pub/sub connection temporary unavailable")
 )
 
+// errRedisUnsupportedChannel is returned by the Redis broker and presence
+// manager in Redis Cluster for a channel whose name starts with "}", where
+// they keep a channel's keys together by its name. It wraps ErrorBadRequest,
+// so a client asking for such a channel is told so.
+//
+// A channel's keys carry the channel as a hash tag, "{channel}", so that they
+// share a slot. Redis hashes the text between the first "{" and the next "}",
+// which for such a name is empty – and then Redis hashes each whole key
+// instead, putting the keys of one channel in different slots, where a call
+// using several of them can not run. A "}" further into the name is fine: it
+// ends the tag the same way in every key of the channel.
+var errRedisUnsupportedChannel = fmt.Errorf("%w: channel name starting with \"}\" is not supported in Redis Cluster", ErrorBadRequest)
+
+// checkRedisChannelTag returns errRedisUnsupportedChannel for a channel which
+// can not be a hash tag - see errRedisUnsupportedChannel.
+func checkRedisChannelTag(ch string) error {
+	if strings.HasPrefix(ch, "}") {
+		return errRedisUnsupportedChannel
+	}
+	return nil
+}
+
+// checkChannel refuses a channel whose keys could not share a slot. Only a
+// cluster without sharded PUB/SUB tags keys by channel; sharded PUB/SUB tags
+// them by partition, which is never empty.
+func (b *RedisBroker) checkChannel(ch string) error {
+	if s := b.getShard(ch).shard; s.isCluster && !b.useShardedPubSub(s) {
+		return checkRedisChannelTag(ch)
+	}
+	return nil
+}
+
 const (
 	// redisSubscribeBatchLimit is a maximum number of channels to include in a single
 	// batch subscribe call.
@@ -781,6 +813,9 @@ func (b *RedisBroker) useShardedPubSub(s *RedisShard) bool {
 
 // Publish - see Broker.Publish.
 func (b *RedisBroker) Publish(ch string, data []byte, opts PublishOptions) (PublishResult, error) {
+	if err := b.checkChannel(ch); err != nil {
+		return PublishResult{}, err
+	}
 	return b.publish(b.getShard(ch), ch, data, opts)
 }
 
@@ -876,7 +911,13 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 				)
 			}
 		}
-		return PublishResult{}, resp.Error()
+		// The idempotent script replies with what its publish replied, and
+		// with SkipPubSub there is nothing to publish to - a nil reply, which
+		// is not a failure: the result was remembered.
+		if err := resp.Error(); err != nil && !rueidis.IsRedisNil(err) {
+			return PublishResult{}, err
+		}
+		return PublishResult{}, nil
 	}
 
 	historyMetaKey := b.historyMetaKey(s.shard, ch)
@@ -971,6 +1012,9 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 
 // PublishJoin - see Broker.PublishJoin.
 func (b *RedisBroker) PublishJoin(ch string, info *ClientInfo) error {
+	if err := b.checkChannel(ch); err != nil {
+		return err
+	}
 	return b.publishJoin(b.getShard(ch), ch, info)
 }
 
@@ -995,6 +1039,9 @@ func (b *RedisBroker) publishJoin(s *shardWrapper, ch string, info *ClientInfo) 
 
 // PublishLeave - see Broker.PublishLeave.
 func (b *RedisBroker) PublishLeave(ch string, info *ClientInfo) error {
+	if err := b.checkChannel(ch); err != nil {
+		return err
+	}
 	return b.publishLeave(b.getShard(ch), ch, info)
 }
 
@@ -1021,6 +1068,11 @@ func (b *RedisBroker) publishLeave(s *shardWrapper, ch string, info *ClientInfo)
 func (b *RedisBroker) Subscribe(channels ...string) error {
 	if len(channels) == 0 {
 		return nil
+	}
+	for _, ch := range channels {
+		if err := b.checkChannel(ch); err != nil {
+			return err
+		}
 	}
 	if len(channels) == 1 {
 		return b.subscribe(b.getShard(channels[0]), channels[0])
@@ -1199,6 +1251,9 @@ func (b *RedisBroker) unsubscribe(s *shardWrapper, ch string) error {
 
 // History - see Broker.History.
 func (b *RedisBroker) History(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
+	if err := b.checkChannel(ch); err != nil {
+		return nil, StreamPosition{}, err
+	}
 	return b.history(b.getShard(ch), ch, opts)
 }
 
@@ -1211,6 +1266,9 @@ func (b *RedisBroker) history(s *shardWrapper, ch string, opts HistoryOptions) (
 
 // RemoveHistory - see Broker.RemoveHistory.
 func (b *RedisBroker) RemoveHistory(ch string) error {
+	if err := b.checkChannel(ch); err != nil {
+		return err
+	}
 	return b.removeHistory(b.getShard(ch), ch)
 }
 
