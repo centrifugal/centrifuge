@@ -876,7 +876,13 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 				)
 			}
 		}
-		return PublishResult{}, resp.Error()
+		// The idempotent script replies with what its publish replied, and
+		// with SkipPubSub there is nothing to publish to - a nil reply, which
+		// is not a failure: the result was remembered.
+		if err := resp.Error(); err != nil && !rueidis.IsRedisNil(err) {
+			return PublishResult{}, err
+		}
+		return PublishResult{}, nil
 	}
 
 	historyMetaKey := b.historyMetaKey(s.shard, ch)

@@ -367,6 +367,14 @@ func TestRedisBrokerPublishNoPubSub(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, res.StreamPosition.Offset > 0)
+
+	// An idempotent publication without history has nothing to publish to,
+	// which must not be reported as a failure - neither the first time nor
+	// when the result is found remembered.
+	for i := 0; i < 2; i++ {
+		_, err = b.Publish("channel", []byte(`{}`), PublishOptions{IdempotencyKey: "key"})
+		require.NoError(t, err, "attempt %d", i)
+	}
 }
 
 func TestRedisBrokerPublishIdempotent(t *testing.T) {
