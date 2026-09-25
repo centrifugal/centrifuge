@@ -3253,7 +3253,7 @@ func TestRedisRejectsChannelStartingWithBrace(t *testing.T) {
 	}
 	for name, call := range calls {
 		err := call()
-		require.ErrorIs(t, err, ErrRedisUnsupportedChannel, name)
+		require.ErrorIs(t, err, errRedisUnsupportedChannel, name)
 		var clientErr *Error
 		require.ErrorAs(t, err, &clientErr, name)
 		require.Equal(t, ErrorBadRequest.Code, clientErr.Code, name)

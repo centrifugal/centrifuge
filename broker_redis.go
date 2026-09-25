@@ -26,7 +26,7 @@ var (
 	errPubSubConnUnavailable = errors.New("redis: pub/sub connection temporary unavailable")
 )
 
-// ErrRedisUnsupportedChannel is returned by the Redis broker and presence
+// errRedisUnsupportedChannel is returned by the Redis broker and presence
 // manager in Redis Cluster for a channel whose name starts with "}", where
 // they keep a channel's keys together by its name. It wraps ErrorBadRequest,
 // so a client asking for such a channel is told so.
@@ -37,13 +37,13 @@ var (
 // instead, putting the keys of one channel in different slots, where a call
 // using several of them can not run. A "}" further into the name is fine: it
 // ends the tag the same way in every key of the channel.
-var ErrRedisUnsupportedChannel = fmt.Errorf("%w: channel name starting with \"}\" is not supported in Redis Cluster", ErrorBadRequest)
+var errRedisUnsupportedChannel = fmt.Errorf("%w: channel name starting with \"}\" is not supported in Redis Cluster", ErrorBadRequest)
 
-// checkRedisChannelTag returns ErrRedisUnsupportedChannel for a channel which
-// can not be a hash tag - see ErrRedisUnsupportedChannel.
+// checkRedisChannelTag returns errRedisUnsupportedChannel for a channel which
+// can not be a hash tag - see errRedisUnsupportedChannel.
 func checkRedisChannelTag(ch string) error {
 	if strings.HasPrefix(ch, "}") {
-		return ErrRedisUnsupportedChannel
+		return errRedisUnsupportedChannel
 	}
 	return nil
 }

@@ -368,7 +368,7 @@ func (m *RedisPresenceManager) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 // checkChannel refuses a channel whose keys could not share a slot. Presence
-// keys are tagged by channel in any cluster - see ErrRedisUnsupportedChannel.
+// keys are tagged by channel in any cluster - see errRedisUnsupportedChannel.
 func (m *RedisPresenceManager) checkChannel(ch string) error {
 	if m.getShard(ch).isCluster {
 		return checkRedisChannelTag(ch)
