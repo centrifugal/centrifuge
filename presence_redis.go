@@ -141,6 +141,9 @@ func (m *RedisPresenceManager) getShard(channel string) *RedisShard {
 
 // AddPresence - see PresenceManager interface description.
 func (m *RedisPresenceManager) AddPresence(ch string, uid string, info *ClientInfo) error {
+	if err := m.checkChannel(ch); err != nil {
+		return err
+	}
 	return m.addPresence(m.getShard(ch), ch, uid, info)
 }
 
@@ -197,6 +200,9 @@ func (m *RedisPresenceManager) addPresence(s *RedisShard, ch string, uid string,
 
 // RemovePresence - see PresenceManager interface description.
 func (m *RedisPresenceManager) RemovePresence(ch string, clientID string, userID string) error {
+	if err := m.checkChannel(ch); err != nil {
+		return err
+	}
 	return m.removePresence(m.getShard(ch), ch, clientID, userID)
 }
 
@@ -227,6 +233,9 @@ func (m *RedisPresenceManager) removePresence(s *RedisShard, ch string, clientID
 
 // Presence - see PresenceManager interface description.
 func (m *RedisPresenceManager) Presence(ch string) (map[string]*ClientInfo, error) {
+	if err := m.checkChannel(ch); err != nil {
+		return nil, err
+	}
 	return m.presence(m.getShard(ch), ch)
 }
 
@@ -328,6 +337,9 @@ func (m *RedisPresenceManager) presenceStats(s *RedisShard, ch string) (Presence
 
 // PresenceStats - see PresenceManager interface description.
 func (m *RedisPresenceManager) PresenceStats(ch string) (PresenceStats, error) {
+	if err := m.checkChannel(ch); err != nil {
+		return PresenceStats{}, err
+	}
 	if m.config.EnableUserMapping != nil && m.config.EnableUserMapping(ch) {
 		return m.presenceStats(m.getShard(ch), ch)
 	}
@@ -353,6 +365,15 @@ func (m *RedisPresenceManager) PresenceStats(ch string) (PresenceStats, error) {
 		NumClients: numClients,
 		NumUsers:   numUsers,
 	}, nil
+}
+
+// checkChannel refuses a channel whose keys could not share a slot. Presence
+// keys are tagged by channel in any cluster - see ErrRedisUnsupportedChannel.
+func (m *RedisPresenceManager) checkChannel(ch string) error {
+	if m.getShard(ch).isCluster {
+		return checkRedisChannelTag(ch)
+	}
+	return nil
 }
 
 func (m *RedisPresenceManager) presenceHashKey(s *RedisShard, ch string) channelID {
