@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/redispartition"
 	"github.com/centrifugal/protocol"
 	"github.com/google/uuid"
+	"github.com/redis/rueidis"
 	"github.com/stretchr/testify/require"
 )
 
@@ -3087,4 +3089,120 @@ func TestRedisBrokerHistoryEmptyChannel(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, pubs)
 	require.NotEmpty(t, sp.Epoch)
+}
+
+// TestRedisBrokerIdempotentPublishDuringSlotMigration checks an idempotent
+// publication with sharded PUB/SUB fails while the slot of its partition
+// migrates, rather than being reported a success nobody received.
+//
+// The node owning a migrating slot does not have a result key still to be
+// written, so Redis sends the call to the node importing the slot, and a call
+// naming only the result key ran there: it published where the channel has no
+// subscribers and remembered the result, so a retry with the same key was
+// suppressed too.
+//
+// The slot is only marked as migrating, no key moves, and it is made stable
+// again at the end.
+func TestRedisBrokerIdempotentPublishDuringSlotMigration(t *testing.T) {
+	node := testNode(t)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	s, err := NewRedisShard(node, RedisShardConfig{
+		ClusterAddresses: []string{"localhost:7001", "localhost:7002", "localhost:7003"},
+		IOTimeout:        10 * time.Second,
+		ConnectTimeout:   10 * time.Second,
+	})
+	require.NoError(t, err)
+	// One partition, so the channel and its result key share the one slot
+	// which migrates.
+	b, err := NewRedisBroker(node, RedisBrokerConfig{
+		Prefix: getUniquePrefix(), Shards: []*RedisShard{s}, NumShardedPubSubPartitions: 1,
+	})
+	require.NoError(t, err)
+	var mu sync.Mutex
+	var got []string
+	require.NoError(t, b.RegisterBrokerEventHandler(&testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, _ StreamPosition, _ bool, _ *Publication) error {
+			mu.Lock()
+			got = append(got, string(pub.Data))
+			mu.Unlock()
+			return nil
+		},
+	}))
+	defer stopRedisBroker(b)
+
+	result := s.client.Do(context.Background(), s.client.B().Spublish().Channel(getUniquePrefix()+"._").Message("").Build())
+	if result.Error() != nil && strings.Contains(result.Error().Error(), "unknown command") {
+		t.Skip("sharded PUB/SUB not supported by this Redis version")
+	}
+	require.NoError(t, result.Error())
+
+	require.NoError(t, b.Subscribe("idem"))
+	// Probes only wait for the subscription, and one still in flight may
+	// arrive later, so they are left out.
+	received := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.DeleteFunc(slices.Clone(got), func(data string) bool { return data == "probe" })
+	}
+	require.Eventually(t, func() bool {
+		_, err := b.Publish("idem", []byte("probe"), PublishOptions{})
+		require.NoError(t, err)
+		mu.Lock()
+		defer mu.Unlock()
+		return len(got) > 0
+	}, 10*time.Second, 100*time.Millisecond, "the subscription never started delivering")
+
+	// Find the node owning the slot, and another to migrate it to. A node
+	// answers MOVED for a key of a slot it does not own.
+	ctx := context.Background()
+	resultKey := string(b.resultCacheKey(s, "idem", "key"))
+	var src, dst rueidis.Client
+	for _, c := range s.client.Nodes() {
+		err := c.Do(ctx, c.B().Get().Key(resultKey).Build()).Error()
+		if err == nil || rueidis.IsRedisNil(err) {
+			src = c
+		} else if redisErr, ok := rueidis.IsRedisErr(err); ok {
+			_, moved := redisErr.IsMoved()
+			require.True(t, moved, "unexpected error: %v", err)
+			if dst == nil {
+				dst = c
+			}
+		} else {
+			require.NoError(t, err)
+		}
+	}
+	require.NotNil(t, src, "no node owns the slot")
+	require.NotNil(t, dst, "the cluster has a single node")
+	slot, err := src.Do(ctx, src.B().ClusterKeyslot().Key(resultKey).Build()).AsInt64()
+	require.NoError(t, err)
+	srcID, err := src.Do(ctx, src.B().ClusterMyid().Build()).ToString()
+	require.NoError(t, err)
+	dstID, err := dst.Do(ctx, dst.B().ClusterMyid().Build()).ToString()
+	require.NoError(t, err)
+	setSlot := func(c rueidis.Client, args ...string) {
+		t.Helper()
+		cmd := append([]string{"CLUSTER", "SETSLOT", strconv.FormatInt(slot, 10)}, args...)
+		require.NoError(t, c.Do(ctx, c.B().Arbitrary(cmd...).Build()).Error())
+	}
+	setSlot(dst, "IMPORTING", srcID)
+	setSlot(src, "MIGRATING", dstID)
+	stable := func() {
+		setSlot(src, "STABLE")
+		setSlot(dst, "STABLE")
+	}
+	defer stable()
+
+	opts := PublishOptions{IdempotencyKey: "key"}
+	_, err = b.Publish("idem", []byte("during"), opts)
+	require.Error(t, err, "a publication during the migration must fail rather than be lost")
+	require.Contains(t, err.Error(), "TRYAGAIN")
+
+	// Nothing ran, so nothing was remembered: once the slot is stable the
+	// same idempotency key publishes.
+	stable()
+	res, err := b.Publish("idem", []byte("after"), opts)
+	require.NoError(t, err)
+	require.False(t, res.Suppressed, "the failed publication must not have been remembered")
+	require.Eventually(t, func() bool { return len(received()) > 0 }, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, []string{"after"}, received())
 }

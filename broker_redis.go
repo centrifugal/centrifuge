@@ -845,7 +845,8 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 				resp = b.publishIdempotentScript.Exec(
 					context.Background(),
 					s.shard.client,
-					[]string{string(resultKey)},
+					// The second key only routes the call - see idempotentRouteKey.
+					[]string{string(resultKey), idempotentRouteKey(resultKey)},
 					[]string{
 						convert.BytesToString(byteMessage),
 						publishChannelStr,
@@ -1315,6 +1316,24 @@ func (b *RedisBroker) pubSubShardChannelID(clusterShardIndex int, psShardIndex i
 
 func (b *RedisBroker) nodeChannelID(nodeID string) channelID {
 	return channelID(b.config.Prefix + redisNodeChannelPrefix + nodeID)
+}
+
+// idempotentRouteKey returns a key which never exists, passed to an idempotent
+// publish with sharded PUB/SUB after its result key.
+//
+// While the slot of a partition migrates, the node owning it does not have a
+// result key which is still to be written, so Redis sends the call to the node
+// importing the slot, and a call naming that one key runs there. It publishes
+// where the channel has no subscribers - they are on the node owning the slot
+// until the migration ends - and remembers the result, so the publication is
+// reported a success, nobody receives it, and a retry with the same key is
+// suppressed. With a second key missing too, the importing node answers
+// TRYAGAIN instead, before anything runs, and the publication fails.
+//
+// The key is the result key with a suffix, so it shares its slot: Redis hashes
+// the first "{...}" of a key, which nothing appended after it changes.
+func idempotentRouteKey(resultKey channelID) string {
+	return string(resultKey) + ".route"
 }
 
 func (b *RedisBroker) resultCacheKey(s *RedisShard, ch string, idempotencyKey string) channelID {
