@@ -182,7 +182,8 @@ func (w *channelWriter) flushWindow() {
 // When FlushLatestPublication is enabled, publications are coalesced by key — only the
 // latest publication for each key is kept. For non-map publications (Key=""), all collapse
 // into a single entry. Items are ordered by last-update time so offsets stay ascending.
-// It starts a delay timer if this is the first item, and flushes immediately if the batch size is reached.
+// It flushes immediately if the batch size is reached, otherwise the writer joins the
+// batch window of its channel, which flushes it once the delay has passed.
 func (w *channelWriter) Add(item queue.Item, config ChannelBatchConfig) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
