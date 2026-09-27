@@ -503,3 +503,177 @@ func TestPerChannelWriterDelWriter(t *testing.T) {
 	pcw.delWriter("never-existed", false)
 	pcw.Close(false)
 }
+
+// BenchmarkChannelBatchFanout measures the channel batching of a publication
+// delivered to many subscribers of one channel: each subscriber's writer gets
+// one item per window. Reported per window: CPU time of the process and
+// allocations, the part that grows with subscribers.
+func BenchmarkChannelBatchFanout(b *testing.B) {
+	const subscribers = 1000
+	config := ChannelBatchConfig{MaxDelay: 200 * time.Microsecond, MaxSize: 128}
+	var wg sync.WaitGroup
+	writers := make([]*perChannelWriter, subscribers)
+	for i := range writers {
+		writers[i] = newPerChannelWriter(func(items []queue.Item) error {
+			for range items {
+				wg.Done()
+			}
+			return nil
+		})
+	}
+	item := queue.Item{Channel: "news", FrameType: protocol.FrameTypePushPublication, Data: []byte("x")}
+	b.ReportAllocs()
+	cpu0 := processCPUTime()
+	for b.Loop() {
+		wg.Add(subscribers)
+		for _, w := range writers {
+			w.Add(item, "news", config)
+		}
+		wg.Wait()
+	}
+	b.ReportMetric(float64((processCPUTime()-cpu0).Nanoseconds())/float64(b.N)/subscribers, "cpu-ns/subscriber")
+	for _, w := range writers {
+		w.Close(false)
+	}
+}
+
+// collectingWriter returns a perChannelWriter which records what it flushes.
+func collectingWriter() (*perChannelWriter, func() []string) {
+	var mu sync.Mutex
+	var flushed []string
+	w := newPerChannelWriter(func(items []queue.Item) error {
+		mu.Lock()
+		for _, item := range items {
+			flushed = append(flushed, string(item.Data))
+		}
+		mu.Unlock()
+		return nil
+	})
+	return w, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), flushed...)
+	}
+}
+
+func pubItem(data string) queue.Item {
+	return queue.Item{FrameType: protocol.FrameTypePushPublication, Data: []byte(data)}
+}
+
+// TestChannelBatchWindow_SharedByWriters checks the writers of one channel
+// waiting for the same delay are flushed together, once the delay has passed,
+// each with its own items.
+func TestChannelBatchWindow_SharedByWriters(t *testing.T) {
+	t.Parallel()
+	channel := "window-shared-" + t.Name()
+	config := ChannelBatchConfig{MaxDelay: 50 * time.Millisecond}
+
+	const writers = 20
+	ws := make([]*perChannelWriter, writers)
+	gets := make([]func() []string, writers)
+	for i := range ws {
+		ws[i], gets[i] = collectingWriter()
+	}
+	started := time.Now()
+	for i, w := range ws {
+		w.Add(pubItem("a"+strconv.Itoa(i)), channel, config)
+		w.Add(pubItem("b"+strconv.Itoa(i)), channel, config)
+	}
+	for i := range ws {
+		require.Empty(t, gets[i](), "flushed before the delay")
+	}
+	require.Eventually(t, func() bool {
+		for i := range ws {
+			if len(gets[i]()) != 2 {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, time.Millisecond)
+	require.GreaterOrEqual(t, time.Since(started), config.MaxDelay)
+	for i := range ws {
+		require.Equal(t, []string{"a" + strconv.Itoa(i), "b" + strconv.Itoa(i)}, gets[i]())
+	}
+}
+
+// TestChannelBatchWindow_DelaysDoNotMix checks writers of one channel waiting
+// for different delays do not share a window: a writer is never held longer
+// than its own delay by another writer's.
+func TestChannelBatchWindow_DelaysDoNotMix(t *testing.T) {
+	t.Parallel()
+	channel := "window-delays-" + t.Name()
+	long, getLong := collectingWriter()
+	short, getShort := collectingWriter()
+	long.Add(pubItem("long"), channel, ChannelBatchConfig{MaxDelay: time.Hour})
+	short.Add(pubItem("short"), channel, ChannelBatchConfig{MaxDelay: 20 * time.Millisecond})
+
+	require.Eventually(t, func() bool { return len(getShort()) == 1 }, 5*time.Second, time.Millisecond)
+	require.Empty(t, getLong())
+	long.Close(false)
+}
+
+// TestChannelBatchWindow_SizeFlushThenDelay checks a writer which flushed for
+// size keeps waiting in its window, and what it collects next is flushed with
+// the window.
+func TestChannelBatchWindow_SizeFlushThenDelay(t *testing.T) {
+	t.Parallel()
+	channel := "window-size-" + t.Name()
+	w, get := collectingWriter()
+	config := ChannelBatchConfig{MaxSize: 2, MaxDelay: 30 * time.Millisecond}
+	w.Add(pubItem("1"), channel, config)
+	w.Add(pubItem("2"), channel, config) // size reached: flushed now
+	require.Equal(t, []string{"1", "2"}, get())
+	w.Add(pubItem("3"), channel, config)
+	require.Eventually(t, func() bool { return len(get()) == 3 }, 5*time.Second, time.Millisecond)
+	require.Equal(t, []string{"1", "2", "3"}, get())
+}
+
+// TestChannelBatchWindow_ClosedWriterNotFlushed checks a writer closed without
+// flushing, while it waits in a window, is not flushed when the window is.
+func TestChannelBatchWindow_ClosedWriterNotFlushed(t *testing.T) {
+	t.Parallel()
+	channel := "window-closed-" + t.Name()
+	config := ChannelBatchConfig{MaxDelay: 20 * time.Millisecond}
+	closed, getClosed := collectingWriter()
+	open, getOpen := collectingWriter()
+	closed.Add(pubItem("dropped"), channel, config)
+	open.Add(pubItem("kept"), channel, config)
+	closed.Close(false)
+
+	require.Eventually(t, func() bool { return len(getOpen()) == 1 }, 5*time.Second, time.Millisecond)
+	require.Empty(t, getClosed())
+}
+
+// TestChannelBatchWindow_Concurrent adds items to many writers of a few
+// channels from many goroutines. Every item must be flushed exactly once, and
+// each writer's items in the order it received them.
+func TestChannelBatchWindow_Concurrent(t *testing.T) {
+	t.Parallel()
+	const writers, items = 50, 200
+	ws := make([]*perChannelWriter, writers)
+	gets := make([]func() []string, writers)
+	for i := range ws {
+		ws[i], gets[i] = collectingWriter()
+	}
+	var wg sync.WaitGroup
+	for i := range ws {
+		wg.Go(func() {
+			channel := "window-concurrent-" + strconv.Itoa(i%3)
+			config := ChannelBatchConfig{MaxDelay: time.Millisecond, MaxSize: 7}
+			for j := range items {
+				ws[i].Add(pubItem(strconv.Itoa(j)), channel, config)
+				if j%50 == 0 {
+					time.Sleep(time.Millisecond)
+				}
+			}
+		})
+	}
+	wg.Wait()
+	for i := range ws {
+		require.Eventually(t, func() bool { return len(gets[i]()) == items }, 5*time.Second, time.Millisecond, "writer %d", i)
+		got := gets[i]()
+		for j := range items {
+			require.Equal(t, strconv.Itoa(j), got[j], "writer %d item %d", i, j)
+		}
+	}
+}

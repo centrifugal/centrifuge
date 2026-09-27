@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/queue"
-	"github.com/centrifugal/centrifuge/internal/timers"
 
 	"github.com/centrifugal/protocol"
 )
@@ -133,16 +132,15 @@ type ChannelBatchConfig struct {
 	FlushLatestPublication bool
 }
 
-// channelWriter buffers queue.Item objects and flushes them after a fixed delay
-// or when a specific batch size is reached.
+// channelWriter buffers queue.Item objects of one channel for one connection
+// and flushes them after a delay or when a specific batch size is reached.
 type channelWriter struct {
-	mu     sync.Mutex
-	buffer []queue.Item
-	timer  *time.Timer
-	// timerStop is closed to release the waitTimer goroutine when its timer is
-	// cancelled. waitTimer blocks on the timer channel, which a stopped timer
-	// never delivers, so stopping the timer alone would leak the goroutine.
-	timerStop  chan struct{}
+	mu      sync.Mutex
+	channel string
+	buffer  []queue.Item
+	// inWindow is true while the writer waits in a batch window of its
+	// channel, which flushes it when the delay has passed.
+	inWindow   bool
 	flushFn    func([]queue.Item) error
 	latestOnly bool
 	// latestPubs tracks the latest publication per key for FlushLatestPublication mode.
@@ -156,26 +154,27 @@ func newChannelWriter(flushFn func([]queue.Item) error) *channelWriter {
 	return &channelWriter{flushFn: flushFn}
 }
 
-// stopTimerLocked cancels a pending flush timer, releasing its waitTimer
-// goroutine. Caller must hold the lock.
-func (w *channelWriter) stopTimerLocked() {
-	if w.timer == nil {
-		return
-	}
-	w.timer = nil
-	close(w.timerStop)
-	w.timerStop = nil
-}
-
-// close stops the timer and optionally flushes remaining items.
+// close optionally flushes remaining items and drops the rest. A batch window
+// the writer waits in may still flush it later: there is nothing left to
+// flush then.
 func (w *channelWriter) close(flushRemaining bool) {
 	w.mu.Lock()
-	w.stopTimerLocked()
 	if flushRemaining && (len(w.buffer) > 0 || len(w.latestPubs) > 0) {
 		w.flushLocked()
 	}
 	w.buffer = nil
 	w.latestPubs = nil
+	w.mu.Unlock()
+}
+
+// flushWindow flushes the writer when the batch window it waited in has
+// passed its delay.
+func (w *channelWriter) flushWindow() {
+	w.mu.Lock()
+	w.inWindow = false
+	if len(w.buffer) > 0 || len(w.latestPubs) > 0 {
+		w.flushLocked()
+	}
 	w.mu.Unlock()
 }
 
@@ -206,42 +205,18 @@ func (w *channelWriter) Add(item queue.Item, config ChannelBatchConfig) {
 	// Total items count includes all latest pubs.
 	totalCount := len(w.buffer) + len(w.latestPubs)
 
-	// Start timer on first item.
-	if config.MaxDelay > 0 && totalCount == 1 && w.timer == nil {
-		w.timer = timers.AcquireTimer(config.MaxDelay)
-		w.timerStop = make(chan struct{})
-		go w.waitTimer(w.timer, w.timerStop)
-	}
-
 	// Flush immediately if batch size is reached.
 	if config.MaxSize > 0 && int64(totalCount) >= config.MaxSize {
-		w.stopTimerLocked()
 		w.flushLocked()
+		return
 	}
-}
 
-// waitTimer waits for the timer to fire (or to be cancelled via stop) and then
-// flushes the batch. It always returns the timer to the pool exactly once.
-func (w *channelWriter) waitTimer(tm *time.Timer, stop <-chan struct{}) {
-	select {
-	case <-tm.C:
-		w.mu.Lock()
-		// Only act if this is still the active timer — a size-triggered flush or
-		// close may have cancelled it (and possibly armed a new one) in the race
-		// with the fire. timerStop is a fresh channel per timer, so it uniquely
-		// identifies this one.
-		if w.timerStop == stop {
-			if len(w.buffer) > 0 || len(w.latestPubs) > 0 {
-				w.flushLocked()
-			}
-			w.timer = nil
-			w.timerStop = nil
-		}
-		w.mu.Unlock()
-		timers.ReleaseTimer(tm)
-	case <-stop:
-		// Cancelled by stopTimerLocked; return the timer to the pool.
-		timers.ReleaseTimer(tm)
+	// Wait for the delay in the batch window of the channel. A writer which
+	// flushed for size stays in its window, and what it collects next is
+	// flushed with the window, before the delay has passed for it.
+	if config.MaxDelay > 0 && !w.inWindow {
+		w.inWindow = true
+		channelBatchWindows.join(w.channel, config.MaxDelay, w)
 	}
 }
 
@@ -302,6 +277,7 @@ func (pcw *perChannelWriter) getWriter(channel string) *channelWriter {
 		w, exists = pcw.writers[channel]
 		if !exists {
 			w = newChannelWriter(pcw.flushFn)
+			w.channel = channel
 			pcw.writers[channel] = w
 		}
 		pcw.mu.Unlock()
@@ -323,6 +299,71 @@ func (pcw *perChannelWriter) delWriter(channel string, flushRemaining bool) {
 func (pcw *perChannelWriter) Add(item queue.Item, ch string, config ChannelBatchConfig) {
 	w := pcw.getWriter(ch)
 	w.Add(item, config)
+}
+
+// batchWindows holds the open batch windows of channels. The writers of all
+// connections subscribed to a channel which wait for the same delay wait in
+// one window, flushed by one timer, rather than each arming a timer of its
+// own: a publication into a channel with many subscribers would otherwise
+// start a timer and a goroutine per subscriber.
+//
+// It is shared by all nodes in the process: a window is identified by the
+// channel and the delay, so writers only share a window when they wait for
+// the same delay.
+type batchWindows struct {
+	shards [batchWindowShards]batchWindowShard
+}
+
+const batchWindowShards = 64
+
+type batchWindowShard struct {
+	mu      sync.Mutex
+	windows map[batchWindowKey]*batchWindow
+}
+
+type batchWindowKey struct {
+	channel string
+	delay   time.Duration
+}
+
+type batchWindow struct {
+	writers []*channelWriter
+}
+
+var channelBatchWindows = &batchWindows{}
+
+// join adds the writer to the open window of its channel and delay, opening
+// one when there is none. The window flushes its writers once the delay has
+// passed since it opened, so a writer waits no longer than the delay.
+func (b *batchWindows) join(channel string, delay time.Duration, w *channelWriter) {
+	key := batchWindowKey{channel: channel, delay: delay}
+	shard := &b.shards[index(channel, batchWindowShards)]
+	shard.mu.Lock()
+	if shard.windows == nil {
+		shard.windows = make(map[batchWindowKey]*batchWindow)
+	}
+	window, ok := shard.windows[key]
+	if !ok {
+		window = &batchWindow{}
+		shard.windows[key] = window
+		time.AfterFunc(delay, func() { shard.flush(key, window) })
+	}
+	window.writers = append(window.writers, w)
+	shard.mu.Unlock()
+}
+
+// flush closes the window, so writers which collect items from now on open a
+// new one, and flushes the writers which waited in it. The shard lock is not
+// held while writers flush: a writer joins holding its own lock.
+func (s *batchWindowShard) flush(key batchWindowKey, window *batchWindow) {
+	s.mu.Lock()
+	delete(s.windows, key)
+	writers := window.writers
+	window.writers = nil
+	s.mu.Unlock()
+	for _, w := range writers {
+		w.flushWindow()
+	}
 }
 
 // TimerCanceler is the interface returned from ScheduleTimer which allows the task to be cancelled.
