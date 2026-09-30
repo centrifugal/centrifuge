@@ -131,6 +131,9 @@ func Match(f *protocol.FilterNode, tags map[string]string) (bool, error) {
 // Validate ensures the filter tree is well-formed.
 // Called at subscription time.
 func Validate(f *protocol.FilterNode) error {
+	if f == nil {
+		return errors.New("filter node must not be nil")
+	}
 	switch f.Op {
 	case OpLeaf:
 		// Leaf must have a comparison operator.

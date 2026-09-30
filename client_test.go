@@ -1410,6 +1410,36 @@ func TestClientStorageNotNil(t *testing.T) {
 	}
 }
 
+// TestServerSideSubscriptionsNilSubRequest checks that a connect request which
+// has a nil entry for a server-side subscription channel is handled like one
+// which has no entry for it.
+func TestServerSideSubscriptionsNilSubRequest(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			Credentials:   &Credentials{UserID: "42"},
+			Subscriptions: map[string]SubscribeOptions{"server-side-1": {}},
+		}, nil
+	})
+	transport := newTestTransport(func() {})
+	transport.sink = make(chan []byte, 100)
+	client, err := newClient(context.Background(), node, transport)
+	require.NoError(t, err)
+
+	cmd, err := protocol.NewJSONCommandDecoder([]byte(`{"id":1,"connect":{"subs":{"server-side-1":null}}}`)).Decode()
+	require.NotNil(t, cmd, err)
+	require.Contains(t, cmd.Connect.Subs, "server-side-1")
+
+	rwWrapper := testReplyWriterWrapper()
+	err = client.connectCmd(cmd.Connect, cmd, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	require.Contains(t, rwWrapper.replies[0].Connect.Subs, "server-side-1")
+}
+
 func TestServerSideSubscriptions(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {

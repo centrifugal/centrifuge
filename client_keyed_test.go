@@ -74,6 +74,38 @@ func TestKeyedTrack_NoTrackHandler(t *testing.T) {
 	require.Equal(t, ErrorNotAvailable, err)
 }
 
+// TestKeyedTrack_NilEntries checks that a track request with a nil batch or a
+// nil item is rejected as a bad request.
+func TestKeyedTrack_NilEntries(t *testing.T) {
+	t.Parallel()
+	node := newTestNodeWithSharedPoll(t)
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options:           SubscribeOptions{ExpireAt: time.Now().Unix() + 3600},
+				ClientSideRefresh: true,
+			}, nil)
+		})
+	})
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, "test:channel")
+
+	for _, track := range [][]*protocol.TrackBatch{
+		{nil},
+		{{Items: []*protocol.KeyedItem{nil}}},
+		{{Items: []*protocol.KeyedItem{{Key: "k", Version: 1}}}, nil},
+	} {
+		rwWrapper := testReplyWriterWrapper()
+		err := client.handleSubRefresh(&protocol.SubRefreshRequest{
+			Channel: "test:channel",
+			Type:    typeTrack,
+			Track:   track,
+		}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+		require.Equal(t, ErrorBadRequest, err)
+	}
+}
+
 // TestKeyedTrack_TtlField covers the inner branch in handleTrack that sets
 // res.Ttl when reply.ExpireAt > now.
 func TestKeyedTrack_TtlField(t *testing.T) {
