@@ -85,7 +85,13 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 	flatIdx := make(map[string]int, 16)
 	var flat []flatItem
 	for i, b := range req.Track {
+		if b == nil {
+			return ErrorBadRequest
+		}
 		for _, it := range b.Items {
+			if it == nil {
+				return ErrorBadRequest
+			}
 			fi := flatItem{key: it.Key, version: it.Version, batchIdx: i}
 			if existing, ok := flatIdx[it.Key]; ok {
 				flat[existing] = fi // last batch wins for version + batchIdx

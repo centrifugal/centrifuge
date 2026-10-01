@@ -3459,7 +3459,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 				subCmd := &protocol.SubscribeRequest{
 					Channel: ch,
 				}
-				if subReq, ok := req.Subs[ch]; ok {
+				if subReq, ok := req.Subs[ch]; ok && subReq != nil {
 					subCmd.Recover = subReq.Recover
 					subCmd.Offset = subReq.Offset
 					subCmd.Epoch = subReq.Epoch

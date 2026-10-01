@@ -1046,3 +1046,12 @@ func TestValidateNestedErrors(t *testing.T) {
 		require.Contains(t, err.Error(), "in comparison must not use Val")
 	})
 }
+
+func TestValidateNilNode(t *testing.T) {
+	require.Error(t, Validate(nil))
+	for _, op := range []string{OpAnd, OpOr, OpNot} {
+		err := Validate(&protocol.FilterNode{Op: op, Nodes: []*protocol.FilterNode{nil}})
+		require.Error(t, err, op)
+		require.Contains(t, err.Error(), "must not be nil")
+	}
+}
