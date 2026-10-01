@@ -440,13 +440,13 @@ func (c *Client) ConnectNoErrorToDisconnect(req ConnectRequest) error {
 // so prefer using Connect or ConnectNoErrorToDisconnect methods until necessary.
 func (c *Client) ProtocolConnect(req *protocol.ConnectRequest) {
 	// unidirectionalConnect never returns errors when errorToDisconnect is true.
-	_ = c.unidirectionalConnect(req, req.SizeVT(), true)
+	_ = c.unidirectionalConnect(req, req.SizeCF(), true)
 }
 
 // ProtocolConnectNoErrorToDisconnect accepts protocol.ConnectRequest directly. It adds dependency to
 // protocol package, so prefer ConnectNoErrorToDisconnect methods until necessary.
 func (c *Client) ProtocolConnectNoErrorToDisconnect(req *protocol.ConnectRequest) error {
-	return c.unidirectionalConnect(req, req.SizeVT(), false)
+	return c.unidirectionalConnect(req, req.SizeCF(), false)
 }
 
 func (c *Client) getDisconnectPushReply(d Disconnect) ([]byte, error) {

@@ -738,7 +738,7 @@ func newRealConnProtobufConnect(b testing.TB, url string, compression bool) *web
 		Connect: &protocol.ConnectRequest{},
 	}
 
-	cmdBytes, _ := cmd.MarshalVT()
+	cmdBytes, _ := cmd.MarshalCF()
 
 	var buf bytes.Buffer
 	bs := make([]byte, 8)
@@ -777,7 +777,7 @@ func newRealConnProtobuf(b testing.TB, channel string, url string, compression b
 			Channel: channel,
 		},
 	}
-	cmdBytes, _ := cmd.MarshalVT()
+	cmdBytes, _ := cmd.MarshalCF()
 
 	var buf bytes.Buffer
 	bs := make([]byte, 8)
@@ -1007,7 +1007,7 @@ func BenchmarkWsCommandReplyV2(b *testing.B) {
 	}
 	jsonCommand, _ := json.Marshal(cmd)
 
-	cmdBytes, _ := cmd.MarshalVT()
+	cmdBytes, _ := cmd.MarshalCF()
 
 	var buf bytes.Buffer
 	bs := make([]byte, 8)
@@ -1094,7 +1094,7 @@ func BenchmarkWsCommandReplyV2Multiple(b *testing.B) {
 	jsonCommand = append(jsonCommand, []byte("\n")...)
 	jsonCommand = append(jsonCommand, jsonBytes...)
 
-	cmdBytes, _ := cmd.MarshalVT()
+	cmdBytes, _ := cmd.MarshalCF()
 
 	var buf bytes.Buffer
 	bs := make([]byte, 8)
@@ -1211,9 +1211,9 @@ func BenchmarkWsCommandReplyV2MultipleParallel(b *testing.B) {
 	jsonBytes3, _ := json.Marshal(cmd3)
 	jsonCommand = append(jsonCommand, jsonBytes3...)
 
-	cmdBytes1, _ := cmd1.MarshalVT()
-	cmdBytes2, _ := cmd2.MarshalVT()
-	cmdBytes3, _ := cmd3.MarshalVT()
+	cmdBytes1, _ := cmd1.MarshalCF()
+	cmdBytes2, _ := cmd2.MarshalCF()
+	cmdBytes3, _ := cmd3.MarshalCF()
 	var buf bytes.Buffer
 	bs := make([]byte, 8)
 	nBytes := binary.PutUvarint(bs, uint64(len(cmdBytes1)))

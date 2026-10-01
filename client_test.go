@@ -2081,7 +2081,7 @@ func readSinkPublication(t *testing.T, sink chan []byte, offset uint64) *protoco
 		select {
 		case data := <-sink:
 			reply := &protocol.Reply{}
-			if err := reply.UnmarshalVT(data); err != nil {
+			if err := reply.UnmarshalCF(data); err != nil {
 				continue
 			}
 			if reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Offset == offset {
@@ -2493,9 +2493,9 @@ func testReplyWriterWrapper() *sliceReplyWriter {
 	}
 	wrapper.rw = &replyWriter{
 		write: func(rep *protocol.Reply) {
-			d, _ := rep.MarshalVT()
+			d, _ := rep.MarshalCF()
 			var r protocol.Reply
-			_ = r.UnmarshalVT(d)
+			_ = r.UnmarshalCF(d)
 			wrapper.replies = append(wrapper.replies, &r)
 		},
 	}
@@ -6044,7 +6044,7 @@ func TestSubscribe_JoinLeaveWireOrderOnQuickDisconnect(t *testing.T) {
 		select {
 		case data := <-sinkB:
 			reply := &protocol.Reply{}
-			if err := reply.UnmarshalVT(data); err != nil {
+			if err := reply.UnmarshalCF(data); err != nil {
 				continue
 			}
 			if reply.Push == nil {
@@ -6157,7 +6157,7 @@ func TestSubscribe_ReplyPrecedesSelfJoinOnJoinerWire(t *testing.T) {
 		select {
 		case data := <-sink:
 			reply := &protocol.Reply{}
-			if err := reply.UnmarshalVT(data); err != nil {
+			if err := reply.UnmarshalCF(data); err != nil {
 				continue
 			}
 			idx++
@@ -6322,7 +6322,7 @@ func recoveryOrderingFrames(t *testing.T, protoType ProtocolType, frames [][]byt
 		if protoType == ProtocolTypeProtobuf {
 			// One reply per frame, without a length prefix.
 			reply := &protocol.Reply{}
-			require.NoError(t, reply.UnmarshalVT(frame))
+			require.NoError(t, reply.UnmarshalCF(frame))
 			replies = append(replies, reply)
 			continue
 		}

@@ -2201,7 +2201,7 @@ func TestSharedPollDelta_DeltaApplicable(t *testing.T) {
 		select {
 		case data := <-sink:
 			reply := &protocol.Reply{}
-			err := reply.UnmarshalVT(data)
+			err := reply.UnmarshalCF(data)
 			if err == nil && reply.Push != nil && reply.Push.Pub != nil {
 				firstPubData = reply.Push.Pub.Data
 				goto gotFirst
@@ -2231,7 +2231,7 @@ gotFirst:
 		select {
 		case data := <-sink:
 			reply := &protocol.Reply{}
-			err := reply.UnmarshalVT(data)
+			err := reply.UnmarshalCF(data)
 			if err == nil && reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 2 {
 				// Apply the fossil delta to first data.
 				require.True(t, reply.Push.Pub.Delta)
@@ -3646,7 +3646,7 @@ func TestSharedPoll_PrevDataNotUsedWhenKeepLatestData(t *testing.T) {
 		select {
 		case d := <-sink:
 			reply := &protocol.Reply{}
-			err := reply.UnmarshalVT(d)
+			err := reply.UnmarshalCF(d)
 			if err == nil && reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 5 {
 				require.False(t, reply.Push.Pub.Delta, "first delivery should be full")
 				v5Data = reply.Push.Pub.Data
@@ -3680,7 +3680,7 @@ gotV5:
 		select {
 		case d := <-sink:
 			reply := &protocol.Reply{}
-			err := reply.UnmarshalVT(d)
+			err := reply.UnmarshalCF(d)
 			if err == nil && reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 10 {
 				v10Reply = reply
 				goto gotV10
@@ -3731,7 +3731,7 @@ gotV10:
 		select {
 		case d := <-sink:
 			reply := &protocol.Reply{}
-			err := reply.UnmarshalVT(d)
+			err := reply.UnmarshalCF(d)
 			if err == nil && reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 12 {
 				v12Reply = reply
 			}
@@ -5183,7 +5183,7 @@ drain:
 		select {
 		case data := <-sink:
 			reply := &protocol.Reply{}
-			if err := reply.UnmarshalVT(data); err != nil {
+			if err := reply.UnmarshalCF(data); err != nil {
 				continue
 			}
 			if reply.Push == nil || reply.Push.Pub == nil {
@@ -5360,7 +5360,7 @@ drain:
 		select {
 		case data := <-sink:
 			reply := &protocol.Reply{}
-			if err := reply.UnmarshalVT(data); err != nil {
+			if err := reply.UnmarshalCF(data); err != nil {
 				continue
 			}
 			if reply.Push == nil || reply.Push.Pub == nil {

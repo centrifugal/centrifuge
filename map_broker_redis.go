@@ -559,7 +559,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		}
 		protoPub.Delta = opts.UseDelta
 
-		pubBytes, err := protoPub.MarshalVT()
+		pubBytes, err := protoPub.MarshalCF()
 		if err != nil {
 			return MapUpdateResult{}, err
 		}
@@ -586,7 +586,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		Key:   key,
 		Score: opts.score,
 	}
-	streamBytes, err := streamProtoPub.MarshalVT()
+	streamBytes, err := streamProtoPub.MarshalCF()
 	if err != nil {
 		return MapUpdateResult{}, err
 	}
@@ -806,7 +806,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 		Time:    now,
 		Tags:    opts.Tags,
 	}
-	pubBytes, err := protoPub.MarshalVT()
+	pubBytes, err := protoPub.MarshalCF()
 	if err != nil {
 		return MapUpdateResult{}, err
 	}
@@ -987,7 +987,7 @@ func (e *RedisMapBroker) readSingleKeyWithOpts(ctx context.Context, ch string, o
 			return MapStateResult{}, fmt.Errorf("failed to parse state value: %w", err)
 		}
 		var protoPub protocol.Publication
-		if err := protoPub.UnmarshalVT(payload); err != nil {
+		if err := protoPub.UnmarshalCF(payload); err != nil {
 			return MapStateResult{}, fmt.Errorf("failed to unmarshal publication: %w", err)
 		}
 		pub := pubFromProto(&protoPub)
@@ -1043,7 +1043,7 @@ func (e *RedisMapBroker) readSingleKeyWithOpts(ctx context.Context, ch string, o
 
 	// Unmarshal Publication from protobuf payload
 	var protoPub protocol.Publication
-	if err := protoPub.UnmarshalVT(payload); err != nil {
+	if err := protoPub.UnmarshalCF(payload); err != nil {
 		return MapStateResult{Position: streamPos}, fmt.Errorf("failed to unmarshal publication: %w", err)
 	}
 
@@ -1138,7 +1138,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 
 		// Unmarshal Publication from protobuf payload
 		var protoPub protocol.Publication
-		if err := protoPub.UnmarshalVT(payload); err != nil {
+		if err := protoPub.UnmarshalCF(payload); err != nil {
 			// Skip malformed entries
 			continue
 		}
@@ -1395,7 +1395,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 
 		// Unmarshal Publication from protobuf payload
 		var protoPub protocol.Publication
-		if err := protoPub.UnmarshalVT(payload); err != nil {
+		if err := protoPub.UnmarshalCF(payload); err != nil {
 			// Skip malformed entries
 			continue
 		}
@@ -2029,7 +2029,7 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 		}
 
 		var protoPub protocol.Publication
-		err = protoPub.UnmarshalVT(payload)
+		err = protoPub.UnmarshalCF(payload)
 		if err != nil {
 			return MapStreamResult{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 		}
@@ -2207,7 +2207,7 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 		}
 
 		var protoPub protocol.Publication
-		err = protoPub.UnmarshalVT(payload)
+		err = protoPub.UnmarshalCF(payload)
 		if err != nil {
 			return MapStreamResult{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 		}
@@ -2629,7 +2629,7 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 				_, _, payload, parseErr := parseStateValue(entry.stateValue)
 				if parseErr == nil && len(payload) > 0 {
 					var pub protocol.Publication
-					if unmarshalErr := pub.UnmarshalVT(payload); unmarshalErr == nil {
+					if unmarshalErr := pub.UnmarshalCF(payload); unmarshalErr == nil {
 						tags = pub.Tags
 					}
 				}
@@ -2642,7 +2642,7 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 				Time:    now,
 				Tags:    tags,
 			}
-			pubBytes, marshalErr := removePub.MarshalVT()
+			pubBytes, marshalErr := removePub.MarshalCF()
 			if marshalErr != nil {
 				continue
 			}
@@ -2906,7 +2906,7 @@ func (e *RedisMapBroker) handleRedisClientMessage(isCluster bool, eventHandler B
 
 	// Unmarshal as Publication (unified format)
 	var protoPub protocol.Publication
-	err = protoPub.UnmarshalVT(protobuf)
+	err = protoPub.UnmarshalCF(protobuf)
 	if err != nil {
 		return fmt.Errorf("can not unmarshal value to Publication: %v", err)
 	}
@@ -2923,7 +2923,7 @@ func (e *RedisMapBroker) handleRedisClientMessage(isCluster bool, eventHandler B
 		_, _, payload, parseErr := parseStateValue(prevProtobuf)
 		if parseErr == nil {
 			var prevPub protocol.Publication
-			if err := prevPub.UnmarshalVT(payload); err == nil {
+			if err := prevPub.UnmarshalCF(payload); err == nil {
 				prevPubPtr = pubFromProto(&prevPub)
 			}
 		}
@@ -3273,7 +3273,7 @@ func parseAddScriptResult(replies []rueidis.RedisMessage) (MapUpdateResult, erro
 				entryOffset, _, payload, parseErr := parseStateValue(currentValue)
 				if parseErr == nil {
 					var protoPub protocol.Publication
-					if protoPub.UnmarshalVT(payload) == nil {
+					if protoPub.UnmarshalCF(payload) == nil {
 						result.CurrentEntry = &MapCurrentEntry{Offset: entryOffset, Data: protoPub.Data}
 					}
 				}

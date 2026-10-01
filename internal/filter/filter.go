@@ -200,8 +200,8 @@ func Validate(f *protocol.FilterNode) error {
 
 // Hash computes filter hash.
 func Hash(f *protocol.FilterNode) [32]byte {
-	bb := bpool.GetByteBuffer(f.SizeVT())
+	bb := bpool.GetByteBuffer(f.SizeCF())
 	defer bpool.PutByteBuffer(bb)
-	n, _ := f.MarshalToVT(bb.B)    // get canonical hash.
+	n, _ := f.MarshalToCF(bb.B)    // get canonical hash.
 	return sha256.Sum256(bb.B[:n]) // SHA-256 hash.
 }

@@ -282,7 +282,7 @@ func TestKeyedWritePublication_DeltaFallsBackToFullWhenBaseMismatches(t *testing
 		select {
 		case data := <-sink:
 			reply := &protocol.Reply{}
-			if err := reply.UnmarshalVT(data); err != nil {
+			if err := reply.UnmarshalCF(data); err != nil {
 				continue
 			}
 			if reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 20 {

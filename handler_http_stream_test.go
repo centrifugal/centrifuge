@@ -287,7 +287,7 @@ func (d *protobufStreamCommandDecoder) decode() (*protocol.Reply, int, error) {
 		return nil, 0, io.ErrShortBuffer
 	}
 	var c protocol.Reply
-	err = c.UnmarshalVT(b[:int(msgLength)])
+	err = c.UnmarshalCF(b[:int(msgLength)])
 	if err != nil {
 		return nil, 0, err
 	}
