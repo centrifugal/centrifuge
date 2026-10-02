@@ -4558,7 +4558,7 @@ func TestSubRefresh_ServerTagsFilter_MapUnsubscribed(t *testing.T) {
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: channel,
 		Token:   "new_token",
-	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 
 	select {
@@ -4568,6 +4568,10 @@ func TestSubRefresh_ServerTagsFilter_MapUnsubscribed(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout waiting for unsubscribe event")
 	}
+	// The refresh command is replied to before the unsubscribe.
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	require.NotNil(t, rwWrapper.replies[0].SubRefresh)
 }
 
 func TestSubRefresh_ServerTagsFilter_SameFilterNoUnsubscribe(t *testing.T) {

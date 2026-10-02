@@ -2526,11 +2526,12 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 		isMapSub := sameSub && channelHasFlag(channelContext.flags, flagMap)
 		c.mu.Unlock()
 
+		var unsub Unsubscribe
+		needUnsubscribe := false
 		if sameSub && reply.ServerTagsFilter != nil {
-			if unsub, ok := c.updateServerTagsFilter(channel, ctx.subGen, reply.ServerTagsFilter, isMapSub); !ok {
-				c.Unsubscribe(channel, unsub)
-				return
-			}
+			var ok bool
+			unsub, ok = c.updateServerTagsFilter(channel, ctx.subGen, reply.ServerTagsFilter, isMapSub)
+			needUnsubscribe = !ok
 		}
 
 		protoReply, err := c.getSubRefreshCommandReply(res)
@@ -2542,6 +2543,13 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 		c.writeEncodedCommandReply(channel, protocol.FrameTypeSubRefresh, cmd, protoReply, rw)
 		c.handleCommandFinished(cmd, protocol.FrameTypeSubRefresh, nil, protoReply, started, channel)
 		c.releaseSubRefreshCommandReply(protoReply)
+
+		if needUnsubscribe {
+			// After the reply: the refresh itself succeeded, and SDKs wait for
+			// the reply to the command. The unsubscribe push which follows
+			// makes them resubscribe with the new filter.
+			c.Unsubscribe(channel, unsub)
+		}
 	})
 	return nil
 }

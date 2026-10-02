@@ -948,7 +948,8 @@ func TestClientSubscribeDeltaWithServerTagsFilterGetsFilteredPublications(t *tes
 
 // A sub refresh setting a server tags filter on a subscription with delta
 // compression hot-swapped the filter, which isn't applied to delta subscribers.
-// The subscription must resubscribe instead, which doesn't negotiate delta.
+// The subscription must resubscribe instead, which doesn't negotiate delta. The
+// refresh command is still replied to.
 func TestSubRefreshServerTagsFilterResubscribesDeltaSubscription(t *testing.T) {
 	t.Parallel()
 	node := defaultNodeNoHandlers()
@@ -986,13 +987,16 @@ func TestSubRefreshServerTagsFilterResubscribesDeltaSubscription(t *testing.T) {
 	refreshRW := testReplyWriterWrapper()
 	require.NoError(t, client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: "ch", Token: "new_token",
-	}, &protocol.Command{}, time.Now(), refreshRW.rw))
+	}, &protocol.Command{Id: 2}, time.Now(), refreshRW.rw))
 	select {
 	case e := <-unsubscribeCh:
 		require.Equal(t, UnsubscribeCodeInsufficient, e.Code)
 	case <-time.After(time.Second):
 		require.Fail(t, "delta subscription not resubscribed after the server tags filter was set")
 	}
+	require.Len(t, refreshRW.replies, 1)
+	require.Nil(t, refreshRW.replies[0].Error)
+	require.NotNil(t, refreshRW.replies[0].SubRefresh)
 }
 
 // History is not filtered by a server tags filter, so a subscriber narrowed by
