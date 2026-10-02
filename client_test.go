@@ -1086,6 +1086,58 @@ func TestClientHistoryRefusedAfterSubRefreshSetsServerTagsFilter(t *testing.T) {
 	require.Equal(t, ErrorPermissionDenied, err)
 }
 
+// A subscription refreshed on the server side, when it expires, takes the server
+// tags filter of the refresh reply as one refreshed by the client does: the
+// filter was ignored there before.
+func TestClientServerSideSubRefreshSetsServerTagsFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{Credentials: &Credentials{UserID: "user1"}}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{ExpireAt: time.Now().Unix() + 60}}, nil)
+		})
+		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+			cb(SubRefreshReply{
+				ExpireAt:         time.Now().Unix() + 7200,
+				ServerTagsFilter: &FilterNode{Key: "team", Cmp: "eq", Val: "eng"},
+			}, nil)
+		})
+		client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
+			cb(HistoryReply{}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+	rw := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{Channel: "ch"}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+	require.Len(t, rw.replies, 1)
+	require.Nil(t, rw.replies[0].Error)
+
+	client.mu.RLock()
+	chCtx := client.channels["ch"]
+	client.mu.RUnlock()
+	require.False(t, channelHasFlag(chCtx.flags, flagServerTagsFilter))
+
+	node.mu.Lock()
+	node.nowTimeGetter = func() time.Time { return time.Now().Add(time.Hour) }
+	node.mu.Unlock()
+	refreshed := make(chan bool, 1)
+	client.checkSubscriptionExpiration("ch", chCtx, 0, func(ok bool) { refreshed <- ok })
+	require.True(t, <-refreshed)
+
+	client.mu.RLock()
+	chCtx = client.channels["ch"]
+	client.mu.RUnlock()
+	require.True(t, channelHasFlag(chCtx.flags, flagServerTagsFilter))
+
+	rw = testReplyWriterWrapper()
+	err := client.handleHistory(&protocol.HistoryRequest{Channel: "ch"}, &protocol.Command{}, time.Now(), rw.rw)
+	require.Equal(t, ErrorPermissionDenied, err)
+}
+
 // Publications from SubscribeReply were sent with raw data to a JSON client with
 // fossil delta, which expects the data of such a subscription as a JSON string,
 // as recovered and live publications are sent.
