@@ -995,6 +995,97 @@ func TestSubRefreshServerTagsFilterResubscribesDeltaSubscription(t *testing.T) {
 	}
 }
 
+// History is not filtered by a server tags filter, so a subscriber narrowed by
+// one is refused history: it would read exactly what the filter withholds.
+// Without a filter history is answered as usual.
+func TestClientHistoryRefusedWithServerTagsFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			opts := SubscribeOptions{}
+			if e.Channel == "filtered" {
+				opts.ServerTagsFilter = &FilterNode{Key: "team", Cmp: "eq", Val: "eng"}
+			}
+			cb(SubscribeReply{Options: opts}, nil)
+		})
+		client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
+			cb(HistoryReply{}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+	for _, ch := range []string{"filtered", "plain"} {
+		_, err := node.Publish(ch, []byte(`{}`), WithHistory(10, time.Minute), WithTags(map[string]string{"team": "sales"}))
+		require.NoError(t, err)
+		rw := testReplyWriterWrapper()
+		require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{Channel: ch}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+		require.Len(t, rw.replies, 1)
+		require.Nil(t, rw.replies[0].Error)
+	}
+
+	rw := testReplyWriterWrapper()
+	err := client.handleHistory(&protocol.HistoryRequest{Channel: "filtered"}, &protocol.Command{}, time.Now(), rw.rw)
+	require.Equal(t, ErrorPermissionDenied, err)
+	require.Empty(t, rw.replies)
+
+	rw = testReplyWriterWrapper()
+	require.NoError(t, client.handleHistory(&protocol.HistoryRequest{Channel: "plain"}, &protocol.Command{}, time.Now(), rw.rw))
+	require.Len(t, rw.replies, 1)
+	require.Nil(t, rw.replies[0].Error)
+	require.Len(t, rw.replies[0].History.Publications, 0)
+	require.Equal(t, uint64(1), rw.replies[0].History.Offset)
+}
+
+// A sub refresh which narrows a subscription with a server tags filter makes
+// the subscription one which is refused history from then on.
+func TestClientHistoryRefusedAfterSubRefreshSetsServerTagsFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{ClientSideRefresh: true, Credentials: &Credentials{UserID: "user1"}}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options:           SubscribeOptions{ExpireAt: time.Now().Unix() + 60},
+				ClientSideRefresh: true,
+			}, nil)
+		})
+		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+			cb(SubRefreshReply{
+				ExpireAt:         time.Now().Unix() + 60,
+				ServerTagsFilter: &FilterNode{Key: "team", Cmp: "eq", Val: "eng"},
+			}, nil)
+		})
+		client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
+			cb(HistoryReply{}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+	rw := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{Channel: "ch"}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+	require.Len(t, rw.replies, 1)
+	require.Nil(t, rw.replies[0].Error)
+
+	rw = testReplyWriterWrapper()
+	require.NoError(t, client.handleHistory(&protocol.HistoryRequest{Channel: "ch"}, &protocol.Command{}, time.Now(), rw.rw))
+	require.Len(t, rw.replies, 1)
+	require.Nil(t, rw.replies[0].Error)
+
+	refreshRW := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubRefresh(&protocol.SubRefreshRequest{
+		Channel: "ch", Token: "new_token",
+	}, &protocol.Command{}, time.Now(), refreshRW.rw))
+	require.Len(t, refreshRW.replies, 1)
+	require.Nil(t, refreshRW.replies[0].Error)
+
+	rw = testReplyWriterWrapper()
+	err := client.handleHistory(&protocol.HistoryRequest{Channel: "ch"}, &protocol.Command{}, time.Now(), rw.rw)
+	require.Equal(t, ErrorPermissionDenied, err)
+}
+
 // Publications from SubscribeReply were sent with raw data to a JSON client with
 // fossil delta, which expects the data of such a subscription as a JSON string,
 // as recovered and live publications are sent.

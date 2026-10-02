@@ -2498,6 +2498,11 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 		if sameSub {
 			channelContext.info = reply.Info
 			channelContext.expireAt = expireAt
+			if reply.ServerTagsFilter != nil {
+				// A refresh may narrow a subscription which had no server tags
+				// filter: whatever depends on the flag must see it from now on.
+				channelContext.flags |= flagServerTagsFilter
+			}
 			c.channels[channel] = channelContext
 		}
 		isMapSub := sameSub && channelHasFlag(channelContext.flags, flagMap)
@@ -2899,6 +2904,17 @@ func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Comma
 	channel := req.Channel
 	if channel == "" {
 		return c.logDisconnectBadRequest("channel required for history")
+	}
+
+	// A server tags filter withholds publications from the subscriber, and
+	// history is not filtered by it: answering would hand out exactly what the
+	// filter hides. Recovery on subscribe applies the filter, so it stays the
+	// way for such a subscriber to get missed publications.
+	c.mu.RLock()
+	channelContext, subscribed := c.channels[channel]
+	c.mu.RUnlock()
+	if subscribed && channelHasFlag(channelContext.flags, flagServerTagsFilter) {
+		return ErrorPermissionDenied
 	}
 
 	var historyFilter HistoryFilter
