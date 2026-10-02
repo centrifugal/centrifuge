@@ -1,12 +1,12 @@
 package filter
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
 
 	"github.com/centrifugal/protocol"
-	"github.com/segmentio/encoding/json"
 	"github.com/stretchr/testify/require"
 )
 

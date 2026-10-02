@@ -1274,7 +1274,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 //				}
 //				// Unmarshal Publication from protobuf payload
 //				var protoPub protocol.Publication
-//				if err := protoPub.UnmarshalVT(payloadBytes); err != nil {
+//				if err := protoPub.UnmarshalCF(payloadBytes); err != nil {
 //					// Skip malformed entries
 //					continue
 //				}
@@ -1614,7 +1614,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 //				}
 //
 //				var protoPub protocol.Publication
-//				if err := protoPub.UnmarshalVT(payload.B); err != nil {
+//				if err := protoPub.UnmarshalCF(payload.B); err != nil {
 //					bpool.PutByteBuffer(payload)
 //					return err
 //				}
@@ -1860,7 +1860,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 //			}
 //
 //			var protoPub protocol.Publication
-//			if err := protoPub.UnmarshalVT(payload.B); err != nil {
+//			if err := protoPub.UnmarshalCF(payload.B); err != nil {
 //				bpool.PutByteBuffer(payload)
 //				return err
 //			}

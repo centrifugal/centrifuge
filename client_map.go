@@ -12,7 +12,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/recovery"
 
 	"github.com/centrifugal/protocol"
-	"github.com/segmentio/encoding/json"
+	"github.com/centrifugal/protocol/cfjson"
 )
 
 // Map subscriptions provide synchronized state across clients. Unlike normal pub/sub
@@ -143,7 +143,7 @@ func escapeStateForDelta(pubs []*protocol.Publication, deltaEnabled bool, isJSON
 	}
 	for i, pub := range pubs {
 		if len(pub.Data) > 0 {
-			pubs[i] = copyMapPubWithData(pub, json.Escape(convert.BytesToString(pub.Data)), false)
+			pubs[i] = copyMapPubWithData(pub, cfjson.AppendString(nil, convert.BytesToString(pub.Data)), false)
 		}
 	}
 	return pubs

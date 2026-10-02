@@ -14,7 +14,7 @@ import (
 
 	"github.com/centrifugal/fdelta"
 	"github.com/centrifugal/protocol"
-	"github.com/segmentio/encoding/json"
+	"github.com/centrifugal/protocol/cfjson"
 )
 
 const numHubShards = 64
@@ -1012,7 +1012,7 @@ func getDeltaPub(prevPub *Publication, prevUTF8 *lazyutf8.Validator, fullPub *pr
 			deltaData = fullPub.Data
 		}
 		if key.ProtocolType == protocol.TypeJSON {
-			deltaData = json.Escape(convert.BytesToString(deltaData))
+			deltaData = cfjson.AppendString(nil, convert.BytesToString(deltaData))
 		}
 		deltaPub = &protocol.Publication{
 			Offset:  fullPub.Offset,
@@ -1029,7 +1029,7 @@ func getDeltaPub(prevPub *Publication, prevUTF8 *lazyutf8.Validator, fullPub *pr
 		// In JSON and Fossil case we need to send full state in JSON string format.
 		deltaPub = &protocol.Publication{
 			Offset:  fullPub.Offset,
-			Data:    json.Escape(convert.BytesToString(fullPub.Data)),
+			Data:    cfjson.AppendString(nil, convert.BytesToString(fullPub.Data)),
 			Info:    fullPub.Info,
 			Tags:    fullPub.Tags,
 			Key:     fullPub.Key,
@@ -1265,7 +1265,7 @@ func (s *subShard) broadcastPublication(
 					if key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
 						pubToUse = &protocol.Publication{
 							Offset:  fullPub.Offset,
-							Data:    json.Escape(convert.BytesToString(fullPub.Data)),
+							Data:    cfjson.AppendString(nil, convert.BytesToString(fullPub.Data)),
 							Info:    fullPub.Info,
 							Tags:    fullPub.Tags,
 							Channel: fullPub.Channel,
@@ -1292,7 +1292,7 @@ func (s *subShard) broadcastPublication(
 					if key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
 						pubToUse = &protocol.Publication{
 							Offset:  fullPub.Offset,
-							Data:    json.Escape(convert.BytesToString(fullPub.Data)),
+							Data:    cfjson.AppendString(nil, convert.BytesToString(fullPub.Data)),
 							Info:    fullPub.Info,
 							Tags:    fullPub.Tags,
 							Channel: fullPub.Channel,

@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strconv"
@@ -15,7 +16,6 @@ import (
 
 	"github.com/centrifugal/fdelta"
 	"github.com/centrifugal/protocol"
-	"github.com/segmentio/encoding/json"
 	"github.com/stretchr/testify/require"
 )
 
@@ -5033,12 +5033,13 @@ func TestSharedPollTrack_WarmKey_DeliversLatestSnapshot(t *testing.T) {
 // keyedManager.getOrCreateChannel followed later by getHub).
 //
 // Scenario:
-//   client A tracks → untracks (immediate shutdown removes both
-//   sharedPollManager state and keyedManager state)
-//   client B handleTrack runs concurrently — getOrCreateChannel may create
-//   the keyedManager state just before A's finalizeShutdown calls
-//   removeChannel, leaving B's later getHub returning nil → panic at
-//   addSubscriber.
+//
+//	client A tracks → untracks (immediate shutdown removes both
+//	sharedPollManager state and keyedManager state)
+//	client B handleTrack runs concurrently — getOrCreateChannel may create
+//	the keyedManager state just before A's finalizeShutdown calls
+//	removeChannel, leaving B's later getHub returning nil → panic at
+//	addSubscriber.
 //
 // The test runs many iterations and expects no panic / no missed
 // broadcasts. With ChannelShutdownDelay=-1 (immediate), the race window
@@ -5100,7 +5101,6 @@ func TestSharedPollTrack_RaceWithChannelShutdownStress(t *testing.T) {
 		_ = clientB.close(DisconnectForceNoReconnect)
 	}
 }
-
 
 // TestKeyedBroadcast_OrderedDeliveryUnderConcurrentBroadcasts asserts that
 // concurrent broadcasts for the same key to the same client are delivered to

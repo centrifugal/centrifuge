@@ -15,6 +15,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/controlproto"
 
 	"github.com/centrifugal/protocol"
+	"github.com/centrifugal/protocol/cfprotobuf"
 	"github.com/stretchr/testify/require"
 )
 
@@ -773,7 +774,7 @@ func TestNode_handleControl(t *testing.T) {
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
 		err := n.handleControl([]byte("random"))
-		require.EqualError(t, err, "unexpected EOF")
+		require.ErrorIs(t, err, cfprotobuf.ErrTruncated)
 	})
 
 	t.Run("Node", func(t *testing.T) {
@@ -792,7 +793,7 @@ func TestNode_handleControl(t *testing.T) {
 		require.NoError(t, err)
 
 		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
+		require.ErrorIs(t, err, cfprotobuf.ErrTruncated)
 		err = n.handleControl(cmdBytes)
 		require.NoError(t, err)
 		require.NotContains(t, n.nodes.nodes, "new_node")

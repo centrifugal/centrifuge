@@ -9,7 +9,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/readerpool"
 
 	"github.com/centrifugal/protocol"
-	"github.com/segmentio/encoding/json"
+	"github.com/centrifugal/protocol/cfjson"
 )
 
 // EmulationConfig is a config for EmulationHandler.
@@ -72,7 +72,7 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Content-Type") == "application/octet-stream" {
 		err = req.UnmarshalCF(data)
 	} else {
-		_, err = json.Parse(data, &req, json.ZeroCopy)
+		err = cfjson.Unmarshal(data, &req, 0)
 	}
 	if err != nil {
 		if s.node.logEnabled(LogLevelInfo) {
@@ -153,7 +153,7 @@ func (h *emulationSurveyHandler) HandleEmulation(e SurveyEvent, cb SurveyCallbac
 	var data []byte
 	if client.transport.Protocol() == ProtocolTypeJSON {
 		var d string
-		err = json.Unmarshal(req.Data, &d)
+		d, err = cfjson.UnmarshalString(req.Data)
 		if err != nil {
 			h.node.logger.log(newErrorLogEntry(err, "error unmarshal emulation request data", map[string]any{"data": string(req.Data), "error": err.Error()}))
 			cb(SurveyReply{Code: emulationErrorCodeBadRequest})
