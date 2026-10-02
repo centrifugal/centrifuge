@@ -49,6 +49,7 @@ Publishing format (via PUBLISH/SPUBLISH):
 -- ARGV[24] = version_field (pre-computed "v:KEY" for per-key version, empty '' to disable)
 -- ARGV[25] = version_epoch_field (pre-computed "ve:KEY" for per-key version epoch, empty '' to disable)
 -- ARGV[26] = now (current time in milliseconds, from Go)
+-- ARGV[27] = copy_entry_tags ("1" on removal: publish it with the removed entry's tags, optional)
 
 -- Local variables from KEYS
 local stream_key = KEYS[1]
@@ -91,6 +92,7 @@ local nil_key = ARGV[23] or ""
 local version_field = ARGV[24] or ""
 local version_epoch_field = ARGV[25] or ""
 local now = tonumber(ARGV[26])
+local copy_entry_tags = ARGV[27] or "0"
 if nil_key ~= "" then
     if stream_key == nil_key then stream_key = '' end
     if meta_key == nil_key then meta_key = '' end
@@ -107,6 +109,63 @@ end
 local state_payload = state_payload_arg
 if state_payload == "" then
     state_payload = message_payload
+end
+
+-- publication_tags returns the encoded tags fields (field 7) of a state value
+-- "offset:epoch:publication", or "" when there are none or it can't be read.
+local function publication_tags(stored)
+    local first = string.find(stored, ":", 1, true)
+    if not first then return "" end
+    local second = string.find(stored, ":", first + 1, true)
+    if not second then return "" end
+    local pos, n = second + 1, #stored
+    local function varint()
+        local result, mult = 0, 1
+        while pos <= n do
+            local b = string.byte(stored, pos)
+            pos = pos + 1
+            result = result + (b % 128) * mult
+            if b < 128 then return result end
+            mult = mult * 128
+        end
+        return nil
+    end
+    local out = {}
+    while pos <= n do
+        local start = pos
+        local key = varint()
+        if key == nil then return "" end
+        local field, wire = math.floor(key / 8), key % 8
+        if wire == 0 then
+            if varint() == nil then return "" end
+        elseif wire == 1 then
+            pos = pos + 8
+        elseif wire == 2 then
+            local len = varint()
+            if len == nil then return "" end
+            pos = pos + len
+        elseif wire == 5 then
+            pos = pos + 4
+        else
+            return ""
+        end
+        if pos > n + 1 then return "" end
+        if field == 7 and wire == 2 then
+            out[#out + 1] = string.sub(stored, start, pos - 1)
+        end
+    end
+    return table.concat(out)
+end
+
+-- A removal which brings no tags of its own carries the tags of the entry it
+-- removes, so that subscribers with a tags filter receive it just as they
+-- received the entry. Protobuf fields may come in any order, so the entry's
+-- tags fields are appended to the removal publication as they are.
+if is_leave == "1" and copy_entry_tags == "1" and state_hash_key ~= "" and message_key ~= "" then
+    local stored = redis.call("hget", state_hash_key, message_key)
+    if stored then
+        message_payload = message_payload .. publication_tags(stored)
+    end
 end
 
 -- ==== Step 0: Idempotency check ====
