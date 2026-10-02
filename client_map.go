@@ -1387,6 +1387,10 @@ func (c *Client) buildMapChannelFlags(deltaEnabled bool, delta string, isPresenc
 	if opts.MapRemoveClientOnUnsubscribe {
 		channelFlags |= flagCleanupOnUnsubscribe
 	}
+	if opts.ServerTagsFilter != nil {
+		// As for stream subscriptions: history is not filtered.
+		channelFlags |= flagServerTagsFilter
+	}
 	return channelFlags
 }
 

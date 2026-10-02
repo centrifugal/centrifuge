@@ -5088,6 +5088,10 @@ func TestBuildMapChannelFlags(t *testing.T) {
 	// ClientSideRefresh from reply.
 	flags = client.buildMapChannelFlags(false, "", false, SubscribeOptions{}, SubscribeReply{ClientSideRefresh: true})
 	require.True(t, flags&flagClientSideRefresh != 0)
+
+	// A server tags filter, which refuses history as on stream subscriptions.
+	flags = client.buildMapChannelFlags(false, "", false, SubscribeOptions{ServerTagsFilter: &FilterNode{Key: "k", Cmp: "eq", Val: "v"}}, SubscribeReply{})
+	require.True(t, flags&flagServerTagsFilter != 0)
 }
 
 // TestCleanupMapSubscribingAll covers the loop body of cleanupMapSubscribingAll.
