@@ -958,6 +958,9 @@ func TestSubRefreshServerTagsFilterResubscribesDeltaSubscription(t *testing.T) {
 		return ConnectReply{ClientSideRefresh: true, Credentials: &Credentials{UserID: "user1"}}, nil
 	})
 	unsubscribeCh := make(chan UnsubscribeEvent, 1)
+	// The number of replies to the refresh when the subscription is unsubscribed.
+	repliesOnUnsubscribe := make(chan int, 1)
+	refreshRW := testReplyWriterWrapper()
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
@@ -974,7 +977,10 @@ func TestSubRefreshServerTagsFilterResubscribesDeltaSubscription(t *testing.T) {
 				ServerTagsFilter: &FilterNode{Key: "team", Cmp: "eq", Val: "eng"},
 			}, nil)
 		})
-		client.OnUnsubscribe(func(e UnsubscribeEvent) { unsubscribeCh <- e })
+		client.OnUnsubscribe(func(e UnsubscribeEvent) {
+			unsubscribeCh <- e
+			repliesOnUnsubscribe <- len(refreshRW.replies)
+		})
 	})
 	client := newTestConnectedClientV2(t, node, "user1")
 	rw := testReplyWriterWrapper()
@@ -984,7 +990,6 @@ func TestSubRefreshServerTagsFilterResubscribesDeltaSubscription(t *testing.T) {
 	require.Len(t, rw.replies, 1)
 	require.True(t, rw.replies[0].Subscribe.Delta)
 
-	refreshRW := testReplyWriterWrapper()
 	require.NoError(t, client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: "ch", Token: "new_token",
 	}, &protocol.Command{Id: 2}, time.Now(), refreshRW.rw))
@@ -994,6 +999,7 @@ func TestSubRefreshServerTagsFilterResubscribesDeltaSubscription(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "delta subscription not resubscribed after the server tags filter was set")
 	}
+	require.Equal(t, 1, <-repliesOnUnsubscribe, "sub refresh must be replied to before the unsubscribe")
 	require.Len(t, refreshRW.replies, 1)
 	require.Nil(t, refreshRW.replies[0].Error)
 	require.NotNil(t, refreshRW.replies[0].SubRefresh)
@@ -1137,9 +1143,74 @@ func TestClientServerSideSubRefreshSetsServerTagsFilter(t *testing.T) {
 	client.mu.RUnlock()
 	require.True(t, channelHasFlag(chCtx.flags, flagServerTagsFilter))
 
+	// The hub entry of the refreshed subscription filters publications with it.
+	shard := node.hub.subShards[index("ch", numHubShards)]
+	shard.mu.RLock()
+	sub := shard.subs["ch"][client.uid]
+	shard.mu.RUnlock()
+	require.Equal(t, chCtx.subGen, sub.subGen)
+	require.NotNil(t, sub.serverTagsFilter)
+	require.Equal(t, filter.Hash(&FilterNode{Key: "team", Cmp: "eq", Val: "eng"}), sub.serverTagsFilter.hash)
+
 	rw = testReplyWriterWrapper()
 	err := client.handleHistory(&protocol.HistoryRequest{Channel: "ch"}, &protocol.Command{}, time.Now(), rw.rw)
 	require.Equal(t, ErrorPermissionDenied, err)
+}
+
+// A delta subscription refreshed on the server side with a server tags filter
+// resubscribes, as one refreshed by the client does: delta compression isn't
+// used together with a server tags filter.
+func TestClientServerSideSubRefreshServerTagsFilterResubscribesDeltaSubscription(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{Credentials: &Credentials{UserID: "user1"}}, nil
+	})
+	unsubscribeCh := make(chan UnsubscribeEvent, 1)
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					ExpireAt:          time.Now().Unix() + 60,
+					AllowedDeltaTypes: []DeltaType{DeltaTypeFossil},
+				},
+			}, nil)
+		})
+		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+			cb(SubRefreshReply{
+				ExpireAt:         time.Now().Unix() + 7200,
+				ServerTagsFilter: &FilterNode{Key: "team", Cmp: "eq", Val: "eng"},
+			}, nil)
+		})
+		client.OnUnsubscribe(func(e UnsubscribeEvent) { unsubscribeCh <- e })
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+	rw := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "ch", Delta: string(DeltaTypeFossil),
+	}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+	require.Len(t, rw.replies, 1)
+	require.True(t, rw.replies[0].Subscribe.Delta)
+
+	client.mu.RLock()
+	chCtx := client.channels["ch"]
+	client.mu.RUnlock()
+
+	node.mu.Lock()
+	node.nowTimeGetter = func() time.Time { return time.Now().Add(time.Hour) }
+	node.mu.Unlock()
+	refreshed := make(chan bool, 1)
+	client.checkSubscriptionExpiration("ch", chCtx, 0, func(ok bool) { refreshed <- ok })
+	require.True(t, <-refreshed)
+
+	select {
+	case e := <-unsubscribeCh:
+		require.Equal(t, UnsubscribeCodeInsufficient, e.Code)
+		require.Equal(t, "ch", e.Channel)
+	case <-time.After(time.Second):
+		require.Fail(t, "delta subscription not resubscribed after the server tags filter was set")
+	}
 }
 
 // Publications from SubscribeReply were sent with raw data to a JSON client with
