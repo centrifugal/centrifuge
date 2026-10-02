@@ -182,9 +182,8 @@ const (
 	flagCleanupOnUnsubscribe // Clean up keys by client_id when subscription ends
 	flagKeyed                // Channel uses keyed subscription (shared poll track/untrack)
 	// flagServerTagsFilter marks a subscription narrowed by a server-controlled
-	// tags filter. Such a subscriber must not be offered the channel's compression
-	// dictionary: the filter withholds publications from them, but the dictionary
-	// is built from all of them.
+	// tags filter. Such a subscriber is refused history: history is not filtered,
+	// so it would hand out the publications the filter withholds (see handleHistory).
 	flagServerTagsFilter
 )
 
