@@ -1076,7 +1076,7 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 			isMapSub := sameSub && channelHasFlag(ctx.flags, flagMap)
 			c.mu.Unlock()
 			if sameSub && reply.ServerTagsFilter != nil {
-				if unsub, ok := c.updateServerTagsFilter(channel, reply.ServerTagsFilter, isMapSub); !ok {
+				if unsub, ok := c.updateServerTagsFilter(channel, channelContext.subGen, reply.ServerTagsFilter, isMapSub); !ok {
 					// The subscription must start over with the new filter. A
 					// server-side one can't be resubscribed by the client, so the
 					// connection reconnects, as on insufficient state.
@@ -2527,7 +2527,7 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 		c.mu.Unlock()
 
 		if sameSub && reply.ServerTagsFilter != nil {
-			if unsub, ok := c.updateServerTagsFilter(channel, reply.ServerTagsFilter, isMapSub); !ok {
+			if unsub, ok := c.updateServerTagsFilter(channel, ctx.subGen, reply.ServerTagsFilter, isMapSub); !ok {
 				c.Unsubscribe(channel, unsub)
 				return
 			}
@@ -2551,13 +2551,15 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 // and must be unsubscribed with the returned Unsubscribe: a map subscription
 // must load its state again, and delta compression isn't used together with
 // tags filters (see subscribeCmd), so a delta subscription resubscribes
-// without it.
-func (c *Client) updateServerTagsFilter(channel string, f *FilterNode, isMapSub bool) (Unsubscribe, bool) {
+// without it. Only the subscription of generation subGen is updated: c.mu is
+// released before the hub is, so a resubscribe in between must neither get
+// the filter nor be unsubscribed for it.
+func (c *Client) updateServerTagsFilter(channel string, subGen uint64, f *FilterNode, isMapSub bool) (Unsubscribe, bool) {
 	newTf := &tagsFilter{
 		filter: f,
 		hash:   filter.Hash(f),
 	}
-	_, changed, usesDelta := c.node.hub.updateServerTagsFilter(channel, c.ID(), newTf)
+	_, changed, usesDelta := c.node.hub.updateServerTagsFilter(channel, c.ID(), subGen, newTf)
 	if changed && isMapSub {
 		return Unsubscribe{Code: UnsubscribeCodeStateInvalidated, Reason: "server tags filter changed"}, false
 	}
