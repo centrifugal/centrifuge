@@ -240,6 +240,42 @@ type BufferPool interface {
 // added to the pool.
 type writePoolData struct{ buf []byte }
 
+// ReadBufferPool is a pool of read buffers of one size. Connections using it
+// hold a read buffer only while reading frames.
+type ReadBufferPool struct {
+	pool BufferPool
+	size int
+}
+
+// NewReadBufferPool creates a pool of read buffers of the given size. Zero
+// size means the default one.
+func NewReadBufferPool(size int) *ReadBufferPool {
+	if size == 0 {
+		size = defaultReadBufferSize
+	} else if size < maxControlFramePayloadSize {
+		size = maxControlFramePayloadSize
+	}
+	return &ReadBufferPool{pool: &sync.Pool{}, size: size}
+}
+
+func (p *ReadBufferPool) get(r io.Reader) *bufio.Reader {
+	if br, ok := p.pool.Get().(*bufio.Reader); ok {
+		br.Reset(r)
+		return br
+	}
+	return bufio.NewReaderSize(r, p.size)
+}
+
+// put adds the reader to the pool if it has the pool's size, like the
+// buffered reader of a hijacked HTTP connection usually has.
+func (p *ReadBufferPool) put(br *bufio.Reader) {
+	if br.Size() != p.size {
+		return
+	}
+	br.Reset(nil)
+	p.pool.Put(br)
+}
+
 // The Conn type represents a WebSocket connection.
 type Conn struct {
 	conn net.Conn
@@ -251,6 +287,7 @@ type Conn struct {
 	writeDeadline time.Time
 	writer        io.WriteCloser // the current writer returned to the application
 	writePool     BufferPool
+	readPool      *ReadBufferPool // if set, br is nil while waiting for a frame.
 	writeErr      error
 
 	newDecompressionReader func(io.Reader) io.ReadCloser
@@ -266,6 +303,8 @@ type Conn struct {
 	// closeCode holds the first close frame observed on the connection, packed
 	// as bits 0-15 = code, bit 16 = incoming flag; 0 means none observed yet.
 	closeCode        atomic.Int32
+	firstByte        [1]byte // first byte of a frame read without a read buffer.
+	frameRead        bool    // whether a frame was read, see readFrameStart.
 	compressionLevel int
 	readMaskPos      int
 	writeBufSize     int
@@ -280,8 +319,8 @@ type Conn struct {
 	isServer               bool
 }
 
-func newConn(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int, writeBufferPool BufferPool, br *bufio.Reader, writeBuf []byte) *Conn {
-	if br == nil {
+func newConn(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int, readBufferPool *ReadBufferPool, writeBufferPool BufferPool, br *bufio.Reader, writeBuf []byte) *Conn {
+	if br == nil && readBufferPool == nil {
 		if readBufferSize == 0 {
 			readBufferSize = defaultReadBufferSize
 		} else if readBufferSize < maxControlFramePayloadSize {
@@ -305,6 +344,7 @@ func newConn(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int, 
 	return &Conn{
 		isServer:               isServer,
 		br:                     br,
+		readPool:               readBufferPool,
 		conn:                   conn,
 		mu:                     mu,
 		readFinal:              true,
@@ -359,10 +399,74 @@ func (c *Conn) writeFatal(err error) error {
 	return err
 }
 
+// readFrameStartPooled reads the first two bytes of a frame for a connection
+// with a read buffer pool. It returns the read buffer to the pool if nothing is
+// buffered, then waits for the frame reading its first byte directly from the
+// connection. The reader passed to newConn (from the hijacked HTTP connection)
+// is kept until the first frame is read, it is about to arrive and needs a
+// buffer anyway.
+func (c *Conn) readFrameStartPooled() (byte, byte, error) {
+	if c.br != nil && c.br.Buffered() == 0 && c.frameRead {
+		c.readPool.put(c.br)
+		c.br = nil
+	}
+	c.frameRead = true
+	if c.br == nil {
+		if err := c.readFirstByte(); err != nil {
+			return 0, 0, err
+		}
+		c.br = c.readPool.get(c.conn)
+		p, err := c.read(1)
+		if err != nil {
+			return 0, 0, err
+		}
+		return c.firstByte[0], p[0], nil
+	}
+	p, err := c.read(2)
+	if err != nil {
+		return 0, 0, err
+	}
+	return p[0], p[1], nil
+}
+
+func (c *Conn) readFirstByte() error {
+	for i := 0; i < 100; i++ {
+		n, err := c.conn.Read(c.firstByte[:])
+		if n == 1 {
+			// Like bufio.Reader, leave the error (if any) to the next read.
+			return nil
+		}
+		if err != nil {
+			if err == io.EOF {
+				err = errUnexpectedEOF
+			}
+			return err
+		}
+	}
+	return io.ErrNoProgress
+}
+
+// readLarge reads n bytes not fitting the read buffer: a control frame payload
+// larger than the small read buffer used for HTTP/2. Rare, so allocate instead
+// of making the buffer bigger.
+func (c *Conn) readLarge(n int) ([]byte, error) {
+	p := make([]byte, n)
+	_, err := io.ReadFull(c.br, p)
+	if err == io.EOF || err == io.ErrUnexpectedEOF {
+		err = errUnexpectedEOF
+	}
+	return p, err
+}
+
 func (c *Conn) read(n int) ([]byte, error) {
 	p, err := c.br.Peek(n)
-	if err == io.EOF {
-		err = errUnexpectedEOF
+	if err != nil {
+		if err == bufio.ErrBufferFull {
+			return c.readLarge(n)
+		}
+		if err == io.EOF {
+			err = errUnexpectedEOF
+		}
 	}
 	_, _ = c.br.Discard(len(p))
 	return p, err
@@ -786,7 +890,15 @@ func (c *Conn) advanceFrame() (int, error) {
 
 	var errs []string
 
-	p, err := c.read(2)
+	var p []byte
+	var err error
+	if c.readPool == nil {
+		p, err = c.read(2)
+	} else {
+		var hdr [2]byte
+		hdr[0], hdr[1], err = c.readFrameStartPooled()
+		p = hdr[:]
+	}
 	if err != nil {
 		return noFrame, err
 	}
