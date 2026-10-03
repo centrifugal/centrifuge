@@ -83,10 +83,11 @@ func TestReadBufferPoolIdle(t *testing.T) {
 	}))
 	defer s.Close()
 
-	wc, _, _, err := (&Dialer{}).Dial("ws"+strings.TrimPrefix(s.URL, "http"), nil)
+	wc, resp, _, err := (&Dialer{}).Dial("ws"+strings.TrimPrefix(s.URL, "http"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	_ = resp.Body.Close()
 	defer func() { _ = wc.Close() }()
 	rc := <-serverConn
 	defer func() { _ = rc.Close() }()
@@ -377,10 +378,11 @@ func BenchmarkConnectFirstFrame(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				c, _, _, err := (&Dialer{}).Dial(url, nil)
+				c, resp, _, err := (&Dialer{}).Dial(url, nil)
 				if err != nil {
 					b.Fatal(err)
 				}
+				_ = resp.Body.Close()
 				conns = append(conns, c)
 				if err := c.WriteMessage(TextMessage, frame); err != nil {
 					b.Fatal(err)
