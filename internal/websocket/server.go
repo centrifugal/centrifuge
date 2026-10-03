@@ -48,6 +48,16 @@ type Upgrader struct {
 	// WriteBufferSize.
 	WriteBufferPool BufferPool
 
+	// ReadBufferPool is a pool of read buffers. If set, a connection returns
+	// its read buffer to the pool when nothing is left buffered, and waits for
+	// the next frame reading its first byte directly from the connection, so
+	// idle connections hold no read buffer. The cost is an extra 1-byte read
+	// for each frame arriving at an idle connection. The buffered reader of
+	// the hijacked HTTP connection is used for the first frames and then goes
+	// to the pool if it has the pool's size. ReadBufferSize is not used when
+	// the pool is set. Ignored for HTTP/2 connections.
+	ReadBufferPool *ReadBufferPool
+
 	// Subprotocols specifies the server's supported protocols in order of
 	// preference. If this field is not nil, then the Upgrade method negotiates a
 	// subprotocol by selecting the first match in this list with a protocol
@@ -259,7 +269,11 @@ func (u *Upgrader) upgradeH1(w http.ResponseWriter, r *http.Request, responseHea
 	}
 
 	var br *bufio.Reader
-	if u.ReadBufferSize == 0 && brw.Reader.Size() > 256 {
+	if u.ReadBufferPool != nil {
+		// Read the first frames with the hijacked buffered reader, it goes to
+		// the pool once nothing is buffered.
+		br = brw.Reader
+	} else if u.ReadBufferSize == 0 && brw.Reader.Size() > 256 {
 		// Reuse hijacked buffered reader as connection reader.
 		br = brw.Reader
 	}
@@ -272,7 +286,7 @@ func (u *Upgrader) upgradeH1(w http.ResponseWriter, r *http.Request, responseHea
 		writeBuf = buf
 	}
 
-	c := newConn(netConn, true, u.ReadBufferSize, u.WriteBufferSize, u.WriteBufferPool, br, writeBuf)
+	c := newConn(netConn, true, u.ReadBufferSize, u.WriteBufferSize, u.ReadBufferPool, u.WriteBufferPool, br, writeBuf)
 
 	if compress {
 		c.newCompressionWriter = compressNoContextTakeover
@@ -381,15 +395,7 @@ func (u *Upgrader) upgradeH2(w http.ResponseWriter, r *http.Request, responseHea
 		rc:         rc,
 	}
 
-	// HTTP/2 stream already has internal buffering. Make small br to avoid allocating a new
-	// large intermediary buffer inside newConn.
-	// Small reads will be sufficient with 16 bytes buffer, for large reads our intermediary
-	// buffer will be bypassed avoiding any overhead.
-	// This means that for HTTP/2 it's not possible to control the read buffer size
-	// via Upgrader.ReadBufferSize. For write buffers it's better to always use a pool
-	// by setting Upgrader.WriteBufferPool.
-	br := bufio.NewReaderSize(stream, 16)
-	c := newConn(stream, true, u.ReadBufferSize, u.WriteBufferSize, u.WriteBufferPool, br, nil)
+	c := u.newHTTP2Conn(stream)
 	if compress {
 		c.newCompressionWriter = compressNoContextTakeover
 		c.newDecompressionReader = decompressNoContextTakeover
@@ -414,6 +420,19 @@ type writeHook struct {
 func (wh *writeHook) Write(p []byte) (int, error) {
 	wh.p = p
 	return len(p), nil
+}
+
+// newHTTP2Conn creates a connection over an HTTP/2 extended CONNECT stream.
+func (u *Upgrader) newHTTP2Conn(stream *http2Stream) *Conn {
+	// HTTP/2 stream already has internal buffering. Make small br to avoid allocating a new
+	// large intermediary buffer inside newConn.
+	// Small reads will be sufficient with 16 bytes buffer, for large reads our intermediary
+	// buffer will be bypassed avoiding any overhead.
+	// This means that for HTTP/2 it's not possible to control the read buffer size
+	// via Upgrader.ReadBufferSize. For write buffers it's better to always use a pool
+	// by setting Upgrader.WriteBufferPool.
+	br := bufio.NewReaderSize(stream, 16)
+	return newConn(stream, true, u.ReadBufferSize, u.WriteBufferSize, nil, u.WriteBufferPool, br, nil)
 }
 
 // bufioWriterBuffer grabs the buffer from a bufio.Writer.
