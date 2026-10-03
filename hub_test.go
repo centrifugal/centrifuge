@@ -1695,8 +1695,10 @@ func TestSubIDShardDistribution(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, isNew, "Should be new channel")
 
-			// Verify the sub ID follows our shard pattern
-			expectedShardIndex := int(subID % numHubShards)
+			// Verify the sub ID follows our shard pattern. IDs start from 1, 0 is
+			// never assigned.
+			require.Positive(t, subID)
+			expectedShardIndex := int((subID - 1) % numHubShards)
 			require.Equal(t, shardIdx, expectedShardIndex,
 				"Sub ID %d should belong to shard %d, but belongs to shard %d",
 				subID, shardIdx, expectedShardIndex)
@@ -1710,9 +1712,9 @@ func TestSubIDShardDistribution(t *testing.T) {
 		ids := idsByShard[shardIdx]
 		require.Len(t, ids, channelsPerShard, "Should have exactly %d IDs for shard %d", channelsPerShard, shardIdx)
 
-		// Verify the IDs follow the pattern: shardIndex, shardIndex + numHubShards, shardIndex + 2*numHubShards, etc.
+		// Verify the IDs follow the pattern: shardIndex + 1, shardIndex + 1 + numHubShards, shardIndex + 1 + 2*numHubShards, etc.
 		for i, id := range ids {
-			expectedID := int64(shardIdx) + int64(i)*numHubShards
+			expectedID := int64(shardIdx) + 1 + int64(i)*numHubShards
 			require.Equal(t, expectedID, id,
 				"Shard %d, ID %d: expected %d, got %d", shardIdx, i, expectedID, id)
 		}
@@ -3214,6 +3216,75 @@ func waitSinkPublication(t *testing.T, transport *testTransport) string {
 			}
 		case <-time.After(2 * time.Second):
 			t.Fatal("no publication frame in sink")
+		}
+	}
+}
+
+// Channel IDs start from 1 on every hub shard. ID 0 is the proto3 default and
+// is not sent over the wire, so a compacted push with ID 0 would carry neither
+// the ID nor the channel, and the client could not route it.
+func TestHubChannelCompactionIDNeverZero(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{AllowChannelCompaction: true}}, nil)
+		})
+	})
+
+	// Before the fix the first compacted channel of shard 0 got ID 0.
+	channelOnShard := func(shard int) string {
+		for i := 0; ; i++ {
+			ch := "compaction" + strconv.Itoa(i)
+			if index(ch, numHubShards) == shard {
+				return ch
+			}
+		}
+	}
+
+	seen := map[int64]string{}
+	for _, shard := range []int{0, 1, numHubShards - 1} {
+		ch := channelOnShard(shard)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		transport := newTestTransport(cancel)
+		transport.sink = make(chan []byte, 100)
+		transport.setProtocolType(ProtocolTypeJSON)
+		transport.setProtocolVersion(ProtocolVersion2)
+		client := newTestConnectedClientWithTransport(t, ctx, node, transport, "u")
+
+		rw := testReplyWriterWrapper()
+		require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
+			Channel: ch, Flag: subscriptionFlagChannelCompression,
+		}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+		require.Len(t, rw.replies, 1)
+		require.Nil(t, rw.replies[0].Error)
+		id := rw.replies[0].Subscribe.Id
+		require.Positive(t, id, "channel %q on shard %d got no channel ID", ch, shard)
+		require.NotContains(t, seen, id, "channel ID %d reused for %q and %q", id, seen[id], ch)
+		seen[id] = ch
+
+		_, err := node.Publish(ch, []byte(`{"x":1}`))
+		require.NoError(t, err)
+		timeout := time.After(2 * time.Second)
+	waitPub:
+		for {
+			select {
+			case data := <-transport.sink:
+				if !strings.Contains(string(data), `"pub"`) {
+					continue
+				}
+				var reply protocol.Reply
+				require.NoError(t, json.Unmarshal(data, &reply))
+				require.NotNil(t, reply.Push)
+				require.Equal(t, id, reply.Push.Id, "publication push must be routable by channel ID")
+				require.Empty(t, reply.Push.Channel)
+				break waitPub
+			case <-timeout:
+				t.Fatal("no publication frame in sink")
+			}
 		}
 	}
 }

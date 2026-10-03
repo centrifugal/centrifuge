@@ -839,10 +839,12 @@ func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
 	if sub.useID {
 		existingChanID, hasChanID := s.chanIDs[ch]
 		if !hasChanID {
-			// Generate unique ID using shard index + (counter * numHubShards)
-			// This ensures each shard generates non-overlapping ID ranges
+			// Generate unique ID using shard index + 1 + ((counter - 1) * numHubShards)
+			// This ensures each shard generates non-overlapping ID ranges. IDs start
+			// from 1: zero is not sent over the wire (proto3 default), so a push with
+			// ID 0 would carry neither ID nor channel and clients could not route it.
 			counter := s.lastChanID.Add(1)
-			chanID = int64(s.shardIndex) + ((counter - 1) * numHubShards)
+			chanID = int64(s.shardIndex) + 1 + ((counter - 1) * numHubShards)
 			s.chanIDs[ch] = chanID
 		} else {
 			chanID = existingChanID
