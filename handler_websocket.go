@@ -1,6 +1,8 @@
 package centrifuge
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -127,17 +129,51 @@ type WebsocketConfig struct {
 	// roughly halves the read loop's stack.
 	ProcessCommandsOffReadLoop bool
 
+	// HandshakeConnect allows clients to send their first commands (connect and
+	// optimistic subscriptions) inside the WebSocket handshake request, saving
+	// one round trip before the connection is ready. The client offers the
+	// commands as a subprotocol "cf-connect.<data>", where data is the frame it
+	// would otherwise send first, encoded with unpadded base64url, and puts
+	// "cf-json-hc" or "cf-proto-hc" first in the offer, followed by a plain
+	// subprotocol. The server selects the -hc subprotocol only if the data is
+	// valid and fits MessageSizeLimit, and then processes the commands right
+	// after the handshake, before reading any frame. Otherwise the plain
+	// subprotocol is selected and the client sends the commands after the
+	// connection opens, as usual. The data is never echoed back. Note that
+	// credentials in the commands (connection and subscription tokens) then
+	// travel in a request header, which some proxies may log. Off by default.
+	HandshakeConnect bool
+
 	PingPongConfig
 }
+
+// WebSocket subprotocols. The short cf-json and cf-proto are equivalent to
+// centrifuge-json and centrifuge-protobuf, which stay supported.
+const (
+	subprotocolJSON          = "centrifuge-json"
+	subprotocolProtobuf      = "centrifuge-protobuf"
+	subprotocolJSONShort     = "cf-json"
+	subprotocolProtobufShort = "cf-proto"
+	// Selected to confirm the commands from the handshake were taken and will
+	// be processed, see WebsocketConfig.HandshakeConnect.
+	subprotocolJSONHandshakeConnect     = "cf-json-hc"
+	subprotocolProtobufHandshakeConnect = "cf-proto-hc"
+	// handshakeConnectPrefix prefixes the subprotocol carrying commands sent
+	// inside the handshake.
+	handshakeConnectPrefix = "cf-connect."
+)
 
 // WebsocketHandler handles WebSocket client connections. WebSocket protocol
 // is a bidirectional connection between a client and a server for low-latency
 // communication.
 type WebsocketHandler struct {
-	node          *Node
-	upgrade       *websocket.Upgrader
-	config        WebsocketConfig
-	preparedCache *otter.Cache[string, *websocket.PreparedMessage]
+	node    *Node
+	upgrade *websocket.Upgrader
+	// upgradeHandshakeConnect is used instead of upgrade for requests carrying
+	// valid handshake connect data, set only if WebsocketConfig.HandshakeConnect.
+	upgradeHandshakeConnect *websocket.Upgrader
+	config                  WebsocketConfig
+	preparedCache           *otter.Cache[string, *websocket.PreparedMessage]
 }
 
 var writeBufferPool = &sync.Pool{}
@@ -147,7 +183,7 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 	upgrade := &websocket.Upgrader{
 		ReadBufferSize:      config.ReadBufferSize,
 		EnableCompression:   config.Compression,
-		Subprotocols:        []string{"centrifuge-json", "centrifuge-protobuf"},
+		Subprotocols:        []string{subprotocolJSON, subprotocolProtobuf, subprotocolJSONShort, subprotocolProtobufShort},
 		DisableHTTP1Upgrade: config.DisableHTTP1Upgrade,
 	}
 	if config.UseWriteBufferPool {
@@ -174,12 +210,40 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 
 	warnAboutIncorrectPingPongConfig(node, config.PingPongConfig, transportWebsocket)
 
-	return &WebsocketHandler{
-		node:          node,
-		config:        config,
-		upgrade:       upgrade,
-		preparedCache: cache,
+	var upgradeHandshakeConnect *websocket.Upgrader
+	if config.HandshakeConnect {
+		u := *upgrade
+		u.Subprotocols = append([]string{subprotocolJSONHandshakeConnect, subprotocolProtobufHandshakeConnect}, upgrade.Subprotocols...)
+		upgradeHandshakeConnect = &u
 	}
+
+	return &WebsocketHandler{
+		node:                    node,
+		config:                  config,
+		upgrade:                 upgrade,
+		upgradeHandshakeConnect: upgradeHandshakeConnect,
+		preparedCache:           cache,
+	}
+}
+
+// handshakeConnectData returns commands sent inside the handshake request, or
+// nil if there are none or they are not valid base64url or exceed limit.
+func handshakeConnectData(r *http.Request, limit int) []byte {
+	for _, p := range websocket.Subprotocols(r) {
+		encoded, ok := strings.CutPrefix(p, handshakeConnectPrefix)
+		if !ok {
+			continue
+		}
+		if encoded == "" || base64.RawURLEncoding.DecodedLen(len(encoded)) > limit {
+			return nil
+		}
+		data, err := base64.RawURLEncoding.DecodeString(encoded)
+		if err != nil {
+			return nil
+		}
+		return data
+	}
+	return nil
 }
 
 func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
@@ -200,16 +264,36 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	messageSizeLimit := s.config.MessageSizeLimit
+	if messageSizeLimit <= 0 {
+		messageSizeLimit = 65536 // 64KB
+	}
+
+	upgrade := s.upgrade
+	var handshakeData []byte
+	if s.upgradeHandshakeConnect != nil {
+		handshakeData = handshakeConnectData(r, messageSizeLimit)
+		if handshakeData != nil {
+			// Lets the -hc subprotocol be selected if the client offered it.
+			upgrade = s.upgradeHandshakeConnect
+		}
+	}
+
 	compression := s.config.Compression
 	compressionLevel := s.config.CompressionLevel
 	compressionMinSize := s.config.CompressionMinSize
-	conn, subProtocol, err := s.upgrade.Upgrade(rw, r, nil)
+	conn, subProtocol, err := upgrade.Upgrade(rw, r, nil)
 	if err != nil {
 		s.node.logger.log(newLogEntry(LogLevelDebug, "websocket upgrade error", map[string]any{"error": err.Error()}))
 		return
 	}
-	if subProtocol == "centrifuge-protobuf" {
+	if subProtocol == subprotocolProtobuf || subProtocol == subprotocolProtobufShort || subProtocol == subprotocolProtobufHandshakeConnect {
 		protoType = ProtocolTypeProtobuf
+	}
+	if subProtocol != subprotocolJSONHandshakeConnect && subProtocol != subprotocolProtobufHandshakeConnect {
+		// Without the -hc subprotocol the client sends the commands after the
+		// connection opens.
+		handshakeData = nil
 	}
 
 	if compression {
@@ -221,10 +305,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	writeTimeout := s.config.WriteTimeout
 	if writeTimeout == 0 {
 		writeTimeout = 1 * time.Second
-	}
-	messageSizeLimit := s.config.MessageSizeLimit
-	if messageSizeLimit <= 0 {
-		messageSizeLimit = 65536 // 64KB
 	}
 	conn.SetReadLimit(int64(messageSizeLimit))
 	// The stream command decoder parses decoded command bytes, so it is bounded
@@ -314,7 +394,18 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			handoff = newFrameHandoff(c, decoderMessageSizeLimit)
 		}
 
-		for {
+		// Commands from the handshake go first, like a frame received before
+		// any other.
+		keepReading := true
+		if handshakeData != nil {
+			if handoff != nil {
+				keepReading = handoff.handle(bytes.NewReader(handshakeData))
+			} else {
+				keepReading = HandleReadFrame(c, bytes.NewReader(handshakeData), decoderMessageSizeLimit)
+			}
+		}
+
+		for keepReading {
 			_, r, err := conn.NextReader()
 			if err != nil {
 				if s.node.logEnabled(LogLevelTrace) {
