@@ -798,13 +798,19 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 
 	now := time.Now().UnixMilli()
 
-	// Create a Publication with key and removed=true to signal removal.
-	// Include opts.Tags so server-side tags filtering can route the removal correctly.
+	// Create a Publication with key and removed=true to signal removal. Tags
+	// route the removal through tags filters: when the caller gives none, the
+	// script publishes it with the tags of the entry it removes, as the other
+	// map brokers do.
 	protoPub := &protocol.Publication{
 		Key:     key,
 		Removed: true,
 		Time:    now,
 		Tags:    opts.Tags,
+	}
+	copyEntryTags := "0"
+	if opts.Tags == nil {
+		copyEntryTags = "1"
 	}
 	pubBytes, err := protoPub.MarshalCF()
 	if err != nil {
@@ -894,6 +900,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 			versionField,               // version_field (pre-computed "v:KEY" or "")
 			versionEpochField,          // version_epoch_field (pre-computed "ve:KEY" or "")
 			strconv.FormatInt(now, 10), // now (current time in milliseconds)
+			copyEntryTags,              // copy_entry_tags (publish with the removed entry's tags)
 		},
 	).ToArray()
 	if err != nil {
