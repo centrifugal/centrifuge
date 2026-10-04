@@ -319,7 +319,7 @@ func TestEmulationHandlerProtobufInvalid(t *testing.T) {
 	_ = resp.Body.Close()
 }
 
-// TestEmulationSurveyHandler_BadProtobuf covers the UnmarshalVT-error branch
+// TestEmulationSurveyHandler_BadProtobuf covers the UnmarshalCF-error branch
 // of emulationSurveyHandler.HandleEmulation.
 func TestEmulationSurveyHandler_BadProtobuf(t *testing.T) {
 	t.Parallel()
