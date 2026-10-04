@@ -948,7 +948,8 @@ func TestClientSubscribeDeltaWithServerTagsFilterGetsFilteredPublications(t *tes
 
 // A sub refresh setting a server tags filter on a subscription with delta
 // compression hot-swapped the filter, which isn't applied to delta subscribers.
-// The subscription must resubscribe instead, which doesn't negotiate delta.
+// The subscription must resubscribe instead, which doesn't negotiate delta. The
+// refresh command is still replied to.
 func TestSubRefreshServerTagsFilterResubscribesDeltaSubscription(t *testing.T) {
 	t.Parallel()
 	node := defaultNodeNoHandlers()
@@ -957,6 +958,9 @@ func TestSubRefreshServerTagsFilterResubscribesDeltaSubscription(t *testing.T) {
 		return ConnectReply{ClientSideRefresh: true, Credentials: &Credentials{UserID: "user1"}}, nil
 	})
 	unsubscribeCh := make(chan UnsubscribeEvent, 1)
+	// The number of replies to the refresh when the subscription is unsubscribed.
+	repliesOnUnsubscribe := make(chan int, 1)
+	refreshRW := testReplyWriterWrapper()
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
@@ -973,6 +977,212 @@ func TestSubRefreshServerTagsFilterResubscribesDeltaSubscription(t *testing.T) {
 				ServerTagsFilter: &FilterNode{Key: "team", Cmp: "eq", Val: "eng"},
 			}, nil)
 		})
+		client.OnUnsubscribe(func(e UnsubscribeEvent) {
+			unsubscribeCh <- e
+			repliesOnUnsubscribe <- len(refreshRW.replies)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+	rw := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "ch", Delta: string(DeltaTypeFossil),
+	}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+	require.Len(t, rw.replies, 1)
+	require.True(t, rw.replies[0].Subscribe.Delta)
+
+	require.NoError(t, client.handleSubRefresh(&protocol.SubRefreshRequest{
+		Channel: "ch", Token: "new_token",
+	}, &protocol.Command{Id: 2}, time.Now(), refreshRW.rw))
+	select {
+	case e := <-unsubscribeCh:
+		require.Equal(t, UnsubscribeCodeInsufficient, e.Code)
+	case <-time.After(time.Second):
+		require.Fail(t, "delta subscription not resubscribed after the server tags filter was set")
+	}
+	require.Equal(t, 1, <-repliesOnUnsubscribe, "sub refresh must be replied to before the unsubscribe")
+	require.Len(t, refreshRW.replies, 1)
+	require.Nil(t, refreshRW.replies[0].Error)
+	require.NotNil(t, refreshRW.replies[0].SubRefresh)
+}
+
+// History is not filtered by a server tags filter, so a subscriber narrowed by
+// one is refused history: it would read exactly what the filter withholds.
+// Without a filter history is answered as usual.
+func TestClientHistoryRefusedWithServerTagsFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			opts := SubscribeOptions{}
+			if e.Channel == "filtered" {
+				opts.ServerTagsFilter = &FilterNode{Key: "team", Cmp: "eq", Val: "eng"}
+			}
+			cb(SubscribeReply{Options: opts}, nil)
+		})
+		client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
+			cb(HistoryReply{}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+	for _, ch := range []string{"filtered", "plain"} {
+		_, err := node.Publish(ch, []byte(`{}`), WithHistory(10, time.Minute), WithTags(map[string]string{"team": "sales"}))
+		require.NoError(t, err)
+		rw := testReplyWriterWrapper()
+		require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{Channel: ch}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+		require.Len(t, rw.replies, 1)
+		require.Nil(t, rw.replies[0].Error)
+	}
+
+	rw := testReplyWriterWrapper()
+	err := client.handleHistory(&protocol.HistoryRequest{Channel: "filtered"}, &protocol.Command{}, time.Now(), rw.rw)
+	require.Equal(t, ErrorPermissionDenied, err)
+	require.Empty(t, rw.replies)
+
+	rw = testReplyWriterWrapper()
+	require.NoError(t, client.handleHistory(&protocol.HistoryRequest{Channel: "plain"}, &protocol.Command{}, time.Now(), rw.rw))
+	require.Len(t, rw.replies, 1)
+	require.Nil(t, rw.replies[0].Error)
+	require.Len(t, rw.replies[0].History.Publications, 0)
+	require.Equal(t, uint64(1), rw.replies[0].History.Offset)
+}
+
+// A sub refresh which narrows a subscription with a server tags filter makes
+// the subscription one which is refused history from then on.
+func TestClientHistoryRefusedAfterSubRefreshSetsServerTagsFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{ClientSideRefresh: true, Credentials: &Credentials{UserID: "user1"}}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options:           SubscribeOptions{ExpireAt: time.Now().Unix() + 60},
+				ClientSideRefresh: true,
+			}, nil)
+		})
+		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+			cb(SubRefreshReply{
+				ExpireAt:         time.Now().Unix() + 60,
+				ServerTagsFilter: &FilterNode{Key: "team", Cmp: "eq", Val: "eng"},
+			}, nil)
+		})
+		client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
+			cb(HistoryReply{}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+	rw := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{Channel: "ch"}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+	require.Len(t, rw.replies, 1)
+	require.Nil(t, rw.replies[0].Error)
+
+	rw = testReplyWriterWrapper()
+	require.NoError(t, client.handleHistory(&protocol.HistoryRequest{Channel: "ch"}, &protocol.Command{}, time.Now(), rw.rw))
+	require.Len(t, rw.replies, 1)
+	require.Nil(t, rw.replies[0].Error)
+
+	refreshRW := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubRefresh(&protocol.SubRefreshRequest{
+		Channel: "ch", Token: "new_token",
+	}, &protocol.Command{}, time.Now(), refreshRW.rw))
+	require.Len(t, refreshRW.replies, 1)
+	require.Nil(t, refreshRW.replies[0].Error)
+
+	rw = testReplyWriterWrapper()
+	err := client.handleHistory(&protocol.HistoryRequest{Channel: "ch"}, &protocol.Command{}, time.Now(), rw.rw)
+	require.Equal(t, ErrorPermissionDenied, err)
+}
+
+// A subscription refreshed on the server side, when it expires, takes the server
+// tags filter of the refresh reply as one refreshed by the client does: the
+// filter was ignored there before.
+func TestClientServerSideSubRefreshSetsServerTagsFilter(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{Credentials: &Credentials{UserID: "user1"}}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{ExpireAt: time.Now().Unix() + 60}}, nil)
+		})
+		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+			cb(SubRefreshReply{
+				ExpireAt:         time.Now().Unix() + 7200,
+				ServerTagsFilter: &FilterNode{Key: "team", Cmp: "eq", Val: "eng"},
+			}, nil)
+		})
+		client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
+			cb(HistoryReply{}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+	rw := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{Channel: "ch"}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+	require.Len(t, rw.replies, 1)
+	require.Nil(t, rw.replies[0].Error)
+
+	client.mu.RLock()
+	chCtx := client.channels["ch"]
+	client.mu.RUnlock()
+	require.False(t, channelHasFlag(chCtx.flags, flagServerTagsFilter))
+
+	node.mu.Lock()
+	node.nowTimeGetter = func() time.Time { return time.Now().Add(time.Hour) }
+	node.mu.Unlock()
+	refreshed := make(chan bool, 1)
+	client.checkSubscriptionExpiration("ch", chCtx, 0, func(ok bool) { refreshed <- ok })
+	require.True(t, <-refreshed)
+
+	client.mu.RLock()
+	chCtx = client.channels["ch"]
+	client.mu.RUnlock()
+	require.True(t, channelHasFlag(chCtx.flags, flagServerTagsFilter))
+
+	// The hub entry of the refreshed subscription filters publications with it.
+	shard := node.hub.subShards[index("ch", numHubShards)]
+	shard.mu.RLock()
+	sub := shard.subs["ch"][client.uid]
+	shard.mu.RUnlock()
+	require.Equal(t, chCtx.subGen, sub.subGen)
+	require.NotNil(t, sub.serverTagsFilter)
+	require.Equal(t, filter.Hash(&FilterNode{Key: "team", Cmp: "eq", Val: "eng"}), sub.serverTagsFilter.hash)
+
+	rw = testReplyWriterWrapper()
+	err := client.handleHistory(&protocol.HistoryRequest{Channel: "ch"}, &protocol.Command{}, time.Now(), rw.rw)
+	require.Equal(t, ErrorPermissionDenied, err)
+}
+
+// A delta subscription refreshed on the server side with a server tags filter
+// resubscribes, as one refreshed by the client does: delta compression isn't
+// used together with a server tags filter.
+func TestClientServerSideSubRefreshServerTagsFilterResubscribesDeltaSubscription(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{Credentials: &Credentials{UserID: "user1"}}, nil
+	})
+	unsubscribeCh := make(chan UnsubscribeEvent, 1)
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					ExpireAt:          time.Now().Unix() + 60,
+					AllowedDeltaTypes: []DeltaType{DeltaTypeFossil},
+				},
+			}, nil)
+		})
+		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+			cb(SubRefreshReply{
+				ExpireAt:         time.Now().Unix() + 7200,
+				ServerTagsFilter: &FilterNode{Key: "team", Cmp: "eq", Val: "eng"},
+			}, nil)
+		})
 		client.OnUnsubscribe(func(e UnsubscribeEvent) { unsubscribeCh <- e })
 	})
 	client := newTestConnectedClientV2(t, node, "user1")
@@ -983,13 +1193,21 @@ func TestSubRefreshServerTagsFilterResubscribesDeltaSubscription(t *testing.T) {
 	require.Len(t, rw.replies, 1)
 	require.True(t, rw.replies[0].Subscribe.Delta)
 
-	refreshRW := testReplyWriterWrapper()
-	require.NoError(t, client.handleSubRefresh(&protocol.SubRefreshRequest{
-		Channel: "ch", Token: "new_token",
-	}, &protocol.Command{}, time.Now(), refreshRW.rw))
+	client.mu.RLock()
+	chCtx := client.channels["ch"]
+	client.mu.RUnlock()
+
+	node.mu.Lock()
+	node.nowTimeGetter = func() time.Time { return time.Now().Add(time.Hour) }
+	node.mu.Unlock()
+	refreshed := make(chan bool, 1)
+	client.checkSubscriptionExpiration("ch", chCtx, 0, func(ok bool) { refreshed <- ok })
+	require.True(t, <-refreshed)
+
 	select {
 	case e := <-unsubscribeCh:
 		require.Equal(t, UnsubscribeCodeInsufficient, e.Code)
+		require.Equal(t, "ch", e.Channel)
 	case <-time.After(time.Second):
 		require.Fail(t, "delta subscription not resubscribed after the server tags filter was set")
 	}

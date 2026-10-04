@@ -4523,6 +4523,9 @@ func TestSubRefresh_ServerTagsFilter_MapUnsubscribed(t *testing.T) {
 	})
 
 	unsubscribeCh := make(chan UnsubscribeEvent, 1)
+	// The number of replies to the refresh when the subscription is unsubscribed.
+	repliesOnUnsubscribe := make(chan int, 1)
+	rwWrapper := testReplyWriterWrapper()
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
@@ -4542,6 +4545,7 @@ func TestSubRefresh_ServerTagsFilter_MapUnsubscribed(t *testing.T) {
 		})
 		client.OnUnsubscribe(func(e UnsubscribeEvent) {
 			unsubscribeCh <- e
+			repliesOnUnsubscribe <- len(rwWrapper.replies)
 		})
 	})
 
@@ -4554,11 +4558,10 @@ func TestSubRefresh_ServerTagsFilter_MapUnsubscribed(t *testing.T) {
 	})
 
 	// Refresh with a different filter — should trigger unsubscribe with state invalidated.
-	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: channel,
 		Token:   "new_token",
-	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 
 	select {
@@ -4568,6 +4571,11 @@ func TestSubRefresh_ServerTagsFilter_MapUnsubscribed(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout waiting for unsubscribe event")
 	}
+	// The refresh command is replied to before the unsubscribe.
+	require.Equal(t, 1, <-repliesOnUnsubscribe, "sub refresh must be replied to before the unsubscribe")
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	require.NotNil(t, rwWrapper.replies[0].SubRefresh)
 }
 
 func TestSubRefresh_ServerTagsFilter_SameFilterNoUnsubscribe(t *testing.T) {
@@ -5088,6 +5096,10 @@ func TestBuildMapChannelFlags(t *testing.T) {
 	// ClientSideRefresh from reply.
 	flags = client.buildMapChannelFlags(false, "", false, SubscribeOptions{}, SubscribeReply{ClientSideRefresh: true})
 	require.True(t, flags&flagClientSideRefresh != 0)
+
+	// A server tags filter, which refuses history as on stream subscriptions.
+	flags = client.buildMapChannelFlags(false, "", false, SubscribeOptions{ServerTagsFilter: &FilterNode{Key: "k", Cmp: "eq", Val: "v"}}, SubscribeReply{})
+	require.True(t, flags&flagServerTagsFilter != 0)
 }
 
 // TestCleanupMapSubscribingAll covers the loop body of cleanupMapSubscribingAll.

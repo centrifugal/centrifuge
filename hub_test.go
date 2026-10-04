@@ -2614,7 +2614,7 @@ func TestSubShard_UpdateServerTagsFilter_NotFound(t *testing.T) {
 	shard := hub.subShards[0]
 
 	// Channel not in shard at all → both returns false.
-	found, changed, _ := shard.updateServerTagsFilter("ghost-channel", "anyone", nil)
+	found, changed, _ := shard.updateServerTagsFilter("ghost-channel", "anyone", 1, nil)
 	require.False(t, found)
 	require.False(t, changed)
 
@@ -2625,24 +2625,58 @@ func TestSubShard_UpdateServerTagsFilter_NotFound(t *testing.T) {
 	client := newTestSubscribedClientV2(t, node, "u-tags", "test-tags-channel")
 	t.Cleanup(func() { _ = client.close(DisconnectForceNoReconnect) })
 
+	client.mu.RLock()
+	subGen := client.channels["test-tags-channel"].subGen
+	client.mu.RUnlock()
+
 	chShard := hub.subShards[index("test-tags-channel", numHubShards)]
-	_, _, _ = chShard.updateServerTagsFilter("test-tags-channel", "no-such-client", nil)
+	_, _, _ = chShard.updateServerTagsFilter("test-tags-channel", "no-such-client", subGen, nil)
 
 	// Same client, no existing filter, new filter is also nil → both-nil no-op.
-	found, changed, _ = chShard.updateServerTagsFilter("test-tags-channel", client.uid, nil)
+	found, changed, _ = chShard.updateServerTagsFilter("test-tags-channel", client.uid, subGen, nil)
 	require.True(t, found)
 	require.False(t, changed)
 
 	// Now set a real filter and assert it changed.
 	tf := &tagsFilter{filter: &FilterNode{Key: "k", Cmp: "eq", Val: "v"}}
-	found, changed, _ = chShard.updateServerTagsFilter("test-tags-channel", client.uid, tf)
+	found, changed, _ = chShard.updateServerTagsFilter("test-tags-channel", client.uid, subGen, tf)
 	require.True(t, found)
 	require.True(t, changed)
 
 	// Same hash again — no-op.
-	found, changed, _ = chShard.updateServerTagsFilter("test-tags-channel", client.uid, tf)
+	found, changed, _ = chShard.updateServerTagsFilter("test-tags-channel", client.uid, subGen, tf)
 	require.True(t, found)
 	require.False(t, changed)
+}
+
+// TestSubShard_UpdateServerTagsFilter_GenMismatch checks that a filter made for
+// an older generation of a subscription is not applied to the one a resubscribe
+// registered since: it is reported as not found and leaves the filter alone.
+func TestSubShard_UpdateServerTagsFilter_GenMismatch(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestSubscribedClientV2(t, node, "u-tags", "test-tags-channel")
+	t.Cleanup(func() { _ = client.close(DisconnectForceNoReconnect) })
+
+	client.mu.RLock()
+	subGen := client.channels["test-tags-channel"].subGen
+	client.mu.RUnlock()
+
+	shard := node.hub.subShards[index("test-tags-channel", numHubShards)]
+	tf := &tagsFilter{filter: &FilterNode{Key: "k", Cmp: "eq", Val: "v"}}
+
+	found, changed, _ := shard.updateServerTagsFilter("test-tags-channel", client.uid, subGen+1, tf)
+	require.False(t, found)
+	require.False(t, changed)
+	shard.mu.RLock()
+	require.Nil(t, shard.subs["test-tags-channel"][client.uid].serverTagsFilter)
+	shard.mu.RUnlock()
+
+	found, changed, _ = shard.updateServerTagsFilter("test-tags-channel", client.uid, subGen, tf)
+	require.True(t, found)
+	require.True(t, changed)
 }
 
 // ---------------------------------------------------------------------------

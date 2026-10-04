@@ -383,11 +383,23 @@ type SubRefreshReply struct {
 	ExpireAt int64
 	// Info is a new channel-scope info. Zero value means do not change previous one.
 	Info []byte
-	// ServerTagsFilter is an optional updated server-side tags filter. When nil,
-	// the existing filter is left unchanged. When set, Centrifuge compares it
-	// with the current filter — if different, the filter is updated in the hub
-	// and for map subscriptions the client is unsubscribed with
-	// UnsubscribeCodeStateInvalidated to force a full state re-sync.
+	// ServerTagsFilter is an optional updated server-side tags filter, see
+	// SubscribeOptions.ServerTagsFilter. It is applied on both client-side and
+	// server-side subscription refresh. When nil, the existing filter is left
+	// unchanged. When set, Centrifuge compares it with the current filter, and
+	// if different, starts delivering by the new one. A subscription which
+	// can't just switch filters must start over:
+	//   - a map subscription is unsubscribed with UnsubscribeCodeStateInvalidated
+	//     to re-sync its state;
+	//   - a subscription using delta compression is unsubscribed with
+	//     UnsubscribeCodeInsufficient to resubscribe without delta, as delta is
+	//     not negotiated together with a server tags filter;
+	//   - a server-side subscription which needs either is disconnected with
+	//     DisconnectInsufficientState, since a client can't resubscribe to it.
+	// Once a subscription has a server tags filter, it is refused history, as
+	// subscribing with one is. Return the same filter in subscribe or connect
+	// options as on refresh: otherwise every subscription starts without it,
+	// and a server-side delta subscription reconnects on every expiration.
 	ServerTagsFilter *FilterNode
 }
 

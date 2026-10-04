@@ -181,9 +181,8 @@ const (
 	flagCleanupOnUnsubscribe // Clean up keys by client_id when subscription ends
 	flagKeyed                // Channel uses keyed subscription (shared poll track/untrack)
 	// flagServerTagsFilter marks a subscription narrowed by a server-controlled
-	// tags filter. Such a subscriber must not be offered the channel's compression
-	// dictionary: the filter withholds publications from them, but the dictionary
-	// is built from all of them.
+	// tags filter. Such a subscriber is refused history: history is not filtered,
+	// so it would hand out the publications the filter withholds (see handleHistory).
 	flagServerTagsFilter
 )
 
@@ -1060,14 +1059,32 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 			// refresh was validated against channelContext.subGen — applying its
 			// expireAt/info to a newer subscription would corrupt one its token never
 			// validated (mirrors handleSubRefresh and checkPosition).
-			if ctx, ok := c.channels[channel]; ok && ctx.subGen == channelContext.subGen {
+			ctx, ok := c.channels[channel]
+			sameSub := ok && ctx.subGen == channelContext.subGen
+			if sameSub {
 				if len(reply.Info) > 0 {
 					ctx.info = reply.Info
 				}
 				ctx.expireAt = newExpireAt
+				if reply.ServerTagsFilter != nil {
+					ctx.flags |= flagServerTagsFilter
+				}
 				c.channels[channel] = ctx
 			}
+			isMapSub := sameSub && channelHasFlag(ctx.flags, flagMap)
 			c.mu.Unlock()
+			if sameSub && reply.ServerTagsFilter != nil {
+				if unsub, ok := c.updateServerTagsFilter(channel, channelContext.subGen, reply.ServerTagsFilter, isMapSub); !ok {
+					// The subscription must start over with the new filter. A
+					// server-side one can't be resubscribed by the client, so the
+					// connection reconnects, as on insufficient state.
+					if c.isAsyncUnsubscribe(channelHasFlag(channelContext.flags, flagServerSide)) {
+						go c.handleAsyncUnsubscribe(channel, unsub)
+					} else {
+						go func() { _ = c.close(DisconnectInsufficientState) }()
+					}
+				}
+			}
 			resultCB(true)
 		}
 		// Give subscription a chance to be refreshed via SubRefreshHandler.
@@ -2488,33 +2505,22 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 		if sameSub {
 			channelContext.info = reply.Info
 			channelContext.expireAt = expireAt
+			if reply.ServerTagsFilter != nil {
+				// A refresh may narrow a subscription which had no server tags
+				// filter: whatever depends on the flag must see it from now on.
+				channelContext.flags |= flagServerTagsFilter
+			}
 			c.channels[channel] = channelContext
 		}
 		isMapSub := sameSub && channelHasFlag(channelContext.flags, flagMap)
 		c.mu.Unlock()
 
+		var unsub Unsubscribe
+		needUnsubscribe := false
 		if sameSub && reply.ServerTagsFilter != nil {
-			newTf := &tagsFilter{
-				filter: reply.ServerTagsFilter,
-				hash:   filter.Hash(reply.ServerTagsFilter),
-			}
-			_, changed, usesDelta := c.node.hub.updateServerTagsFilter(channel, c.ID(), newTf)
-			if changed && isMapSub {
-				c.Unsubscribe(channel, Unsubscribe{
-					Code:   UnsubscribeCodeStateInvalidated,
-					Reason: "server tags filter changed",
-				})
-				return
-			}
-			if changed && usesDelta {
-				// Delta compression isn't used together with tags filters (see
-				// subscribeCmd): the subscription resubscribes, without delta.
-				c.Unsubscribe(channel, Unsubscribe{
-					Code:   UnsubscribeCodeInsufficient,
-					Reason: "server tags filter changed",
-				})
-				return
-			}
+			var ok bool
+			unsub, ok = c.updateServerTagsFilter(channel, ctx.subGen, reply.ServerTagsFilter, isMapSub)
+			needUnsubscribe = !ok
 		}
 
 		protoReply, err := c.getSubRefreshCommandReply(res)
@@ -2526,8 +2532,38 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 		c.writeEncodedCommandReply(channel, protocol.FrameTypeSubRefresh, cmd, protoReply, rw)
 		c.handleCommandFinished(cmd, protocol.FrameTypeSubRefresh, nil, protoReply, started, channel)
 		c.releaseSubRefreshCommandReply(protoReply)
+
+		if needUnsubscribe {
+			// After the reply: the refresh itself succeeded, and SDKs wait for
+			// the reply to the command. The unsubscribe push which follows
+			// makes them resubscribe with the new filter.
+			c.Unsubscribe(channel, unsub)
+		}
 	})
 	return nil
+}
+
+// updateServerTagsFilter installs a server tags filter returned on sub refresh.
+// It returns false when the subscription can't continue with the new filter
+// and must be unsubscribed with the returned Unsubscribe: a map subscription
+// must load its state again, and delta compression isn't used together with
+// tags filters (see subscribeCmd), so a delta subscription resubscribes
+// without it. Only the subscription of generation subGen is updated: c.mu is
+// released before the hub is, so a resubscribe in between must neither get
+// the filter nor be unsubscribed for it.
+func (c *Client) updateServerTagsFilter(channel string, subGen uint64, f *FilterNode, isMapSub bool) (Unsubscribe, bool) {
+	newTf := &tagsFilter{
+		filter: f,
+		hash:   filter.Hash(f),
+	}
+	_, changed, usesDelta := c.node.hub.updateServerTagsFilter(channel, c.ID(), subGen, newTf)
+	if changed && isMapSub {
+		return Unsubscribe{Code: UnsubscribeCodeStateInvalidated, Reason: "server tags filter changed"}, false
+	}
+	if changed && usesDelta {
+		return Unsubscribe{Code: UnsubscribeCodeInsufficient, Reason: "server tags filter changed"}, false
+	}
+	return Unsubscribe{}, true
 }
 
 func (c *Client) releaseSubRefreshCommandReply(reply *protocol.Reply) {
@@ -2889,6 +2925,17 @@ func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Comma
 	channel := req.Channel
 	if channel == "" {
 		return c.logDisconnectBadRequest("channel required for history")
+	}
+
+	// A server tags filter withholds publications from the subscriber, and
+	// history is not filtered by it: answering would hand out exactly what the
+	// filter hides. Recovery on subscribe applies the filter, so it stays the
+	// way for such a subscriber to get missed publications.
+	c.mu.RLock()
+	channelContext, subscribed := c.channels[channel]
+	c.mu.RUnlock()
+	if subscribed && channelHasFlag(channelContext.flags, flagServerTagsFilter) {
+		return ErrorPermissionDenied
 	}
 
 	var historyFilter HistoryFilter
