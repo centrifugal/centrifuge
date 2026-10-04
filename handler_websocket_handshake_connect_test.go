@@ -404,12 +404,21 @@ func TestWebsocketShortSubprotocols(t *testing.T) {
 	}
 }
 
-func TestHandshakeConnectData(t *testing.T) {
+func TestHandshakeConnectEncoded(t *testing.T) {
 	t.Parallel()
 	newRequest := func(protocols ...string) *http.Request {
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 		r.Header.Set("Sec-WebSocket-Protocol", strings.Join(protocols, ", "))
 		return r
+	}
+	handshakeConnectData := func(r *http.Request, limit int) []byte {
+		encoded := handshakeConnectEncoded(r, limit)
+		if encoded == "" {
+			return nil
+		}
+		data, err := base64.RawURLEncoding.DecodeString(encoded)
+		require.NoError(t, err)
+		return data
 	}
 	// "YWJj" is "abc".
 	require.Equal(t, []byte("abc"), handshakeConnectData(newRequest("cf-json-hc", "cf-connect.YWJj"), 3))
@@ -418,6 +427,8 @@ func TestHandshakeConnectData(t *testing.T) {
 	// Unpadded only.
 	require.Equal(t, []byte("ab"), handshakeConnectData(newRequest("cf-connect.YWI"), 10))
 	require.Nil(t, handshakeConnectData(newRequest("cf-connect.YWI="), 10))
+	// A length no encoding produces.
+	require.Nil(t, handshakeConnectData(newRequest("cf-connect.YWJjY"), 10))
 	// URL alphabet only: 0xfb 0xff is "-_8" in base64url and "+/8" in standard.
 	require.Equal(t, []byte{0xfb, 0xff}, handshakeConnectData(newRequest("cf-connect.-_8"), 10))
 	require.Nil(t, handshakeConnectData(newRequest("cf-connect.+/8"), 10))

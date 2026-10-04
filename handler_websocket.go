@@ -226,24 +226,38 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 	}
 }
 
-// handshakeConnectData returns commands sent inside the handshake request, or
-// nil if there are none or they are not valid base64url or exceed limit.
-func handshakeConnectData(r *http.Request, limit int) []byte {
+// handshakeConnectEncoded returns the encoded commands sent inside the handshake
+// request, or "" if there are none or they are not valid unpadded base64url or
+// exceed limit once decoded. It only validates: the data is decoded after a
+// successful upgrade, so requests failing it (e.g. the origin check) cost no
+// decoding.
+func handshakeConnectEncoded(r *http.Request, limit int) string {
 	for _, p := range websocket.Subprotocols(r) {
 		encoded, ok := strings.CutPrefix(p, handshakeConnectPrefix)
 		if !ok {
 			continue
 		}
-		if encoded == "" || base64.RawURLEncoding.DecodedLen(len(encoded)) > limit {
-			return nil
+		if !isRawURLBase64(encoded) || base64.RawURLEncoding.DecodedLen(len(encoded)) > limit {
+			return ""
 		}
-		data, err := base64.RawURLEncoding.DecodeString(encoded)
-		if err != nil {
-			return nil
-		}
-		return data
+		return encoded
 	}
-	return nil
+	return ""
+}
+
+// isRawURLBase64 reports whether s decodes with base64.RawURLEncoding: non-empty,
+// of the URL alphabet only and not of a length no encoding produces.
+func isRawURLBase64(s string) bool {
+	if s == "" || len(s)%4 == 1 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
@@ -270,10 +284,10 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	upgrade := s.upgrade
-	var handshakeData []byte
+	var handshakeEncoded string
 	if s.upgradeHandshakeConnect != nil {
-		handshakeData = handshakeConnectData(r, messageSizeLimit)
-		if handshakeData != nil {
+		handshakeEncoded = handshakeConnectEncoded(r, messageSizeLimit)
+		if handshakeEncoded != "" {
 			// Lets the -hc subprotocol be selected if the client offered it.
 			upgrade = s.upgradeHandshakeConnect
 		}
@@ -290,10 +304,12 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if subProtocol == subprotocolProtobuf || subProtocol == subprotocolProtobufShort || subProtocol == subprotocolProtobufHandshakeConnect {
 		protoType = ProtocolTypeProtobuf
 	}
-	if subProtocol != subprotocolJSONHandshakeConnect && subProtocol != subprotocolProtobufHandshakeConnect {
-		// Without the -hc subprotocol the client sends the commands after the
-		// connection opens.
-		handshakeData = nil
+	// Without the -hc subprotocol the client sends the commands after the
+	// connection opens.
+	var handshakeData []byte
+	if subProtocol == subprotocolJSONHandshakeConnect || subProtocol == subprotocolProtobufHandshakeConnect {
+		// Validated by handshakeConnectEncoded, so decoding doesn't fail.
+		handshakeData, _ = base64.RawURLEncoding.DecodeString(handshakeEncoded)
 	}
 
 	if compression {
