@@ -22,9 +22,8 @@ import (
 	"github.com/centrifugal/centrifuge/internal/timers"
 
 	"github.com/centrifugal/protocol"
+	"github.com/centrifugal/protocol/cfjson"
 	"github.com/google/uuid"
-	"github.com/segmentio/encoding/json"
-	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // Empty Replies/Pushes for pings.
@@ -440,13 +439,13 @@ func (c *Client) ConnectNoErrorToDisconnect(req ConnectRequest) error {
 // so prefer using Connect or ConnectNoErrorToDisconnect methods until necessary.
 func (c *Client) ProtocolConnect(req *protocol.ConnectRequest) {
 	// unidirectionalConnect never returns errors when errorToDisconnect is true.
-	_ = c.unidirectionalConnect(req, req.SizeVT(), true)
+	_ = c.unidirectionalConnect(req, req.SizeCF(), true)
 }
 
 // ProtocolConnectNoErrorToDisconnect accepts protocol.ConnectRequest directly. It adds dependency to
 // protocol package, so prefer ConnectNoErrorToDisconnect methods until necessary.
 func (c *Client) ProtocolConnectNoErrorToDisconnect(req *protocol.ConnectRequest) error {
-	return c.unidirectionalConnect(req, req.SizeVT(), false)
+	return c.unidirectionalConnect(req, req.SizeCF(), false)
 }
 
 func (c *Client) getDisconnectPushReply(d Disconnect) ([]byte, error) {
@@ -1644,10 +1643,7 @@ func (c *Client) traceInCmd(cmd *protocol.Command) {
 	c.mu.RLock()
 	user := c.user
 	c.mu.RUnlock()
-	jsonBytes, err := json.Marshal(cmd)
-	if err != nil {
-		jsonBytes, _ = protojson.Marshal(cmd)
-	}
+	jsonBytes := cmd.AppendJSON(nil)
 	c.node.logger.log(newLogEntry(LogLevelTrace, "<-in--", map[string]any{"client": c.ID(), "user": user, "command": string(jsonBytes)}))
 }
 
@@ -1655,10 +1651,7 @@ func (c *Client) traceOutReply(rep *protocol.Reply) {
 	c.mu.RLock()
 	user := c.user
 	c.mu.RUnlock()
-	jsonBytes, err := json.Marshal(rep)
-	if err != nil {
-		jsonBytes, _ = protojson.Marshal(rep)
-	}
+	jsonBytes := rep.AppendJSON(nil)
 	c.node.logger.log(newLogEntry(LogLevelTrace, "-out->", map[string]any{"client": c.ID(), "user": user, "reply": string(jsonBytes)}))
 }
 
@@ -1666,10 +1659,7 @@ func (c *Client) traceOutPush(push *protocol.Push) {
 	c.mu.RLock()
 	user := c.user
 	c.mu.RUnlock()
-	jsonBytes, err := json.Marshal(push)
-	if err != nil {
-		jsonBytes, _ = protojson.Marshal(push)
-	}
+	jsonBytes := push.AppendJSON(nil)
 	c.node.logger.log(newLogEntry(LogLevelTrace, "-out->", map[string]any{"client": c.ID(), "user": user, "push": string(jsonBytes)}))
 }
 
@@ -4691,7 +4681,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		for _, pub := range reply.Publications {
 			protoPub := pubToProto(pub)
 			if jsonDelta {
-				protoPub.Data = json.Escape(convert.BytesToString(pub.Data))
+				protoPub.Data = cfjson.AppendString(nil, convert.BytesToString(pub.Data))
 			}
 			protoPubs = append(protoPubs, protoPub)
 		}
@@ -4817,7 +4807,7 @@ func (c *Client) makeRecoveredPubsDeltaFossil(recoveredPubs []*protocol.Publicat
 			Offset: prevPub.Offset,
 			Info:   prevPub.Info,
 			Tags:   prevPub.Tags,
-			Data:   json.Escape(convert.BytesToString(prevPub.Data)),
+			Data:   cfjson.AppendString(nil, convert.BytesToString(prevPub.Data)),
 			Delta:  false,
 		}
 		recoveredPubs[0] = pub
@@ -4836,7 +4826,7 @@ func (c *Client) makeRecoveredPubsDeltaFossil(recoveredPubs []*protocol.Publicat
 			deltaData = pub.Data
 		}
 		if isJSON {
-			deltaData = json.Escape(convert.BytesToString(deltaData))
+			deltaData = cfjson.AppendString(nil, convert.BytesToString(deltaData))
 		}
 		deltaPub := &protocol.Publication{
 			Offset: pub.Offset,
@@ -4868,7 +4858,7 @@ func (c *Client) makeRecoveredMapPubsDeltaFossil(recoveredPubs []*protocol.Publi
 			// Removals are not delta-encoded (matches live behavior).
 			delete(prevByKey, key)
 			if isJSON && len(pub.Data) > 0 {
-				recoveredPubs[i] = copyMapPubWithData(pub, json.Escape(convert.BytesToString(pub.Data)), false) //nolint:gosec // i is from range recoveredPubs
+				recoveredPubs[i] = copyMapPubWithData(pub, cfjson.AppendString(nil, convert.BytesToString(pub.Data)), false) //nolint:gosec // i is from range recoveredPubs
 			}
 			continue
 		}
@@ -4877,7 +4867,7 @@ func (c *Client) makeRecoveredMapPubsDeltaFossil(recoveredPubs []*protocol.Publi
 			// First occurrence of this key — send full data.
 			prevByKey[key] = pub
 			if isJSON {
-				recoveredPubs[i] = copyMapPubWithData(pub, json.Escape(convert.BytesToString(pub.Data)), false)
+				recoveredPubs[i] = copyMapPubWithData(pub, cfjson.AppendString(nil, convert.BytesToString(pub.Data)), false)
 			}
 			continue
 		}
@@ -4889,7 +4879,7 @@ func (c *Client) makeRecoveredMapPubsDeltaFossil(recoveredPubs []*protocol.Publi
 			deltaData = pub.Data
 		}
 		if isJSON {
-			deltaData = json.Escape(convert.BytesToString(deltaData))
+			deltaData = cfjson.AppendString(nil, convert.BytesToString(deltaData))
 		}
 		prevByKey[key] = pub
 		recoveredPubs[i] = copyMapPubWithData(pub, deltaData, delta)

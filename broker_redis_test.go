@@ -883,7 +883,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 			pub := &protocol.Publication{
 				Data: []byte("{}"),
 			}
-			data, err := pub.MarshalVT()
+			data, err := pub.MarshalCF()
 			require.NoError(t, err)
 			var publicationHandlerCalled bool
 			err = b.handleRedisClientMessage(isCluster, &testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
@@ -899,7 +899,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 			info := &protocol.ClientInfo{
 				User: "12",
 			}
-			data, err = info.MarshalVT()
+			data, err = info.MarshalCF()
 			require.NoError(t, err)
 			var joinHandlerCalled bool
 			err = b.handleRedisClientMessage(isCluster, &testBrokerEventHandler{HandleJoinFunc: func(ch string, info *ClientInfo) error {
@@ -3020,7 +3020,7 @@ func TestSharedPollPublish_CrossNodeDelivery_TwoNodes(t *testing.T) {
 				select {
 				case msg := <-sink:
 					reply := &protocol.Reply{}
-					if err := reply.UnmarshalVT(msg); err != nil {
+					if err := reply.UnmarshalCF(msg); err != nil {
 						continue
 					}
 					if reply.Push == nil || reply.Push.Pub == nil {

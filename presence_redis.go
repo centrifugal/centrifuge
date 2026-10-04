@@ -149,7 +149,7 @@ func (m *RedisPresenceManager) AddPresence(ch string, uid string, info *ClientIn
 
 func (m *RedisPresenceManager) addPresenceScriptKeysArgs(s *RedisShard, ch string, uid string, info *ClientInfo) ([]string, []string, error) {
 	expire := int(m.config.PresenceTTL.Seconds())
-	infoBytes, err := infoToProto(info).MarshalVT()
+	infoBytes, err := infoToProto(info).MarshalCF()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -294,7 +294,7 @@ func mapStringClientInfo(result []rueidis.RedisMessage) (map[string]*ClientInfo,
 			return nil, errors.New("value is not string")
 		}
 		var f protocol.ClientInfo
-		err = f.UnmarshalVT(convert.StringToBytes(value))
+		err = f.UnmarshalCF(convert.StringToBytes(value))
 		if err != nil {
 			return nil, errors.New("can not unmarshal value to ClientInfo")
 		}

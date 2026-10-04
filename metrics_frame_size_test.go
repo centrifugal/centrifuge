@@ -45,9 +45,13 @@ func encodeFrame(t *testing.T, cmds ...*protocol.Command) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	enc := protocol.NewJSONCommandEncoder()
-	for _, cmd := range cmds {
+	for i, cmd := range cmds {
 		data, err := enc.Encode(cmd)
 		require.NoError(t, err)
+		if i > 0 {
+			// JSON commands in a frame are separated by newlines.
+			buf.WriteByte('\n')
+		}
 		buf.Write(data)
 	}
 	return buf.Bytes()

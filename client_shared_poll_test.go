@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strconv"
@@ -15,7 +16,6 @@ import (
 
 	"github.com/centrifugal/fdelta"
 	"github.com/centrifugal/protocol"
-	"github.com/segmentio/encoding/json"
 	"github.com/stretchr/testify/require"
 )
 
@@ -2201,7 +2201,7 @@ func TestSharedPollDelta_DeltaApplicable(t *testing.T) {
 		select {
 		case data := <-sink:
 			reply := &protocol.Reply{}
-			err := reply.UnmarshalVT(data)
+			err := reply.UnmarshalCF(data)
 			if err == nil && reply.Push != nil && reply.Push.Pub != nil {
 				firstPubData = reply.Push.Pub.Data
 				goto gotFirst
@@ -2231,7 +2231,7 @@ gotFirst:
 		select {
 		case data := <-sink:
 			reply := &protocol.Reply{}
-			err := reply.UnmarshalVT(data)
+			err := reply.UnmarshalCF(data)
 			if err == nil && reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 2 {
 				// Apply the fossil delta to first data.
 				require.True(t, reply.Push.Pub.Delta)
@@ -3646,7 +3646,7 @@ func TestSharedPoll_PrevDataNotUsedWhenKeepLatestData(t *testing.T) {
 		select {
 		case d := <-sink:
 			reply := &protocol.Reply{}
-			err := reply.UnmarshalVT(d)
+			err := reply.UnmarshalCF(d)
 			if err == nil && reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 5 {
 				require.False(t, reply.Push.Pub.Delta, "first delivery should be full")
 				v5Data = reply.Push.Pub.Data
@@ -3680,7 +3680,7 @@ gotV5:
 		select {
 		case d := <-sink:
 			reply := &protocol.Reply{}
-			err := reply.UnmarshalVT(d)
+			err := reply.UnmarshalCF(d)
 			if err == nil && reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 10 {
 				v10Reply = reply
 				goto gotV10
@@ -3731,7 +3731,7 @@ gotV10:
 		select {
 		case d := <-sink:
 			reply := &protocol.Reply{}
-			err := reply.UnmarshalVT(d)
+			err := reply.UnmarshalCF(d)
 			if err == nil && reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 12 {
 				v12Reply = reply
 			}
@@ -5033,12 +5033,13 @@ func TestSharedPollTrack_WarmKey_DeliversLatestSnapshot(t *testing.T) {
 // keyedManager.getOrCreateChannel followed later by getHub).
 //
 // Scenario:
-//   client A tracks → untracks (immediate shutdown removes both
-//   sharedPollManager state and keyedManager state)
-//   client B handleTrack runs concurrently — getOrCreateChannel may create
-//   the keyedManager state just before A's finalizeShutdown calls
-//   removeChannel, leaving B's later getHub returning nil → panic at
-//   addSubscriber.
+//
+//	client A tracks → untracks (immediate shutdown removes both
+//	sharedPollManager state and keyedManager state)
+//	client B handleTrack runs concurrently — getOrCreateChannel may create
+//	the keyedManager state just before A's finalizeShutdown calls
+//	removeChannel, leaving B's later getHub returning nil → panic at
+//	addSubscriber.
 //
 // The test runs many iterations and expects no panic / no missed
 // broadcasts. With ChannelShutdownDelay=-1 (immediate), the race window
@@ -5100,7 +5101,6 @@ func TestSharedPollTrack_RaceWithChannelShutdownStress(t *testing.T) {
 		_ = clientB.close(DisconnectForceNoReconnect)
 	}
 }
-
 
 // TestKeyedBroadcast_OrderedDeliveryUnderConcurrentBroadcasts asserts that
 // concurrent broadcasts for the same key to the same client are delivered to
@@ -5183,7 +5183,7 @@ drain:
 		select {
 		case data := <-sink:
 			reply := &protocol.Reply{}
-			if err := reply.UnmarshalVT(data); err != nil {
+			if err := reply.UnmarshalCF(data); err != nil {
 				continue
 			}
 			if reply.Push == nil || reply.Push.Pub == nil {
@@ -5360,7 +5360,7 @@ drain:
 		select {
 		case data := <-sink:
 			reply := &protocol.Reply{}
-			if err := reply.UnmarshalVT(data); err != nil {
+			if err := reply.UnmarshalCF(data); err != nil {
 				continue
 			}
 			if reply.Push == nil || reply.Push.Pub == nil {

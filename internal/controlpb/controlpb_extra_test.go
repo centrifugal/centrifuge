@@ -70,10 +70,10 @@ func TestFilterNodeRoundTrip(t *testing.T) {
 	}
 
 	for name, build := range map[string]func() ([]byte, error){
-		"Subscribe":   func() ([]byte, error) { return (&Subscribe{LabelFilter: original}).MarshalVT() },
-		"Unsubscribe": func() ([]byte, error) { return (&Unsubscribe{LabelFilter: original}).MarshalVT() },
-		"Disconnect":  func() ([]byte, error) { return (&Disconnect{LabelFilter: original}).MarshalVT() },
-		"Refresh":     func() ([]byte, error) { return (&Refresh{LabelFilter: original}).MarshalVT() },
+		"Subscribe":   func() ([]byte, error) { return (&Subscribe{LabelFilter: original}).MarshalCF() },
+		"Unsubscribe": func() ([]byte, error) { return (&Unsubscribe{LabelFilter: original}).MarshalCF() },
+		"Disconnect":  func() ([]byte, error) { return (&Disconnect{LabelFilter: original}).MarshalCF() },
+		"Refresh":     func() ([]byte, error) { return (&Refresh{LabelFilter: original}).MarshalCF() },
 	} {
 		t.Run(name, func(t *testing.T) {
 			data, err := build()
@@ -83,19 +83,19 @@ func TestFilterNodeRoundTrip(t *testing.T) {
 			switch name {
 			case "Subscribe":
 				m := &Subscribe{}
-				require.NoError(t, m.UnmarshalVT(data))
+				require.NoError(t, m.UnmarshalCF(data))
 				got = m.LabelFilter
 			case "Unsubscribe":
 				m := &Unsubscribe{}
-				require.NoError(t, m.UnmarshalVT(data))
+				require.NoError(t, m.UnmarshalCF(data))
 				got = m.LabelFilter
 			case "Disconnect":
 				m := &Disconnect{}
-				require.NoError(t, m.UnmarshalVT(data))
+				require.NoError(t, m.UnmarshalCF(data))
 				got = m.LabelFilter
 			case "Refresh":
 				m := &Refresh{}
-				require.NoError(t, m.UnmarshalVT(data))
+				require.NoError(t, m.UnmarshalCF(data))
 				got = m.LabelFilter
 			}
 			require.Equal(t, original.Op, got.Op)

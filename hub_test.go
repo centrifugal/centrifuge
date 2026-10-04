@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strconv"
@@ -19,7 +20,7 @@ import (
 
 	"github.com/centrifugal/fdelta"
 	"github.com/centrifugal/protocol"
-	"github.com/segmentio/encoding/json"
+	"github.com/centrifugal/protocol/cfjson"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1498,7 +1499,7 @@ func TestJsonStringEncode(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, testDeltaJsonData)
 
-	alternativeDeltaJsonData := json.Escape(convert.BytesToString(testBenchmarkDeltaFossilPatch))
+	alternativeDeltaJsonData := cfjson.AppendString(nil, convert.BytesToString(testBenchmarkDeltaFossilPatch))
 	require.Equal(t, testDeltaJsonData, alternativeDeltaJsonData)
 }
 
@@ -1507,7 +1508,7 @@ var testBenchmarkEncodeData []byte
 func BenchmarkEncodeJSONString(b *testing.B) {
 	jsonData := []byte(`{"input": "test"}`)
 	for i := 0; i < b.N; i++ {
-		testBenchmarkEncodeData = json.Escape(convert.BytesToString(jsonData))
+		testBenchmarkEncodeData = cfjson.AppendString(nil, convert.BytesToString(jsonData))
 		if len(testBenchmarkEncodeData) == 0 {
 			b.Fatal("empty data")
 		}
@@ -2106,7 +2107,7 @@ func TestGetDeltaPubPreservesMapFields(t *testing.T) {
 	require.Equal(t, "map_channel", result.Channel)
 	require.False(t, result.Delta)
 	// Data should be JSON-escaped.
-	require.Equal(t, []byte(json.Escape(convert.BytesToString(fullPub.Data))), []byte(result.Data))
+	require.Equal(t, []byte(cfjson.AppendString(nil, convert.BytesToString(fullPub.Data))), []byte(result.Data))
 
 	// Test 3: Protobuf+Fossil with prevPub — data is not JSON-escaped.
 	keyProto := preparedKey{
@@ -2118,7 +2119,7 @@ func TestGetDeltaPubPreservesMapFields(t *testing.T) {
 	require.Equal(t, "user:1", result.Key)
 	require.Equal(t, int64(42), result.Score)
 	// Protobuf delta data should NOT be JSON-escaped.
-	require.NotEqual(t, []byte(json.Escape(convert.BytesToString(fullPub.Data))), []byte(result.Data))
+	require.NotEqual(t, []byte(cfjson.AppendString(nil, convert.BytesToString(fullPub.Data))), []byte(result.Data))
 
 	// Test 4: Removed publication preserves Removed flag.
 	removedPub := &protocol.Publication{
@@ -2153,10 +2154,10 @@ func TestEscapeStateForDelta(t *testing.T) {
 		{Offset: 3, Key: "c"}, // no data
 	}
 	result = escapeStateForDelta(pubs2, true, true)
-	require.Equal(t, []byte(json.Escape(`{"x":1}`)), []byte(result[0].Data))
+	require.Equal(t, []byte(cfjson.AppendString(nil, `{"x":1}`)), []byte(result[0].Data))
 	require.Equal(t, "a", result[0].Key)
 	require.Equal(t, int64(10), result[0].Score)
-	require.Equal(t, []byte(json.Escape(`{"y":2}`)), []byte(result[1].Data))
+	require.Equal(t, []byte(cfjson.AppendString(nil, `{"y":2}`)), []byte(result[1].Data))
 	require.Equal(t, "b", result[1].Key)
 	require.True(t, result[1].Removed)
 	require.Equal(t, int64(20), result[1].Score)

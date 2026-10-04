@@ -6,7 +6,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/convert"
 
 	"github.com/centrifugal/protocol"
-	"github.com/segmentio/encoding/json"
+	"github.com/centrifugal/protocol/cfjson"
 )
 
 // encodeKeyedPush encodes a publication as a Push (or Reply wrapping a Push) for this
@@ -352,7 +352,7 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		// escaped slice — the cached bytes are untouched.
 		if len(cachedItems) > 0 && channelIsDelta && c.transport.Protocol().toProto() == protocol.TypeJSON {
 			for _, pub := range cachedItems {
-				pub.Data = json.Escape(convert.BytesToString(pub.Data))
+				pub.Data = cfjson.AppendString(nil, convert.BytesToString(pub.Data))
 			}
 		}
 
@@ -362,9 +362,9 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		// if the response encode fails below — without rollback the connection
 		// would mark cached items as delivered while the SDK never received them.
 		type versionRollback struct {
-			ks              *keyedKeyState
-			prevVersion     uint64
-			prevDeltaReady  bool
+			ks             *keyedKeyState
+			prevVersion    uint64
+			prevDeltaReady bool
 		}
 		var rollbacks []versionRollback
 		if len(cachedItems) > 0 {
@@ -831,7 +831,7 @@ func (c *Client) keyedWritePublication(channel string, key string, pubVersion ui
 	if channelDelta && isJSON {
 		// JSON+delta: must JSON-escape data so client stores bytes for delta base.
 		pubFullToEncode = &protocol.Publication{
-			Data:    json.Escape(convert.BytesToString(pub.Data)),
+			Data:    cfjson.AppendString(nil, convert.BytesToString(pub.Data)),
 			Key:     pub.Key,
 			Version: pub.Version,
 		}
@@ -851,7 +851,7 @@ func (c *Client) keyedWritePublication(channel string, key string, pubVersion ui
 			isRealDelta = false
 		}
 		if isJSON {
-			deltaData = json.Escape(convert.BytesToString(deltaData))
+			deltaData = cfjson.AppendString(nil, convert.BytesToString(deltaData))
 		}
 		deltaPub := &protocol.Publication{
 			Data:    deltaData,

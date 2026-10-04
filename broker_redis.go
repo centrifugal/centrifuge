@@ -839,7 +839,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		protoPub.Delta = opts.UseDelta
 	}
 
-	byteMessage, err := protoPub.MarshalVT()
+	byteMessage, err := protoPub.MarshalCF()
 	if err != nil {
 		return PublishResult{}, err
 	}
@@ -1019,7 +1019,7 @@ func (b *RedisBroker) PublishJoin(ch string, info *ClientInfo) error {
 }
 
 func (b *RedisBroker) publishJoin(s *shardWrapper, ch string, info *ClientInfo) error {
-	byteMessage, err := infoToProto(info).MarshalVT()
+	byteMessage, err := infoToProto(info).MarshalCF()
 	if err != nil {
 		return err
 	}
@@ -1046,7 +1046,7 @@ func (b *RedisBroker) PublishLeave(ch string, info *ClientInfo) error {
 }
 
 func (b *RedisBroker) publishLeave(s *shardWrapper, ch string, info *ClientInfo) error {
-	byteMessage, err := infoToProto(info).MarshalVT()
+	byteMessage, err := infoToProto(info).MarshalCF()
 	if err != nil {
 		return err
 	}
@@ -1599,7 +1599,7 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 	}
 	if typeOfPush == pubPushType {
 		var pub protocol.Publication
-		err := pub.UnmarshalVT(pushData)
+		err := pub.UnmarshalCF(pushData)
 		if err != nil {
 			return err
 		}
@@ -1631,7 +1631,7 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 			_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, true, prevPub)
 		} else if delta && len(prevPayload) > 0 {
 			var prevPub protocol.Publication
-			err = prevPub.UnmarshalVT(prevPayload)
+			err = prevPub.UnmarshalCF(prevPayload)
 			if err != nil {
 				return err
 			}
@@ -1641,14 +1641,14 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 		}
 	} else if typeOfPush == joinPushType {
 		var info protocol.ClientInfo
-		err := info.UnmarshalVT(pushData)
+		err := info.UnmarshalCF(pushData)
 		if err != nil {
 			return err
 		}
 		_ = eventHandler.HandleJoin(channel, infoFromProto(&info))
 	} else if typeOfPush == leavePushType {
 		var info protocol.ClientInfo
-		err := info.UnmarshalVT(pushData)
+		err := info.UnmarshalCF(pushData)
 		if err != nil {
 			return err
 		}
@@ -1760,7 +1760,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOption
 				return nil, StreamPosition{}, err
 			}
 			var pub protocol.Publication
-			err = pub.UnmarshalVT(pushData)
+			err = pub.UnmarshalCF(pushData)
 			if err != nil {
 				return nil, StreamPosition{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 			}
@@ -1830,7 +1830,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 		}
 
 		var pub protocol.Publication
-		err = pub.UnmarshalVT(pushData)
+		err = pub.UnmarshalCF(pushData)
 		if err != nil {
 			return nil, StreamPosition{}, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}
