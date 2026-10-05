@@ -354,12 +354,11 @@ func (c *Client) handleMapStatePhase(
 			c.mu.Unlock()
 			return ErrorAlreadySubscribed
 		}
-		var stf *tagsFilter
-		if reply.Options.ServerTagsFilter != nil {
-			stf = &tagsFilter{
-				filter: reply.Options.ServerTagsFilter,
-				hash:   filter.Hash(reply.Options.ServerTagsFilter),
-			}
+		stf, err := newServerTagsFilter(reply.Options.ServerTagsFilter)
+		if err != nil {
+			c.mu.Unlock()
+			c.logInvalidServerTagsFilter(channel, err)
+			return ErrorInternal
 		}
 		c.mapSubscribing[channel] = &mapSubscribeState{
 			options:           reply.Options,
@@ -1043,12 +1042,12 @@ func (c *Client) handleMapStreamPhase(
 			return err
 		}
 		state.tagsFilter = tf
-		if reply.Options.ServerTagsFilter != nil {
-			state.serverTagsFilter = &tagsFilter{
-				filter: reply.Options.ServerTagsFilter,
-				hash:   filter.Hash(reply.Options.ServerTagsFilter),
-			}
+		stf, err := newServerTagsFilter(reply.Options.ServerTagsFilter)
+		if err != nil {
+			c.logInvalidServerTagsFilter(channel, err)
+			return ErrorInternal
 		}
+		state.serverTagsFilter = stf
 		c.mu.Lock()
 		if c.mapSubscribing == nil {
 			c.mapSubscribing = make(map[string]*mapSubscribeState)
@@ -1314,12 +1313,12 @@ func (c *Client) handleMapLivePhase(
 		// reply.Options never landed in mapSubscribing. Inherit it here so it
 		// applies to recovered + live publications. Without this the server-side
 		// RBAC filter is bypassed on clean reconnect.
-		if opts.ServerTagsFilter != nil {
-			serverTagsFilterFromState = &tagsFilter{
-				filter: opts.ServerTagsFilter,
-				hash:   filter.Hash(opts.ServerTagsFilter),
-			}
+		stf, err := newServerTagsFilter(opts.ServerTagsFilter)
+		if err != nil {
+			c.logInvalidServerTagsFilter(channel, err)
+			return ErrorInternal
 		}
+		serverTagsFilterFromState = stf
 	}
 
 	// Recovery or paginated join - stream catch-up needed. state is nil on the

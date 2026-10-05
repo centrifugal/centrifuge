@@ -1048,6 +1048,11 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 				resultCB(false)
 				return
 			}
+			if _, err := newServerTagsFilter(reply.ServerTagsFilter); err != nil {
+				c.logInvalidServerTagsFilter(channel, err)
+				resultCB(false)
+				return
+			}
 			newExpireAt := min(reply.ExpireAt, nowUnix+maxTTLSeconds)
 			if reply.Expired || (newExpireAt > 0 && newExpireAt < nowUnix) {
 				resultCB(false)
@@ -2475,6 +2480,11 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubRefresh, cmd, err, started, rw)
 			return
 		}
+		if _, err := newServerTagsFilter(reply.ServerTagsFilter); err != nil {
+			c.logInvalidServerTagsFilter(req.Channel, err)
+			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubRefresh, cmd, ErrorInternal, started, rw)
+			return
+		}
 
 		res := &protocol.SubRefreshResult{}
 
@@ -2552,6 +2562,7 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 // released before the hub is, so a resubscribe in between must neither get
 // the filter nor be unsubscribed for it.
 func (c *Client) updateServerTagsFilter(channel string, subGen uint64, f *FilterNode, isMapSub bool) (Unsubscribe, bool) {
+	// f is validated by the callers.
 	newTf := &tagsFilter{
 		filter: f,
 		hash:   filter.Hash(f),
@@ -4418,13 +4429,13 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			hash:   filter.Hash(req.Tf),
 		}
 	}
-	if reply.Options.ServerTagsFilter != nil {
-		sub.serverTagsFilter = &tagsFilter{
-			filter: reply.Options.ServerTagsFilter,
-			hash:   filter.Hash(reply.Options.ServerTagsFilter),
-		}
+	stf, err := newServerTagsFilter(reply.Options.ServerTagsFilter)
+	if err != nil {
+		c.logInvalidServerTagsFilter(channel, err)
+		return errorDisconnectContext(ErrorInternal, nil)
 	}
-	hasServerTagsFilter := reply.Options.ServerTagsFilter != nil
+	sub.serverTagsFilter = stf
+	hasServerTagsFilter := stf != nil
 
 	// Publications which come while the client subscribes are synced with the
 	// recovery (see recovery.PubSubSync). Every failure path below cancels the
@@ -5510,4 +5521,11 @@ func disconnectFromError(err error) (*Disconnect, bool) {
 		return &disconnectValue, true
 	}
 	return nil, false
+}
+
+// logInvalidServerTagsFilter logs a server tags filter given by the application
+// which is not valid: the subscription is refused (or its refresh fails), as
+// matching publications against it is impossible.
+func (c *Client) logInvalidServerTagsFilter(channel string, err error) {
+	c.node.logger.log(newLogEntry(LogLevelError, "invalid server tags filter", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 }

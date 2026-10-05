@@ -40,6 +40,10 @@ const (
 
 // Match checks if the provided tags match the filter.
 func Match(f *protocol.FilterNode, tags map[string]string) (bool, error) {
+	if f == nil {
+		// Validate refuses nil nodes; never panic on a filter which skipped it.
+		return false, errors.New("filter node must not be nil")
+	}
 	switch f.Op {
 	case OpLeaf:
 		val, ok := tags[f.Key]
