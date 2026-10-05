@@ -24,8 +24,8 @@ github.com/centrifugal/centrifuge-go v0.12.1 h1:nvk5y6/TYGqa2ysQ0+qkcS5DTVC0jTIT
 github.com/centrifugal/centrifuge-go v0.12.1/go.mod h1:YkU4klP3EyPLbSP/5eb2+w9S7Swv2gw73hYnSrcVnB8=
 github.com/centrifugal/fdelta v0.0.3 h1:sYD/zCXH2xYDcELPPztXsF7VCZb6vtiRBEVCYjgzHj4=
 github.com/centrifugal/fdelta v0.0.3/go.mod h1:9coq4YBCDBGhScGS9KcKeGSW9xQ+Kzq3tcFiK0n5OcE=
-github.com/centrifugal/protocol v0.23.0 h1:aLNOBzZTBNgf40bPuiosrg9qSWnLEGCf1HOOBSbwtew=
-github.com/centrifugal/protocol v0.23.0/go.mod h1:K8qKv/y8ujLbYYN/orINUBaKDMmjTrpE9++vFT6x68E=
+github.com/centrifugal/protocol v0.23.1 h1:UUawQRfk6w8vovblEgx27vUfPE40KO3CHdzhhu4Sg58=
+github.com/centrifugal/protocol v0.23.1/go.mod h1:K8qKv/y8ujLbYYN/orINUBaKDMmjTrpE9++vFT6x68E=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/charmbracelet/bubbletea v1.3.10 h1:otUDHWMMzQSB0Pkc87rm691KZ3SWa4KUlvF9nRvCICw=

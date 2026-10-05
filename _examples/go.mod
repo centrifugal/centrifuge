@@ -7,7 +7,7 @@ replace github.com/centrifugal/centrifuge => ../
 require (
 	github.com/centrifugal/centrifuge v0.39.3
 	github.com/centrifugal/centrifuge-go v0.12.1
-	github.com/centrifugal/protocol v0.23.0
+	github.com/centrifugal/protocol v0.23.1
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/cristalhq/jwt/v5 v5.4.0
