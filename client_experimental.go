@@ -92,15 +92,22 @@ func (c *Client) AcquireStorage() (map[string]any, func(map[string]any)) {
 // OnStateSnapshot allows settings StateSnapshotHandler.
 // This API is EXPERIMENTAL and may be changed/removed.
 func (c *Client) OnStateSnapshot(h StateSnapshotHandler) {
+	c.mu.Lock()
 	c.eventHub.stateSnapshotHandler = h
+	c.mu.Unlock()
 }
 
 // StateSnapshot allows collecting current state copy.
 // Mostly useful for connection introspection from the outside.
 // This API is EXPERIMENTAL and may be changed/removed.
 func (c *Client) StateSnapshot() (any, error) {
-	if c.eventHub.stateSnapshotHandler != nil {
-		return c.eventHub.stateSnapshotHandler()
+	// May be called from another goroutine while ConnectHandler sets the handler.
+	// The handler is called without holding c.mu as it may use Client methods.
+	c.mu.RLock()
+	stateSnapshotHandler := c.eventHub.stateSnapshotHandler
+	c.mu.RUnlock()
+	if stateSnapshotHandler != nil {
+		return stateSnapshotHandler()
 	}
 	return nil, nil
 }

@@ -42,7 +42,10 @@ func init() {
 
 // clientEventHub allows dealing with client event handlers.
 // All its methods are not goroutine-safe and supposed to be called
-// once inside Node ConnectHandler.
+// once inside Node ConnectHandler. The exceptions are unsubscribeHandler
+// and stateSnapshotHandler: they are guarded by Client.mu since they are
+// read from other goroutines (a server-side unsubscribe, a state snapshot
+// request) which may run while ConnectHandler is still setting them.
 type clientEventHub struct {
 	aliveHandler         AliveHandler
 	disconnectHandler    DisconnectHandler
@@ -108,7 +111,9 @@ func (c *Client) OnSubscribe(h SubscribeHandler) {
 // OnUnsubscribe allows setting UnsubscribeHandler.
 // UnsubscribeHandler called when client unsubscribes from channel.
 func (c *Client) OnUnsubscribe(h UnsubscribeHandler) {
+	c.mu.Lock()
 	c.eventHub.unsubscribeHandler = h
+	c.mu.Unlock()
 }
 
 // OnPublish allows setting PublishHandler.
@@ -5455,8 +5460,11 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	}
 
 	if channelHasFlag(chCtx.flags, flagSubscribed) {
-		if c.eventHub.unsubscribeHandler != nil {
-			c.eventHub.unsubscribeHandler(UnsubscribeEvent{
+		c.mu.RLock()
+		unsubscribeHandler := c.eventHub.unsubscribeHandler
+		c.mu.RUnlock()
+		if unsubscribeHandler != nil {
+			unsubscribeHandler(UnsubscribeEvent{
 				Channel: channel,
 				// Recomputed from the post-wait context: the pre-wait `serverSide`
 				// snapshot may come from a reservation with flags==0 that finalized

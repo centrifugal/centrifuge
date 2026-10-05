@@ -4874,6 +4874,81 @@ func TestClientOnStateSnapshot(t *testing.T) {
 	require.Equal(t, 1, num)
 }
 
+// TestClientOnStateSnapshotConcurrentWithConnect sets StateSnapshotHandler in
+// ConnectHandler while another goroutine already asks the hub-registered client
+// for its state. Run with -race.
+func TestClientOnStateSnapshotConcurrentWithConnect(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	pollStarted := make(chan struct{})
+	pollDone := make(chan any)
+	go func() {
+		started := false
+		for {
+			result, err := client.StateSnapshot()
+			if err != nil || result != nil {
+				pollDone <- result
+				return
+			}
+			if !started {
+				started = true
+				close(pollStarted)
+			}
+		}
+	}()
+
+	var result any
+	node.OnConnect(func(client *Client) {
+		<-pollStarted
+		client.OnStateSnapshot(func() (any, error) {
+			return 1, nil
+		})
+		result = <-pollDone
+	})
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleConnect(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Equal(t, 1, result)
+}
+
+// TestClientOnUnsubscribeConcurrentWithConnect sets UnsubscribeHandler in
+// ConnectHandler while a server-side unsubscribe from a connect-time subscription
+// runs in another goroutine. Run with -race.
+func TestClientOnUnsubscribeConcurrentWithConnect(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			Subscriptions: map[string]SubscribeOptions{"server-side": {}},
+		}, nil
+	})
+
+	node.OnConnect(func(client *Client) {
+		unsubscribeStarted := make(chan struct{})
+		unsubscribeDone := make(chan error)
+		go func() {
+			close(unsubscribeStarted)
+			unsubscribeDone <- node.Unsubscribe("42", "server-side")
+		}()
+		<-unsubscribeStarted
+		client.OnUnsubscribe(func(e UnsubscribeEvent) {})
+		require.NoError(t, <-unsubscribeDone)
+	})
+
+	client := newTestClient(t, node, "42")
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleConnect(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.NotContains(t, client.Channels(), "server-side")
+}
+
 func connectClientV2(t testing.TB, client *Client) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
