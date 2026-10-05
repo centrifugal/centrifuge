@@ -152,14 +152,6 @@ func TestServerSideSubRefreshInvalidServerTagsFilterFails(t *testing.T) {
 	require.False(t, <-refreshed)
 }
 
-// numHubSubscribers returns the number of hub subscribers of the channel.
-func numHubSubscribers(node *Node, channel string) int {
-	shard := node.hub.subShards[index(channel, numHubShards)]
-	shard.mu.RLock()
-	defer shard.mu.RUnlock()
-	return len(shard.subs[channel])
-}
-
 // A server-side subscription with an invalid server tags filter is refused
 // and leaves nothing behind: a later valid subscription works.
 func TestServerSideSubscribeInvalidServerTagsFilterRefused(t *testing.T) {
@@ -171,7 +163,7 @@ func TestServerSideSubscribeInvalidServerTagsFilterRefused(t *testing.T) {
 	err := client.Subscribe("ch", func(o *SubscribeOptions) { o.ServerTagsFilter = invalidServerTagsFilter() })
 	require.Equal(t, ErrorInternal, err)
 	require.NotContains(t, client.Channels(), "ch")
-	require.Zero(t, numHubSubscribers(node, "ch"))
+	require.Zero(t, node.hub.NumSubscribers("ch"))
 
 	require.NoError(t, client.Subscribe("ch", func(o *SubscribeOptions) {
 		o.ServerTagsFilter = &FilterNode{Key: "team", Cmp: "eq", Val: "eng"}
@@ -203,15 +195,10 @@ func TestConnectSubscriptionsInvalidServerTagsFilterRefused(t *testing.T) {
 	client, _ := newClient(ctx, node, transport)
 	rw := testReplyWriterWrapper()
 	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rw.rw)
-	if err == nil {
-		require.Len(t, rw.replies, 1)
-		require.NotNil(t, rw.replies[0].Error)
-		require.Equal(t, ErrorInternal.Code, rw.replies[0].Error.Code)
-	} else {
-		require.Equal(t, ErrorInternal, err)
-	}
-	require.Zero(t, numHubSubscribers(node, "bad"))
-	require.Zero(t, numHubSubscribers(node, "good"))
+	require.Equal(t, ErrorInternal, err)
+	require.Empty(t, rw.replies)
+	require.Zero(t, node.hub.NumSubscribers("bad"))
+	require.Zero(t, node.hub.NumSubscribers("good"))
 }
 
 // Map subscriptions which start in the STREAM phase (recovery) or go to LIVE
@@ -220,45 +207,47 @@ func TestConnectSubscriptionsInvalidServerTagsFilterRefused(t *testing.T) {
 // duplicate.
 func TestMapSubscribeRecoveryInvalidServerTagsFilterRefused(t *testing.T) {
 	t.Parallel()
-	for _, phase := range []int32{MapPhaseStream, MapPhaseLive} {
-		node, broker := newTestNodeWithMapBroker(t)
-		setTestMapChannelOptionsConverging(node)
-		channel := "map_recovery_invalid_filter"
-		res, err := broker.Publish(context.Background(), channel, "k", MapPublishOptions{
-			Data: []byte(`{}`),
-			Tags: map[string]string{"team": "eng"},
-		})
-		require.NoError(t, err)
-
-		var valid atomic.Bool
-		node.OnConnect(func(client *Client) {
-			client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
-				stf := invalidServerTagsFilter()
-				if valid.Load() {
-					stf = &FilterNode{Key: "team", Cmp: "eq", Val: "eng"}
-				}
-				cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap, ServerTagsFilter: stf}}, nil)
+	for name, phase := range map[string]int32{"stream": MapPhaseStream, "live": MapPhaseLive} {
+		t.Run(name, func(t *testing.T) {
+			node, broker := newTestNodeWithMapBroker(t)
+			setTestMapChannelOptionsConverging(node)
+			channel := "map_recovery_invalid_filter"
+			res, err := broker.Publish(context.Background(), channel, "k", MapPublishOptions{
+				Data: []byte(`{}`),
+				Tags: map[string]string{"team": "eng"},
 			})
-		})
-		client := newTestConnectedClientV2(t, node, "user1")
-		req := &protocol.SubscribeRequest{
-			Channel: channel,
-			Type:    int32(SubscriptionTypeMap),
-			Phase:   phase,
-			Offset:  res.Position.Offset,
-			Epoch:   res.Position.Epoch,
-			Limit:   10,
-			Recover: true,
-		}
-		protoErr := subscribeMapClientExpectError(t, client, req)
-		require.Equal(t, ErrorInternal.Code, protoErr.Code, "phase %d", phase)
-		client.mu.RLock()
-		_, subscribing := client.mapSubscribing[channel]
-		client.mu.RUnlock()
-		require.False(t, subscribing, "phase %d", phase)
-		require.Zero(t, numHubSubscribers(node, channel), "phase %d", phase)
+			require.NoError(t, err)
 
-		valid.Store(true)
-		_ = subscribeMapClient(t, client, req) // Not refused as a duplicate.
+			var valid atomic.Bool
+			node.OnConnect(func(client *Client) {
+				client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+					stf := invalidServerTagsFilter()
+					if valid.Load() {
+						stf = &FilterNode{Key: "team", Cmp: "eq", Val: "eng"}
+					}
+					cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap, ServerTagsFilter: stf}}, nil)
+				})
+			})
+			client := newTestConnectedClientV2(t, node, "user1")
+			req := &protocol.SubscribeRequest{
+				Channel: channel,
+				Type:    int32(SubscriptionTypeMap),
+				Phase:   phase,
+				Offset:  res.Position.Offset,
+				Epoch:   res.Position.Epoch,
+				Limit:   10,
+				Recover: true,
+			}
+			protoErr := subscribeMapClientExpectError(t, client, req)
+			require.Equal(t, ErrorInternal.Code, protoErr.Code)
+			client.mu.RLock()
+			_, subscribing := client.mapSubscribing[channel]
+			client.mu.RUnlock()
+			require.False(t, subscribing)
+			require.Zero(t, node.hub.NumSubscribers(channel))
+
+			valid.Store(true)
+			_ = subscribeMapClient(t, client, req) // Not refused as a duplicate.
+		})
 	}
 }
