@@ -42,6 +42,19 @@ const (
 	statusCodeClientConnectionClosed = 499
 )
 
+func supportsFlushing(w http.ResponseWriter) bool {
+	for {
+		switch t := w.(type) {
+		case interface{ FlushError() error }, http.Flusher:
+			return true
+		case interface{ Unwrap() http.ResponseWriter }:
+			w = t.Unwrap()
+		default:
+			return false
+		}
+	}
+}
+
 func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions { // For pre-flight browser requests.
 		w.Header().Set("Access-Control-Max-Age", "300")
@@ -50,8 +63,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, ok := w.(http.Flusher)
-	if !ok {
+	if !supportsFlushing(w) {
 		h.node.logger.log(newErrorLogEntry(errors.New("not http.Flusher"), "HTTP stream: ResponseWriter is not a Flusher", map[string]any{}))
 		http.Error(w, "expected http.ResponseWriter to be http.Flusher", http.StatusInternalServerError)
 		return

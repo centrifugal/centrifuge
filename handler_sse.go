@@ -43,8 +43,7 @@ const connectUrlParam = "cf_connect"
 const defaultMaxSSEBodySize = 64 * 1024
 
 func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	_, ok := w.(http.Flusher)
-	if !ok {
+	if !supportsFlushing(w) {
 		h.node.logger.log(newErrorLogEntry(errors.New("not http.Flusher"), "SSE: ResponseWriter is not a Flusher", map[string]any{}))
 		http.Error(w, "expected http.ResponseWriter to be http.Flusher", http.StatusInternalServerError)
 		return
