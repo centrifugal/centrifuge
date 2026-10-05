@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -29,9 +30,12 @@ func newNonFlusherWriter() *nonFlusherResponseWriter {
 	return &nonFlusherResponseWriter{headers: http.Header{}, status: http.StatusOK}
 }
 
-func (w *nonFlusherResponseWriter) Header() http.Header         { return w.headers }
-func (w *nonFlusherResponseWriter) Write(b []byte) (int, error) { w.body = append(w.body, b...); return len(b), nil }
-func (w *nonFlusherResponseWriter) WriteHeader(status int)      { w.status = status }
+func (w *nonFlusherResponseWriter) Header() http.Header { return w.headers }
+func (w *nonFlusherResponseWriter) Write(b []byte) (int, error) {
+	w.body = append(w.body, b...)
+	return len(b), nil
+}
+func (w *nonFlusherResponseWriter) WriteHeader(status int) { w.status = status }
 
 func TestHTTPStreamHandler(t *testing.T) {
 	t.Parallel()
@@ -292,4 +296,150 @@ func (d *protobufStreamCommandDecoder) decode() (*protocol.Reply, int, error) {
 		return nil, 0, err
 	}
 	return &c, int(msgLength) + 8, nil
+}
+
+type unwrappingResponseWriter struct {
+	http.ResponseWriter
+}
+
+func (w unwrappingResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+type flushErrorResponseWriter struct {
+	http.ResponseWriter
+}
+
+func (w flushErrorResponseWriter) FlushError() error {
+	return http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+func streamingResponseWriterWrappers() []struct {
+	name string
+	wrap func(http.ResponseWriter) http.ResponseWriter
+} {
+	return []struct {
+		name string
+		wrap func(http.ResponseWriter) http.ResponseWriter
+	}{
+		{"original", func(w http.ResponseWriter) http.ResponseWriter { return w }},
+		{"unwrap", func(w http.ResponseWriter) http.ResponseWriter { return unwrappingResponseWriter{w} }},
+		{"nested_unwrap", func(w http.ResponseWriter) http.ResponseWriter {
+			return unwrappingResponseWriter{unwrappingResponseWriter{w}}
+		}},
+		{"flush_error", func(w http.ResponseWriter) http.ResponseWriter { return flushErrorResponseWriter{w} }},
+		{"unwrap_flush_error", func(w http.ResponseWriter) http.ResponseWriter {
+			return unwrappingResponseWriter{flushErrorResponseWriter{w}}
+		}},
+	}
+}
+
+func TestStreamingHandlers_WrappedResponseWriter(t *testing.T) {
+	t.Parallel()
+	n, err := New(Config{})
+	require.NoError(t, err)
+	n.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{Credentials: &Credentials{UserID: "test"}}, nil
+	})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	for _, transport := range []struct {
+		name     string
+		method   string
+		handler  http.Handler
+		protobuf bool
+	}{
+		{"sse_get", http.MethodGet, NewSSEHandler(n, SSEConfig{}), false},
+		{"sse_post", http.MethodPost, NewSSEHandler(n, SSEConfig{}), false},
+		{"http_stream_json", http.MethodPost, NewHTTPStreamHandler(n, HTTPStreamConfig{}), false},
+		{"http_stream_protobuf", http.MethodPost, NewHTTPStreamHandler(n, HTTPStreamConfig{}), true},
+	} {
+		for _, wrapper := range streamingResponseWriterWrappers() {
+			t.Run(transport.name+"/"+wrapper.name, func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					transport.handler.ServeHTTP(wrapper.wrap(w), r)
+				}))
+				defer server.Close()
+
+				command := &protocol.Command{Id: 1, Connect: &protocol.ConnectRequest{}}
+				var data []byte
+				var err error
+				if transport.protobuf {
+					data, err = protocol.NewProtobufCommandEncoder().Encode(command)
+				} else {
+					data, err = json.Marshal(command)
+				}
+				require.NoError(t, err)
+				address := server.URL
+				if transport.method == http.MethodGet {
+					values := url.Values{connectUrlParam: {string(data)}}
+					address += "?" + values.Encode()
+				}
+				request, err := http.NewRequest(transport.method, address, bytes.NewReader(data))
+				require.NoError(t, err)
+				if transport.protobuf {
+					request.Header.Set("Content-Type", "application/octet-stream")
+				}
+				client := &http.Client{Timeout: 5 * time.Second}
+				response, err := client.Do(request)
+				require.NoError(t, err)
+				defer func() { _ = response.Body.Close() }()
+				require.Equal(t, http.StatusOK, response.StatusCode)
+
+				reply := new(protocol.Reply)
+				if transport.protobuf {
+					decoded, _, err := newProtobufStreamCommandDecoder(response.Body).decode()
+					require.NoError(t, err)
+					reply = decoded
+				} else if strings.HasPrefix(transport.name, "sse") {
+					decoder := newSSEStreamDecoder(response.Body)
+					for {
+						message, err := decoder.decode()
+						require.NoError(t, err)
+						if len(message.Data) == 0 {
+							continue
+						}
+						require.NoError(t, json.Unmarshal(message.Data, reply))
+						break
+					}
+				} else {
+					message, err := newJSONStreamDecoder(response.Body).decode()
+					require.NoError(t, err)
+					require.NoError(t, json.Unmarshal(message, reply))
+				}
+				require.Equal(t, uint32(1), reply.Id)
+				require.NotNil(t, reply.Connect)
+				require.NotEmpty(t, reply.Connect.Session)
+				require.NotEmpty(t, reply.Connect.Node)
+			})
+		}
+	}
+}
+
+func TestStreamingHandlers_WrappedResponseWriterValidation(t *testing.T) {
+	t.Parallel()
+	n, err := New(Config{})
+	require.NoError(t, err)
+	for _, transport := range []struct {
+		name    string
+		method  string
+		handler http.Handler
+		body    string
+		status  int
+	}{
+		{"sse_get_missing_connect", http.MethodGet, NewSSEHandler(n, SSEConfig{}), "", http.StatusBadRequest},
+		{"sse_post_too_large", http.MethodPost, NewSSEHandler(n, SSEConfig{MaxRequestBodySize: 2}), "large", http.StatusRequestEntityTooLarge},
+		{"http_stream_too_large", http.MethodPost, NewHTTPStreamHandler(n, HTTPStreamConfig{MaxRequestBodySize: 2}), "large", http.StatusRequestEntityTooLarge},
+	} {
+		for _, wrapper := range streamingResponseWriterWrappers() {
+			t.Run(transport.name+"/"+wrapper.name, func(t *testing.T) {
+				recorder := httptest.NewRecorder()
+				request := httptest.NewRequest(transport.method, "/", strings.NewReader(transport.body))
+				transport.handler.ServeHTTP(wrapper.wrap(recorder), request)
+				require.Equal(t, transport.status, recorder.Code)
+				require.False(t, recorder.Flushed)
+			})
+		}
+	}
 }
