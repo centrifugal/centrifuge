@@ -4096,18 +4096,23 @@ func setEpochAwareSharedPollHandler(node *Node, initial string) func(string) {
 // setEpochAwareSharedPollHandlerBlocking is the deterministic variant: the
 // FIRST handler call (the cold-key auto-poll triggered by track) blocks
 // until the test calls release(); subsequent calls run unblocked. This
-// eliminates a race where the auto-poll's response — captured before the
-// test sets up its initial epoch — lands AFTER the test flips to a new
-// epoch and reverts state back. Use whenever the test plans to do a
+// eliminates a race where the auto-poll's response lands AFTER the test flips
+// to a new epoch and reverts state back. Use whenever the test plans to do a
 // setPublisherEpoch(...) after the initial setup.
+//
+// Release only AFTER the flip: the handler reads the epoch when it returns,
+// so its response then carries the new epoch and applying it is a no-op
+// whenever it lands. Released before the flip, the response may carry the
+// old epoch and still be applied after the flip - release() does not wait
+// for the response to be applied.
 //
 // Returns (setEpoch, release). Typical usage:
 //
 //	setPub, release := setEpochAwareSharedPollHandlerBlocking(node, "epochA")
 //	subscribe + track
 //	SharedPollPublish(... "epochA" ...)
-//	release()                       // now the auto-poll's response is safe
 //	setPub("epochB"); SharedPollPublish(... "epochB" ...)
+//	release()                       // the auto-poll's response carries "epochB"
 func setEpochAwareSharedPollHandlerBlocking(node *Node, initial string) (func(string), func()) {
 	var epoch atomic.Pointer[string]
 	epoch.Store(&initial)
@@ -4236,13 +4241,13 @@ func TestSharedPollEpoch_FlipUnsubscribesClient(t *testing.T) {
 		return node.sharedPollManager.Epoch("test:channel", false) == "epochA"
 	}, time.Second, 10*time.Millisecond)
 
-	// Release the cold-key auto-poll. Its response carries "epochA" (no flip).
-	releaseAutoPoll()
-
 	// Flip with new epoch — update the refresh handler in lockstep so the
 	// publisher stays consistent across both paths.
 	setPublisherEpoch("epochB")
 	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 1, "epochB", []byte(`{"v":1-newepoch"}`)))
+	// Release the cold-key auto-poll after the flip: its response carries
+	// "epochB", so it can't revert the epoch whenever it is applied.
+	releaseAutoPoll()
 
 	// Channel epoch updated.
 	require.Eventually(t, func() bool {
@@ -4281,12 +4286,12 @@ func TestSharedPollEpoch_FlipResetsEntries(t *testing.T) {
 		return node.sharedPollManager.Epoch("test:channel", false) == "epochA"
 	}, time.Second, 10*time.Millisecond)
 
-	// Release the cold-key auto-poll. Its response carries "epochA" (no flip).
-	releaseAutoPoll()
-
 	// New epoch with low version: must be accepted (entries reset on flip).
 	setPublisherEpoch("epochB")
 	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 1, "epochB", []byte(`{"v":1-postflip"}`)))
+	// Release the cold-key auto-poll after the flip: its response carries
+	// "epochB", so it can't revert the epoch whenever it is applied.
+	releaseAutoPoll()
 
 	// Re-track client (it was unsubbed by the flip). Then verify that the
 	// post-flip publish data is reachable by re-subscribing and tracking.

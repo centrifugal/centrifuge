@@ -749,6 +749,21 @@ type tagsFilter struct {
 	hash   [32]byte
 }
 
+// newServerTagsFilter validates a server tags filter given by the application
+// (SubscribeOptions.ServerTagsFilter, SubRefreshReply.ServerTagsFilter) and
+// prepares it for matching. Client filters are validated on subscribe; a server
+// filter needs it too, as it may be built from external input (e.g. a proxy
+// response where a null node decodes to nil). A nil filter means no filter.
+func newServerTagsFilter(f *FilterNode) (*tagsFilter, error) {
+	if f == nil {
+		return nil, nil
+	}
+	if err := filter.Validate(f); err != nil {
+		return nil, err
+	}
+	return &tagsFilter{filter: f, hash: filter.Hash(f)}, nil
+}
+
 type subInfo struct {
 	client           *Client
 	deltaType        DeltaType

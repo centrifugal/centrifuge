@@ -1055,3 +1055,23 @@ func TestValidateNilNode(t *testing.T) {
 		require.Contains(t, err.Error(), "must not be nil")
 	}
 }
+
+// Match never panics on a nil node: Validate refuses them, but a filter which
+// was not validated must still not crash publication delivery.
+func TestMatchNilNode(t *testing.T) {
+	tags := map[string]string{"team": "eng"}
+	for _, f := range []*protocol.FilterNode{
+		nil,
+		{Op: OpAnd, Nodes: []*protocol.FilterNode{nil}},
+		{Op: OpOr, Nodes: []*protocol.FilterNode{nil, {Key: "team", Cmp: CompareEQ, Val: "eng"}}},
+		{Op: OpNot, Nodes: []*protocol.FilterNode{nil}},
+	} {
+		require.NotPanics(t, func() {
+			_, _ = Match(f, tags)
+		})
+	}
+	match, err := Match(&protocol.FilterNode{Op: OpAnd, Nodes: []*protocol.FilterNode{nil}}, tags)
+	require.Error(t, err)
+	require.False(t, match)
+	require.Error(t, Validate(&protocol.FilterNode{Op: OpAnd, Nodes: []*protocol.FilterNode{nil}}))
+}

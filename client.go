@@ -1048,6 +1048,12 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 				resultCB(false)
 				return
 			}
+			stf, err := newServerTagsFilter(reply.ServerTagsFilter)
+			if err != nil {
+				c.logInvalidServerTagsFilter(channel, err)
+				resultCB(false)
+				return
+			}
 			newExpireAt := min(reply.ExpireAt, nowUnix+maxTTLSeconds)
 			if reply.Expired || (newExpireAt > 0 && newExpireAt < nowUnix) {
 				resultCB(false)
@@ -1066,15 +1072,15 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 					ctx.info = reply.Info
 				}
 				ctx.expireAt = newExpireAt
-				if reply.ServerTagsFilter != nil {
+				if stf != nil {
 					ctx.flags |= flagServerTagsFilter
 				}
 				c.channels[channel] = ctx
 			}
 			isMapSub := sameSub && channelHasFlag(ctx.flags, flagMap)
 			c.mu.Unlock()
-			if sameSub && reply.ServerTagsFilter != nil {
-				if unsub, ok := c.updateServerTagsFilter(channel, channelContext.subGen, reply.ServerTagsFilter, isMapSub); !ok {
+			if sameSub && stf != nil {
+				if unsub, ok := c.updateServerTagsFilter(channel, channelContext.subGen, stf, isMapSub); !ok {
 					// The subscription must start over with the new filter. A
 					// server-side one can't be resubscribed by the client, so the
 					// connection reconnects, as on insufficient state.
@@ -2475,6 +2481,12 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubRefresh, cmd, err, started, rw)
 			return
 		}
+		stf, err := newServerTagsFilter(reply.ServerTagsFilter)
+		if err != nil {
+			c.logInvalidServerTagsFilter(req.Channel, err)
+			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubRefresh, cmd, ErrorInternal, started, rw)
+			return
+		}
 
 		res := &protocol.SubRefreshResult{}
 
@@ -2505,7 +2517,7 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 		if sameSub {
 			channelContext.info = reply.Info
 			channelContext.expireAt = expireAt
-			if reply.ServerTagsFilter != nil {
+			if stf != nil {
 				// A refresh may narrow a subscription which had no server tags
 				// filter: whatever depends on the flag must see it from now on.
 				channelContext.flags |= flagServerTagsFilter
@@ -2517,9 +2529,9 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 
 		var unsub Unsubscribe
 		needUnsubscribe := false
-		if sameSub && reply.ServerTagsFilter != nil {
+		if sameSub && stf != nil {
 			var ok bool
-			unsub, ok = c.updateServerTagsFilter(channel, ctx.subGen, reply.ServerTagsFilter, isMapSub)
+			unsub, ok = c.updateServerTagsFilter(channel, ctx.subGen, stf, isMapSub)
 			needUnsubscribe = !ok
 		}
 
@@ -2543,7 +2555,8 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 	return nil
 }
 
-// updateServerTagsFilter installs a server tags filter returned on sub refresh.
+// updateServerTagsFilter installs a server tags filter returned on sub refresh,
+// validated and prepared by newServerTagsFilter.
 // It returns false when the subscription can't continue with the new filter
 // and must be unsubscribed with the returned Unsubscribe: a map subscription
 // must load its state again, and delta compression isn't used together with
@@ -2551,12 +2564,8 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 // without it. Only the subscription of generation subGen is updated: c.mu is
 // released before the hub is, so a resubscribe in between must neither get
 // the filter nor be unsubscribed for it.
-func (c *Client) updateServerTagsFilter(channel string, subGen uint64, f *FilterNode, isMapSub bool) (Unsubscribe, bool) {
-	newTf := &tagsFilter{
-		filter: f,
-		hash:   filter.Hash(f),
-	}
-	_, changed, usesDelta := c.node.hub.updateServerTagsFilter(channel, c.ID(), subGen, newTf)
+func (c *Client) updateServerTagsFilter(channel string, subGen uint64, tf *tagsFilter, isMapSub bool) (Unsubscribe, bool) {
+	_, changed, usesDelta := c.node.hub.updateServerTagsFilter(channel, c.ID(), subGen, tf)
 	if changed && isMapSub {
 		return Unsubscribe{Code: UnsubscribeCodeStateInvalidated, Reason: "server tags filter changed"}, false
 	}
@@ -4418,13 +4427,13 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			hash:   filter.Hash(req.Tf),
 		}
 	}
-	if reply.Options.ServerTagsFilter != nil {
-		sub.serverTagsFilter = &tagsFilter{
-			filter: reply.Options.ServerTagsFilter,
-			hash:   filter.Hash(reply.Options.ServerTagsFilter),
-		}
+	stf, err := newServerTagsFilter(reply.Options.ServerTagsFilter)
+	if err != nil {
+		c.logInvalidServerTagsFilter(channel, err)
+		return errorDisconnectContext(ErrorInternal, nil)
 	}
-	hasServerTagsFilter := reply.Options.ServerTagsFilter != nil
+	sub.serverTagsFilter = stf
+	hasServerTagsFilter := stf != nil
 
 	// Publications which come while the client subscribes are synced with the
 	// recovery (see recovery.PubSubSync). Every failure path below cancels the
@@ -5510,4 +5519,11 @@ func disconnectFromError(err error) (*Disconnect, bool) {
 		return &disconnectValue, true
 	}
 	return nil, false
+}
+
+// logInvalidServerTagsFilter logs a server tags filter given by the application
+// which is not valid: the subscription is refused (or its refresh fails), as
+// matching publications against it is impossible.
+func (c *Client) logInvalidServerTagsFilter(channel string, err error) {
+	c.node.logger.log(newLogEntry(LogLevelError, "invalid server tags filter", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 }
