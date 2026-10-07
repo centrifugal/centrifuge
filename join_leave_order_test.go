@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -614,4 +615,93 @@ func TestJoinLeaveOrder_CloseDuringMapClientPresenceAdd(t *testing.T) {
 	clients, err := node.MapStateRead(context.Background(), "clients:ch", MapReadStateOptions{Limit: -1})
 	require.NoError(t, err)
 	require.Empty(t, clients.Publications, "map client presence left behind")
+}
+
+type holdHistoryBroker struct {
+	*MemoryBroker
+	armed   atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *holdHistoryBroker) History(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
+	if b.armed.CompareAndSwap(true, false) {
+		close(b.entered)
+		<-b.release
+	}
+	return b.MemoryBroker.History(ch, opts)
+}
+
+// A presence tick add which lands while a resubscribe holds its reservation
+// (before the commit) is kept if the resubscribe goes live with the same
+// presence, and undone if it goes live without presence.
+func TestJoinLeaveOrder_PresenceTickDuringResubscribe(t *testing.T) {
+	t.Parallel()
+	for _, withPresence := range []bool{true, false} {
+		t.Run(strconv.FormatBool(withPresence), func(t *testing.T) {
+			t.Parallel()
+			node, err := New(Config{LogLevel: LogLevelError, LogHandler: func(entry LogEntry) {}})
+			require.NoError(t, err)
+			memPresence, err := NewMemoryPresenceManager(node, MemoryPresenceManagerConfig{})
+			require.NoError(t, err)
+			presenceManager := &holdAddPresenceManager{PresenceManager: memPresence, entered: make(chan struct{}), release: make(chan struct{})}
+			node.SetPresenceManager(presenceManager)
+			memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+			require.NoError(t, err)
+			broker := &holdHistoryBroker{MemoryBroker: memBroker, entered: make(chan struct{}), release: make(chan struct{})}
+			node.SetBroker(broker)
+			var subscribes atomic.Int32
+			node.OnConnect(func(client *Client) {
+				client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+					emitPresence := subscribes.Add(1) == 1 || withPresence
+					cb(SubscribeReply{Options: SubscribeOptions{EmitPresence: emitPresence, EnableRecovery: true}}, nil)
+				})
+			})
+			require.NoError(t, node.Run())
+			t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+			client := newTestConnectedClientV2(t, node, "user1")
+			subscribeClientV2(t, client, "ch")
+			client.mu.RLock()
+			snapshot := []channelTickItem{{channel: "ch", ctx: client.channels["ch"], duties: dutyPresence}}
+			client.mu.RUnlock()
+
+			presenceManager.armed.Store(true)
+			tickDone := make(chan struct{})
+			go func() {
+				defer close(tickDone)
+				client.updateChannelPresenceItem(&snapshot[0])
+				<-broker.entered // The resubscribe holds its reservation.
+				client.compensateRacedPresence(snapshot)
+			}()
+			<-presenceManager.entered
+			client.Unsubscribe("ch")
+
+			broker.armed.Store(true)
+			subscribed := make(chan struct{})
+			go func() {
+				defer close(subscribed)
+				rwWrapper := testReplyWriterWrapper()
+				_ = client.handleSubscribe(&protocol.SubscribeRequest{Channel: "ch"}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
+			}()
+			<-broker.entered
+			close(presenceManager.release)
+			<-tickDone
+			close(broker.release)
+			<-subscribed
+			require.True(t, client.IsSubscribed("ch"))
+
+			hasPresence := func() bool {
+				presence, err := node.Presence("ch")
+				require.NoError(t, err)
+				_, ok := presence.Presence[client.ID()]
+				return ok
+			}
+			if withPresence {
+				require.Never(t, func() bool { return !hasPresence() }, 200*time.Millisecond, 10*time.Millisecond)
+			} else {
+				require.Eventually(t, func() bool { return !hasPresence() }, 2*time.Second, 10*time.Millisecond)
+			}
+		})
+	}
 }
