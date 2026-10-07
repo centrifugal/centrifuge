@@ -2707,7 +2707,8 @@ func (c *Client) finishAttemptEnd(channel string) {
 // SubscribeHandler (waitAttemptEnds) it blocks the processing of the client's
 // commands. Before DisconnectHandler (waitPendingUnsubscribes) it waits for
 // calls already running, as close() does for its own: it can be generous.
-const (
+// Variables, tests shorten them.
+var (
 	pendingUnsubscribesSubscribeTimeout  = 5 * time.Second
 	pendingUnsubscribesDisconnectTimeout = 30 * time.Second
 )
@@ -5936,13 +5937,13 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 }
 
 // subscribeInProgressTimeout bounds how long an unsubscribe waits for a
-// subscribe to the channel in progress.
-const subscribeInProgressTimeout = 5 * time.Second
+// subscribe to the channel in progress. A variable, tests shorten it.
+var subscribeInProgressTimeout = 5 * time.Second
 
 // closeSubscribesTimeout bounds how long close() waits for all subscribes in
 // progress together (regular, shared poll and map ones), each of them for up to
-// subscribeInProgressTimeout.
-const closeSubscribesTimeout = 10 * time.Second
+// subscribeInProgressTimeout. A variable, tests shorten it.
+var closeSubscribesTimeout = 10 * time.Second
 
 // waitOtherUnsubscribe is called by a client unsubscribe which found nothing
 // to remove: another unsubscribe may have removed the subscription, so the
