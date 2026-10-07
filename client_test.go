@@ -7700,6 +7700,94 @@ func TestClientMapSubscribeConcurrentUnsubscribeOrder(t *testing.T) {
 	})
 	afterCommit := func(channel string) {
 		if channel == ch {
+			// Another map request of the client finishing meanwhile wakes the
+			// waiting unsubscribe: it must keep waiting for this one.
+			require.True(t, client.acquireMapPaginationLock("other"))
+			client.releaseMapPaginationLock("other")
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	testAfterMapCommit.Store(&afterCommit)
+	t.Cleanup(func() { testAfterMapCommit.Store(nil) })
+
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: ch, Type: int32(SubscriptionTypeMap), Phase: MapPhaseLive,
+		Recover: true, Offset: res.Position.Offset, Epoch: res.Position.Epoch,
+	}, &protocol.Command{Id: 2}, time.Now(), testReplyWriterWrapper().rw))
+	<-unsubscribed
+
+	var order []string
+	require.Eventually(t, func() bool {
+		for _, frame := range drainSink(sink) {
+			decoder := newReplyDecoder(protocol.TypeJSON, frame)
+			for {
+				reply, err := decoder.Decode()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				require.NoError(t, err)
+				switch {
+				case reply.Id == 2 && reply.Subscribe != nil:
+					order = append(order, "subscribe")
+				case reply.Push != nil && reply.Push.Channel == ch && reply.Push.Unsubscribe != nil:
+					order = append(order, "unsubscribe")
+				}
+			}
+		}
+		return len(order) == 2
+	}, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, []string{"subscribe", "unsubscribe"}, order)
+	require.False(t, client.IsSubscribed(ch))
+}
+
+// An unsubscribe starting between the go-live commit of a map subscribe and its
+// reply waits for the subscribe request: the unsubscribe push comes after the
+// subscribe result.
+func TestClientMapSubscribeUnsubscribeAfterCommitOrder(t *testing.T) {
+	setIsInTest(t)
+	testSyncPointDelay.Store(int64(time.Millisecond))
+	t.Cleanup(func() { testSyncPointDelay.Store(0) })
+
+	ch := testChannelRecoveryOrderingPrefix + "_map_unsubscribe_after_commit"
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{Mode: MapModeRecoverable, KeyTTL: time.Minute, MinPageSize: 1}
+			},
+		},
+	})
+	require.NoError(t, err)
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(mapBroker)
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+		})
+		c.OnUnsubscribe(func(UnsubscribeEvent) {})
+	})
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	res, err := node.MapPublish(context.Background(), ch, "key", MapPublishOptions{Data: []byte(`{}`)})
+	require.NoError(t, err)
+
+	transport := newTestTransport(func() {})
+	sink := make(chan []byte, 1024)
+	transport.sink = sink
+	client := newTestConnectedClientWithTransport(t, context.Background(), node, transport, "42")
+	drainSink(sink)
+
+	// The unsubscribe starts after the go-live commit, before the reply is
+	// written: it must still wait for the subscribe request to finish.
+	unsubscribed := make(chan struct{})
+	afterCommit := func(channel string) {
+		if channel == ch {
+			go func() {
+				defer close(unsubscribed)
+				client.Unsubscribe(ch)
+			}()
 			time.Sleep(50 * time.Millisecond)
 		}
 	}

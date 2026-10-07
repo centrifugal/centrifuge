@@ -16,32 +16,52 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 		return ErrorNotAvailable
 	}
 
-	// Pre-register channel to track duplicate subscriptions (matches regular subscribe
-	// flow). Reject if the channel is already reserved (subscribed OR a subscribe/map
-	// subscribe in flight), mirroring validateSubscribeRequest — this keeps the
-	// one-in-flight-subscribe-per-channel invariant. The reservation carries a
-	// subscribingCh so a concurrent unsubscribe waits for this in-flight subscribe
-	// instead of racing it: without it the unsubscribe removes the empty reservation
-	// and the async finalize re-adds the channel, leaking the subscription.
-	c.mu.Lock()
-	if _, ok := c.channels[channel]; ok {
+	var subscribingCh chan struct{}
+	var subGen uint64
+	var waitDeadline time.Time
+	for {
+		// Pre-register channel to track duplicate subscriptions (matches regular subscribe
+		// flow). Reject if the channel is already reserved (subscribed OR a subscribe/map
+		// subscribe in flight), mirroring validateSubscribeRequest — this keeps the
+		// one-in-flight-subscribe-per-channel invariant. The reservation carries a
+		// subscribingCh so a concurrent unsubscribe waits for this in-flight subscribe
+		// instead of racing it: without it the unsubscribe removes the empty reservation
+		// and the async finalize re-adds the channel, leaking the subscription.
+		c.mu.Lock()
+		if _, ok := c.channels[channel]; ok {
+			c.mu.Unlock()
+			return ErrorAlreadySubscribed
+		}
+		if _, ok := c.mapSubscribing[channel]; ok {
+			c.mu.Unlock()
+			return ErrorAlreadySubscribed
+		}
+		if c.mapSubscribePendingLocked(channel) {
+			c.mu.Unlock()
+			return ErrorAlreadySubscribed
+		}
+		channelLimit := c.node.config.ClientChannelLimit
+		numChannels := c.numChannelsLocked()
+		if channelLimit > 0 && numChannels >= channelLimit {
+			c.mu.Unlock()
+			return ErrorLimitExceeded
+		}
+		if c.status == statusClosed {
+			// SubscribeHandler is not called on a closed client.
+			c.mu.Unlock()
+			return DisconnectConnectionClosed
+		}
+		if c.mustWaitAttemptEndsLocked(channel, &waitDeadline) {
+			c.mu.Unlock()
+			c.waitAttemptEnds(channel, waitDeadline)
+			continue
+		}
+		subscribingCh = make(chan struct{})
+		subGen = c.subGenCounter.Add(1)
+		c.channels[channel] = ChannelContext{subscribingCh: subscribingCh, subGen: subGen}
 		c.mu.Unlock()
-		return ErrorAlreadySubscribed
+		break
 	}
-	if _, ok := c.mapSubscribing[channel]; ok {
-		c.mu.Unlock()
-		return ErrorAlreadySubscribed
-	}
-	channelLimit := c.node.config.ClientChannelLimit
-	numChannels := len(c.channels) + len(c.mapSubscribing)
-	if channelLimit > 0 && numChannels >= channelLimit {
-		c.mu.Unlock()
-		return ErrorLimitExceeded
-	}
-	subscribingCh := make(chan struct{})
-	subGen := c.subGenCounter.Add(1)
-	c.channels[channel] = ChannelContext{subscribingCh: subscribingCh, subGen: subGen}
-	c.mu.Unlock()
 
 	event := SubscribeEvent{
 		Channel: channel,
@@ -50,13 +70,19 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 		Type:    SubscriptionTypeSharedPoll,
 	}
 
+	answered := false // Guarded by c.mu.
 	c.eventHub.subscribeHandler(event, func(reply SubscribeReply, err error) {
+		// From here on every failure ends an allowed attempt through the
+		// reservation removal. A closed client is handled when installing the
+		// subscription below.
+		if _, ok := c.answerSubscribeCallback(channel, subGen, err == nil, &answered); !ok {
+			return
+		}
 		if err != nil {
 			c.onSubscribeErrorGen(channel, subGen)
 			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, err, started, rw)
 			return
 		}
-
 		res := &protocol.SubscribeResult{}
 		res.Type = int32(SubscriptionTypeSharedPoll)
 
@@ -114,6 +140,8 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 			// waiters burn the full 5s timeout) and resurrect a channel this client
 			// already unsubscribed from. Nothing of ours is installed yet — shared
 			// poll uses no broker and no hub — so there is nothing else to undo.
+			// The attempt was ended by whoever removed the reservation (or by
+			// answerSubscribeCallback, if it was gone already).
 			c.mu.Unlock()
 			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, ErrorInternal, started, rw)
 			return
@@ -124,10 +152,18 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 			// unsubscribe waiting on the gate (mirrors commitSubscription's closed
 			// path).
 			delete(c.channels, channel)
+			if resv.subscribeAllowed {
+				c.addAttemptEndLocked(channel)
+			}
 			c.mu.Unlock()
+			if resv.subscribeAllowed {
+				c.endSubscribeAttempt(channel, nil, nil)
+			}
 			if gateCh != nil {
 				close(gateCh)
 			}
+			// Only completes the command (event, metrics): the transport is closed.
+			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, DisconnectConnectionClosed, started, rw)
 			return
 		}
 		c.channels[channel] = ChannelContext{
@@ -137,6 +173,10 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 			mapClientPresenceChannel: reply.Options.MapClientPresenceChannel,
 			mapUserPresenceChannel:   reply.Options.MapUserPresenceChannel,
 			subGen:                   subGen,
+			// Until the subscribe reply below, a failure removing it with
+			// onSubscribeErrorGen ends the attempt. An unsubscribe treats it as a
+			// subscription (flagSubscribed).
+			subscribeAllowed: true,
 		}
 		if c.keyed == nil {
 			c.keyed = &keyedState{
@@ -166,6 +206,8 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 			// early once the entry is gone), so dropping the reservation first
 			// would strand it for the lifetime of the connection.
 			c.cleanupKeyed(channel)
+			// Ends the attempt, unless an unsubscribe removed it first and reported
+			// it.
 			c.onSubscribeErrorGen(channel, subGen)
 			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, ErrorNotAvailable, started, rw)
 			return

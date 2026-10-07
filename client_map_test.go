@@ -5120,7 +5120,7 @@ func TestCleanupMapSubscribingAll(t *testing.T) {
 	client.mapSubscribing["b"] = &mapSubscribeState{} // no subscribingCh
 	client.mu.Unlock()
 
-	client.cleanupMapSubscribingAll()
+	client.cleanupMapSubscribingAll(&DisconnectConnectionClosed)
 
 	client.mu.Lock()
 	require.Empty(t, client.mapSubscribing)
