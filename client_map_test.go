@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -3141,6 +3142,276 @@ func TestMapSubscribe_CatchUpTimeout_Sweep(t *testing.T) {
 	_, hasA = client.mapSubscribing["ch_a"]
 	client.mu.RUnlock()
 	require.False(t, hasA, "expired ch_a catch-up should be swept")
+}
+
+// A continuation of a catch-up which another channel's subscribe swept gets
+// DisconnectSlow, as when its own request notices the timeout, not
+// ErrorPermissionDenied, which clients treat as permanent.
+func TestMapSubscribe_CatchUpTimeout_SweptContinuation(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name     string
+		next     func(result *protocol.SubscribeResult) *protocol.SubscribeRequest
+		wantSlow bool
+	}{
+		{"state_page", func(result *protocol.SubscribeResult) *protocol.SubscribeRequest {
+			return &protocol.SubscribeRequest{Phase: MapPhaseState, Limit: 1, Cursor: result.Cursor, Offset: result.Offset, Epoch: result.Epoch}
+		}, true},
+		{"stream_phase", func(result *protocol.SubscribeResult) *protocol.SubscribeRequest {
+			return &protocol.SubscribeRequest{Phase: MapPhaseStream, Offset: result.Offset, Epoch: result.Epoch}
+		}, true},
+		{"resubscribe", func(_ *protocol.SubscribeResult) *protocol.SubscribeRequest {
+			return &protocol.SubscribeRequest{Phase: MapPhaseState, Limit: 100}
+		}, false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			node, broker := newTestNodeWithMapBroker(t)
+			var catchUpTimeout atomic.Int64
+			catchUpTimeout.Store(int64(time.Hour))
+			node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:                    MapModeRecoverable,
+					KeyTTL:                  60 * time.Second,
+					MinPageSize:             1,
+					SubscribeCatchUpTimeout: time.Duration(catchUpTimeout.Load()),
+				}
+			}
+			ctx := context.Background()
+			for _, key := range []string{"key1", "key2"} {
+				_, err := broker.Publish(ctx, "ch_a", key, MapPublishOptions{Data: []byte(`{"v":"data"}`)})
+				require.NoError(t, err)
+			}
+			_, err := broker.Publish(ctx, "ch_b", "key1", MapPublishOptions{Data: []byte(`{"v":"data"}`)})
+			require.NoError(t, err)
+
+			node.OnConnect(func(client *Client) {
+				client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+					cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+				})
+			})
+			client := newTestConnectedClientV2(t, node, "user1")
+
+			result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+				Channel: "ch_a",
+				Type:    int32(SubscriptionTypeMap),
+				Phase:   MapPhaseState,
+				Limit:   1,
+			})
+			require.NotEmpty(t, result.Cursor)
+
+			// ch_b's subscribe sweeps the expired catch-up of ch_a.
+			catchUpTimeout.Store(int64(time.Nanosecond))
+			subscribeMapClient(t, client, &protocol.SubscribeRequest{
+				Channel: "ch_b",
+				Type:    int32(SubscriptionTypeMap),
+				Phase:   MapPhaseState,
+				Limit:   100,
+			})
+			client.mu.RLock()
+			_, hasA := client.mapSubscribing["ch_a"]
+			client.mu.RUnlock()
+			require.False(t, hasA)
+
+			catchUpTimeout.Store(int64(time.Hour))
+			req := tc.next(result)
+			req.Channel = "ch_a"
+			req.Type = int32(SubscriptionTypeMap)
+			rwWrapper := testReplyWriterWrapper()
+			err = client.handleSubscribe(req, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+			if tc.wantSlow {
+				require.ErrorIs(t, err, DisconnectSlow)
+			} else {
+				require.NoError(t, err)
+				require.Len(t, rwWrapper.replies, 1)
+				require.Nil(t, rwWrapper.replies[0].Error)
+			}
+			client.mu.RLock()
+			var swept map[string]int64
+			if client.tracking != nil {
+				swept = client.tracking.mapSubscribeSwept
+			}
+			client.mu.RUnlock()
+			require.Nil(t, swept)
+		})
+	}
+}
+
+// Channels whose catch-up was swept are forgotten after mapSubscribeSweptTTL
+// if the client sends nothing for them.
+func TestMapSubscribe_CatchUpTimeout_SweptForgotten(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:                    MapModeEphemeral,
+			KeyTTL:                  60 * time.Second,
+			MinPageSize:             1,
+			SubscribeCatchUpTimeout: time.Nanosecond,
+		}
+	}
+	ctx := context.Background()
+	for _, ch := range []string{"ch_a", "ch_b", "ch_c"} {
+		for _, key := range []string{"key1", "key2"} {
+			_, err := broker.Publish(ctx, ch, key, MapPublishOptions{Data: []byte(`{"v":"data"}`)})
+			require.NoError(t, err)
+		}
+	}
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	for _, ch := range []string{"ch_a", "ch_b"} {
+		result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+			Channel: ch,
+			Type:    int32(SubscriptionTypeMap),
+			Phase:   MapPhaseState,
+			Limit:   1,
+		})
+		require.NotEmpty(t, result.Cursor)
+	}
+	client.mu.Lock()
+	_, sweptA := client.tracking.mapSubscribeSwept["ch_a"]
+	if sweptA {
+		client.tracking.mapSubscribeSwept["ch_a"] = time.Now().Add(-2 * mapSubscribeSweptTTL).UnixNano()
+	}
+	client.mu.Unlock()
+	require.True(t, sweptA)
+
+	// ch_c's subscribe sweeps ch_b and forgets ch_a.
+	subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: "ch_c",
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   1,
+	})
+	client.mu.RLock()
+	_, sweptA = client.tracking.mapSubscribeSwept["ch_a"]
+	_, sweptB := client.tracking.mapSubscribeSwept["ch_b"]
+	client.mu.RUnlock()
+	require.False(t, sweptA)
+	require.True(t, sweptB)
+}
+
+type slowStateMapBroker struct {
+	*MemoryMapBroker
+	slowChannel string
+	delay       time.Duration
+}
+
+func (b *slowStateMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
+	if ch == b.slowChannel {
+		time.Sleep(b.delay)
+	}
+	return b.MemoryMapBroker.ReadState(ctx, ch, opts)
+}
+
+// A catch-up swept while its last state page is read gets DisconnectSlow, not no
+// reply at all.
+func TestMapSubscribe_CatchUpTimeout_SweptDuringStateRead(t *testing.T) {
+	t.Parallel()
+	node, err := New(Config{
+		LogLevel:   LogLevelError,
+		LogHandler: func(entry LogEntry) {},
+		Map: MapConfig{GetMapChannelOptions: func(string) MapChannelOptions {
+			return MapChannelOptions{Mode: MapModeEphemeral, KeyTTL: time.Minute, MinPageSize: 1, SubscribeCatchUpTimeout: 20 * time.Millisecond}
+		}},
+	})
+	require.NoError(t, err)
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	node.SetMapBroker(&slowStateMapBroker{MemoryMapBroker: mapBroker, slowChannel: "ch_a", delay: 150 * time.Millisecond})
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+	ctx := context.Background()
+	for _, ch := range []string{"ch_a", "ch_b"} {
+		_, err := mapBroker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte(`{"v":"data"}`)})
+		require.NoError(t, err)
+	}
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			reply := SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}
+			if e.Channel == "ch_a" {
+				go cb(reply, nil)
+				return
+			}
+			cb(reply, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+	transport := client.transport.(*testTransport)
+
+	rwWrapper := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "ch_a",
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   10,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw))
+	time.Sleep(60 * time.Millisecond) // ch_a reads its page, its catch-up expired.
+	// ch_b's subscribe sweeps ch_a.
+	subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: "ch_b",
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   10,
+	})
+	require.Eventually(t, func() bool {
+		transport.mu.Lock()
+		defer transport.mu.Unlock()
+		return transport.closed
+	}, 2*time.Second, 5*time.Millisecond)
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	require.Equal(t, DisconnectSlow.Code, transport.disconnect.Code)
+}
+
+// Swept channels are remembered up to ClientChannelLimit.
+func TestMapSubscribe_CatchUpTimeout_SweptLimit(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	node.config.ClientChannelLimit = 2
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{Mode: MapModeEphemeral, KeyTTL: time.Minute, MinPageSize: 1, SubscribeCatchUpTimeout: time.Nanosecond}
+	}
+	ctx := context.Background()
+	channels := []string{"ch_a", "ch_b", "ch_c", "ch_d"}
+	for _, ch := range channels {
+		for _, key := range []string{"key1", "key2"} {
+			_, err := broker.Publish(ctx, ch, key, MapPublishOptions{Data: []byte(`{"v":"data"}`)})
+			require.NoError(t, err)
+		}
+	}
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Each subscribe sweeps the previous channel's load.
+	for _, ch := range channels {
+		result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+			Channel: ch,
+			Type:    int32(SubscriptionTypeMap),
+			Phase:   MapPhaseState,
+			Limit:   1,
+		})
+		require.NotEmpty(t, result.Cursor)
+	}
+	client.mu.RLock()
+	swept := make([]string, 0)
+	for ch := range client.tracking.mapSubscribeSwept {
+		swept = append(swept, ch)
+	}
+	client.mu.RUnlock()
+	require.ElementsMatch(t, []string{"ch_a", "ch_b"}, swept)
 }
 
 func TestMapSubscribe_CatchUpTimeout_Disabled(t *testing.T) {

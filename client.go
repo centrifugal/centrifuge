@@ -2357,6 +2357,9 @@ type subscribeTracking struct {
 	// SubscribeHandler again for the same channel, and the application could not
 	// tell their UnsubscribeHandler calls apart.
 	mapSubscribePending map[string]struct{}
+	// mapSubscribeSwept holds channels whose catch-up sweepExpiredMapSubscribing
+	// dropped (UnixNano of the sweep), see sweptMapContinuation.
+	mapSubscribeSwept map[string]int64
 	// attemptEnds counts UnsubscribeHandler calls still to come for ended
 	// attempts (see addAttemptEndLocked), in total and per channel.
 	attemptEnds        int

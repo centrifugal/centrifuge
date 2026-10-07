@@ -311,6 +311,12 @@ func (c *Client) handleMapSubscribeCommand(
 	// the client stopped sending requests but stayed connected. The current channel
 	// is skipped — its expiry is checked below with a proper DisconnectStale.
 	c.sweepExpiredMapSubscribing(req.Channel)
+	if c.sweptMapContinuation(req) {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "map subscribe catch-up timeout", map[string]any{
+			"channel": req.Channel, "user": c.user, "client": c.uid,
+		}))
+		return DisconnectSlow
+	}
 
 	// For map subscription continuation requests (pagination or non-state phase with existing state),
 	// bypass the OnSubscribe callback - we already authorized on the first request.
@@ -641,8 +647,17 @@ func (c *Client) handleMapStatePhase(
 	// Check for direct STATE→LIVE transition on last page.
 	if nextCursor == "" {
 		if state == nil {
-			// Disconnect raced with MapStateRead — subscription is being cleaned up.
-			return nil
+			// The reservation was removed during MapStateRead: by close(), or by a
+			// sweep of another channel's subscribe (unsubscribes wait for the
+			// pagination lock). The catch-up timed out then, so the reply is the
+			// one its own request would get.
+			c.mu.RLock()
+			closed := c.status == statusClosed
+			c.mu.RUnlock()
+			if closed {
+				return nil
+			}
+			return DisconnectSlow
 		}
 		positioning := state.options.EnablePositioning || state.options.EnableRecovery
 
@@ -1757,7 +1772,20 @@ func (c *Client) sweepExpiredMapSubscribing(skipChannel string) {
 	// snapshot — guards against a resubscribe that replaced the entry between
 	// the RUnlock and the Lock.
 	removed := expired[:0]
+	now := time.Now().UnixNano()
+	// A client loads at most ClientChannelLimit channels at once, which bounds the
+	// swept channels a well-behaved client needs remembered.
+	sweptLimit := c.node.config.ClientChannelLimit
+	if sweptLimit <= 0 {
+		sweptLimit = defaultMapSubscribeSweptLimit
+	}
 	c.mu.Lock()
+	t := c.trackingLocked()
+	for ch, sweptAt := range t.mapSubscribeSwept {
+		if time.Duration(now-sweptAt) > mapSubscribeSweptTTL {
+			delete(t.mapSubscribeSwept, ch)
+		}
+	}
 	for _, e := range expired {
 		if state, ok := c.mapSubscribing[e.ch]; ok && state == e.state {
 			if state.subscribingCh != nil {
@@ -1766,6 +1794,12 @@ func (c *Client) sweepExpiredMapSubscribing(skipChannel string) {
 			delete(c.mapSubscribing, e.ch)
 			removed = append(removed, e)
 			c.addAttemptEndLocked(e.ch)
+			if len(t.mapSubscribeSwept) < sweptLimit {
+				if t.mapSubscribeSwept == nil {
+					t.mapSubscribeSwept = make(map[string]int64)
+				}
+				t.mapSubscribeSwept[e.ch] = now
+			}
 		}
 	}
 	if len(removed) > 0 {
@@ -1804,6 +1838,40 @@ func (c *Client) cleanupContinuationMapSubscribing(channel string, attempt *mapS
 	if attempt == nil {
 		c.cleanupMapSubscribing(channel)
 	}
+}
+
+// mapSubscribeSweptTTL is how long a channel stays in mapSubscribeSwept when
+// the client sends nothing for it.
+const mapSubscribeSweptTTL = time.Minute
+
+// defaultMapSubscribeSweptLimit bounds mapSubscribeSwept without ClientChannelLimit.
+const defaultMapSubscribeSweptLimit = 128
+
+// sweptMapContinuation reports whether req continues a map catch-up which
+// sweepExpiredMapSubscribing dropped. Such a request finds no reservation, and
+// without this it would get ErrorPermissionDenied, which clients treat as
+// permanent, instead of DisconnectSlow, which a catch-up timeout gets when the
+// channel's own request notices it. Any request for the channel forgets it.
+func (c *Client) sweptMapContinuation(req *protocol.SubscribeRequest) bool {
+	c.mu.RLock()
+	swept := false
+	if c.tracking != nil {
+		_, swept = c.tracking.mapSubscribeSwept[req.Channel]
+	}
+	c.mu.RUnlock()
+	if !swept {
+		return false
+	}
+	c.mu.Lock()
+	delete(c.tracking.mapSubscribeSwept, req.Channel)
+	if len(c.tracking.mapSubscribeSwept) == 0 {
+		c.tracking.mapSubscribeSwept = nil
+	}
+	_, hasState := c.mapSubscribing[req.Channel]
+	c.mu.Unlock()
+	// The requests which need the dropped reservation: a state page with a
+	// cursor, or the stream phase without recovery.
+	return !hasState && (req.Cursor != "" || (req.Phase == MapPhaseStream && !req.Recover))
 }
 
 // cleanupMapSubscribing removes map subscribing state for a channel.
