@@ -1636,13 +1636,12 @@ func (c *Client) Unsubscribe(ch string, unsubscribe ...Unsubscribe) {
 		unsub = unsubscribe[0]
 	}
 
-	err := c.unsubscribe(ch, unsub, nil)
+	err := c.unsubscribeWaiting(ch, unsub, nil, subscribeInProgressTimeout, true)
 	if err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error unsubscribe", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		go c.Disconnect(DisconnectServerError)
 		return
 	}
-	_ = c.sendUnsubscribe(ch, unsub)
 }
 
 func (c *Client) sendUnsubscribe(ch string, unsub Unsubscribe) error {
@@ -1780,7 +1779,7 @@ func (c *Client) close(disconnect Disconnect) error {
 
 	// Unsubscribe from all channels (handles both normal and map subscriptions).
 	for channel := range channels {
-		err := c.unsubscribeWaiting(channel, unsubscribeDisconnect, &disconnect, subscribeWait())
+		err := c.unsubscribeWaiting(channel, unsubscribeDisconnect, &disconnect, subscribeWait(), false)
 		if err != nil {
 			c.node.logger.log(newErrorLogEntry(err, "error unsubscribing client from channel", map[string]any{"channel": channel, "user": user, "client": c.uid, "error": err.Error()}))
 		}
@@ -5540,15 +5539,10 @@ func (c *Client) handleInsufficientStateDisconnect() {
 }
 
 func (c *Client) handleAsyncUnsubscribe(ch string, unsub Unsubscribe) {
-	err := c.unsubscribe(ch, unsub, nil)
+	err := c.unsubscribeWaiting(ch, unsub, nil, subscribeInProgressTimeout, true)
 	if err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error async unsubscribing", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		_ = c.close(DisconnectServerError)
-		return
-	}
-	err = c.sendUnsubscribe(ch, unsub)
-	if err != nil {
-		_ = c.close(DisconnectWriteError)
 		return
 	}
 }
@@ -5824,7 +5818,7 @@ func (c *Client) writeLeave(ch string, leave *protocol.Leave, data []byte, batch
 
 // Lock must not be held.
 func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect *Disconnect) error {
-	return c.unsubscribeWaiting(channel, unsubscribe, disconnect, subscribeInProgressTimeout)
+	return c.unsubscribeWaiting(channel, unsubscribe, disconnect, subscribeInProgressTimeout, false)
 }
 
 // subscribeInProgressTimeout bounds how long an unsubscribe waits for a
@@ -5837,8 +5831,11 @@ const subscribeInProgressTimeout = 5 * time.Second
 const closeSubscribesTimeout = 10 * time.Second
 
 // unsubscribeWaiting is unsubscribe waiting at most maxWaitTimeout for a
-// subscribe to the channel in progress.
-func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, disconnect *Disconnect, maxWaitTimeout time.Duration) error {
+// subscribe to the channel in progress. With push, a server-side unsubscribe
+// also sends the unsubscribe push when it removed something: a new subscribe to
+// the channel waits for it (see addPendingLeaveLocked), so the push can't come
+// after that subscribe's reply.
+func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, disconnect *Disconnect, maxWaitTimeout time.Duration, push bool) error {
 	// A map subscribe of the channel may be in SubscribeHandler, holding no
 	// reservation the unsubscribe could remove yet. Wait for it, like for a
 	// regular subscribe in progress below.
@@ -6048,6 +6045,9 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 				c.addPendingLeaveLocked(channel)
 			}
 		}
+		if push {
+			c.addPendingLeaveLocked(channel)
+		}
 	}
 	c.mu.Unlock()
 
@@ -6081,7 +6081,14 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 		c.cleanupKeyed(channel)
 	}
 
-	if err := c.node.removeSubscription(channel, c, removedSubGen); err != nil {
+	err := c.node.removeSubscription(channel, c, removedSubGen)
+	if push {
+		if err == nil {
+			_ = c.sendUnsubscribe(channel, unsubscribe)
+		}
+		c.finishPendingLeave(channel)
+	}
+	if err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error removing subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		return err
 	}
