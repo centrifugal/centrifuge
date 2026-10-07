@@ -961,7 +961,7 @@ func TestSubscribeAttempt_MapPendingRejectsSharedPoll(t *testing.T) {
 	node := newTestNodeWithSharedPoll(t)
 	client, _ := newAttemptTestClient(t, node, allowSubscribe(SubscribeReply{}))
 	client.mu.Lock()
-	client.trackingLocked().mapSubscribePending = map[string]struct{}{"ch": {}}
+	client.trackingLocked().mapSubscribePending = channelCounts{"ch"}
 	client.mu.Unlock()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: "ch", Type: int32(SubscriptionTypeSharedPoll),
@@ -1631,4 +1631,30 @@ func TestSubscribeAttempt_StuckAttemptEndsDelayOneSubscribe(t *testing.T) {
 	elapsed := time.Since(started)
 	require.GreaterOrEqual(t, elapsed, pendingUnsubscribesSubscribeTimeout)
 	require.Less(t, elapsed, pendingUnsubscribesSubscribeTimeout+2*time.Second)
+}
+
+func TestChannelCounts(t *testing.T) {
+	t.Parallel()
+	var m channelCounts
+	m.add("a")
+	m.add("b")
+	m.add("a")
+	require.True(t, m.has("a"))
+	m.remove("a")
+	require.True(t, m.has("a"))
+	m.remove("a")
+	require.False(t, m.has("a"))
+	m.remove("a") // Not there: no-op.
+	require.Equal(t, channelCounts{"b"}, m)
+	m.remove("b")
+	require.Empty(t, m)
+	require.NotNil(t, m, "small backing array kept")
+
+	for i := 0; i < 2*maxRetainedChannelCounts; i++ {
+		m.add(strconv.Itoa(i))
+	}
+	for i := 0; i < 2*maxRetainedChannelCounts; i++ {
+		m.remove(strconv.Itoa(i))
+	}
+	require.Nil(t, m, "large backing array dropped")
 }

@@ -192,6 +192,7 @@ const (
 // Note: this struct is aligned to consume less memory.
 type ChannelContext struct {
 	subscribingCh            chan struct{}
+	joinGate                 *joinGate
 	info                     []byte
 	streamPosition           StreamPosition
 	expireAt                 int64
@@ -807,6 +808,119 @@ func (c *Client) spawnCloseUnlessClosing(disconnect Disconnect) {
 	go func() { _ = c.close(disconnect) }()
 }
 
+// joinGate orders the unsubscribe's presence removal and leave after the
+// presence add and join which the subscribe does once it is live. Between the
+// commit and those, an unsubscribe can already remove the subscription: the one
+// of them which comes second does the removal and leave, nobody waits. Set for a
+// subscription which adds presence or publishes join after the commit.
+type joinGate struct {
+	mu     sync.Mutex
+	joined bool
+	left   bool
+}
+
+// join is called by the subscribe after its presence add and join (or where it
+// skips them). Reports whether the subscription was unsubscribed meanwhile, so
+// the caller must do the removal and leave.
+func (g *joinGate) join() bool {
+	if g == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.joined = true
+	return g.left
+}
+
+// leave is called by the unsubscribe. Reports whether it does the removal and
+// leave itself, otherwise join does them.
+func (g *joinGate) leave() bool {
+	if g == nil {
+		return true
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.left = true
+	return g.joined
+}
+
+// finishJoin is called by every subscribe path after the subscription went live
+// and its presence and join were done, see joinGate.
+func (c *Client) finishJoin(channel string, chCtx ChannelContext) {
+	if chCtx.joinGate.join() {
+		c.removePresenceAndLeave(channel, chCtx)
+		c.finishPendingLeave(channel)
+	}
+}
+
+// addPendingLeaveLocked registers the presence removal and leave of a removed
+// subscription, done by the unsubscribe or left to the subscribe still
+// publishing the join (see joinGate). Until it is done, a new subscribe to the
+// channel waits (or it would remove the new subscription's presence and publish
+// a leave after its join), and close() waits before DisconnectHandler.
+func (c *Client) addPendingLeaveLocked(channel string) {
+	c.addPendingUnsubscribeLocked()
+	c.trackingLocked().channelLeaves.add(channel)
+}
+
+func (c *Client) finishPendingLeave(channel string) {
+	c.mu.Lock()
+	c.tracking.channelLeaves.remove(channel)
+	c.signalLocked()
+	c.finishPendingUnsubscribeLocked()
+	c.mu.Unlock()
+}
+
+// mustWaitPendingLeaveLocked reports whether a server-side subscribe to the
+// channel must wait for a pending leave, see addPendingLeaveLocked. The
+// deadline is set on first use.
+func (c *Client) mustWaitPendingLeaveLocked(channel string, deadline *time.Time) bool {
+	if c.tracking == nil || !c.tracking.channelLeaves.has(channel) {
+		return false
+	}
+	now := time.Now()
+	if deadline.IsZero() {
+		*deadline = now.Add(pendingUnsubscribesSubscribeTimeout)
+	}
+	return now.Before(*deadline)
+}
+
+// hasPresenceOrLeave reports whether removePresenceAndLeave has something to do
+// for a subscription with these flags.
+func hasPresenceOrLeave(flags uint16) bool {
+	return channelHasFlag(flags, flagEmitPresence|flagEmitJoinLeave|flagMapClientPresence|flagMapUserPresence|flagCleanupOnUnsubscribe)
+}
+
+// removePresenceAndLeave removes the presence of a subscription which ended and
+// publishes its leave.
+func (c *Client) removePresenceAndLeave(channel string, chCtx ChannelContext) {
+	hasMapPresenceOrCleanup := channelHasFlag(chCtx.flags, flagMapClientPresence) ||
+		channelHasFlag(chCtx.flags, flagMapUserPresence) ||
+		channelHasFlag(chCtx.flags, flagCleanupOnUnsubscribe)
+	if hasMapPresenceOrCleanup {
+		err := c.removeMapPresence(channel, chCtx)
+		if err != nil {
+			c.node.logger.log(newErrorLogEntry(err, "error removing channel presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+		}
+	} else if channelHasFlag(chCtx.flags, flagEmitPresence) {
+		err := c.node.removePresence(channel, c.uid, c.user)
+		if err != nil {
+			c.node.logger.log(newErrorLogEntry(err, "error removing channel presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+		}
+	}
+	if channelHasFlag(chCtx.flags, flagEmitJoinLeave) {
+		c.mu.RLock()
+		connInfo := c.info
+		c.mu.RUnlock()
+		_ = c.node.publishLeave(channel, &ClientInfo{
+			ClientID: c.uid,
+			UserID:   c.user,
+			ConnInfo: connInfo,
+			ChanInfo: chCtx.info,
+		})
+	}
+}
+
 // publishJoinAndPresence publishes join notification and sets up map presence
 // for a channel after subscribe. Must be called with non-nil clientInfo.
 func (c *Client) publishJoinAndPresence(channel string, chCtx ChannelContext, clientInfo *ClientInfo) {
@@ -986,13 +1100,21 @@ func (c *Client) updateChannelPresenceItem(item *channelTickItem) {
 // channel, so a tick pays a single RLock instead of one per channel for a race
 // that almost never fires.
 func (c *Client) compensateRacedPresence(snapshot []channelTickItem) {
+	const tickPresenceFlags = flagEmitPresence | flagMapClientPresence
 	var raced bool
 	c.mu.RLock()
 	for i := range snapshot {
 		if !snapshot[i].presenceAdded {
 			continue
 		}
-		if _, ok := c.channels[snapshot[i].channel]; !ok {
+		// Raced unless the subscription the add was for, or a live one with the
+		// same presence, is there: a reservation or a resubscribe without that
+		// presence would never remove the entry.
+		item := snapshot[i].ctx
+		current, ok := c.channels[snapshot[i].channel]
+		if !ok || (current.subGen != item.subGen && (!channelHasFlag(current.flags, flagSubscribed) ||
+			current.flags&tickPresenceFlags != item.flags&tickPresenceFlags ||
+			current.mapClientPresenceChannel != item.mapClientPresenceChannel)) {
 			snapshot[i].raced = true
 			raced = true
 		}
@@ -2347,6 +2469,41 @@ func (c *Client) onSubscribeErrorGen(channel string, expectGen uint64) {
 	}
 }
 
+// channelCounts is a multiset of channel names. A slice rather than a map: it
+// holds a few entries for a short time, and keeping its small backing array
+// when it empties saves allocating on every use.
+type channelCounts []string
+
+// maxRetainedChannelCounts is the capacity an emptied channelCounts keeps.
+const maxRetainedChannelCounts = 4
+
+func (m *channelCounts) add(channel string) {
+	*m = append(*m, channel)
+}
+
+// remove removes one occurrence of the channel.
+func (m *channelCounts) remove(channel string) {
+	s := *m
+	for i := range s {
+		if s[i] != channel {
+			continue
+		}
+		last := len(s) - 1
+		s[i] = s[last]
+		s[last] = ""
+		s = s[:last]
+		if len(s) == 0 && cap(s) > maxRetainedChannelCounts {
+			s = nil
+		}
+		*m = s
+		return
+	}
+}
+
+func (m channelCounts) has(channel string) bool {
+	return slices.Contains(m, channel)
+}
+
 // subscribeTracking holds subscribe state which most connections never need
 // (see Client.tracking). Guarded by c.mu.
 type subscribeTracking struct {
@@ -2356,18 +2513,21 @@ type subscribeTracking struct {
 	// this keeps one subscribe attempt per channel: a second one would call
 	// SubscribeHandler again for the same channel, and the application could not
 	// tell their UnsubscribeHandler calls apart.
-	mapSubscribePending map[string]struct{}
+	mapSubscribePending channelCounts
 	// mapSubscribeSwept holds channels whose catch-up sweepExpiredMapSubscribing
 	// dropped (UnixNano of the sweep), see sweptMapContinuation.
 	mapSubscribeSwept map[string]int64
 	// attemptEnds counts UnsubscribeHandler calls still to come for ended
 	// attempts (see addAttemptEndLocked), in total and per channel.
 	attemptEnds        int
-	channelAttemptEnds map[string]int
+	channelAttemptEnds channelCounts
 	// attemptEndsTimedOut is set when a subscribe gave up waiting for them, until
 	// they are all made: stuck UnsubscribeHandler calls hold up one subscribe,
 	// not each of the client's subscribes in turn.
 	attemptEndsTimedOut bool
+	// channelLeaves counts per channel the presence removals and leaves of
+	// removed subscriptions still to be done, see addPendingLeaveLocked.
+	channelLeaves channelCounts
 	// changed is closed (and reset) by signalLocked, for waitUntil.
 	changed chan struct{}
 }
@@ -2450,22 +2610,16 @@ func (c *Client) addAttemptEndLocked(channel string) {
 	c.addPendingUnsubscribeLocked()
 	t := c.trackingLocked()
 	t.attemptEnds++
-	if t.channelAttemptEnds == nil {
-		t.channelAttemptEnds = make(map[string]int)
-	}
-	t.channelAttemptEnds[channel]++
+	t.channelAttemptEnds.add(channel)
 }
 
 func (c *Client) finishAttemptEnd(channel string) {
 	c.mu.Lock()
 	t := c.tracking
 	t.attemptEnds--
-	if t.channelAttemptEnds[channel]--; t.channelAttemptEnds[channel] == 0 {
-		delete(t.channelAttemptEnds, channel)
-	}
+	t.channelAttemptEnds.remove(channel)
 	if t.attemptEnds == 0 {
 		t.attemptEndsTimedOut = false
-		t.channelAttemptEnds = nil // Don't keep an empty map for the connection lifetime.
 	}
 	c.signalLocked()
 	c.finishPendingUnsubscribeLocked()
@@ -2508,10 +2662,11 @@ func (c *Client) waitPendingUnsubscribes(timeout time.Duration) {
 // deadline means don't wait. Must be called with c.mu held.
 func (c *Client) mustWaitAttemptEndsLocked(channel string, deadline *time.Time) bool {
 	t := c.tracking
-	if t == nil || t.attemptEnds == 0 || t.attemptEndsTimedOut || deadline == nil {
+	if t == nil || deadline == nil {
 		return false
 	}
-	if t.channelAttemptEnds[channel] == 0 && t.attemptEnds < maxPendingAttemptEnds {
+	if !t.channelLeaves.has(channel) && (t.attemptEnds == 0 || t.attemptEndsTimedOut ||
+		(!t.channelAttemptEnds.has(channel) && t.attemptEnds < maxPendingAttemptEnds)) {
 		return false
 	}
 	now := time.Now()
@@ -2525,7 +2680,9 @@ func (c *Client) mustWaitAttemptEndsLocked(channel string, deadline *time.Time) 
 // channel, or the deadline.
 func (c *Client) waitAttemptEnds(channel string, deadline time.Time) {
 	if c.waitUntil(func() bool {
-		return c.tracking.channelAttemptEnds[channel] == 0 && c.tracking.attemptEnds < maxPendingAttemptEnds
+		t := c.tracking
+		return !t.channelLeaves.has(channel) && (t.attemptEndsTimedOut ||
+			(!t.channelAttemptEnds.has(channel) && t.attemptEnds < maxPendingAttemptEnds))
 	}, time.Until(deadline)) {
 		return
 	}
@@ -2533,8 +2690,19 @@ func (c *Client) waitAttemptEnds(channel string, deadline time.Time) {
 	if c.tracking.attemptEnds > 0 {
 		c.tracking.attemptEndsTimedOut = true
 	}
+	leavePending := c.tracking.channelLeaves.has(channel)
 	c.mu.Unlock()
+	if leavePending {
+		c.logLeaveNotFinished(channel)
+		return
+	}
 	c.node.logger.log(newLogEntry(LogLevelWarn, "unsubscribe handler not finished within timeout, calling subscribe handler", map[string]any{"channel": channel, "client": c.uid, "user": c.user, "timeout": pendingUnsubscribesSubscribeTimeout.String()}))
+}
+
+// logLeaveNotFinished logs a subscribe which stopped waiting for the leave of
+// the channel's previous subscription, see addPendingLeaveLocked.
+func (c *Client) logLeaveNotFinished(channel string) {
+	c.node.logger.log(newLogEntry(LogLevelWarn, "leave of previous subscription not finished within timeout, subscribing", map[string]any{"channel": channel, "client": c.uid, "user": c.user, "timeout": pendingUnsubscribesSubscribeTimeout.String()}))
 }
 
 // endSubscribeAttempt calls UnsubscribeHandler for a subscribe attempt allowed
@@ -2574,8 +2742,7 @@ func (c *Client) mapSubscribePendingLocked(channel string) bool {
 	if c.tracking == nil {
 		return false
 	}
-	_, ok := c.tracking.mapSubscribePending[channel]
-	return ok
+	return c.tracking.mapSubscribePending.has(channel)
 }
 
 // numChannelsLocked returns the number of channels counted against
@@ -2760,6 +2927,7 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 				c.publishJoinAndPresence(req.Channel, ctx.channelContext, ctx.clientInfo)
 			}
 		}
+		c.finishJoin(req.Channel, ctx.channelContext)
 	}
 	c.eventHub.subscribeHandler(event, cb)
 	return nil
@@ -4009,6 +4177,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			// Join after Leave on the wire.
 			c.publishJoinAndPresence(channel, subCtx.channelContext, subCtx.clientInfo)
 		}
+		c.finishJoin(channel, subCtx.channelContext)
 	}
 
 	return nil
@@ -4174,7 +4343,15 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	// c.channels write into an inconsistent state. The reservation carries a
 	// subscribingCh (with flags==0, so flagServerSide is not yet set), which the
 	// existing unsubscribe wait-gate uses to synchronize a racing Unsubscribe.
+	var waitDeadline time.Time
 	c.mu.Lock()
+	for c.status != statusClosed && c.mustWaitPendingLeaveLocked(channel, &waitDeadline) {
+		c.mu.Unlock()
+		if !c.waitUntil(func() bool { return !c.tracking.channelLeaves.has(channel) }, time.Until(waitDeadline)) {
+			c.logLeaveNotFinished(channel)
+		}
+		c.mu.Lock()
+	}
 	if c.status == statusClosed {
 		c.mu.Unlock()
 		return nil
@@ -4253,6 +4430,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	if subscribingCh != nil {
 		close(subscribingCh)
 	}
+	defer c.finishJoin(channel, subCtx.channelContext)
 	if writeErr != nil {
 		return writeErr
 	}
@@ -5184,6 +5362,10 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	if reply.Options.EnableRecovery || reply.Options.EnablePositioning {
 		channelContext.positionCheckTime = time.Now().Unix()
 	}
+	if reply.Options.EmitJoinLeave || reply.Options.MapClientPresenceChannel != "" {
+		// Join and map presence are done after the commit.
+		channelContext.joinGate = &joinGate{}
+	}
 
 	if !serverSide {
 		// In case of server-side sub this will be done later by the caller.
@@ -5663,7 +5845,6 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 	c.waitChannelMapSubscribePending(channel, maxWaitTimeout)
 
 	c.mu.RLock()
-	info := c.clientInfo(channel)
 	chCtx, ok := c.channels[channel]
 	subscribingCh := chCtx.subscribingCh
 	// Identity of the subscription this unsubscribe targets. subGen is stable from
@@ -5786,15 +5967,23 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 				removedState = true
 				c.addAttemptEndLocked(channel)
 			}
+			current, committed := c.channels[channel]
 			c.mu.Unlock()
 			if removedState {
 				c.endSubscribeAttempt(channel, &unsubscribe, disconnect)
 			}
-			go func() {
-				_ = c.close(DisconnectServerError)
-			}()
 			c.node.logger.log(newLogEntry(LogLevelInfo, "timeout waiting for keyed subscribe to finish", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-			return nil
+			if disconnect == nil || !committed || current.subGen != targetSubGen {
+				go func() {
+					_ = c.close(DisconnectServerError)
+				}()
+				return nil
+			}
+			// close() waited for a go-live which committed the subscription but
+			// still adds presence or publishes join: nothing would remove the
+			// subscription after close() moves on, so remove it below. Its presence
+			// removal and leave come after the go-live's, see joinGate.
+			chCtx = current
 		}
 	}
 
@@ -5840,12 +6029,24 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 	if removedNow && disconnect == nil && c.perChannelWriter != nil {
 		c.perChannelWriter.delWriter(channel, false)
 	}
+	// Remove presence, run map cleanup and publish leave below, unless the
+	// subscribe still has to add presence and publish join: it does this after
+	// them then, see joinGate.
+	leaveNow := false
 	if removedNow {
 		// For the UnsubscribeHandler call below, or for endSubscribeAttempt.
 		if endedAttempt {
 			c.addAttemptEndLocked(channel)
 		} else {
 			c.addPendingUnsubscribeLocked()
+		}
+		if channelHasFlag(chCtx.flags, flagSubscribed) {
+			leaveNow = chCtx.joinGate.leave()
+			if !leaveNow || hasPresenceOrLeave(chCtx.flags) {
+				// Done here or by the subscribe, a new subscribe to the channel
+				// must not go live before them.
+				c.addPendingLeaveLocked(channel)
+			}
 		}
 	}
 	c.mu.Unlock()
@@ -5868,32 +6069,16 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 		defer c.finishPendingUnsubscribe()
 	}
 
-	// Remove presence and/or run map cleanup on unsubscribe.
-	hasMapPresenceOrCleanup := channelHasFlag(chCtx.flags, flagMapClientPresence) ||
-		channelHasFlag(chCtx.flags, flagMapUserPresence) ||
-		channelHasFlag(chCtx.flags, flagCleanupOnUnsubscribe)
-
-	if channelHasFlag(chCtx.flags, flagSubscribed) {
-		if hasMapPresenceOrCleanup {
-			err := c.removeMapPresence(channel, chCtx)
-			if err != nil {
-				c.node.logger.log(newErrorLogEntry(err, "error removing channel presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-			}
-		} else if channelHasFlag(chCtx.flags, flagEmitPresence) {
-			err := c.node.removePresence(channel, c.uid, c.user)
-			if err != nil {
-				c.node.logger.log(newErrorLogEntry(err, "error removing channel presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-			}
+	if leaveNow {
+		c.removePresenceAndLeave(channel, chCtx)
+		if hasPresenceOrLeave(chCtx.flags) {
+			c.finishPendingLeave(channel)
 		}
 	}
 
 	// Clean up keyed subscription state (shared poll).
 	if channelHasFlag(chCtx.flags, flagKeyed) {
 		c.cleanupKeyed(channel)
-	}
-
-	if channelHasFlag(chCtx.flags, flagEmitJoinLeave) && channelHasFlag(chCtx.flags, flagSubscribed) {
-		_ = c.node.publishLeave(channel, info)
 	}
 
 	if err := c.node.removeSubscription(channel, c, removedSubGen); err != nil {

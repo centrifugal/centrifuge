@@ -166,7 +166,7 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, DisconnectConnectionClosed, started, rw)
 			return
 		}
-		c.channels[channel] = ChannelContext{
+		chCtx := ChannelContext{
 			flags:                    flags,
 			expireAt:                 reply.Options.ExpireAt,
 			info:                     reply.Options.ChannelInfo,
@@ -178,6 +178,11 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 			// subscription (flagSubscribed).
 			subscribeAllowed: true,
 		}
+		if reply.Options.EmitPresence || reply.Options.EmitJoinLeave || reply.Options.MapClientPresenceChannel != "" {
+			// Presence and join are done after the reply below.
+			chCtx.joinGate = &joinGate{}
+		}
+		c.channels[channel] = chCtx
 		if c.keyed == nil {
 			c.keyed = &keyedState{
 				channels:    make(map[string]*keyedChannelDeltaState),
@@ -197,6 +202,9 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 		if gateCh != nil {
 			defer close(gateCh)
 		}
+		// After the presence and join below, or where they are skipped: an
+		// unsubscribe may have left its presence removal and leave to it.
+		defer c.finishJoin(channel, chCtx)
 
 		// Ensure keyed channel state exists.
 		opts, ok := c.node.config.SharedPoll.GetSharedPollChannelOptions(channel)

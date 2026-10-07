@@ -203,21 +203,14 @@ func (a *mapSubscribeAttempt) start(waitDeadline *time.Time) (mustWait bool, err
 	if c.mustWaitAttemptEndsLocked(a.channel, waitDeadline) {
 		return true, nil
 	}
-	t := c.trackingLocked()
-	if t.mapSubscribePending == nil {
-		t.mapSubscribePending = make(map[string]struct{})
-	}
-	t.mapSubscribePending[a.channel] = struct{}{}
+	c.trackingLocked().mapSubscribePending.add(a.channel)
 	return false, nil
 }
 
 // unregisterLocked undoes start, waking waitChannelMapSubscribePending. Called
 // under c.mu.
 func (a *mapSubscribeAttempt) unregisterLocked() {
-	t := a.client.tracking
-	if delete(t.mapSubscribePending, a.channel); len(t.mapSubscribePending) == 0 {
-		t.mapSubscribePending = nil // Don't keep an empty map for the connection lifetime.
-	}
+	a.client.tracking.mapSubscribePending.remove(a.channel)
 	a.client.signalLocked()
 }
 
@@ -1109,6 +1102,10 @@ func (c *Client) handleMapTransitionToLive(
 		mapUserPresenceChannel:   opts.MapUserPresenceChannel,
 		subGen:                   subGen,
 	}
+	if opts.EmitPresence || opts.EmitJoinLeave || opts.MapClientPresenceChannel != "" {
+		// Presence and join are done after the commit.
+		channelContext.joinGate = &joinGate{}
+	}
 
 	// Install channelContext BEFORE writing the reply so that any follow-up
 	// commands from the SDK that arrive between the reply send and StopBuffering
@@ -1151,6 +1148,7 @@ func (c *Client) handleMapTransitionToLive(
 
 	// Add presence and join handling.
 	c.setupMapPresenceAndJoin(channel, opts)
+	c.finishJoin(channel, channelContext)
 
 	return nil
 }
@@ -1939,6 +1937,14 @@ func (c *Client) mapPresenceTTL() time.Duration {
 	return ttl
 }
 
+// presenceContext is the context of map presence writes: not canceled when the
+// client closes. A canceled call can still be applied by the broker after it
+// returned, so after the presence removal which follows it (see joinGate,
+// compensateRacedPresence), and the entry would stay until its TTL.
+func presenceContext(ctx context.Context) context.Context {
+	return context.WithoutCancel(ctx)
+}
+
 // addMapClientPresence adds client presence to the given channel.
 // Key is clientId, stores full ClientInfo.
 func (c *Client) addMapClientPresence(presenceChannel string, info *ClientInfo) error {
@@ -1946,7 +1952,7 @@ func (c *Client) addMapClientPresence(presenceChannel string, info *ClientInfo) 
 	// - Publish JOIN event only if this is a new presence entry
 	// - Refresh TTL without publishing if entry already exists (quick reconnect)
 	// KeyTTL is configured in GetMapChannelOptions for presence channels.
-	_, err := c.node.MapPublish(c.ctx, presenceChannel, c.uid, MapPublishOptions{
+	_, err := c.node.MapPublish(presenceContext(c.ctx), presenceChannel, c.uid, MapPublishOptions{
 		ClientInfo:           info,
 		KeyMode:              KeyModeIfNew,
 		RefreshTTLOnSuppress: true,
@@ -1966,7 +1972,7 @@ func (c *Client) addMapUserPresence(presenceChannel string) error {
 	// - Publish JOIN event only if this is a new user
 	// - Refresh TTL without publishing if user already exists
 	// KeyTTL is configured in GetMapChannelOptions for presence channels.
-	_, err := c.node.MapPublish(c.ctx, presenceChannel, c.user, MapPublishOptions{
+	_, err := c.node.MapPublish(presenceContext(c.ctx), presenceChannel, c.user, MapPublishOptions{
 		KeyMode:              KeyModeIfNew,
 		RefreshTTLOnSuppress: true,
 	})
@@ -1984,7 +1990,7 @@ func (c *Client) updateMapPresence(info *ClientInfo, ctx ChannelContext) error {
 
 	// Update client presence if channel is configured.
 	if ctx.mapClientPresenceChannel != "" {
-		_, err := c.node.MapPublish(c.ctx, ctx.mapClientPresenceChannel, c.uid, MapPublishOptions{
+		_, err := c.node.MapPublish(presenceContext(c.ctx), ctx.mapClientPresenceChannel, c.uid, MapPublishOptions{
 			ClientInfo:           info,
 			KeyMode:              KeyModeIfNew,
 			RefreshTTLOnSuppress: true,
@@ -1997,7 +2003,7 @@ func (c *Client) updateMapPresence(info *ClientInfo, ctx ChannelContext) error {
 	// Update user presence if channel is configured. Skip for anonymous
 	// connections (empty user ID) — user-presence is keyless without a user.
 	if ctx.mapUserPresenceChannel != "" && c.user != "" {
-		_, err := c.node.MapPublish(c.ctx, ctx.mapUserPresenceChannel, c.user, MapPublishOptions{
+		_, err := c.node.MapPublish(presenceContext(c.ctx), ctx.mapUserPresenceChannel, c.user, MapPublishOptions{
 			KeyMode:              KeyModeIfNew,
 			RefreshTTLOnSuppress: true,
 		})
