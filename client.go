@@ -1101,7 +1101,7 @@ func (c *Client) updateChannelPresenceItem(item *channelTickItem) {
 // that almost never fires.
 func (c *Client) compensateRacedPresence(snapshot []channelTickItem) {
 	var raced bool
-	c.mu.RLock()
+	c.mu.Lock()
 	for i := range snapshot {
 		if !snapshot[i].presenceAdded {
 			continue
@@ -1118,16 +1118,19 @@ func (c *Client) compensateRacedPresence(snapshot []channelTickItem) {
 				snapshot[i].raced = true
 				snapshot[i].racedNode, snapshot[i].racedMap = node, mapClient
 				raced = true
+				// A subscribe to the channel waits for the removal.
+				c.addPendingLeaveLocked(snapshot[i].channel)
 			}
 		}
 	}
-	c.mu.RUnlock()
+	c.mu.Unlock()
 	if !raced {
 		return
 	}
 	for i := range snapshot {
 		if snapshot[i].raced {
 			c.removeRacedPresence(snapshot[i].channel, snapshot[i].ctx, snapshot[i].racedNode, snapshot[i].racedMap)
+			c.finishPendingLeave(snapshot[i].channel)
 		}
 	}
 }
@@ -1156,11 +1159,17 @@ func (c *Client) compensateRacedPresenceAfterSubscribe(ch string, item ChannelCo
 	case <-tm.C:
 	}
 	timers.ReleaseTimer(tm)
-	c.mu.RLock()
+	c.mu.Lock()
 	current, ok := c.channels[ch]
-	c.mu.RUnlock()
-	if node, mapClient := tickPresenceToRemove(current, ok, item); node || mapClient {
+	node, mapClient := tickPresenceToRemove(current, ok, item)
+	if node || mapClient {
+		// A subscribe to the channel waits for the removal.
+		c.addPendingLeaveLocked(ch)
+	}
+	c.mu.Unlock()
+	if node || mapClient {
 		c.removeRacedPresence(ch, item, node, mapClient)
+		c.finishPendingLeave(ch)
 	}
 }
 
@@ -1170,9 +1179,8 @@ func (c *Client) compensateRacedPresenceAfterSubscribe(ch string, item ChannelCo
 // removeMapPresence.
 //
 // Removing twice (here and in unsubscribe) is harmless: removal is idempotent.
-// If a fast re-subscribe raced this removal the entry can be dropped while the
-// client is subscribed, but the next presence tick re-adds it, and unsubscribe's
-// own removePresence already has that same race with a re-subscribe today.
+// Callers register the removal with addPendingLeaveLocked, so a resubscribe to
+// the channel can't add presence before it.
 func (c *Client) removeRacedPresence(ch string, chCtx ChannelContext, node, mapClient bool) {
 	if node {
 		if err := c.node.removePresence(ch, c.uid, c.user); err != nil {
@@ -1655,22 +1663,32 @@ func (c *Client) getSendPushReply(data []byte) ([]byte, error) {
 	})
 }
 
-// Unsubscribe allows unsubscribing client from channel.
+// Unsubscribe allows unsubscribing client from channel. Called before
+// ConnectHandler returned (e.g. Node.Unsubscribe of a subscription made on
+// connect, or from inside ConnectHandler), it takes effect right after
+// ConnectHandler returns: so UnsubscribeHandler set in ConnectHandler gets the
+// call, and not while ConnectHandler runs.
 func (c *Client) Unsubscribe(ch string, unsubscribe ...Unsubscribe) {
 	if len(unsubscribe) > 1 {
 		panic("Client.Unsubscribe called with more than 1 unsubscribe argument")
 	}
-	c.mu.RLock()
-	if c.status == statusClosed {
-		c.mu.RUnlock()
-		return
-	}
-	c.mu.RUnlock()
-
 	unsub := unsubscribeServer
 	if len(unsubscribe) > 0 {
 		unsub = unsubscribe[0]
 	}
+
+	c.mu.Lock()
+	switch c.status {
+	case statusClosed:
+		c.mu.Unlock()
+		return
+	case statusConnecting:
+		t := c.trackingLocked()
+		t.unsubscribesAfterConnect = append(t.unsubscribesAfterConnect, pendingUnsubscribe{channel: ch, unsubscribe: unsub})
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
 
 	err := c.unsubscribeWaiting(ch, unsub, nil, subscribeInProgressTimeout, true, 0)
 	if err != nil {
@@ -2265,6 +2283,16 @@ func (c *Client) handleConnect(req *protocol.ConnectRequest, cmd *protocol.Comma
 }
 
 func (c *Client) triggerConnect() {
+	pending := c.connect()
+	// After ConnectHandler, outside connectMu: see Unsubscribe.
+	for _, p := range pending {
+		c.Unsubscribe(p.channel, p.unsubscribe)
+	}
+}
+
+// connect calls ConnectHandler and marks the client connected. It returns the
+// unsubscribes called meanwhile.
+func (c *Client) connect() []pendingUnsubscribe {
 	c.connectMu.Lock()
 	defer c.connectMu.Unlock()
 	// c.status is guarded by c.mu, not connectMu — other code (e.g. Unsubscribe
@@ -2276,14 +2304,20 @@ func (c *Client) triggerConnect() {
 	connecting := c.status == statusConnecting
 	c.mu.RUnlock()
 	if !connecting {
-		return
+		return nil
 	}
 	if c.node.clientEvents.connectHandler != nil {
 		c.node.clientEvents.connectHandler(c)
 	}
 	c.mu.Lock()
 	c.status = statusConnected
+	var pending []pendingUnsubscribe
+	if c.tracking != nil {
+		pending = c.tracking.unsubscribesAfterConnect
+		c.tracking.unsubscribesAfterConnect = nil
+	}
 	c.mu.Unlock()
+	return pending
 }
 
 func (c *Client) scheduleOnConnectTimers() {
@@ -2563,8 +2597,16 @@ type subscribeTracking struct {
 	// channelLeaves counts per channel the presence removals and leaves of
 	// removed subscriptions still to be done, see addPendingLeaveLocked.
 	channelLeaves channelCounts
+	// unsubscribesAfterConnect holds Client.Unsubscribe calls made before
+	// ConnectHandler returned, see Unsubscribe.
+	unsubscribesAfterConnect []pendingUnsubscribe
 	// changed is closed (and reset) by signalLocked, for waitUntil.
 	changed chan struct{}
+}
+
+type pendingUnsubscribe struct {
+	channel     string
+	unsubscribe Unsubscribe
 }
 
 // trackingLocked returns c.tracking, allocating it. Must be called with c.mu held.

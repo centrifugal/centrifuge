@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -318,4 +319,79 @@ func TestStaleUnsubscribe_MapPublishAfterCleanup(t *testing.T) {
 	res, err := broker.ReadState(context.Background(), "cursors", MapReadStateOptions{Limit: 100})
 	require.NoError(t, err)
 	require.Empty(t, res.Publications, "key of the unsubscribed client left behind")
+}
+
+// Node.Unsubscribe of a subscription made on connect while ConnectHandler runs
+// takes effect after ConnectHandler returns: UnsubscribeHandler set in it gets
+// the call.
+func TestUnsubscribeDuringConnectHandler(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			Credentials:   &Credentials{UserID: "u"},
+			Subscriptions: map[string]SubscribeOptions{"ch": {}},
+		}, nil
+	})
+	inConnect := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseConnect := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseConnect() // Before the node shutdown: it waits for ConnectHandler.
+	var connectReturned atomic.Bool
+	unsubscribes := make(chan bool, 2)
+	node.OnConnect(func(client *Client) {
+		close(inConnect)
+		<-release
+		client.OnUnsubscribe(func(UnsubscribeEvent) { unsubscribes <- connectReturned.Load() })
+		connectReturned.Store(true)
+	})
+	client, err := newClient(context.Background(), node, newTestTransport(func() {}))
+	require.NoError(t, err)
+	connected := make(chan struct{})
+	go func() {
+		defer close(connected)
+		connectClientV2(t, client)
+	}()
+	<-inConnect
+	require.NoError(t, node.Unsubscribe("u", "ch"))
+	require.True(t, client.IsSubscribed("ch"), "applied after ConnectHandler")
+	releaseConnect()
+	<-connected
+	require.False(t, client.IsSubscribed("ch"))
+	select {
+	case afterConnect := <-unsubscribes:
+		require.True(t, afterConnect)
+	case <-time.After(time.Second):
+		require.Fail(t, "UnsubscribeHandler not called")
+	}
+	require.Empty(t, unsubscribes)
+}
+
+// Client.Unsubscribe called inside ConnectHandler takes effect after it returns.
+func TestUnsubscribeInsideConnectHandler(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			Credentials:   &Credentials{UserID: "u"},
+			Subscriptions: map[string]SubscribeOptions{"ch": {}},
+		}, nil
+	})
+	unsubscribed := make(chan struct{}, 1)
+	node.OnConnect(func(client *Client) {
+		client.OnUnsubscribe(func(UnsubscribeEvent) { unsubscribed <- struct{}{} })
+		client.Unsubscribe("ch")
+	})
+	client, err := newClient(context.Background(), node, newTestTransport(func() {}))
+	require.NoError(t, err)
+	connectClientV2(t, client)
+	require.False(t, client.IsSubscribed("ch"))
+	select {
+	case <-unsubscribed:
+	case <-time.After(time.Second):
+		require.Fail(t, "UnsubscribeHandler not called")
+	}
 }

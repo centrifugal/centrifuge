@@ -705,3 +705,76 @@ func TestJoinLeaveOrder_PresenceTickDuringResubscribe(t *testing.T) {
 		})
 	}
 }
+
+// holdPresenceManager holds the next AddPresence or RemovePresence, once armed,
+// until released.
+type holdPresenceManager struct {
+	PresenceManager
+	holdAdd, holdRemove atomic.Bool
+	entered             chan string
+	release             chan struct{}
+}
+
+func (p *holdPresenceManager) AddPresence(ch string, uid string, info *ClientInfo) error {
+	if p.holdAdd.CompareAndSwap(true, false) {
+		p.entered <- "add"
+		<-p.release
+	}
+	return p.PresenceManager.AddPresence(ch, uid, info)
+}
+
+func (p *holdPresenceManager) RemovePresence(ch string, uid string, user string) error {
+	if p.holdRemove.CompareAndSwap(true, false) {
+		p.entered <- "remove"
+		<-p.release
+	}
+	return p.PresenceManager.RemovePresence(ch, uid, user)
+}
+
+// A presence tick add which raced an unsubscribe is undone by the tick. A
+// resubscribe to the channel meanwhile waits for that removal, so it does not
+// remove the new subscription's presence.
+func TestJoinLeaveOrder_ResubscribeWaitsForTickPresenceRemoval(t *testing.T) {
+	t.Parallel()
+	node, err := New(Config{LogLevel: LogLevelError, LogHandler: func(LogEntry) {}})
+	require.NoError(t, err)
+	memPresence, err := NewMemoryPresenceManager(node, MemoryPresenceManagerConfig{})
+	require.NoError(t, err)
+	presenceManager := &holdPresenceManager{PresenceManager: memPresence, entered: make(chan string), release: make(chan struct{})}
+	node.SetPresenceManager(presenceManager)
+	node.OnConnect(func(client *Client) {})
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	t.Cleanup(func() { close(presenceManager.release) }) // Releases a held call if the test fails.
+	client := newTestConnectedClientV2(t, node, "u")
+	require.NoError(t, client.Subscribe("ch", WithEmitPresence(true)))
+
+	presenceManager.holdAdd.Store(true)
+	tickDone := make(chan struct{})
+	go func() {
+		defer close(tickDone)
+		client.updatePresence()
+	}()
+	require.Equal(t, "add", <-presenceManager.entered) // The tick's add is in flight.
+	client.Unsubscribe("ch")
+
+	presenceManager.holdRemove.Store(true)
+	presenceManager.release <- struct{}{}
+	require.Equal(t, "remove", <-presenceManager.entered) // The tick undoes its add.
+
+	resubscribed := make(chan error, 1)
+	go func() { resubscribed <- client.Subscribe("ch", WithEmitPresence(true)) }()
+	select {
+	case <-resubscribed:
+		require.Fail(t, "resubscribe did not wait for the tick's presence removal")
+	case <-time.After(100 * time.Millisecond):
+	}
+	presenceManager.release <- struct{}{}
+	<-tickDone
+	require.NoError(t, <-resubscribed)
+
+	presence, err := node.Presence("ch")
+	require.NoError(t, err)
+	require.Contains(t, presence.Presence, client.ID())
+}
