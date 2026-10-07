@@ -127,12 +127,45 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 			flags |= flagMapUserPresence
 		}
 
+		opts, ok := c.node.config.SharedPoll.GetSharedPollChannelOptions(channel)
+		if !ok {
+			// Ends the attempt, unless an unsubscribe removed it first and reported
+			// it.
+			c.onSubscribeErrorGen(channel, subGen)
+			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, ErrorNotAvailable, started, rw)
+			return
+		}
+		if c.node.sharedPollManager != nil {
+			res.Epoch = c.node.sharedPollManager.Epoch(channel, opts.isVersionless())
+		}
+		protoReply, err := c.getSubscribeCommandReply(res)
+		if err != nil {
+			c.onSubscribeErrorGen(channel, subGen)
+			c.logWriteInternalErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, err, "error encoding subscribe", started, rw)
+			return
+		}
+
+		// Write the reply while the reservation still makes an unsubscribe of the
+		// channel wait for this subscribe (as the regular subscribe writes its
+		// reply before its commit): an unsubscribe must not remove the
+		// subscription, or reply, before the subscribe reply. Nothing of the
+		// channel reaches the client before the subscription is installed below.
+		c.mu.RLock()
+		resv, haveResv := c.channels[channel]
+		replied := haveResv && resv.subGen == subGen && c.status != statusClosed
+		c.mu.RUnlock()
+		if replied {
+			c.writeEncodedCommandReply(channel, protocol.FrameTypeSubscribe, cmd, protoReply, rw)
+			c.handleCommandFinished(cmd, protocol.FrameTypeSubscribe, nil, protoReply, started, channel)
+		}
+		c.releaseSubscribeCommandReply(protoReply)
+
 		// Take the reservation's wait-gate channel from the map rather than using
 		// the local captured at reservation time: the unsubscribe wait-gate timeout
 		// path closes it and nils it in the stored context, so closing the local
 		// again would panic. A nil here means that already happened.
 		c.mu.Lock()
-		resv, haveResv := c.channels[channel]
+		resv, haveResv = c.channels[channel]
 		if !haveResv || resv.subGen != subGen {
 			// Reservation lost — a subscribe stalled past the unsubscribe wait-gate
 			// timeout, and the channel may now belong to a fresh subscribe. Installing
@@ -143,7 +176,9 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 			// The attempt was ended by whoever removed the reservation (or by
 			// answerSubscribeCallback, if it was gone already).
 			c.mu.Unlock()
-			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, ErrorInternal, started, rw)
+			if !replied {
+				c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, ErrorInternal, started, rw)
+			}
 			return
 		}
 		gateCh := resv.subscribingCh
@@ -162,8 +197,10 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 			if gateCh != nil {
 				close(gateCh)
 			}
-			// Only completes the command (event, metrics): the transport is closed.
-			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, DisconnectConnectionClosed, started, rw)
+			if !replied {
+				// Only completes the command (event, metrics): the transport is closed.
+				c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, DisconnectConnectionClosed, started, rw)
+			}
 			return
 		}
 		chCtx := ChannelContext{
@@ -173,13 +210,9 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 			mapClientPresenceChannel: reply.Options.MapClientPresenceChannel,
 			mapUserPresenceChannel:   reply.Options.MapUserPresenceChannel,
 			subGen:                   subGen,
-			// Until the subscribe reply below, a failure removing it with
-			// onSubscribeErrorGen ends the attempt. An unsubscribe treats it as a
-			// subscription (flagSubscribed).
-			subscribeAllowed: true,
 		}
 		if reply.Options.EmitPresence || reply.Options.EmitJoinLeave || reply.Options.MapClientPresenceChannel != "" {
-			// Presence and join are done after the reply below.
+			// Presence and join are done after the install below.
 			chCtx.joinGate = &joinGate{}
 		}
 		c.channels[channel] = chCtx
@@ -202,39 +235,11 @@ func (c *Client) handleSharedPollSubscribe(req *protocol.SubscribeRequest, cmd *
 		if gateCh != nil {
 			defer close(gateCh)
 		}
-		// After the presence and join below, or where they are skipped: an
-		// unsubscribe may have left its presence removal and leave to it.
+		// After the presence and join below: an unsubscribe may have left its
+		// presence removal and leave to it.
 		defer c.finishJoin(channel, chCtx)
 
-		// Ensure keyed channel state exists.
-		opts, ok := c.node.config.SharedPoll.GetSharedPollChannelOptions(channel)
-		if !ok {
-			// cleanupKeyed first: the keyed delta state installed above is only
-			// reachable while the channel is in c.channels (unsubscribe returns
-			// early once the entry is gone), so dropping the reservation first
-			// would strand it for the lifetime of the connection.
-			c.cleanupKeyed(channel)
-			// Ends the attempt, unless an unsubscribe removed it first and reported
-			// it.
-			c.onSubscribeErrorGen(channel, subGen)
-			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, ErrorNotAvailable, started, rw)
-			return
-		}
-		if c.node.sharedPollManager != nil {
-			res.Epoch = c.node.sharedPollManager.Epoch(channel, opts.isVersionless())
-		}
-		keyedOpts := opts.toKeyedChannelOptions()
-		c.node.keyedManager.getOrCreateChannel(channel, keyedOpts)
-
-		protoReply, err := c.getSubscribeCommandReply(res)
-		if err != nil {
-			c.logWriteInternalErrorFlush(channel, protocol.FrameTypeSubscribe, cmd, err, "error encoding subscribe", started, rw)
-			return
-		}
-		c.writeEncodedCommandReply(channel, protocol.FrameTypeSubscribe, cmd, protoReply, rw)
-		c.handleCommandFinished(cmd, protocol.FrameTypeSubscribe, nil, protoReply, started, channel)
-		c.releaseSubscribeCommandReply(protoReply)
-
+		c.node.keyedManager.getOrCreateChannel(channel, opts.toKeyedChannelOptions())
 		c.setupMapPresenceAndJoin(channel, reply.Options)
 	})
 	return nil

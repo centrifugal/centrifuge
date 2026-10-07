@@ -1112,9 +1112,13 @@ func (c *Client) compensateRacedPresence(snapshot []channelTickItem) {
 			// A resubscribe in progress, which may have added the same presence
 			// already: decide once it is committed or rolled back.
 			go c.compensateRacedPresenceAfterSubscribe(snapshot[i].channel, snapshot[i].ctx, current.subscribingCh)
-		case !keepsTickPresence(current, ok, snapshot[i].ctx):
-			snapshot[i].raced = true
-			raced = true
+		default:
+			node, mapClient := tickPresenceToRemove(current, ok, snapshot[i].ctx)
+			if node || mapClient {
+				snapshot[i].raced = true
+				snapshot[i].racedNode, snapshot[i].racedMap = node, mapClient
+				raced = true
+			}
 		}
 	}
 	c.mu.RUnlock()
@@ -1123,25 +1127,23 @@ func (c *Client) compensateRacedPresence(snapshot []channelTickItem) {
 	}
 	for i := range snapshot {
 		if snapshot[i].raced {
-			c.removeRacedPresence(snapshot[i].channel, snapshot[i].ctx)
+			c.removeRacedPresence(snapshot[i].channel, snapshot[i].ctx, snapshot[i].racedNode, snapshot[i].racedMap)
 		}
 	}
 }
 
-// keepsTickPresence reports whether the presence a tick added for item is still
-// wanted: the subscription it was added for, or a live one with the same
-// presence, is in c.channels. Otherwise nothing would remove the entry.
-func keepsTickPresence(current ChannelContext, ok bool, item ChannelContext) bool {
-	const tickPresenceFlags = flagEmitPresence | flagMapClientPresence
-	if !ok {
-		return false
+// tickPresenceToRemove reports which presence a tick added for item nothing
+// would remove: none for the subscription it was added for, otherwise each kind
+// the current live subscription (if any) does not have itself. A live
+// resubscribe with the same kind of presence owns that entry now (same key).
+func tickPresenceToRemove(current ChannelContext, ok bool, item ChannelContext) (node, mapClient bool) {
+	if ok && current.subGen == item.subGen {
+		return false, false
 	}
-	if current.subGen == item.subGen {
-		return true
-	}
-	return channelHasFlag(current.flags, flagSubscribed) &&
-		current.flags&tickPresenceFlags == item.flags&tickPresenceFlags &&
-		current.mapClientPresenceChannel == item.mapClientPresenceChannel
+	live := ok && channelHasFlag(current.flags, flagSubscribed)
+	node = channelHasFlag(item.flags, flagEmitPresence) && (!live || !channelHasFlag(current.flags, flagEmitPresence))
+	mapClient = item.mapClientPresenceChannel != "" && (!live || current.mapClientPresenceChannel != item.mapClientPresenceChannel)
+	return node, mapClient
 }
 
 // compensateRacedPresenceAfterSubscribe is compensateRacedPresence for a channel
@@ -1157,8 +1159,8 @@ func (c *Client) compensateRacedPresenceAfterSubscribe(ch string, item ChannelCo
 	c.mu.RLock()
 	current, ok := c.channels[ch]
 	c.mu.RUnlock()
-	if !keepsTickPresence(current, ok, item) {
-		c.removeRacedPresence(ch, item)
+	if node, mapClient := tickPresenceToRemove(current, ok, item); node || mapClient {
+		c.removeRacedPresence(ch, item, node, mapClient)
 	}
 }
 
@@ -1171,14 +1173,14 @@ func (c *Client) compensateRacedPresenceAfterSubscribe(ch string, item ChannelCo
 // If a fast re-subscribe raced this removal the entry can be dropped while the
 // client is subscribed, but the next presence tick re-adds it, and unsubscribe's
 // own removePresence already has that same race with a re-subscribe today.
-func (c *Client) removeRacedPresence(ch string, chCtx ChannelContext) {
-	if channelHasFlag(chCtx.flags, flagEmitPresence) {
+func (c *Client) removeRacedPresence(ch string, chCtx ChannelContext, node, mapClient bool) {
+	if node {
 		if err := c.node.removePresence(ch, c.uid, c.user); err != nil {
 			c.node.logger.log(newErrorLogEntry(err, "error removing raced channel presence", map[string]any{
 				"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		}
 	}
-	if chCtx.mapClientPresenceChannel != "" {
+	if mapClient {
 		if _, err := c.node.MapRemove(context.Background(), chCtx.mapClientPresenceChannel, c.uid, MapRemoveOptions{}); err != nil {
 			c.node.logger.log(newErrorLogEntry(err, "error removing raced map client presence", map[string]any{
 				"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
@@ -1284,6 +1286,8 @@ type channelTickItem struct {
 	// so a racing unsubscribe can be compensated for. See compensateRacedPresence.
 	presenceAdded bool
 	raced         bool
+	racedNode     bool // Raced: remove the channel presence.
+	racedMap      bool // Raced: remove the map client presence.
 	// positionInvalid records the outcome of the stream position check. The check
 	// itself may run concurrently; acting on the result (unsubscribe or
 	// disconnect) is left to the sequential pass.
@@ -4182,10 +4186,6 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	}
 	c.mu.Unlock()
 
-	for _, sc := range reservedSubChs {
-		close(sc)
-	}
-
 	// The connect reply is written, so the publications queued since each
 	// subscription's sync point can follow it. Subscriptions which are rolled back
 	// below drop theirs: their channel may already belong to another subscription.
@@ -4197,6 +4197,12 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		if c.pubSubSync.StopBuffering(subCtx.pubSubBuffer, c.writePendingPublication) {
 			go c.handleInsufficientState(channel, true)
 		}
+	}
+
+	// Only now release unsubscribes waiting for these subscribes: their pushes
+	// must not come before the publications queued since the sync points.
+	for _, sc := range reservedSubChs {
+		close(sc)
 	}
 
 	// Roll back connect-time subscriptions whose reservation was lost: remove the
@@ -4484,16 +4490,21 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	if !committed {
 		return DisconnectServerError
 	}
-	if subscribingCh != nil {
-		close(subscribingCh)
-	}
 	defer c.finishJoin(channel, subCtx.channelContext)
 	if writeErr != nil {
+		if subscribingCh != nil {
+			close(subscribingCh)
+		}
 		return writeErr
 	}
 	// Publications which came since the sync point follow the recovered ones.
 	if c.pubSubSync.StopBuffering(subCtx.pubSubBuffer, c.writePendingPublication) {
 		go c.handleInsufficientState(channel, true)
+	}
+	// Only now release an unsubscribe waiting for this subscribe: its push must
+	// not come before the publications queued since the sync point.
+	if subscribingCh != nil {
+		close(subscribingCh)
 	}
 	if subscribePushDisabled {
 		return nil
