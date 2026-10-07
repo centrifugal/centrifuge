@@ -20,23 +20,19 @@ import (
 // allowed (before invoking the callback, as an application allocating per
 // subscription state would) and what UnsubscribeHandler released.
 type attemptTracker struct {
-	mu           sync.Mutex
-	allowed      map[string]int
-	released     map[string]int
-	overReleased []string
-	outOfOrder   []string
-	// serverUnsubscribing counts server unsubscribes in progress per channel: a
-	// subscribe may go ahead of their UnsubscribeHandler calls (only attempt ends
-	// are ordered before the next SubscribeHandler).
-	serverUnsubscribing map[string]int
-	afterDisconnect     []string
-	disconnects         int
-	async               sync.WaitGroup
-	kinds               map[string]int // Event kinds, to show what a run covered.
+	mu              sync.Mutex
+	allowed         map[string]int
+	released        map[string]int
+	overReleased    []string
+	outOfOrder      []string
+	afterDisconnect []string
+	disconnects     int
+	async           sync.WaitGroup
+	kinds           map[string]int // Event kinds, to show what a run covered.
 }
 
 func newAttemptTracker() *attemptTracker {
-	return &attemptTracker{allowed: map[string]int{}, released: map[string]int{}, kinds: map[string]int{}, serverUnsubscribing: map[string]int{}}
+	return &attemptTracker{allowed: map[string]int{}, released: map[string]int{}, kinds: map[string]int{}}
 }
 
 func (tr *attemptTracker) allow(ch string) {
@@ -66,16 +62,10 @@ func (tr *attemptTracker) onUnsubscribe(e UnsubscribeEvent) {
 	}
 }
 
-// serverUnsubscribe unsubscribes the client server-side, recording it in
-// progress.
+// serverUnsubscribe unsubscribes the client server-side: its UnsubscribeHandler
+// call too comes before the next SubscribeHandler call of the channel.
 func (tr *attemptTracker) serverUnsubscribe(client *Client, ch string) {
-	tr.mu.Lock()
-	tr.serverUnsubscribing[ch]++
-	tr.mu.Unlock()
 	client.Unsubscribe(ch)
-	tr.mu.Lock()
-	tr.serverUnsubscribing[ch]--
-	tr.mu.Unlock()
 }
 
 func (tr *attemptTracker) onDisconnect(DisconnectEvent) {
@@ -88,7 +78,7 @@ func (tr *attemptTracker) onDisconnect(DisconnectEvent) {
 // and sometimes allows with options Centrifuge then refuses.
 func (tr *attemptTracker) onSubscribe(e SubscribeEvent, cb SubscribeCallback) {
 	tr.mu.Lock()
-	if tr.allowed[e.Channel] != tr.released[e.Channel] && tr.serverUnsubscribing[e.Channel] == 0 {
+	if tr.allowed[e.Channel] != tr.released[e.Channel] {
 		// A previous attempt on the channel did not get its UnsubscribeHandler
 		// call yet.
 		tr.outOfOrder = append(tr.outOfOrder, e.Channel)

@@ -6115,8 +6115,12 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 	// them then, see joinGate.
 	leaveNow := false
 	if removedNow {
-		// For the UnsubscribeHandler call below, or for endSubscribeAttempt.
-		if endedAttempt {
+		// For the UnsubscribeHandler call below, or for endSubscribeAttempt. A
+		// server unsubscribe of a live subscription is tracked as an attempt end
+		// too, so the next SubscribeHandler of the channel waits for its
+		// UnsubscribeHandler call (the client may subscribe again as soon as it
+		// gets the push). A client unsubscribe makes that call before its reply.
+		if endedAttempt || push {
 			c.addAttemptEndLocked(channel)
 		} else {
 			c.addPendingUnsubscribeLocked()
@@ -6150,6 +6154,8 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 	}
 	if endedAttempt {
 		c.endSubscribeAttempt(channel, &unsubscribe, disconnect)
+	} else if push {
+		defer c.finishAttemptEnd(channel)
 	} else {
 		defer c.finishPendingUnsubscribe()
 	}

@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -69,4 +70,43 @@ func TestServerUnsubscribePushBeforeResubscribeReply(t *testing.T) {
 	}
 	require.Equal(t, []string{"unsubscribe push", "resubscribe reply"}, frames)
 	require.True(t, client.IsSubscribed("x"))
+}
+
+// The UnsubscribeHandler call for a server unsubscribe of a live subscription
+// comes before the SubscribeHandler call of the client's next subscribe to the
+// channel, which may come as soon as the client gets the unsubscribe push.
+func TestServerUnsubscribeHandlerBeforeNextSubscribeHandler(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	var mu sync.Mutex
+	var events []string
+	record := func(event string) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+	}
+	inHandler := make(chan struct{}, 1)
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			record("subscribe")
+			cb(SubscribeReply{}, nil)
+		})
+		client.OnUnsubscribe(func(e UnsubscribeEvent) {
+			inHandler <- struct{}{}
+			time.Sleep(100 * time.Millisecond)
+			record("unsubscribe")
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "u")
+	subscribeClientV2(t, client, "ch")
+
+	go client.Unsubscribe("ch")
+	<-inHandler
+	subscribeClientV2(t, client, "ch")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{"subscribe", "unsubscribe", "subscribe"}, events)
 }

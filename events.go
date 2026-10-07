@@ -229,12 +229,12 @@ type UnsubscribeEvent struct {
 // (unless it takes more than 5 seconds: a warning is logged then and
 // SubscribeHandler is called; until all such calls of the client are done, its
 // subscribes don't wait for them). Subscribes to other channels don't wait,
-// unless the client has many such calls in progress. This does not apply to
+// unless the client has many such calls in progress. The same holds for the
+// UnsubscribeHandler call of a subscription the server unsubscribes
+// (Client.Unsubscribe, Node.Unsubscribe, expiration, insufficient state); for a
+// client unsubscribe it is made before the reply. This does not apply to
 // server-side subscriptions (Client.Subscribe), which don't call
-// SubscribeHandler, nor to UnsubscribeHandler calls for subscriptions which were
-// live: the one for a server-side unsubscribe running concurrently with the
-// client subscribing to the channel again may come after the new
-// SubscribeHandler call.
+// SubscribeHandler.
 //
 // On disconnect, UnsubscribeHandler calls for the connection's subscriptions
 // and the attempts in progress come before DisconnectHandler: Centrifuge waits
