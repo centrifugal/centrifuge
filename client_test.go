@@ -8788,12 +8788,15 @@ func TestClientRecoveryStreamChangesDuringSubscribe(t *testing.T) {
 
 // The history read of a recovering subscribe knows no epoch yet (a lagging replica),
 // and publications with the real epoch come before the sync point. They are merged,
-// and the client takes the epoch of the stream from the following ones. If they are
-// from two epochs, the stream was reset meanwhile: the subscribe fails.
+// and the client takes their epoch. If they are from two epochs, the stream was reset
+// meanwhile: the subscribe fails. If the stream is reset after the subscribe, the
+// publications of the new epoch lead to insufficient state: they are not dropped as
+// ones the client has.
 func TestClientRecoveryEmptyEpochRead(t *testing.T) {
 	for _, mode := range []string{"client_side", "connect"} {
-		for _, mixed := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s_mixed_%v", mode, mixed), func(t *testing.T) {
+		for _, variant := range []string{"one_epoch", "mixed", "reset_after"} {
+			mixed := variant == "mixed"
+			t.Run(mode+"_"+variant, func(t *testing.T) {
 				ch := "empty_epoch_read"
 				node, err := New(Config{LogLevel: LogLevelTrace, LogHandler: func(entry LogEntry) {}})
 				require.NoError(t, err)
@@ -8870,6 +8873,30 @@ func TestClientRecoveryEmptyEpochRead(t *testing.T) {
 					}
 				}
 				require.True(t, readDone.Load())
+
+				if variant == "reset_after" {
+					// The stream is reset: the first publication of the new epoch
+					// has the offset the client already is at.
+					sp := StreamPosition{Offset: 1, Epoch: "reset"}
+					pub := &Publication{Offset: 1, Data: []byte(`{"n":"reset"}`)}
+					require.NoError(t, node.hub.broadcastPublication(ch, sp, pub, nil, nil, ChannelBatchConfig{}))
+					if mode == "connect" {
+						select {
+						case <-transport.closeCh:
+							require.Equal(t, DisconnectInsufficientState.Code, transport.disconnect.Code)
+						case <-time.After(5 * time.Second):
+							require.Fail(t, "client not disconnected")
+						}
+					} else {
+						select {
+						case code := <-unsubscribed:
+							require.Equal(t, UnsubscribeCodeInsufficient, code)
+						case <-time.After(5 * time.Second):
+							require.Fail(t, "client not resubscribed")
+						}
+					}
+					return
+				}
 
 				var epoch string
 				for i := 0; i < 2; i++ {

@@ -5357,6 +5357,12 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			ctx.disconnect = &DisconnectInsufficientState
 			return ctx
 		}
+		if latestEpoch == "" && len(bufferedPubs) > 0 {
+			// The read knew no epoch (a lagging replica): the merged publications
+			// move the position into theirs.
+			latestEpoch = c.pubSubSync.CollectedEpoch(pubSubBuf)
+			res.Epoch = latestEpoch
+		}
 		if reply.Options.RecoveryMode == RecoveryModeCache && len(recoveredPubs) > 1 && req.Delta == "" {
 			// In RecoveryModeCache case client is only interested in last message. So if delta encoding is
 			// not used then we can only send the last publication.

@@ -258,6 +258,18 @@ func (s *PubSubSync[T]) ReadBuffered(b *Buffer[T], epoch string, offset uint64) 
 	return pubs, ok
 }
 
+// CollectedEpoch returns the epoch of the publications ReadBuffered returned. A
+// subscriber whose read knew no epoch (a lagging replica) takes it for its
+// position when it merged them: its offset is in that epoch then.
+func (s *PubSubSync[T]) CollectedEpoch(b *Buffer[T]) string {
+	if b == nil {
+		return ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.epoch
+}
+
 // StopBuffering writes the items queued in phase 2 with write, in order, and lets
 // the following publications through. It must be called after the subscription is
 // committed and its result is written. It returns true if the queue overflowed:

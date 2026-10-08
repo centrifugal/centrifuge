@@ -991,6 +991,11 @@ func (c *Client) handleMapTransitionToLive(
 			rollback(true)
 			return &DisconnectInsufficientState
 		}
+		if streamPos.Epoch == "" && len(bufferedPubs) > 0 {
+			// The read knew no epoch (a lagging replica): the merged publications
+			// move the position into theirs.
+			streamPos.Epoch = c.pubSubSync.CollectedEpoch(pubSubBuf)
+		}
 
 		// Update offset if we saw higher.
 		latestOffset = streamPos.Offset
