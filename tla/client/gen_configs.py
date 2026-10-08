@@ -11,12 +11,18 @@ BASE = dict(
     ConnectSub='FALSE', Positioned='TRUE', Lossy='FALSE', JoinLeave='FALSE',
     CloseAllowed='TRUE', Timeouts='FALSE', DoubleInvoke='FALSE',
     Answers='{"allow", "deny", "refuse", "closedErr"}',
+    MaxDisconnects=0, SlowWrite='FALSE', StaleTimer='FALSE', RefreshMode='"none"',
+    MaxRefreshes=0, MaxExtends=0, RefreshAnswers='{}', MaxTicks=0, SubExpiry='"none"',
+    MaxSubRefreshes=0, MaxEpochs=1, LaggingReplica='FALSE', HistorySize=0, BufferLimit=0,
     Bugs='{}')
 
 SAFETY = ['TypeOK', 'AtMostOneUnsubscribeHandler', 'UnsubscribeBeforeNextSubscribe',
           'NothingAfterDisconnectHandler', 'NoUnsubscribeHandlerDuringConnectHandler',
           'LeaveAfterJoin', 'JoinAfterPreviousLeave', 'NoPublicationOutsideSubscription', 'ContiguousOffsets',
-          'NoUnsubscribePushAfterLaterResult', 'ConsistentAtQuiescence', 'CleanAfterClose']
+          'NoUnsubscribePushAfterLaterResult', 'ConsistentAtQuiescence', 'CleanAfterClose',
+          'DisconnectHandlerOnce', 'DisconnectFrameOfWinner', 'NothingAfterDisconnectFrame',
+          'NoExpireTimerOnClosedClient', 'NoRefreshOrExpiryOfOtherSubscription',
+          'NoPublicationOfAnotherEpochDropped']
 # With Timeouts the documented 5s/30s exceptions apply: a SubscribeHandler may
 # come before the UnsubscribeHandler of an earlier attempt, a resubscribe may stop
 # waiting for the previous subscription's leave and unsubscribe push, calls may
@@ -53,6 +59,7 @@ def bugs(*names):
     return '{' + ', '.join('"%s"' % n for n in names) + '}'
 
 
+
 # Main configurations: the current code. Each must pass.
 w('MC_small.cfg', MaxPubs=1, MaxOffsetless=1)
 w('MC_double_invoke.cfg', MaxPubs=0, DoubleInvoke='TRUE')
@@ -71,6 +78,37 @@ w('MC_liveness_close.cfg', inv=[], spec='SpecAnswering', view=False, MaxCmds=2, 
   MaxIns=0, Answers='{"allow", "deny", "refuse"}',
   props=['AllowedAttemptReleased', 'SubscribeCommandReplied'])
 
+# Connection lifecycle: concurrent closes (transport, Client.Disconnect, slow
+# queue, expiry, stale timer), disconnects during connect and ConnectHandler,
+# expiry and refresh.
+CONN = dict(ClientChans='{}', ServerChans='{"c1"}', MaxCmds=0, ConnectSub='TRUE', MaxPubs=0,
+            MaxServerUnsubs=0, MaxIns=0, MaxDisconnects=1, SlowWrite='TRUE', StaleTimer='TRUE',
+            RefreshAnswers='{"extend", "expired", "error"}', MaxRefreshes=1, MaxExtends=1)
+w('MC_connection.cfg', RefreshMode='"server"', **dict(CONN, MaxExtends=0))
+w('MC_connection_client_refresh.cfg', RefreshMode='"client"', **CONN)
+w('MC_connection_large.cfg', RefreshMode='"server"', **dict(CONN, MaxPubs=1))
+w('MC_liveness_expiry.cfg', inv=[], spec='SpecAnswering', view=False,
+  props=['ExpiredConnectionClosed', 'AllowedAttemptReleased'], RefreshMode='"server"',
+  **dict(CONN, MaxDisconnects=0, SlowWrite='FALSE', CloseAllowed='FALSE', MaxExtends=2))
+
+# Presence ticks racing unsubscribes and resubscribes; subscription expiry and
+# refresh (subGen identity).
+TICK = dict(JoinLeave='TRUE', MaxTicks=2, MaxPubs=0)
+w('MC_presence_tick.cfg', **TICK)
+SUBEXP = dict(MaxPubs=0, MaxIns=0, Answers='{"allow", "deny"}')
+w('MC_sub_expiry_server.cfg', SubExpiry='"server"', MaxTicks=2, **SUBEXP)
+w('MC_sub_expiry_client.cfg', SubExpiry='"client"', MaxTicks=1, MaxSubRefreshes=1, **SUBEXP)
+
+# Recovery details: epoch change during subscribe, unrecoverable position,
+# buffer overflow (ClientQueueMaxSize), empty-epoch read from a lagging replica.
+REC = dict(MaxEpochs=2, MaxPubs=2, MaxServerUnsubs=0, MaxIns=1, CloseAllowed='FALSE')
+w('MC_recovery_epoch.cfg', **REC)
+w('MC_recovery_lagging_replica.cfg', LaggingReplica='TRUE', **REC)
+w('MC_recovery_history_overflow.cfg', HistorySize=1, BufferLimit=1, **dict(REC, MaxEpochs=1))
+
+w('bug_empty_epoch_kept_after_merge.cfg', Bugs=bugs('EmptyEpochKeptAfterMerge'),
+  LaggingReplica='TRUE', **REC)
+
 # Bug variants: old behaviours, each must fail.
 w('bug_push_after_handler.cfg', Bugs=bugs('PushAfterHandler'))
 w('bug_push_after_handler_wire.cfg', Bugs=bugs('PushAfterHandler'),
@@ -80,6 +118,18 @@ w('bug_push_after_handler_wire.cfg', Bugs=bugs('PushAfterHandler'),
 # also written outside c.mu (the old code had both).
 w('bug_server_sub_early_release.cfg', Bugs=bugs('ServerSubEarlyRelease', 'PendingWriteUnlocked'),
   MaxServerSubs=1, UnsubWhileSubscribing='TRUE', **SERVER)
+# The disconnect push enqueued before the writer is closed: frames after it.
+w('bug_disconnect_push_not_last.cfg', Bugs=bugs('DisconnectPushNotLast'), RefreshMode='"none"',
+  **dict(CONN, MaxRefreshes=0, MaxExtends=0, RefreshAnswers='{}'))
+SMALLBUG = dict(MaxServerUnsubs=0, MaxIns=0, CloseAllowed='FALSE', Answers='{"allow"}')
+w('bug_cras_single_wait.cfg', Bugs=bugs('CrasSingleWait'), **TICK)
+w('bug_tick_remove_no_pending_leave.cfg', Bugs=bugs('TickRemoveNoPendingLeave'), **dict(TICK, **SMALLBUG))
+w('bug_tick_remove_ignores_subscription.cfg', Bugs=bugs('TickRemoveIgnoresSubscription'),
+  **dict(TICK, **SMALLBUG))
+w('bug_sub_refresh_no_gen_check.cfg', Bugs=bugs('SubRefreshNoGenCheck'), SubExpiry='"server"',
+  MaxTicks=2, MaxPubs=0, **SMALLBUG)
+w('bug_async_unsubscribe_any_gen.cfg', Bugs=bugs('AsyncUnsubscribeAnyGen'), SubExpiry='"client"',
+  MaxTicks=1, MaxPubs=0, **SMALLBUG)
 w('bug_no_attempt_end_call.cfg', Bugs=bugs('NoAttemptEndCall'))
 # Liveness has teeth: without attempt-end calls an allowed attempt is never released.
 w('bug_no_attempt_end_call_liveness.cfg', inv=[], spec='SpecAnswering', view=False, MaxCmds=2,

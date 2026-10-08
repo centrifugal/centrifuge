@@ -4,7 +4,7 @@ Formal models of parts of Centrifuge, checked with the TLC model checker.
 
 | Spec | What |
 |---|---|
-| [`client`](client/README.md) | the client subscription protocol: subscribe/unsubscribe of a connection, handler calls, frames on the connection, recovery buffer, presence and join/leave |
+| [`client`](client/README.md) | a client connection: connect, close, expiry and refresh; subscribe/unsubscribe, handler calls, frames on the connection, recovery and its buffer, presence ticks, join/leave, subscription expiry |
 
 ## Running
 

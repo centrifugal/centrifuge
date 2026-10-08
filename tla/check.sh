@@ -7,9 +7,9 @@
 #   sh tla/check.sh client MC_small bug_no_join_gate
 #
 # `make tla` runs it (make tla SPEC=client CONFIGS="..."). Each MC_* config must
-# pass, each bug_* config must fail with a property violation (TLC exit code 12
-# or 13). Prints the time and result of each config and exits non-zero on any
-# unexpected result. Uses the same environment as run.sh (JAVA, TLA2TOOLS,
+# pass, each bug_* config (an old behaviour) must fail with a property violation
+# (TLC exit code 12 or 13). Prints the time and result of each config and exits
+# non-zero on any unexpected result. Uses the same environment as run.sh (JAVA, TLA2TOOLS,
 # TLC_WORKERS). The default set of a spec is DEFAULT_CONFIGS in its spec.conf.
 set -u
 TLA_DIR=$(cd "$(dirname "$0")" && pwd)
