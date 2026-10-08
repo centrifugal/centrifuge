@@ -8624,8 +8624,14 @@ func TestClientRecoveryStreamChangesDuringSubscribe(t *testing.T) {
 		mode  string // "client_side", "connect" or "map".
 		when  string // "before_sync_point" or "after_sync_point".
 		lag   bool   // The publication is lagging instead of being from another epoch.
+		gap   bool   // The publication follows a lost one instead of being from another epoch.
 		fails bool   // The subscribe itself fails.
 	}{
+		// The client recovers from the top of the stream, PUB/SUB loses the next
+		// publication and delivers the one after it before the sync point.
+		{name: "gap_before_sync_point_client_side", mode: "client_side", when: "before_sync_point", gap: true, fails: true},
+		{name: "gap_before_sync_point_connect", mode: "connect", when: "before_sync_point", gap: true, fails: true},
+		{name: "gap_before_sync_point_map", mode: "map", when: "before_sync_point", gap: true, fails: true},
 		{name: "epoch_before_sync_point_client_side", mode: "client_side", when: "before_sync_point", fails: true},
 		{name: "epoch_before_sync_point_connect", mode: "connect", when: "before_sync_point", fails: true},
 		{name: "epoch_before_sync_point_map", mode: "map", when: "before_sync_point", fails: true},
@@ -8658,6 +8664,10 @@ func TestClientRecoveryStreamChangesDuringSubscribe(t *testing.T) {
 				if tt.lag {
 					sp.Epoch = top.Epoch
 					pub.Time = time.Now().Add(-time.Minute).UnixMilli()
+				}
+				if tt.gap {
+					pub.Offset = top.Offset + 2
+					sp = StreamPosition{Offset: top.Offset + 2, Epoch: top.Epoch}
 				}
 				require.NoError(t, node.hub.broadcastPublication(ch, sp, pub, nil, nil, ChannelBatchConfig{}))
 			}
@@ -8729,6 +8739,9 @@ func TestClientRecoveryStreamChangesDuringSubscribe(t *testing.T) {
 			transport.sink = sink
 			client := newTestClientCustomTransport(t, context.Background(), node, transport, "42")
 			req := &protocol.SubscribeRequest{Channel: ch, Recover: true, Offset: top.Offset - 1, Epoch: top.Epoch}
+			if tt.gap {
+				req.Offset = top.Offset
+			}
 			switch tt.mode {
 			case "connect":
 				err = client.connectCmd(&protocol.ConnectRequest{Subs: map[string]*protocol.SubscribeRequest{ch: req}},

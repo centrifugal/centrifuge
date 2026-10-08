@@ -986,7 +986,7 @@ func (c *Client) handleMapTransitionToLive(
 		// Merge recovered and buffered publications.
 		var maxSeenOffset uint64
 		var okMerge bool
-		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
+		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs, streamPos.Epoch, streamPos.Offset)
 		if !okMerge {
 			rollback(true)
 			return &DisconnectInsufficientState

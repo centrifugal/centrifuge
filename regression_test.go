@@ -1665,7 +1665,7 @@ func TestBroadcastFiltered_MultipleKeys_NoNilBufferedPub(t *testing.T) {
 		for _, p := range buffered {
 			require.NotNil(t, p, "filtered broadcast buffered a nil publication (missing filteredPub marker)")
 		}
-		_, _, ok := recovery.MergePublications(nil, buffered)
+		_, _, ok := recovery.MergePublications(nil, buffered, "", 0)
 		require.True(t, ok)
 		c.pubSubSync.StopBuffering(bufs[c], c.writePendingPublication)
 	}

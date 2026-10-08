@@ -5349,7 +5349,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			return ctx
 		}
 		var okMerge bool
-		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
+		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs, latestEpoch, latestOffset)
 		if !okMerge {
 			c.pubSubSync.CancelBuffering(pubSubBuf)
 			ctx.disconnect = &DisconnectInsufficientState
@@ -5681,45 +5681,51 @@ func (c *Client) writePublicationUpdatePosition(
 	batchConfig ChannelBatchConfig,
 ) error {
 	c.mu.Lock()
+	data, ok := c.publicationDataUpdatePositionLocked(ch, pub, prep, sp, maxLagExceeded)
+	c.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	if c.node.logEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
+	}
+	return c.writeEncodedPushData(data, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+}
+
+// publicationDataUpdatePositionLocked checks a publication with offset against
+// the subscription to ch and advances its position. It returns the data to write
+// to the client, ok is false if nothing must be written. c.mu must be held.
+func (c *Client) publicationDataUpdatePositionLocked(
+	ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool,
+) ([]byte, bool) {
 	channelContext, ok := c.channels[ch]
 	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
-		c.mu.Unlock()
-		return nil
+		return nil, false
 	}
 	deltaAllowed := channelHasFlag(channelContext.flags, flagDeltaAllowed)
 	if !channelHasFlag(channelContext.flags, flagPositioning) {
 		// Publication with Offset, but client does not use positioning.
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
-			c.mu.Unlock()
-			return nil
+			return nil, false
 		}
-		c.mu.Unlock()
 		if pub.Offset == math.MaxUint64 {
 			// This is a special pub to trigger insufficient state. Noop in non-positioning case.
-			return nil
+			return nil, false
 		}
 
 		// For non-positioning case, if publication should be filtered, skip it
 		if prep.wasFiltered && !prep.deltaSub {
-			return nil
+			return nil, false
 		}
 
 		if prep.deltaSub {
 			if deltaAllowed {
-				return c.writeEncodedPushData(prep.localDeltaData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+				return prep.localDeltaData, true
 			}
-			c.mu.Lock()
-			if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
-				chCtx.flags |= flagDeltaAllowed
-				c.channels[ch] = chCtx
-			}
-			c.mu.Unlock()
+			channelContext.flags |= flagDeltaAllowed
+			c.channels[ch] = channelContext
 		}
-
-		if c.node.logEnabled(LogLevelTrace) {
-			c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
-		}
-		return c.writeEncodedPushData(prep.fullData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+		return prep.fullData, true
 	}
 	serverSide := channelHasFlag(channelContext.flags, flagServerSide)
 	currentPositionOffset := channelContext.streamPosition.Offset
@@ -5737,8 +5743,7 @@ func (c *Client) writePublicationUpdatePosition(
 		}
 		// Tell client about insufficient state, can reconnect/resubscribe to recover the state.
 		go func() { c.handleInsufficientState(ch, serverSide) }()
-		c.mu.Unlock()
-		return nil
+		return nil, false
 	}
 	if pubEpoch != channelContext.streamPosition.Epoch {
 		if channelContext.streamPosition.Epoch == "" {
@@ -5756,8 +5761,7 @@ func (c *Client) writePublicationUpdatePosition(
 				c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state (epoch)", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "epoch": pubEpoch, "expectedEpoch": channelContext.streamPosition.Epoch}))
 			}
 			go func() { c.handleInsufficientState(ch, serverSide) }()
-			c.mu.Unlock()
-			return nil
+			return nil, false
 		}
 	}
 	if pubOffset > nextExpectedOffset {
@@ -5771,45 +5775,33 @@ func (c *Client) writePublicationUpdatePosition(
 		}
 		// Tell client about insufficient state, can reconnect/resubscribe to recover the state.
 		go func() { c.handleInsufficientState(ch, serverSide) }()
-		c.mu.Unlock()
-		return nil
+		return nil, false
 	} else if pubOffset < nextExpectedOffset {
 		// Epoch is correct, but due to the lag in PUB/SUB processing we received non-actual update
 		// here. Safe to just skip for the subscriber.
-		c.mu.Unlock()
-		return nil
+		return nil, false
 	}
 	channelContext.positionCheckTime = time.Now().Unix()
 	channelContext.streamPosition.Offset = pub.Offset
-	c.channels[ch] = channelContext
-	c.mu.Unlock()
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
-		return nil
+		c.channels[ch] = channelContext
+		return nil, false
 	}
 
 	// If publication should be filtered, skip sending it but keep the offset updated
 	if prep.wasFiltered && !prep.deltaSub {
-		return nil
+		c.channels[ch] = channelContext
+		return nil, false
 	}
 	if prep.deltaSub {
 		if deltaAllowed {
-			if c.node.logEnabled(LogLevelTrace) {
-				c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
-			}
-			return c.writeEncodedPushData(prep.brokerDeltaData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+			c.channels[ch] = channelContext
+			return prep.brokerDeltaData, true
 		}
-		c.mu.Lock()
-		if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
-			chCtx.flags |= flagDeltaAllowed
-			c.channels[ch] = chCtx
-		}
-		c.mu.Unlock()
+		channelContext.flags |= flagDeltaAllowed
 	}
-
-	if c.node.logEnabled(LogLevelTrace) {
-		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
-	}
-	return c.writeEncodedPushData(prep.fullData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+	c.channels[ch] = channelContext
+	return prep.fullData, true
 }
 
 func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition, batchConfig ChannelBatchConfig) error {
@@ -5899,8 +5891,22 @@ type pendingPublication struct {
 	batchConfig    ChannelBatchConfig
 }
 
+// writePendingPublication checks and writes a queued publication under c.mu. The
+// subscription is committed already, so an unsubscribe of it does not wait for
+// StopBuffering: it removes the subscription under c.mu and then writes its reply
+// or push. The publication is written either before that or not at all, never
+// after the unsubscribe or, as a duplicate, after the result of a resubscribe.
+// Broadcasts get the same order from the hub shard lock.
 func (c *Client) writePendingPublication(q pendingPublication) {
-	_ = c.writePublicationUpdatePosition(q.channel, q.pub, q.prep, q.sp, q.maxLagExceeded, q.batchConfig)
+	c.mu.Lock()
+	data, ok := c.publicationDataUpdatePositionLocked(q.channel, q.pub, q.prep, q.sp, q.maxLagExceeded)
+	if ok {
+		_ = c.writeEncodedPushData(data, q.channel, q.pub.Key, protocol.FrameTypePushPublication, q.batchConfig)
+	}
+	c.mu.Unlock()
+	if ok && c.node.logEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: q.channel, Pub: q.pub})
+	}
 }
 
 func (c *Client) writeJoin(ch string, join *protocol.Join, data []byte, batchConfig ChannelBatchConfig) error {
@@ -6046,6 +6052,8 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 			// after ours was removed, its generation differs and we must not adopt
 			// it as our target and tear it down.
 			if !ok {
+				// Another unsubscribe removed it meanwhile.
+				c.waitOtherUnsubscribe(channel, unsubscribe, disconnect, maxWaitTimeout)
 				return nil
 			}
 		case <-tm.C:

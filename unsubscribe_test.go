@@ -2,6 +2,8 @@ package centrifuge
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -500,4 +502,152 @@ func TestUnsubscribeInsideConnectHandler(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "UnsubscribeHandler not called")
 	}
+}
+
+// pendingWriteTestClient is a connected client whose subscribe to a channel
+// with testChannelRecoveryOrderingPrefix gets a publication queued at its sync
+// point. onPendingWrite runs on the trace log of that publication's write, from
+// StopBuffering, before the subscribe returns. Frames written to the client are
+// collected as labels.
+type pendingWriteTestClient struct {
+	client *Client
+	mu     sync.Mutex
+	frames []string
+}
+
+func newPendingWriteTestClient(t *testing.T, channel string, presenceManager *holdRemovePresenceManager, onPendingWrite func()) *pendingWriteTestClient {
+	setIsInTest(t)
+	testSyncPointDelay.Store(int64(time.Millisecond))
+	t.Cleanup(func() { testSyncPointDelay.Store(0) })
+	var once sync.Once
+	node, err := New(Config{
+		LogLevel: LogLevelTrace,
+		LogHandler: func(entry LogEntry) {
+			if entry.Message != "-out->" {
+				return
+			}
+			if push, _ := entry.Fields["push"].(string); strings.Contains(push, `"pub"`) {
+				once.Do(onPendingWrite)
+			}
+		},
+	})
+	require.NoError(t, err)
+	if presenceManager != nil {
+		presenceManager.PresenceManager = node.presenceManager
+		node.SetPresenceManager(presenceManager)
+	}
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true, EmitPresence: presenceManager != nil}}, nil)
+		})
+	})
+	setTestAtSyncPoint(t, func(ch string) {
+		if ch != channel {
+			return
+		}
+		_, err := node.Publish(channel, []byte(`{}`), WithHistory(10, time.Minute))
+		require.NoError(t, err)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	transport := newTestTransport(cancel)
+	transport.sink = make(chan []byte, 100)
+	transport.setProtocolType(ProtocolTypeJSON)
+	transport.setProtocolVersion(ProtocolVersion2)
+	client, err := newClient(SetCredentials(ctx, &Credentials{UserID: "u"}), node, transport)
+	require.NoError(t, err)
+	tc := &pendingWriteTestClient{client: client}
+	go func() {
+		for data := range transport.sink {
+			decoder := protocol.NewJSONReplyDecoder(data)
+			for {
+				reply, err := decoder.Decode()
+				if err != nil {
+					break
+				}
+				var label string
+				switch {
+				case reply.Id == 2 && reply.Subscribe != nil:
+					label = "subscribe reply"
+				case reply.Id == 3:
+					label = "unsubscribe reply"
+				case reply.Push != nil && reply.Push.Pub != nil:
+					label = "publication"
+				case reply.Push != nil && reply.Push.Unsubscribe != nil:
+					label = "unsubscribe push"
+				default:
+					continue
+				}
+				tc.mu.Lock()
+				tc.frames = append(tc.frames, label)
+				tc.mu.Unlock()
+			}
+		}
+	}()
+	require.True(t, client.HandleCommand(&protocol.Command{Id: 1, Connect: &protocol.ConnectRequest{}}, 0))
+	return tc
+}
+
+func (tc *pendingWriteTestClient) has(label string) bool {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	return slices.Contains(tc.frames, label)
+}
+
+func (tc *pendingWriteTestClient) requireFrames(t *testing.T, expected ...string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		tc.mu.Lock()
+		defer tc.mu.Unlock()
+		return len(tc.frames) >= len(expected)
+	}, 2*time.Second, time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	require.Equal(t, expected, tc.frames)
+}
+
+// A publication queued while the client subscribed is written before the reply
+// to an unsubscribe which comes once the subscription is committed, or not at all.
+func TestPendingPublicationNotAfterUnsubscribeReply(t *testing.T) {
+	channel := testChannelRecoveryOrderingPrefix + "_pending_unsubscribe"
+	var tc *pendingWriteTestClient
+	tc = newPendingWriteTestClient(t, channel, nil, func() {
+		go tc.client.HandleCommand(&protocol.Command{Id: 3, Unsubscribe: &protocol.UnsubscribeRequest{Channel: channel}}, 0)
+		// Old versions logged before the write: the unsubscribe replied meanwhile.
+		require.Eventually(t, func() bool { return tc.has("unsubscribe reply") }, 200*time.Millisecond, time.Millisecond)
+	})
+	require.True(t, tc.client.HandleCommand(&protocol.Command{Id: 2, Subscribe: &protocol.SubscribeRequest{Channel: channel}}, 0))
+	tc.requireFrames(t, "subscribe reply", "publication", "unsubscribe reply")
+}
+
+// A client unsubscribe which waited for the subscribe in progress, and found the
+// subscription removed by a server unsubscribe meanwhile, replies after that
+// unsubscribe's push.
+func TestClientUnsubscribeWaitingForSubscribeRepliesAfterServerPush(t *testing.T) {
+	channel := testChannelRecoveryOrderingPrefix + "_wait_other"
+	presenceManager := &holdRemovePresenceManager{entered: make(chan struct{}), release: make(chan struct{})}
+	var tc *pendingWriteTestClient
+	tc = newPendingWriteTestClient(t, channel, presenceManager, func() {
+		// The subscription is committed, the client unsubscribe still waits for
+		// the subscribe. The server unsubscribe removes it and stops before its push.
+		go tc.client.Unsubscribe(channel)
+		<-presenceManager.entered
+	})
+	setTestAtSyncPoint(t, func(ch string) {
+		if ch != channel {
+			return
+		}
+		_, err := tc.client.node.Publish(channel, []byte(`{}`), WithHistory(10, time.Minute))
+		require.NoError(t, err)
+		go tc.client.HandleCommand(&protocol.Command{Id: 3, Unsubscribe: &protocol.UnsubscribeRequest{Channel: channel}}, 0)
+		time.Sleep(50 * time.Millisecond) // Waiting for the subscribe.
+	})
+	require.True(t, tc.client.HandleCommand(&protocol.Command{Id: 2, Subscribe: &protocol.SubscribeRequest{Channel: channel}}, 0))
+	time.Sleep(50 * time.Millisecond)
+	close(presenceManager.release)
+	tc.requireFrames(t, "subscribe reply", "publication", "unsubscribe push", "unsubscribe reply")
 }
