@@ -10179,3 +10179,55 @@ func TestOffsetlessPublicationBeforeSubscribeReply(t *testing.T) {
 		}
 	}
 }
+
+// The disconnect push is the last frame written to a unidirectional client:
+// publications still waiting in a per-channel batch come before it.
+func TestClientDisconnectPushIsLastFrame(t *testing.T) {
+	t.Parallel()
+	node, err := New(Config{
+		LogLevel:   LogLevelError,
+		LogHandler: func(LogEntry) {},
+		GetChannelBatchConfig: func(string) ChannelBatchConfig {
+			return ChannelBatchConfig{MaxSize: 100, MaxDelay: time.Minute}
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{Subscriptions: map[string]SubscribeOptions{"ch": {}}}, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := newTestTransport(cancel)
+	transport.sink = make(chan []byte, 100)
+	transport.setProtocolType(ProtocolTypeJSON)
+	transport.setProtocolVersion(ProtocolVersion2)
+	transport.setUnidirectional(true)
+	client, err := newClient(SetCredentials(ctx, &Credentials{UserID: "u"}), node, transport)
+	require.NoError(t, err)
+	require.NoError(t, client.ConnectNoErrorToDisconnect(ConnectRequest{}))
+	_, err = node.Publish("ch", []byte(`{"batched":true}`))
+	require.NoError(t, err)
+	client.Disconnect(Disconnect{Code: 4500, Reason: "test"})
+
+	var frames []string
+	timeout := time.After(200 * time.Millisecond)
+	for done := false; !done; {
+		select {
+		case data := <-transport.sink:
+			for _, line := range strings.Split(string(data), "\n") {
+				switch {
+				case strings.Contains(line, `"pub"`):
+					frames = append(frames, "publication")
+				case strings.Contains(line, `"disconnect"`):
+					frames = append(frames, "disconnect")
+				}
+			}
+		case <-timeout:
+			done = true
+		}
+	}
+	require.Equal(t, []string{"publication", "disconnect"}, frames)
+}

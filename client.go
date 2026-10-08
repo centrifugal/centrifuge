@@ -1793,18 +1793,20 @@ func (c *Client) close(disconnect Disconnect) error {
 		c.node.removeClient(c)
 	}
 
-	if disconnect.Code != DisconnectConnectionClosed.Code && !hasFlag(c.transport.DisabledPushFlags(), PushFlagDisconnect) {
-		if replyData, err := c.getDisconnectPushReply(disconnect); err == nil {
-			_ = c.writeEncodedPushData(replyData, "", "", protocol.FrameTypePushDisconnect, ChannelBatchConfig{})
-		}
-	}
-
-	// close writer and send messages remaining in writer queue if any.
+	// close writer and send messages remaining in writer queue if any, the
+	// disconnect push last: the client is still in the hub, publications may
+	// still come.
 	flushRemaining := disconnect.Code != DisconnectConnectionClosed.Code && disconnect.Code != DisconnectSlow.Code
 	if c.perChannelWriter != nil {
 		c.perChannelWriter.Close(flushRemaining)
 	}
-	_ = c.messageWriter.close(flushRemaining)
+	var disconnectPush *queue.Item
+	if disconnect.Code != DisconnectConnectionClosed.Code && !hasFlag(c.transport.DisabledPushFlags(), PushFlagDisconnect) {
+		if replyData, err := c.getDisconnectPushReply(disconnect); err == nil {
+			disconnectPush = &queue.Item{Data: replyData, FrameType: protocol.FrameTypePushDisconnect}
+		}
+	}
+	_ = c.messageWriter.closeWithLast(disconnectPush, flushRemaining)
 
 	// After the writer has closed and flushed, so this cannot overlap an Encode,
 	// and before the transport goes away, so an implementation still has
