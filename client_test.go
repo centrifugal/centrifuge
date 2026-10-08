@@ -10258,3 +10258,55 @@ func TestClientDisconnectPushIsLastFrame(t *testing.T) {
 	}
 	require.Equal(t, []string{"publication", "disconnect"}, frames)
 }
+
+// A presence tick raced with an unsubscribe and waits for the resubscribe in
+// progress (attempt 2) to decide whether to remove the presence it added. Attempt
+// 2 fails and attempt 3 adds presence before it is committed: the compensation
+// waits for attempt 3 too, and leaves its presence alone.
+func TestTickCompensationWaitsForNextResubscribe(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestConnectedClientV2(t, node, "u")
+	const ch = "tick_compensation_resubscribe"
+	require.NoError(t, client.Subscribe(ch, WithEmitPresence(true)))
+
+	client.mu.Lock()
+	item := client.channels[ch] // The subscription the tick added presence for.
+	attempt2 := make(chan struct{})
+	client.channels[ch] = ChannelContext{subGen: item.subGen + 1, subscribingCh: attempt2}
+	client.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		client.compensateRacedPresenceAfterSubscribe(ch, item, attempt2)
+	}()
+
+	attempt3 := make(chan struct{})
+	client.mu.Lock()
+	close(attempt2)
+	client.channels[ch] = ChannelContext{subGen: item.subGen + 2, subscribingCh: attempt3}
+	require.NoError(t, node.addPresence(ch, client.uid, &ClientInfo{ClientID: client.uid, UserID: client.user}))
+	client.mu.Unlock()
+	time.Sleep(20 * time.Millisecond)
+
+	client.mu.Lock()
+	live := item
+	live.subGen = item.subGen + 2
+	client.channels[ch] = live
+	close(attempt3)
+	client.mu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "compensation did not finish")
+	}
+
+	presence, err := node.Presence(ch)
+	require.NoError(t, err)
+	require.Contains(t, presence.Presence, client.ID(), "presence of attempt 3 removed")
+
+	client.mu.Lock()
+	client.channels[ch] = item
+	client.mu.Unlock()
+}

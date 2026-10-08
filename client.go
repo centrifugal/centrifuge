@@ -1154,13 +1154,26 @@ func tickPresenceToRemove(current ChannelContext, ok bool, item ChannelContext) 
 // committed or rolled back.
 func (c *Client) compensateRacedPresenceAfterSubscribe(ch string, item ChannelContext, subscribingCh chan struct{}) {
 	tm := timers.AcquireTimer(subscribeInProgressTimeout.get())
-	select {
-	case <-subscribingCh:
-	case <-tm.C:
+	defer timers.ReleaseTimer(tm)
+	var current ChannelContext
+	var ok bool
+	for {
+		timedOut := false
+		select {
+		case <-subscribingCh:
+		case <-tm.C:
+			timedOut = true
+		}
+		c.mu.Lock()
+		current, ok = c.channels[ch]
+		if timedOut || !ok || current.subscribingCh == nil || current.subscribingCh == subscribingCh {
+			break
+		}
+		// The subscribe failed and another one is in progress: it may already
+		// have added presence, under the same key. Decide once it is done.
+		subscribingCh = current.subscribingCh
+		c.mu.Unlock()
 	}
-	timers.ReleaseTimer(tm)
-	c.mu.Lock()
-	current, ok := c.channels[ch]
 	node, mapClient := tickPresenceToRemove(current, ok, item)
 	if node || mapClient {
 		// A subscribe to the channel waits for the removal.
