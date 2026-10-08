@@ -880,7 +880,7 @@ func (c *Client) mustWaitPendingLeaveLocked(channel string, deadline *time.Time)
 	}
 	now := time.Now()
 	if deadline.IsZero() {
-		*deadline = now.Add(pendingUnsubscribesSubscribeTimeout)
+		*deadline = now.Add(pendingUnsubscribesSubscribeTimeout.get())
 	}
 	return now.Before(*deadline)
 }
@@ -1153,7 +1153,7 @@ func tickPresenceToRemove(current ChannelContext, ok bool, item ChannelContext) 
 // with a subscribe in progress: it waits (bounded) until the subscribe is
 // committed or rolled back.
 func (c *Client) compensateRacedPresenceAfterSubscribe(ch string, item ChannelContext, subscribingCh chan struct{}) {
-	tm := timers.AcquireTimer(subscribeInProgressTimeout)
+	tm := timers.AcquireTimer(subscribeInProgressTimeout.get())
 	select {
 	case <-subscribingCh:
 	case <-tm.C:
@@ -1690,7 +1690,7 @@ func (c *Client) Unsubscribe(ch string, unsubscribe ...Unsubscribe) {
 	}
 	c.mu.Unlock()
 
-	err := c.unsubscribeWaiting(ch, unsub, nil, subscribeInProgressTimeout, true, 0)
+	err := c.unsubscribeWaiting(ch, unsub, nil, subscribeInProgressTimeout.get(), true, 0)
 	if err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error unsubscribe", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		go c.Disconnect(DisconnectServerError)
@@ -1826,9 +1826,9 @@ func (c *Client) close(disconnect Disconnect) error {
 	// Subscribes in progress (regular, shared poll and map) are waited for, so
 	// that their attempts end before DisconnectHandler: each one for up to
 	// subscribeInProgressTimeout, all of them within closeSubscribesTimeout.
-	subscribesDeadline := time.Now().Add(closeSubscribesTimeout)
+	subscribesDeadline := time.Now().Add(closeSubscribesTimeout.get())
 	subscribeWait := func() time.Duration {
-		return min(subscribeInProgressTimeout, time.Until(subscribesDeadline))
+		return min(subscribeInProgressTimeout.get(), time.Until(subscribesDeadline))
 	}
 
 	// Unsubscribe from all channels (handles both normal and map subscriptions).
@@ -1851,7 +1851,7 @@ func (c *Client) close(disconnect Disconnect) error {
 	// and for channels a concurrent unsubscribe removed before the loop above come
 	// before DisconnectHandler. Only for those: a SubscribeCallback invoked after
 	// this point still ends its attempt, after DisconnectHandler.
-	c.waitPendingUnsubscribes(pendingUnsubscribesDisconnectTimeout)
+	c.waitPendingUnsubscribes(pendingUnsubscribesDisconnectTimeout.get())
 
 	if disconnect.Code != DisconnectConnectionClosed.Code {
 		c.node.logger.log(newLogEntry(LogLevelDebug, "closing client connection", map[string]any{"client": c.uid, "user": user, "reason": disconnect.Reason}))
@@ -2707,11 +2707,23 @@ func (c *Client) finishAttemptEnd(channel string) {
 // SubscribeHandler (waitAttemptEnds) it blocks the processing of the client's
 // commands. Before DisconnectHandler (waitPendingUnsubscribes) it waits for
 // calls already running, as close() does for its own: it can be generous.
-// Variables, tests shorten them.
 var (
-	pendingUnsubscribesSubscribeTimeout  = 5 * time.Second
-	pendingUnsubscribesDisconnectTimeout = 30 * time.Second
+	pendingUnsubscribesSubscribeTimeout  = newWaitTimeout(5 * time.Second)
+	pendingUnsubscribesDisconnectTimeout = newWaitTimeout(30 * time.Second)
 )
+
+// waitTimeout is a bound of a wait which tests shorten while clients of other
+// tests may still be running, hence atomic.
+type waitTimeout struct{ d atomic.Int64 }
+
+func newWaitTimeout(d time.Duration) *waitTimeout {
+	t := &waitTimeout{}
+	t.set(d)
+	return t
+}
+
+func (t *waitTimeout) get() time.Duration  { return time.Duration(t.d.Load()) }
+func (t *waitTimeout) set(d time.Duration) { t.d.Store(int64(d)) }
 
 // maxPendingAttemptEnds is the number of UnsubscribeHandler calls for ended
 // attempts a client may have in progress before its next subscribe request waits
@@ -2749,7 +2761,7 @@ func (c *Client) mustWaitAttemptEndsLocked(channel string, deadline *time.Time) 
 	}
 	now := time.Now()
 	if deadline.IsZero() {
-		*deadline = now.Add(pendingUnsubscribesSubscribeTimeout)
+		*deadline = now.Add(pendingUnsubscribesSubscribeTimeout.get())
 	}
 	return now.Before(*deadline)
 }
@@ -2774,13 +2786,13 @@ func (c *Client) waitAttemptEnds(channel string, deadline time.Time) {
 		c.logLeaveNotFinished(channel)
 		return
 	}
-	c.node.logger.log(newLogEntry(LogLevelWarn, "unsubscribe handler not finished within timeout, calling subscribe handler", map[string]any{"channel": channel, "client": c.uid, "user": c.user, "timeout": pendingUnsubscribesSubscribeTimeout.String()}))
+	c.node.logger.log(newLogEntry(LogLevelWarn, "unsubscribe handler not finished within timeout, calling subscribe handler", map[string]any{"channel": channel, "client": c.uid, "user": c.user, "timeout": pendingUnsubscribesSubscribeTimeout.get().String()}))
 }
 
 // logLeaveNotFinished logs a subscribe which stopped waiting for the leave of
 // the channel's previous subscription, see addPendingLeaveLocked.
 func (c *Client) logLeaveNotFinished(channel string) {
-	c.node.logger.log(newLogEntry(LogLevelWarn, "leave of previous subscription not finished within timeout, subscribing", map[string]any{"channel": channel, "client": c.uid, "user": c.user, "timeout": pendingUnsubscribesSubscribeTimeout.String()}))
+	c.node.logger.log(newLogEntry(LogLevelWarn, "leave of previous subscription not finished within timeout, subscribing", map[string]any{"channel": channel, "client": c.uid, "user": c.user, "timeout": pendingUnsubscribesSubscribeTimeout.get().String()}))
 }
 
 // endSubscribeAttempt calls UnsubscribeHandler for a subscribe attempt allowed
@@ -3139,7 +3151,7 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 			// the reply to the command. The unsubscribe push which follows
 			// makes them resubscribe with the new filter.
 			// Only this subscription: a resubscribe may have come meanwhile.
-			if err := c.unsubscribeWaiting(channel, unsub, nil, subscribeInProgressTimeout, true, ctx.subGen); err != nil {
+			if err := c.unsubscribeWaiting(channel, unsub, nil, subscribeInProgressTimeout.get(), true, ctx.subGen); err != nil {
 				c.node.logger.log(newErrorLogEntry(err, "error unsubscribe", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				go c.Disconnect(DisconnectServerError)
 			}
@@ -5107,9 +5119,11 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	// client-side subscriptions, by the caller (through ctx.pubSubBuffer) for
 	// server-side ones.
 	var pubSubBuf *recovery.Buffer[pendingPublication]
-	needPubSubSync := reply.Options.EnablePositioning || reply.Options.EnableRecovery
-	if needPubSubSync {
+	if reply.Options.EnablePositioning || reply.Options.EnableRecovery {
 		pubSubBuf = c.pubSubSync.StartBuffering(channel)
+	} else {
+		// Nothing to merge, but publications must still come after the result.
+		pubSubBuf = c.pubSubSync.StartQueueing(channel)
 	}
 
 	// Delta compression isn't used together with tags filters: publications
@@ -5654,7 +5668,7 @@ func (c *Client) handleInsufficientStateDisconnect() {
 // server's initiative. A non-zero subGen restricts it to that subscription, see
 // unsubscribeWaiting.
 func (c *Client) handleAsyncUnsubscribe(ch string, subGen uint64, unsub Unsubscribe) {
-	err := c.unsubscribeWaiting(ch, unsub, nil, subscribeInProgressTimeout, true, subGen)
+	err := c.unsubscribeWaiting(ch, unsub, nil, subscribeInProgressTimeout.get(), true, subGen)
 	if err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error async unsubscribing", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		_ = c.close(DisconnectServerError)
@@ -5933,17 +5947,17 @@ func (c *Client) writeLeave(ch string, leave *protocol.Leave, data []byte, batch
 
 // Lock must not be held.
 func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect *Disconnect) error {
-	return c.unsubscribeWaiting(channel, unsubscribe, disconnect, subscribeInProgressTimeout, false, 0)
+	return c.unsubscribeWaiting(channel, unsubscribe, disconnect, subscribeInProgressTimeout.get(), false, 0)
 }
 
 // subscribeInProgressTimeout bounds how long an unsubscribe waits for a
-// subscribe to the channel in progress. A variable, tests shorten it.
-var subscribeInProgressTimeout = 5 * time.Second
+// subscribe to the channel in progress.
+var subscribeInProgressTimeout = newWaitTimeout(5 * time.Second)
 
 // closeSubscribesTimeout bounds how long close() waits for all subscribes in
 // progress together (regular, shared poll and map ones), each of them for up to
-// subscribeInProgressTimeout. A variable, tests shorten it.
-var closeSubscribesTimeout = 10 * time.Second
+// subscribeInProgressTimeout.
+var closeSubscribesTimeout = newWaitTimeout(10 * time.Second)
 
 // waitOtherUnsubscribe is called by a client unsubscribe which found nothing
 // to remove: another unsubscribe may have removed the subscription, so the

@@ -754,8 +754,8 @@ func TestSubscribeAttempt_CloseWithStalledSubscribe(t *testing.T) {
 	// One subscribe in progress is waited for up to 5 seconds.
 	started := time.Now()
 	require.NoError(t, client.close(DisconnectForceNoReconnect))
-	require.GreaterOrEqual(t, time.Since(started), subscribeInProgressTimeout)
-	require.Less(t, time.Since(started), subscribeInProgressTimeout+2*time.Second)
+	require.GreaterOrEqual(t, time.Since(started), subscribeInProgressTimeout.get())
+	require.Less(t, time.Since(started), subscribeInProgressTimeout.get()+2*time.Second)
 	rec.requireDisconnectedOnce(t)
 	require.Empty(t, rec.get())
 
@@ -1218,8 +1218,8 @@ func TestSubscribeAttempt_CloseWaitsForSubscribesWithinOneBudget(t *testing.T) {
 	started := time.Now()
 	require.NoError(t, client.close(DisconnectForceNoReconnect))
 	elapsed := time.Since(started)
-	require.GreaterOrEqual(t, elapsed, closeSubscribesTimeout)
-	require.Less(t, elapsed, closeSubscribesTimeout+2*time.Second)
+	require.GreaterOrEqual(t, elapsed, closeSubscribesTimeout.get())
+	require.Less(t, elapsed, closeSubscribesTimeout.get()+2*time.Second)
 	rec.requireDisconnectedOnce(t)
 
 	// Callbacks invoked after that still end their attempts, after
@@ -1632,8 +1632,8 @@ func TestSubscribeAttempt_StuckAttemptEndsDelayOneSubscribe(t *testing.T) {
 		subscribeClientV2(t, client, "ok"+strconv.Itoa(i))
 	}
 	elapsed := time.Since(started)
-	require.GreaterOrEqual(t, elapsed, pendingUnsubscribesSubscribeTimeout)
-	require.Less(t, elapsed, pendingUnsubscribesSubscribeTimeout+2*time.Second)
+	require.GreaterOrEqual(t, elapsed, pendingUnsubscribesSubscribeTimeout.get())
+	require.Less(t, elapsed, pendingUnsubscribesSubscribeTimeout.get()+2*time.Second)
 }
 
 func TestChannelCounts(t *testing.T) {

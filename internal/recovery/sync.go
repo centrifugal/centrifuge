@@ -99,7 +99,19 @@ func (b *Buffer[T]) enqueue(item T) {
 // StartBuffering starts phase 1 for the channel. It must be called before the
 // subscription is added to the hub, so that no publication for it is missed.
 func (s *PubSubSync[T]) StartBuffering(channel string) *Buffer[T] {
-	b := &Buffer[T]{channel: channel}
+	return s.start(channel, phaseCollecting)
+}
+
+// StartQueueing starts phase 2 for the channel right away, for a subscription
+// without positioning or recovery: there is nothing to merge its publications
+// with, but they must still come after its result. Same rules as StartBuffering,
+// then StopBuffering or CancelBuffering.
+func (s *PubSubSync[T]) StartQueueing(channel string) *Buffer[T] {
+	return s.start(channel, phaseQueueing)
+}
+
+func (s *PubSubSync[T]) start(channel string, phase bufferPhase) *Buffer[T] {
+	b := &Buffer[T]{channel: channel, phase: phase}
 	s.mu.Lock()
 	if s.buffers == nil {
 		s.buffers = make(map[string]*Buffer[T])

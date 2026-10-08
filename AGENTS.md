@@ -11,6 +11,8 @@ For a subscription with positioning or recovery (stream and map paths):
 3. Commit, write the result, then `StopBuffering`. It writes the publications queued meanwhile; if it returns true, resubscribe the client with insufficient state.
 4. Every other exit calls `CancelBuffering`. A leaked buffer queues the channel's publications forever.
 
+A stream subscription without positioning or recovery uses `StartQueueing` instead of `StartBuffering` and skips step 2: it is in the hub before its result is written, and its publications must still come after the result.
+
 Publications without offset can't be synced: they are dropped until `StopBuffering` has written the queue.
 
 All buffers of a client share one limit, `ClientQueueMaxSize`, counted separately from its write queue: it bounds what a connection holds while it subscribes, however many channels it subscribes to.

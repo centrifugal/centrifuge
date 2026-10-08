@@ -9576,7 +9576,7 @@ func TestJoinLeaveOrder_CloseDuringSlowMapGoLive(t *testing.T) {
 	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
 	require.NoError(t, mapBroker.RegisterEventHandler(nil))
-	node.SetMapBroker(&slowPresenceMapBroker{MemoryMapBroker: mapBroker, delay: subscribeInProgressTimeout + 500*time.Millisecond})
+	node.SetMapBroker(&slowPresenceMapBroker{MemoryMapBroker: mapBroker, delay: subscribeInProgressTimeout.get() + 500*time.Millisecond})
 	unsubscribed := make(chan UnsubscribeEvent, 1)
 	disconnected := make(chan struct{})
 	node.OnConnect(func(client *Client) {
@@ -10102,4 +10102,67 @@ func TestOrderTickCompensationRemovesLivePresence(t *testing.T) {
 	presence, err = node.Presence(ch)
 	require.NoError(t, err)
 	require.Contains(t, presence.Presence, client.ID(), "presence of the live subscription removed by the tick's compensation")
+}
+
+type blockingAddPresenceManager struct {
+	PresenceManager
+	entered, release chan struct{}
+}
+
+func (p *blockingAddPresenceManager) AddPresence(ch, uid string, info *ClientInfo) error {
+	close(p.entered)
+	<-p.release
+	return p.PresenceManager.AddPresence(ch, uid, info)
+}
+
+// A publication without offset, broadcast while a subscription without
+// positioning is between its hub add and its reply (here held in AddPresence),
+// reaches the client before the subscribe reply.
+func TestOffsetlessPublicationBeforeSubscribeReply(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	pm, err := NewMemoryPresenceManager(node, MemoryPresenceManagerConfig{})
+	require.NoError(t, err)
+	presenceManager := &blockingAddPresenceManager{PresenceManager: pm, entered: make(chan struct{}), release: make(chan struct{})}
+	node.SetPresenceManager(presenceManager)
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{EmitPresence: true}}, nil)
+		})
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := newTestTransport(cancel)
+	client := newTestConnectedClientWithTransport(t, ctx, node, transport, "u")
+	sink := make(chan []byte, 100)
+	transport.mu.Lock()
+	transport.sink = sink
+	transport.mu.Unlock()
+
+	go client.HandleCommand(&protocol.Command{Id: 100, Subscribe: &protocol.SubscribeRequest{Channel: "ch"}}, 0)
+	<-presenceManager.entered
+	_, err = node.Publish("ch", []byte(`{"id":1}`)) // Without history: no offset.
+	require.NoError(t, err)
+	close(presenceManager.release)
+
+	for {
+		select {
+		case data := <-sink:
+			dec := protocol.NewJSONReplyDecoder(data)
+			for {
+				r, err := dec.Decode()
+				if err != nil {
+					break
+				}
+				if r.Push != nil && r.Push.Pub != nil {
+					t.Fatalf("publication %s before the subscribe reply", r.Push.Pub.Data)
+				}
+				if r.Id == 100 {
+					return
+				}
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("no subscribe reply")
+		}
+	}
 }

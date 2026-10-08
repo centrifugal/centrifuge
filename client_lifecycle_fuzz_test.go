@@ -16,10 +16,13 @@ package centrifuge
 //     except UnsubscribeHandler calls for attempts allowed after it,
 //     DisconnectHandler once per connection OnConnect was called for;
 //   - wire: per channel frame order (nothing of a channel while unsubscribed,
-//     contiguous offsets for positioned subscriptions and recovery), nothing
-//     before the connect reply, no writes after the transport is closed;
+//     contiguous offsets for positioned subscriptions and recovery, publication
+//     ids increasing within a subscription), nothing before the connect reply,
+//     no writes after the transport is closed;
 //   - state at quiet points: subscriptions in the hub, presence, map client
-//     presence and join/leave alternation agree with the client's subscriptions;
+//     presence and join/leave alternation agree with the client's subscriptions,
+//     positioned stream subscriptions are at the stream top, a publication
+//     reaches the subscribed connections;
 //   - at the end: all of it is empty, no leaked tracking counters, recovery
 //     buffers, timers or goroutines.
 //
@@ -122,8 +125,10 @@ type fzWorld struct {
 	label string
 	node  *Node
 	// Not wrapped, to read the state without holds.
+	broker    *MemoryBroker
 	mapBroker *MemoryMapBroker
 	presence  *MemoryPresenceManager
+	pubs      map[string]*fzChanPubs
 
 	mu         sync.Mutex
 	holdMask   uint16
@@ -139,6 +144,10 @@ type fzWorld struct {
 	joinLog    map[string]string
 	// Positions the client knows, for recovery.
 	lastPos map[string]StreamPosition
+	// Publications run during the next history read of a channel.
+	deferred map[string]fzDeferred
+	// Channels with an offset gap injected: their stream top is behind it.
+	gapped map[string]bool
 
 	running atomic.Int32 // Operations in progress.
 }
@@ -246,6 +255,21 @@ func (b *fzBroker) PublishLeave(ch string, info *ClientInfo) error {
 	b.w.hold(fzHoldJoinLeave, "leave "+ch+" "+fzShortID(info.ClientID))
 	b.w.recordJoinLeave(ch, info.ClientID, "leave")
 	return b.MemoryBroker.PublishLeave(ch, info)
+}
+
+func (b *fzBroker) History(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
+	b.w.mu.Lock()
+	d, ok := b.w.deferred[ch]
+	delete(b.w.deferred, ch)
+	b.w.mu.Unlock()
+	if ok && d.before {
+		d.run()
+	}
+	pubs, sp, err := b.MemoryBroker.History(ch, opts)
+	if ok && !d.before {
+		d.run()
+	}
+	return pubs, sp, err
 }
 
 type fzPresence struct {
@@ -394,6 +418,8 @@ type fzWire struct {
 	offset     uint64
 	epoch      string
 	mapNext    *protocol.SubscribeRequest
+	// lastID is the id of the last publication of the subscription.
+	lastID int
 }
 
 type fzMeta struct {
@@ -757,10 +783,12 @@ func (fc *fzConn) subscribed(ch string, wc *fzWire, res *protocol.SubscribeResul
 	wc.unsubByReply = false
 	wc.serverSide = false
 	wc.ambiguous = false
+	wc.lastID = 0
 	if res == nil {
 		wc.positioned = false
 		return
 	}
+	fc.resultPubs(ch, wc, res.Publications)
 	wc.positioned = res.Recoverable || res.Positioned
 	wc.offset, wc.epoch = res.Offset, res.Epoch
 	if res.Recovered && req != nil {
@@ -857,12 +885,13 @@ func (fc *fzConn) onReply(r *protocol.Reply) {
 		if ch == fzP0 {
 			return
 		}
-		w.trace = append(w.trace, fmt.Sprintf("  [c%d wire publication %s offset=%d]", fc.idx, ch, p.Pub.Offset))
+		w.trace = append(w.trace, fmt.Sprintf("  [c%d wire publication %s offset=%d %s]", fc.idx, ch, p.Pub.Offset, p.Pub.Data))
 		if wc.state != wSub {
 			w.violate("client %d wire: publication (offset %d) on %s while %s", fc.idx, p.Pub.Offset, ch, fzState(wc.state))
 			return
 		}
-		if wc.positioned {
+		fc.checkIDs(ch, wc, []*protocol.Publication{p.Pub})
+		if wc.positioned && p.Pub.Offset != 0 {
 			if p.Pub.Offset != wc.offset+1 {
 				w.violate("client %d wire: publication on %s offset %d, want %d", fc.idx, ch, p.Pub.Offset, wc.offset+1)
 			}
@@ -904,6 +933,42 @@ func (fc *fzConn) onReply(r *protocol.Reply) {
 	}
 }
 
+// checkIDs checks that the ids of a subscription's publications increase: they
+// are given in the order the publications are broadcast, which is the order of
+// their offsets, and a subscription gets each of them at most once and in order
+// (recovered, then buffered, then live). Called with w.mu held.
+func (fc *fzConn) checkIDs(ch string, wc *fzWire, pubs []*protocol.Publication) {
+	for _, p := range pubs {
+		id, ok := fzPubID(p.Data)
+		if !ok {
+			continue
+		}
+		if id <= wc.lastID {
+			fc.w.violate("client %d wire: publication id %d (offset %d) on %s after id %d", fc.idx, id, p.Offset, ch, wc.lastID)
+		}
+		wc.lastID = id
+	}
+}
+
+// resultPubs checks the publications of a subscribe result.
+func (fc *fzConn) resultPubs(ch string, wc *fzWire, pubs []*protocol.Publication) {
+	if n := len(pubs); n > 0 {
+		fc.w.trace = append(fc.w.trace, fmt.Sprintf("  [c%d wire result %s publications offset=%d..%d %s..%s]", fc.idx, ch, pubs[0].Offset, pubs[n-1].Offset, pubs[0].Data, pubs[n-1].Data))
+	}
+	fc.checkIDs(ch, wc, pubs)
+}
+
+func fzPubData(id int) []byte { return []byte(`{"id":` + strconv.Itoa(id) + `}`) }
+
+func fzPubID(data []byte) (int, bool) {
+	s, ok := bytes.CutPrefix(data, []byte(`{"id":`))
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.Atoi(string(bytes.TrimSuffix(s, []byte(`}`))))
+	return id, err == nil
+}
+
 func (fc *fzConn) onMapReply(r *protocol.Reply, m fzMeta, wc *fzWire) {
 	w := fc.w
 	if r.Error != nil {
@@ -929,6 +994,8 @@ func (fc *fzConn) onMapReply(r *protocol.Reply, m fzMeta, wc *fzWire) {
 		wc.mapNext = nil
 		wc.offset, wc.epoch = res.Offset, res.Epoch
 		wc.positioned = res.Epoch != ""
+		wc.lastID = 0
+		fc.resultPubs(m.ch, wc, res.Publications)
 		for _, p := range res.Publications {
 			if p.Offset > wc.offset {
 				wc.offset = p.Offset
@@ -961,6 +1028,12 @@ func newFzWorld(tb testing.TB, label string, conf fzConfig) *fzWorld {
 		byID:     map[string]*fzConn{},
 		joinLog:  map[string]string{},
 		lastPos:  map[string]StreamPosition{},
+		deferred: map[string]fzDeferred{},
+		gapped:   map[string]bool{},
+		pubs:     map[string]*fzChanPubs{},
+	}
+	for _, ch := range fzAll {
+		w.pubs[ch] = &fzChanPubs{}
 	}
 	node, err := New(Config{
 		LogLevel:            LogLevelInfo,
@@ -989,6 +1062,7 @@ func newFzWorld(tb testing.TB, label string, conf fzConfig) *fzWorld {
 	if err != nil {
 		tb.Fatal(err)
 	}
+	w.broker = mb
 	node.SetBroker(&fzBroker{MemoryBroker: mb, w: w})
 	pm, err := NewMemoryPresenceManager(node, MemoryPresenceManagerConfig{})
 	if err != nil {
@@ -1021,12 +1095,12 @@ func newFzWorld(tb testing.TB, label string, conf fzConfig) *fzWorld {
 	// Some history and map state to recover from.
 	for _, ch := range fzStreams {
 		for i := 0; i < 3; i++ {
-			_, _ = node.Publish(ch, []byte(`{}`), WithHistory(100, time.Minute))
+			w.streamPublish(ch, fzPubHistory, i)
 		}
 	}
 	for _, ch := range fzMaps {
 		for i := 0; i < 3; i++ {
-			_, _ = node.MapPublish(context.Background(), ch, "k"+strconv.Itoa(i), MapPublishOptions{Data: []byte(`{}`)})
+			w.mapPublish(ch, "k"+strconv.Itoa(i))
 		}
 	}
 	return w
@@ -1270,6 +1344,11 @@ func (w *fzWorld) checkConsistent() {
 	for _, ch := range fzAll {
 		pres := w.presenceOf(ch)
 		mpres := w.mapPresenceOf(ch)
+		stream := slices.Contains(fzStreams, ch)
+		var top StreamPosition
+		if stream {
+			_, top, _ = w.broker.History(ch, HistoryOptions{})
+		}
 		for _, fc := range conns {
 			c := fc.c
 			c.mu.RLock()
@@ -1284,6 +1363,12 @@ func (w *fzWorld) checkConsistent() {
 			wc := fc.wireCh(ch)
 			if !closed && fc.connectReply && !wc.ambiguous && serverSub != (wc.state == wSub) {
 				w.violate("client %d: %s wire %s but server subscribed=%v", fc.idx, ch, fzState(wc.state), serverSub)
+			}
+			// Every publication reaches a positioned subscriber, one of another
+			// epoch or after a gap ends the subscription.
+			if !closed && serverSub && wc.state == wSub && !wc.ambiguous && wc.positioned && stream && !w.gapped[ch] &&
+				(wc.offset != top.Offset || wc.epoch != top.Epoch) {
+				w.violate("client %d: %s wire position %d:%s, stream top %d:%s", fc.idx, ch, wc.offset, wc.epoch, top.Offset, top.Epoch)
 			}
 			wantPres := serverSub && channelHasFlag(chCtx.flags, flagEmitPresence)
 			if pres[c.uid] != wantPres && ch != fzP0 {
@@ -1360,6 +1445,61 @@ func (w *fzWorld) checkHandlers(noTimeouts bool) {
 				r := rels[k]
 				w.violate("client %d: SubscribeHandler on %s before UnsubscribeHandler #%d of previous attempt (subscribed=%v code=%d)", fc.idx, cand.ch, k+1, r.subscribed, r.code)
 			}
+		}
+	}
+}
+
+// checkDelivery publishes to each stream and map channel with subscribers at a
+// quiet point, with and (streams) without history, and checks that each
+// publication reaches every connection subscribed to the channel: nothing is in
+// flight, so none of them races a subscribe or unsubscribe. A connection not
+// subscribed must not get it, as the wire model checks.
+func (w *fzWorld) checkDelivery() {
+	w.mu.Lock()
+	conns := slices.Clone(w.conns)
+	w.mu.Unlock()
+	for _, ch := range slices.Concat(fzStreams, fzMaps) {
+		var subs []*fzConn
+		for _, fc := range conns {
+			fc.c.mu.RLock()
+			chCtx, ok := fc.c.channels[ch]
+			live := fc.c.status != statusClosed && ok && channelHasFlag(chCtx.flags, flagSubscribed)
+			fc.c.mu.RUnlock()
+			w.mu.Lock()
+			wc := fc.wireCh(ch)
+			if live && fc.connectReply && wc.state == wSub && !wc.ambiguous {
+				subs = append(subs, fc)
+			}
+			w.mu.Unlock()
+		}
+		if len(subs) == 0 {
+			continue
+		}
+		isMap := slices.Contains(fzMaps, ch)
+		kinds := []byte{fzPubHistory, fzPubOffsetless}
+		if isMap {
+			kinds = kinds[:1]
+		}
+		for _, kind := range kinds {
+			var id int
+			if isMap {
+				id = w.mapPublish(ch, "marker")
+			} else {
+				id = w.streamPublish(ch, kind, 0)
+			}
+			// Broadcast wrote it to the clients' queues, the marker of flushWire
+			// follows it.
+			w.flushWire()
+			w.mu.Lock()
+			for _, fc := range subs {
+				wc := fc.wireCh(ch)
+				// A positioned subscription skips publications behind an injected gap.
+				skipped := kind == fzPubHistory && wc.positioned && w.gapped[ch]
+				if wc.lastID != id && !skipped {
+					w.violate("client %d: %s publication %d not delivered at a quiet point (last %d)", fc.idx, ch, id, wc.lastID)
+				}
+			}
+			w.mu.Unlock()
 		}
 	}
 }
@@ -1451,11 +1591,15 @@ type fzTarget struct {
 // setFzGlobals shortens the client timeouts and sets the test hooks, returning a
 // function which restores them.
 func setFzGlobals() func() {
-	prevTimeouts := []time.Duration{subscribeInProgressTimeout, pendingUnsubscribesSubscribeTimeout, closeSubscribesTimeout, pendingUnsubscribesDisconnectTimeout}
-	subscribeInProgressTimeout = time.Second
-	pendingUnsubscribesSubscribeTimeout = time.Second
-	closeSubscribesTimeout = 2 * time.Second
-	pendingUnsubscribesDisconnectTimeout = 2 * time.Second
+	timeouts := []*waitTimeout{subscribeInProgressTimeout, pendingUnsubscribesSubscribeTimeout, closeSubscribesTimeout, pendingUnsubscribesDisconnectTimeout}
+	prevTimeouts := make([]time.Duration, len(timeouts))
+	for i, timeout := range timeouts {
+		prevTimeouts[i] = timeout.get()
+	}
+	subscribeInProgressTimeout.set(time.Second)
+	pendingUnsubscribesSubscribeTimeout.set(time.Second)
+	closeSubscribesTimeout.set(2 * time.Second)
+	pendingUnsubscribesDisconnectTimeout.set(2 * time.Second)
 	prevInTest := isInTest.Load()
 	isInTest.Store(true)
 	prevDelay := testSyncPointDelay.Load()
@@ -1473,10 +1617,9 @@ func setFzGlobals() func() {
 	}
 	prevAfterCommit := testAfterMapCommit.Swap(&afterCommit)
 	return func() {
-		subscribeInProgressTimeout = prevTimeouts[0]
-		pendingUnsubscribesSubscribeTimeout = prevTimeouts[1]
-		closeSubscribesTimeout = prevTimeouts[2]
-		pendingUnsubscribesDisconnectTimeout = prevTimeouts[3]
+		for i, timeout := range timeouts {
+			timeout.set(prevTimeouts[i])
+		}
 		isInTest.Store(prevInTest)
 		testSyncPointDelay.Store(prevDelay)
 		testAtSyncPoint.Store(prevAtSync)
@@ -1521,6 +1664,8 @@ func fzRunWorld(tb testing.TB, tgt *fzTarget, label string, data []byte) ([]stri
 		w.violateU("stuck: not quiet after drain:\n%s", strings.Join(w.clientStacks(false), "\n\n"))
 	}
 	w.checkConsistent()
+	w.tracef("-- delivery")
+	w.checkDelivery()
 	w.tracef("-- close all")
 	w.mu.Lock()
 	conns := slices.Clone(w.conns)
@@ -1700,6 +1845,8 @@ var fzSubscribeTarget = &fzTarget{
 		'K': {17, 0, 0},        // presence tick
 		'L': {12, 0, 3},        // answer pending: allow twice
 		'M': {12, 0, 1},        // answer pending: deny
+		'N': {16, 0, 0x64},     // 4 publications to s0 without history
+		'O': {16, 0, 0x1c},     // history reset of s0 and a publication
 	},
 }
 
@@ -1828,18 +1975,103 @@ func (w *fzWorld) serverSubscribe(fc *fzConn, ch string, b byte) {
 	w.spawn(func() { _ = fc.c.Subscribe(ch, opts...) })
 }
 
+// How the publications of a stream publish operation are made.
+const (
+	fzPubOffsetless = iota // Without history.
+	fzPubMixed             // With and without history in turns.
+	fzPubTrimmed           // With a history of 2.
+	fzPubEpoch             // With history, after a history reset before the first.
+	fzPubHistory
+)
+
+// fzChanPubs gives the publications of a channel increasing ids, in the order
+// they are broadcast: their data is {"id":N}.
+type fzChanPubs struct {
+	mu  sync.Mutex
+	seq int
+}
+
+type fzDeferred struct {
+	before bool // Before the read, else after it.
+	run    func()
+}
+
+// publish publishes to a stream channel (a bit 0 unset) or a map channel. With
+// b bit 2 unset it is one publication with history, or to map key b%4. With it
+// set, a burst of 1+(b>>5)&3 publications of kind (b>>3)&3 (fzPub*, map keys
+// from b%4 on). With b bits 2 and 7 set a stream burst runs during the next
+// history read of the channel (a subscriber's, between its StartBuffering and
+// sync point): after the read, or with b bit 0 before it.
 func (w *fzWorld) publish(a, b byte) {
-	if a&1 == 0 {
-		ch := fzStreams[(a>>1)&1]
-		w.tracef("op publish %s", ch)
-		w.spawn(func() { _, _ = w.node.Publish(ch, []byte(`{}`), WithHistory(100, time.Minute)) })
+	n, kind := 1, byte(fzPubHistory)
+	if b&4 != 0 {
+		n, kind = 1+int(b>>5&3), b>>3&3
+	}
+	if a&1 != 0 {
+		ch := fzMaps[(a>>1)&1]
+		w.tracef("op map publish %s n=%d", ch, n)
+		w.spawn(func() {
+			for i := 0; i < n; i++ {
+				w.mapPublish(ch, "k"+strconv.Itoa((int(b)+i)%4))
+			}
+		})
 		return
 	}
-	ch := fzMaps[(a>>1)&1]
-	w.tracef("op map publish %s", ch)
-	w.spawn(func() {
-		_, _ = w.node.MapPublish(context.Background(), ch, "k"+strconv.Itoa(int(b%4)), MapPublishOptions{Data: []byte(`{}`)})
-	})
+	ch := fzStreams[(a>>1)&1]
+	run := func() {
+		for i := 0; i < n; i++ {
+			w.streamPublish(ch, kind, i)
+		}
+	}
+	if b&0x84 == 0x84 {
+		w.tracef("op publish %s kind=%d n=%d during next history read before=%v", ch, kind, n, b&1 != 0)
+		w.mu.Lock()
+		w.deferred[ch] = fzDeferred{before: b&1 != 0, run: run}
+		w.mu.Unlock()
+		return
+	}
+	w.tracef("op publish %s kind=%d n=%d", ch, kind, n)
+	w.spawn(run)
+}
+
+// streamPublish makes publication i of a burst of the kind, returning its id.
+func (w *fzWorld) streamPublish(ch string, kind byte, i int) int {
+	cp := w.pubs[ch]
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+	cp.seq++
+	data := fzPubData(cp.seq)
+	switch {
+	case kind == fzPubOffsetless || kind == fzPubMixed && i%2 == 1:
+		w.tracef("  [publish %s %s offsetless]", ch, data)
+		_, _ = w.node.Publish(ch, data)
+	case kind == fzPubTrimmed:
+		w.tracef("  [publish %s %s history 2]", ch, data)
+		_, _ = w.node.Publish(ch, data, WithHistory(2, time.Minute))
+	default:
+		if kind == fzPubEpoch && i == 0 {
+			// As when the stream's meta expires: the next publication starts a
+			// new epoch.
+			w.broker.historyHub.Lock()
+			delete(w.broker.historyHub.streams, ch)
+			w.broker.historyHub.Unlock()
+			w.tracef("  [history reset %s]", ch)
+		}
+		res, _ := w.node.Publish(ch, data, WithHistory(100, time.Minute))
+		w.tracef("  [publish %s %s offset=%d]", ch, data, res.Offset)
+	}
+	return cp.seq
+}
+
+func (w *fzWorld) mapPublish(ch, key string) int {
+	cp := w.pubs[ch]
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+	cp.seq++
+	data := fzPubData(cp.seq)
+	w.tracef("  [map publish %s %s %s]", ch, key, data)
+	_, _ = w.node.MapPublish(context.Background(), ch, key, MapPublishOptions{Data: data})
+	return cp.seq
 }
 
 func FuzzClientSubscribeLifecycle(f *testing.F) {
@@ -1949,6 +2181,8 @@ var fzConnectTarget = &fzTarget{
 		'K': {9, 0, 0 | fzRefreshExpired<<2}, // c0 expires, RefreshHandler says expired
 		'L': {6, 0, 7},                       // c0 insufficient state on s0
 		'M': {5, 0, 1},                       // Node.Unsubscribe u s0
+		'N': {13, 0, 0x64},                   // 4 publications to s0 without history
+		'O': {13, 0, 0x1c},                   // history reset of s0 and a publication
 	},
 }
 
@@ -2174,6 +2408,9 @@ func (w *fzWorld) endOp(fc *fzConn, a, b byte) {
 				return
 			}
 			off := res.Offset + 2
+			w.mu.Lock()
+			w.gapped[ch] = true
+			w.mu.Unlock()
 			_ = w.node.handlePublication(ch, StreamPosition{Offset: off, Epoch: res.Epoch}, &Publication{Offset: off, Data: []byte(`{}`)}, nil, nil)
 		})
 	}
