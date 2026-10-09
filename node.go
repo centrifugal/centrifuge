@@ -313,9 +313,9 @@ func (n *Node) Hub() *Hub {
 func (n *Node) Run() error {
 	// Initialize shared poll manager if configured. This must happen before
 	// any broker registration below: brokers start goroutines from their
-	// Register*EventHandler methods, and those goroutines read
-	// n.sharedPollManager (see extraBrokerPubSubChannels) for the rest of the
-	// node lifetime. Assigning the field after they start is a data race.
+	// Register*EventHandler methods, which may reach n.sharedPollManager for
+	// the rest of the node lifetime. Assigning the field after they start is a
+	// data race.
 	if n.config.SharedPoll.GetSharedPollChannelOptions != nil {
 		if n.clientEvents.sharedPollHandler == nil {
 			return errors.New("GetSharedPollChannelOptions is set but OnSharedPoll handler is not registered")
@@ -1717,19 +1717,6 @@ func (n *Node) getBroker(ch string) Broker {
 		}
 	}
 	return n.broker
-}
-
-// extraBrokerPubSubChannels returns channels subscribed at the given broker
-// outside the Hub. The Hub is not the complete registry of broker-level
-// subscriptions: shared poll subscribes per-key channels directly and tracks
-// them itself. PUB/SUB reconnect paths must restore these together with
-// Hub().Channels(), otherwise key channels are silently lost on every
-// reconnect and key events stop flowing until keys are re-tracked.
-func (n *Node) extraBrokerPubSubChannels(b Broker) []string {
-	if n.sharedPollManager == nil {
-		return nil
-	}
-	return n.sharedPollManager.brokerChannelsSnapshot(b)
 }
 
 func (n *Node) getMapBroker(ch string) MapBroker {

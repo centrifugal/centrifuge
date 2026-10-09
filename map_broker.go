@@ -102,7 +102,9 @@ type MapBroker interface {
 	RegisterEventHandler(BrokerEventHandler) error
 
 	// Subscribe registers this server node to receive pub/sub messages for the channels.
-	// Called when a client subscribes to a map channel on this node.
+	// Called when a client subscribes to a map channel on this node. Subscribe
+	// and Unsubscribe of the same channel are never called concurrently:
+	// callers serialize them per channel.
 	Subscribe(channels ...string) error
 
 	// Unsubscribe removes this server node from receiving pub/sub messages for the channels.

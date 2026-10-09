@@ -955,3 +955,170 @@ func TestRedisBrokersResubscribeOnlyRoutedChannels(t *testing.T) {
 	}
 	require.Equal(t, 1, delivered, "publication delivered %d times", delivered)
 }
+
+// A broker wrapping another one, as an application or Centrifugo PRO (its
+// cached map broker) may set on the node: the node routes to the wrapper.
+type testWrappedBroker struct{ Broker }
+type testWrappedMapBroker struct{ MapBroker }
+
+// With the node's broker wrapping a Redis broker, a PUB/SUB reconnect still
+// resubscribes the channels of its subscriptions.
+func TestRedisBrokerWrappedResubscribes(t *testing.T) {
+	prefix := getUniquePrefix()
+	node, err := New(Config{LogLevel: LogLevelError, LogHandler: func(LogEntry) {}})
+	require.NoError(t, err)
+	s, err := NewRedisShard(node, testSingleRedisConf(6379))
+	require.NoError(t, err)
+	b, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}})
+	require.NoError(t, err)
+	node.SetBroker(testWrappedBroker{b})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) { cb(SubscribeReply{}, nil) })
+	})
+	require.NoError(t, node.Run())
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+		stopRedisBroker(b)
+	})
+
+	transport := newTestTransport(func() {})
+	sink := make(chan []byte, 100)
+	transport.sink = sink
+	client := newTestClientCustomTransport(t, context.Background(), node, transport, "u")
+	connectClientV2(t, client)
+	const channel = "wrapped:ch"
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{Channel: channel}, &protocol.Command{Id: 2}, time.Now(), testReplyWriterWrapper().rw))
+
+	redisChannel := string(b.messageChannelID(s, channel))
+	numSub := func() int64 {
+		res, err := probeTestRedisDo(t, "127.0.0.1:6379", "PUBSUB", "NUMSUB", redisChannel).ToArray()
+		require.NoError(t, err)
+		n, err := res[1].AsInt64()
+		require.NoError(t, err)
+		return n
+	}
+	require.Eventually(t, func() bool { return numSub() == 1 }, 5*time.Second, 20*time.Millisecond)
+
+	require.NoError(t, probeTestRedisDo(t, "127.0.0.1:6379", "CLIENT", "KILL", "TYPE", "pubsub").Error())
+	require.Eventually(t, func() bool { return numSub() >= 1 }, 10*time.Second, 50*time.Millisecond,
+		"the channel was not resubscribed after the reconnect")
+
+	drainSink(sink)
+	_, err = node.Publish(channel, []byte(`{"once":true}`))
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		for _, frame := range drainSink(sink) {
+			if strings.Contains(string(frame), "once") {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 50*time.Millisecond, "publication not delivered after the reconnect")
+}
+
+// With the node's map broker wrapping a Redis map broker (Centrifugo PRO's
+// cached map broker does), a PUB/SUB reconnect still resubscribes the channels
+// of map subscriptions.
+func TestRedisMapBrokerWrappedResubscribes(t *testing.T) {
+	prefix := getUniquePrefix()
+	node, err := New(Config{
+		LogLevel:   LogLevelError,
+		LogHandler: func(LogEntry) {},
+		Map: MapConfig{GetMapChannelOptions: func(string) MapChannelOptions {
+			return MapChannelOptions{Mode: MapModeEphemeral, KeyTTL: time.Minute}
+		}},
+	})
+	require.NoError(t, err)
+	s, err := NewRedisShard(node, testSingleRedisConf(6379))
+	require.NoError(t, err)
+	b, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}})
+	require.NoError(t, err)
+	mb, err := NewRedisMapBroker(node, RedisMapBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}})
+	require.NoError(t, err)
+	node.SetBroker(b)
+	node.SetMapBroker(testWrappedMapBroker{mb})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+		})
+	})
+	require.NoError(t, node.Run())
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+		stopRedisBroker(b)
+	})
+
+	transport := newTestTransport(func() {})
+	sink := make(chan []byte, 100)
+	transport.sink = sink
+	client := newTestClientCustomTransport(t, context.Background(), node, transport, "u")
+	connectClientV2(t, client)
+	const channel = "wrapped_map"
+	result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: channel, Type: int32(SubscriptionTypeMap), Phase: MapPhaseState, Limit: 100,
+	})
+	require.Equal(t, MapPhaseLive, result.Phase)
+
+	redisChannel := string(b.messageChannelID(s, channel))
+	numSub := func() int64 {
+		res, err := probeTestRedisDo(t, "127.0.0.1:6379", "PUBSUB", "NUMSUB", redisChannel).ToArray()
+		require.NoError(t, err)
+		n, err := res[1].AsInt64()
+		require.NoError(t, err)
+		return n
+	}
+	require.Eventually(t, func() bool { return numSub() == 1 }, 5*time.Second, 20*time.Millisecond)
+
+	require.NoError(t, probeTestRedisDo(t, "127.0.0.1:6379", "CLIENT", "KILL", "TYPE", "pubsub").Error())
+	require.Eventually(t, func() bool { return numSub() >= 1 }, 10*time.Second, 50*time.Millisecond,
+		"the map channel was not resubscribed after the reconnect")
+
+	drainSink(sink)
+	_, err = mb.Publish(context.Background(), channel, "k", MapPublishOptions{Data: []byte(`{"once":true}`)})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		for _, frame := range drainSink(sink) {
+			if strings.Contains(string(frame), "once") {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 50*time.Millisecond, "map publication not delivered after the reconnect")
+}
+
+// A Subscribe failing for lack of a PUB/SUB connection (a reconnect in
+// progress) leaves the channel out of the subscribed set: a caller which does
+// not unsubscribe after a failed subscribe (shared poll, a map broker wrapper)
+// gets no Redis subscription once the connection is up.
+func TestRedisBrokerFailedSubscribeNotResubscribed(t *testing.T) {
+	prefix := getUniquePrefix()
+	node, err := New(Config{LogLevel: LogLevelError, LogHandler: func(LogEntry) {}})
+	require.NoError(t, err)
+	s, err := NewRedisShard(node, testSingleRedisConf(6379))
+	require.NoError(t, err)
+	b, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}})
+	require.NoError(t, err)
+	node.SetBroker(b)
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+		stopRedisBroker(b)
+	})
+
+	// No PUB/SUB connection before the broker runs.
+	const channel = "failed_subscribe"
+	require.ErrorIs(t, b.Subscribe(channel), errPubSubConnUnavailable)
+	require.NoError(t, node.Run())
+
+	redisChannel := string(b.messageChannelID(s, channel))
+	redisShardChannel := string(b.pubSubShardChannelID(0, 0, false))
+	require.Eventually(t, func() bool {
+		chans, err := probeTestRedisDo(t, "127.0.0.1:6379", "PUBSUB", "CHANNELS", redisShardChannel).ToArray()
+		return err == nil && len(chans) > 0
+	}, 10*time.Second, 50*time.Millisecond, "PUB/SUB loop did not start")
+	time.Sleep(200 * time.Millisecond)
+	res, err := probeTestRedisDo(t, "127.0.0.1:6379", "PUBSUB", "NUMSUB", redisChannel).ToArray()
+	require.NoError(t, err)
+	n, err := res[1].AsInt64()
+	require.NoError(t, err)
+	require.Equal(t, int64(0), n, "a channel whose subscribe failed is subscribed")
+}

@@ -89,6 +89,11 @@ type shardWrapper struct {
 	shard               *RedisShard
 	subClientsMu        sync.Mutex
 	subClients          [][]rueidis.DedicatedClient
+	// subscribed holds the channels this broker's Subscribe added and no
+	// Unsubscribe or failed subscribe removed since: what a PUB/SUB reconnect
+	// resubscribes. Guarded by subClientsMu. Subscribe and Unsubscribe of the
+	// same channel are never called concurrently (see Broker).
+	subscribed map[string]struct{}
 	pubSubStartChannels [][]*pubSubStart
 	controlPubSubStart  *controlPubSubStart
 	logFields           map[string]any
@@ -314,7 +319,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		if config.Name != "" {
 			logFields["broker_name"] = config.Name
 		}
-		shardWrappers = append(shardWrappers, &shardWrapper{shard: s, logFields: logFields})
+		shardWrappers = append(shardWrappers, &shardWrapper{shard: s, logFields: logFields, subscribed: map[string]struct{}{}})
 	}
 
 	b := &RedisBroker{
@@ -772,19 +777,6 @@ func (b *RedisBroker) makePubSubCallbacks(s *shardWrapper) pubSubCallbacks {
 		shardForChannel: func(ch string) *RedisShard {
 			return b.getShard(ch).shard
 		},
-		hubChannels: func() []string {
-			channels := b.node.hub.channelsOfKind(false)
-			own := channels[:0]
-			for _, ch := range channels {
-				if b.node.getBroker(ch) == Broker(b) {
-					own = append(own, ch)
-				}
-			}
-			return own
-		},
-		extraResubscribeChannels: func() []string {
-			return b.node.extraBrokerPubSubChannels(b)
-		},
 	}
 }
 
@@ -798,6 +790,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, logFields map[string]any, event
 		s.shard,
 		&s.subClientsMu,
 		s.subClients,
+		s.subscribed,
 		cb,
 		b.node,
 		b.config.Name,
@@ -1107,6 +1100,9 @@ func (b *RedisBroker) subscribe(s *shardWrapper, ch string) error {
 		s.subClientsMu.Unlock()
 		return errPubSubConnUnavailable
 	}
+	// Recorded together with the connection read: a reconnect's resubscribe
+	// snapshot, taken once this connection left its slot, has the channel.
+	s.subscribed[ch] = struct{}{}
 	s.subClientsMu.Unlock()
 
 	var err error
@@ -1115,7 +1111,40 @@ func (b *RedisBroker) subscribe(s *shardWrapper, ch string) error {
 	} else {
 		err = conn.Do(context.Background(), conn.B().Subscribe().Channel(string(b.messageChannelID(s.shard, ch))).Build()).Error()
 	}
+	if err != nil {
+		b.subscribeFailed(s, clusterShardIndex, psShardIndex, conn, []string{ch})
+	}
 	return err
+}
+
+// subscribeFailed removes channels whose subscribe on conn failed from the
+// subscribed set. A connection published for the slot since may have
+// resubscribed them from a snapshot which still had them: they are unsubscribed
+// there (best effort). The caller considers them not subscribed and may never
+// unsubscribe them.
+func (b *RedisBroker) subscribeFailed(s *shardWrapper, clusterShardIndex, psShardIndex int, conn rueidis.DedicatedClient, channels []string) {
+	s.subClientsMu.Lock()
+	for _, ch := range channels {
+		delete(s.subscribed, ch)
+	}
+	cur := s.subClients[clusterShardIndex][psShardIndex]
+	s.subClientsMu.Unlock()
+	if cur != nil && cur != conn {
+		b.unsubscribeOn(s, cur, channels)
+	}
+}
+
+// unsubscribeOn unsubscribes channels on conn, ignoring errors.
+func (b *RedisBroker) unsubscribeOn(s *shardWrapper, conn rueidis.DedicatedClient, channels []string) {
+	chIDs := make([]string, len(channels))
+	for i, ch := range channels {
+		chIDs[i] = string(b.messageChannelID(s.shard, ch))
+	}
+	if b.useShardedPubSub(s.shard) {
+		_ = conn.Do(context.Background(), conn.B().Sunsubscribe().Channel(chIDs...).Build()).Error()
+	} else {
+		_ = conn.Do(context.Background(), conn.B().Unsubscribe().Channel(chIDs...).Build()).Error()
+	}
 }
 
 type brokerConnKey struct {
@@ -1156,6 +1185,12 @@ func (b *RedisBroker) subscribeBatch(channels []string, unsub bool) error {
 	for key, g := range groups {
 		s := g.shard
 		s.subClientsMu.Lock()
+		if unsub {
+			// See unsubscribe.
+			for _, ch := range g.channels {
+				delete(s.subscribed, ch)
+			}
+		}
 		conn := s.subClients[key.clusterShardIdx][key.psShardIdx]
 		if conn == nil {
 			s.subClientsMu.Unlock()
@@ -1163,6 +1198,12 @@ func (b *RedisBroker) subscribeBatch(channels []string, unsub bool) error {
 				b.rollbackSubscribeBatch(groups, completed)
 			}
 			return errPubSubConnUnavailable
+		}
+		if !unsub {
+			// See subscribe.
+			for _, ch := range g.channels {
+				s.subscribed[ch] = struct{}{}
+			}
 		}
 		s.subClientsMu.Unlock()
 
@@ -1187,6 +1228,7 @@ func (b *RedisBroker) subscribeBatch(channels []string, unsub bool) error {
 		}
 		if err != nil {
 			if !unsub {
+				b.subscribeFailed(s, key.clusterShardIdx, key.psShardIdx, conn, g.channels)
 				b.rollbackSubscribeBatch(groups, completed)
 			}
 			return err
@@ -1203,6 +1245,9 @@ func (b *RedisBroker) rollbackSubscribeBatch(groups map[brokerConnKey]*brokerCon
 		g := groups[key]
 		s := g.shard
 		s.subClientsMu.Lock()
+		for _, ch := range g.channels {
+			delete(s.subscribed, ch)
+		}
 		conn := s.subClients[key.clusterShardIdx][key.psShardIdx]
 		s.subClientsMu.Unlock()
 		if conn == nil {
@@ -1243,6 +1288,10 @@ func (b *RedisBroker) unsubscribe(s *shardWrapper, ch string) error {
 	clusterShardIndex = s.pubSubRunner.subClientsIndex(clusterShardIndex)
 
 	s.subClientsMu.Lock()
+	// The channel leaves the subscribed set whatever the outcome below: a
+	// reconnect does not resubscribe it, and a failed unsubscribe is retried by
+	// the caller.
+	delete(s.subscribed, ch)
 	conn := s.subClients[clusterShardIndex][psShardIndex]
 	if conn == nil {
 		s.subClientsMu.Unlock()

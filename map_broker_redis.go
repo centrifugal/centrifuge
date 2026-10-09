@@ -43,6 +43,11 @@ type brokerShardWrapper struct {
 	shard               *RedisShard
 	subClientsMu        sync.Mutex
 	subClients          [][]rueidis.DedicatedClient
+	// subscribed holds the channels this broker's Subscribe added and no
+	// Unsubscribe or failed subscribe removed since: what a PUB/SUB reconnect
+	// resubscribes. Guarded by subClientsMu. Subscribe and Unsubscribe of the
+	// same channel are never called concurrently (see Broker).
+	subscribed map[string]struct{}
 	pubSubStartChannels [][]*pubSubStart
 	pubSubRunner        mapBrokerPubSubRunner
 }
@@ -240,7 +245,7 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 
 	shardWrappers := make([]*brokerShardWrapper, 0, len(conf.Shards))
 	for _, s := range conf.Shards {
-		shardWrappers = append(shardWrappers, &brokerShardWrapper{shard: s})
+		shardWrappers = append(shardWrappers, &brokerShardWrapper{shard: s, subscribed: map[string]struct{}{}})
 	}
 
 	e := &RedisMapBroker{
@@ -2804,19 +2809,6 @@ func (e *RedisMapBroker) makePubSubCallbacks(s *brokerShardWrapper) pubSubCallba
 		shardForChannel: func(ch string) *RedisShard {
 			return e.getShard(ch).shard
 		},
-		hubChannels: func() []string {
-			channels := e.node.hub.channelsOfKind(true)
-			own := channels[:0]
-			for _, ch := range channels {
-				if e.node.getMapBroker(ch) == MapBroker(e) {
-					own = append(own, ch)
-				}
-			}
-			return own
-		},
-		// extraResubscribeChannels is not set: shared poll key channels are
-		// subscribed via node.getBroker which returns Broker implementations
-		// only — RedisMapBroker is not one, so no key channels can live here.
 	}
 }
 
@@ -2830,6 +2822,7 @@ func (e *RedisMapBroker) runPubSub(s *brokerShardWrapper, logFields map[string]a
 		s.shard,
 		&s.subClientsMu,
 		s.subClients,
+		s.subscribed,
 		cb,
 		e.node,
 		e.conf.Name,
@@ -2978,6 +2971,9 @@ func (e *RedisMapBroker) subscribe(s *brokerShardWrapper, ch string) error {
 		s.subClientsMu.Unlock()
 		return errPubSubConnUnavailable
 	}
+	// Recorded together with the connection read: a reconnect's resubscribe
+	// snapshot, taken once this connection left its slot, has the channel.
+	s.subscribed[ch] = struct{}{}
 	s.subClientsMu.Unlock()
 
 	var err error
@@ -2986,7 +2982,40 @@ func (e *RedisMapBroker) subscribe(s *brokerShardWrapper, ch string) error {
 	} else {
 		err = conn.Do(context.Background(), conn.B().Subscribe().Channel(e.messageChannelID(s.shard, ch)).Build()).Error()
 	}
+	if err != nil {
+		e.subscribeFailed(s, clusterShardIndex, psShardIndex, conn, []string{ch})
+	}
 	return err
+}
+
+// subscribeFailed removes channels whose subscribe on conn failed from the
+// subscribed set. A connection published for the slot since may have
+// resubscribed them from a snapshot which still had them: they are unsubscribed
+// there (best effort). The caller considers them not subscribed and may never
+// unsubscribe them.
+func (e *RedisMapBroker) subscribeFailed(s *brokerShardWrapper, clusterShardIndex, psShardIndex int, conn rueidis.DedicatedClient, channels []string) {
+	s.subClientsMu.Lock()
+	for _, ch := range channels {
+		delete(s.subscribed, ch)
+	}
+	cur := s.subClients[clusterShardIndex][psShardIndex]
+	s.subClientsMu.Unlock()
+	if cur != nil && cur != conn {
+		e.unsubscribeOn(s, cur, channels)
+	}
+}
+
+// unsubscribeOn unsubscribes channels on conn, ignoring errors.
+func (e *RedisMapBroker) unsubscribeOn(s *brokerShardWrapper, conn rueidis.DedicatedClient, channels []string) {
+	chIDs := make([]string, len(channels))
+	for i, ch := range channels {
+		chIDs[i] = e.messageChannelID(s.shard, ch)
+	}
+	if e.useShardedPubSub(s.shard) {
+		_ = conn.Do(context.Background(), conn.B().Sunsubscribe().Channel(chIDs...).Build()).Error()
+	} else {
+		_ = conn.Do(context.Background(), conn.B().Unsubscribe().Channel(chIDs...).Build()).Error()
+	}
 }
 
 type mapBrokerConnKey struct {
@@ -3027,6 +3056,12 @@ func (e *RedisMapBroker) subscribeBatch(channels []string, unsub bool) error {
 	for key, g := range groups {
 		s := g.shard
 		s.subClientsMu.Lock()
+		if unsub {
+			// See unsubscribe.
+			for _, ch := range g.channels {
+				delete(s.subscribed, ch)
+			}
+		}
 		conn := s.subClients[key.clusterShardIdx][key.psShardIdx]
 		if conn == nil {
 			s.subClientsMu.Unlock()
@@ -3034,6 +3069,12 @@ func (e *RedisMapBroker) subscribeBatch(channels []string, unsub bool) error {
 				e.rollbackSubscribeBatch(groups, completed)
 			}
 			return errPubSubConnUnavailable
+		}
+		if !unsub {
+			// See subscribe.
+			for _, ch := range g.channels {
+				s.subscribed[ch] = struct{}{}
+			}
 		}
 		s.subClientsMu.Unlock()
 
@@ -3058,6 +3099,7 @@ func (e *RedisMapBroker) subscribeBatch(channels []string, unsub bool) error {
 		}
 		if err != nil {
 			if !unsub {
+				e.subscribeFailed(s, key.clusterShardIdx, key.psShardIdx, conn, g.channels)
 				e.rollbackSubscribeBatch(groups, completed)
 			}
 			return err
@@ -3074,6 +3116,9 @@ func (e *RedisMapBroker) rollbackSubscribeBatch(groups map[mapBrokerConnKey]*map
 		g := groups[key]
 		s := g.shard
 		s.subClientsMu.Lock()
+		for _, ch := range g.channels {
+			delete(s.subscribed, ch)
+		}
 		conn := s.subClients[key.clusterShardIdx][key.psShardIdx]
 		s.subClientsMu.Unlock()
 		if conn == nil {
@@ -3114,6 +3159,10 @@ func (e *RedisMapBroker) unsubscribe(s *brokerShardWrapper, ch string) error {
 	clusterShardIndex = s.pubSubRunner.subClientsIndex(clusterShardIndex)
 
 	s.subClientsMu.Lock()
+	// The channel leaves the subscribed set whatever the outcome below: a
+	// reconnect does not resubscribe it, and a failed unsubscribe is retried by
+	// the caller.
+	delete(s.subscribed, ch)
 	conn := s.subClients[clusterShardIndex][psShardIndex]
 	if conn == nil {
 		s.subClientsMu.Unlock()
