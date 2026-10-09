@@ -948,27 +948,34 @@ func (c *Client) keyedWritePublication(channel string, key string, pubVersion ui
 // keyedWriteRemoval writes a removal publication and removes the key from
 // per-connection tracking.
 func (c *Client) keyedWriteRemoval(channel string, key string, pub *protocol.Publication) {
-	c.mu.Lock()
-	if c.keyed == nil {
-		c.mu.Unlock()
-		return
-	}
-	chanKeys, ok := c.keyed.trackedKeys[channel]
-	if !ok {
-		c.mu.Unlock()
-		return
-	}
-	delete(chanKeys, key)
-	c.mu.Unlock()
-
 	data, err := c.encodeKeyedPush(channel, pub)
 	if err != nil {
 		return
 	}
-
+	// Resolve batch config — user-supplied callback, must run outside c.mu.
 	var batchConfig ChannelBatchConfig
 	if c.node.config.GetChannelBatchConfig != nil {
 		batchConfig = c.node.config.GetChannelBatchConfig(channel)
 	}
-	_ = c.writePublication(channel, pub, preparedData{fullData: data}, StreamPosition{}, false, batchConfig)
+	write := !hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication)
+	if write && c.node.logEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: channel, Pub: pub})
+	}
+
+	// The removal is written under c.mu, like keyedWritePublication: an
+	// unsubscribe removes the tracked keys under c.mu before its reply or push,
+	// so the removal can't come after them.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.keyed == nil {
+		return
+	}
+	chanKeys, ok := c.keyed.trackedKeys[channel]
+	if !ok {
+		return
+	}
+	delete(chanKeys, key)
+	if write {
+		_ = c.writeEncodedPushData(data, channel, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+	}
 }
