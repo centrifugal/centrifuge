@@ -2963,9 +2963,14 @@ func (e *RedisMapBroker) subscribe(s *brokerShardWrapper, ch string) error {
 	if e.useShardedPubSub(s.shard) {
 		clusterShardIndex = consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
 	}
-	clusterShardIndex = s.pubSubRunner.subClientsIndex(clusterShardIndex)
 
+	partition := clusterShardIndex
 	s.subClientsMu.Lock()
+	// The slot index (node-grouped: the partition mapping) is read under
+	// subClientsMu, which a topology rebuild changes it under: a subscribe either
+	// uses the mapping of before the rebuild, and a loop started after it has
+	// the channel in its snapshot, or the new one.
+	clusterShardIndex = s.pubSubRunner.subClientsIndex(partition)
 	conn := s.subClients[clusterShardIndex][psShardIndex]
 	if conn == nil {
 		s.subClientsMu.Unlock()
@@ -2983,7 +2988,7 @@ func (e *RedisMapBroker) subscribe(s *brokerShardWrapper, ch string) error {
 		err = conn.Do(context.Background(), conn.B().Subscribe().Channel(e.messageChannelID(s.shard, ch)).Build()).Error()
 	}
 	if err != nil {
-		e.subscribeFailed(s, clusterShardIndex, psShardIndex, conn, []string{ch})
+		e.subscribeFailed(s, partition, psShardIndex, conn, []string{ch})
 	}
 	return err
 }
@@ -2993,12 +2998,12 @@ func (e *RedisMapBroker) subscribe(s *brokerShardWrapper, ch string) error {
 // resubscribed them from a snapshot which still had them: they are unsubscribed
 // there (best effort). The caller considers them not subscribed and may never
 // unsubscribe them.
-func (e *RedisMapBroker) subscribeFailed(s *brokerShardWrapper, clusterShardIndex, psShardIndex int, conn rueidis.DedicatedClient, channels []string) {
+func (e *RedisMapBroker) subscribeFailed(s *brokerShardWrapper, partition, psShardIndex int, conn rueidis.DedicatedClient, channels []string) {
 	s.subClientsMu.Lock()
 	for _, ch := range channels {
 		delete(s.subscribed, ch)
 	}
-	cur := s.subClients[clusterShardIndex][psShardIndex]
+	cur := s.subClients[s.pubSubRunner.subClientsIndex(partition)][psShardIndex]
 	s.subClientsMu.Unlock()
 	if cur != nil && cur != conn {
 		e.unsubscribeOn(s, cur, channels)
@@ -3042,7 +3047,7 @@ func (e *RedisMapBroker) subscribeBatch(channels []string, unsub bool) error {
 		if e.useShardedPubSub(s.shard) {
 			clusterShardIdx = consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
 		}
-		clusterShardIdx = s.pubSubRunner.subClientsIndex(clusterShardIdx)
+		// Mapped to the slot index under subClientsMu below (see subscribe).
 		key := mapBrokerConnKey{shardIdx: shardIdx, clusterShardIdx: clusterShardIdx, psShardIdx: psShardIdx}
 		g, ok := groups[key]
 		if !ok {
@@ -3056,13 +3061,14 @@ func (e *RedisMapBroker) subscribeBatch(channels []string, unsub bool) error {
 	for key, g := range groups {
 		s := g.shard
 		s.subClientsMu.Lock()
+		slotIdx := s.pubSubRunner.subClientsIndex(key.clusterShardIdx)
 		if unsub {
 			// See unsubscribe.
 			for _, ch := range g.channels {
 				delete(s.subscribed, ch)
 			}
 		}
-		conn := s.subClients[key.clusterShardIdx][key.psShardIdx]
+		conn := s.subClients[slotIdx][key.psShardIdx]
 		if conn == nil {
 			s.subClientsMu.Unlock()
 			if !unsub {
@@ -3119,7 +3125,7 @@ func (e *RedisMapBroker) rollbackSubscribeBatch(groups map[mapBrokerConnKey]*map
 		for _, ch := range g.channels {
 			delete(s.subscribed, ch)
 		}
-		conn := s.subClients[key.clusterShardIdx][key.psShardIdx]
+		conn := s.subClients[s.pubSubRunner.subClientsIndex(key.clusterShardIdx)][key.psShardIdx]
 		s.subClientsMu.Unlock()
 		if conn == nil {
 			continue
@@ -3156,9 +3162,13 @@ func (e *RedisMapBroker) unsubscribe(s *brokerShardWrapper, ch string) error {
 	if e.useShardedPubSub(s.shard) {
 		clusterShardIndex = consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
 	}
-	clusterShardIndex = s.pubSubRunner.subClientsIndex(clusterShardIndex)
 
 	s.subClientsMu.Lock()
+	// The slot index (node-grouped: the partition mapping) is read under
+	// subClientsMu, which a topology rebuild changes it under: a subscribe either
+	// uses the mapping of before the rebuild, and a loop started after it has
+	// the channel in its snapshot, or the new one.
+	clusterShardIndex = s.pubSubRunner.subClientsIndex(clusterShardIndex)
 	// The channel leaves the subscribed set whatever the outcome below: a
 	// reconnect does not resubscribe it, and a failed unsubscribe is retried by
 	// the caller.
