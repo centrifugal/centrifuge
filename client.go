@@ -347,6 +347,9 @@ type Client struct {
 	mapSubscribing map[string]*mapSubscribeState
 	// mapPaginationLocks tracks channels currently being paginated to prevent concurrent pagination.
 	mapPaginationLocks map[string]struct{}
+	// keyedTracks counts shared poll track requests of a channel between their
+	// commit and their join to the keyed hub, see startKeyedTrackLocked.
+	keyedTracks map[string]int
 
 	// keyed holds per-connection keyed subscription state (shared poll).
 	// nil until first keyed subscribe.
@@ -6045,6 +6048,7 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 	// A map subscribe request in progress holds the channel's pagination lock,
 	// also after its go-live commit moved the channel into c.channels.
 	_, paginating := c.mapPaginationLocks[channel]
+	paginating = paginating || c.keyedTracks[channel] > 0
 	c.mu.RUnlock()
 
 	// If channel is not in channels map, check if it's only in mapSubscribing.
@@ -6116,7 +6120,7 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 				// A fresh subscribe replaced the reservation this unsubscribe targets.
 				return true
 			}
-			if _, paginating := c.mapPaginationLocks[channel]; paginating {
+			if _, paginating := c.mapPaginationLocks[channel]; paginating || c.keyedTracks[channel] > 0 {
 				return false
 			}
 			return !wholeLoad || !hasKeyedState || !exists

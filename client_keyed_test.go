@@ -552,3 +552,54 @@ func TestKeyed_InlineUntrackVsRetrack_NoOrphanInHub(t *testing.T) {
 		}, 2*time.Second, time.Millisecond)
 	})
 }
+
+// An unsubscribe of a shared poll channel waits for a track request which
+// committed its keys: the track reply comes before the unsubscribe's push, and
+// the unsubscribe's keyed hub cleanup after the track's join to the hub, so
+// the client is not left in the hub.
+func TestKeyed_UnsubscribeWaitsForTrackInProgress(t *testing.T) {
+	t.Parallel()
+	const channel = "test:track_in_progress"
+	const key = "k1"
+	node := newTestNodeWithSharedPoll(t)
+	setupSharedPollHandlersWithExpiry(node, time.Now().Unix()+3600)
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, channel)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	trackDone := make(chan struct{})
+	go func() {
+		defer close(trackDone)
+		rw := &replyWriter{write: func(*protocol.Reply) {
+			close(entered)
+			<-release
+		}}
+		require.NoError(t, client.handleSubRefresh(&protocol.SubRefreshRequest{
+			Channel: channel,
+			Type:    typeTrack,
+			Track:   []*protocol.TrackBatch{{Items: []*protocol.KeyedItem{{Key: key}}}},
+		}, &protocol.Command{Id: 2}, time.Now(), rw))
+	}()
+	<-entered // The track committed its keys and writes its reply.
+
+	unsubscribed := make(chan struct{})
+	go func() {
+		defer close(unsubscribed)
+		client.Unsubscribe(channel)
+	}()
+	select {
+	case <-unsubscribed:
+		close(release)
+		t.Fatal("unsubscribe did not wait for the track in progress")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	<-trackDone
+	<-unsubscribed
+
+	require.False(t, client.IsSubscribed(channel))
+	hub := node.keyedManager.getHub(channel)
+	require.True(t, hub == nil || !hub.hasSubscriber(key, client), "client left in the keyed hub after unsubscribe")
+}

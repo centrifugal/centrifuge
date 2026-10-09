@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"sync"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
@@ -334,7 +335,10 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		if cs := c.keyed.channels[channel]; cs != nil {
 			channelIsDelta = cs.deltaType != deltaTypeNone
 		}
+		c.startKeyedTrackLocked(channel)
 		c.mu.Unlock()
+		finishTrack := sync.OnceFunc(func() { c.finishKeyedTrack(channel) })
+		defer finishTrack()
 
 		// Step 2: Collect cached data for items where server has newer version.
 		var cachedItems []*protocol.Publication
@@ -446,6 +450,7 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		// hub.subscriberCount(key) is now >= 1 for each key we tracked, so
 		// release just decrements the counter — no entries are deleted.
 		releaseTrackReservation()
+		finishTrack()
 		hub := c.node.keyedManager.getHub(channel)
 
 		// Compute warm key delivery plan AFTER addSubscriber. KeepLatestData →
@@ -978,4 +983,26 @@ func (c *Client) keyedWriteRemoval(channel string, key string, pub *protocol.Pub
 	if write {
 		_ = c.writeEncodedPushData(data, channel, pub.Key, protocol.FrameTypePushPublication, batchConfig)
 	}
+}
+
+// startKeyedTrackLocked marks a track request of the channel committed to the
+// tracked keys: until finishKeyedTrack, after its reply and its join to the
+// keyed hub, an unsubscribe of the channel waits for it (see
+// unsubscribeWaiting). Otherwise the unsubscribe's reply or push could come
+// before the track reply with the channel's items, and its keyed hub cleanup
+// before the join, leaving the client in the hub. c.mu must be held.
+func (c *Client) startKeyedTrackLocked(channel string) {
+	if c.keyedTracks == nil {
+		c.keyedTracks = make(map[string]int)
+	}
+	c.keyedTracks[channel]++
+}
+
+func (c *Client) finishKeyedTrack(channel string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.keyedTracks[channel]--; c.keyedTracks[channel] <= 0 {
+		delete(c.keyedTracks, channel)
+	}
+	c.signalLocked()
 }
