@@ -6128,6 +6128,8 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 			loading := exists && state == keyedState
 			c.mu.RUnlock()
 			if !ok && !loading {
+				// Another unsubscribe may have removed it meanwhile.
+				c.waitOtherUnsubscribe(channel, unsubscribe, disconnect, maxWaitTimeout)
 				return nil
 			}
 		} else {
