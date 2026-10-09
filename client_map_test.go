@@ -6382,3 +6382,64 @@ func TestMapSubscribe_StreamPhaseAfterStreamExpired(t *testing.T) {
 		})
 	}
 }
+
+type holdRemoveMapBroker struct {
+	*MemoryMapBroker
+	entered, release chan struct{}
+}
+
+func (b *holdRemoveMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapUpdateResult, error) {
+	close(b.entered)
+	<-b.release
+	return b.MemoryMapBroker.Remove(ctx, ch, key, opts)
+}
+
+// The cleanup of a client map publish which completed after its subscription
+// ended registers a pending leave, and a map subscribe of the channel commits
+// only after the cleanup removed the key: the key the new subscription
+// publishes once live is not removed.
+func TestMapKeyCleanupBeforeNextMapCommit(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	hold := &holdRemoveMapBroker{MemoryMapBroker: broker, entered: make(chan struct{}), release: make(chan struct{})}
+	node.SetMapBroker(hold)
+	client, _ := newAttemptTestClient(t, node, allowSubscribe(SubscribeReply{}))
+	const ch = "map"
+
+	cleanupDone := make(chan struct{})
+	go func() {
+		defer close(cleanupDone)
+		client.cleanupMapKeyIfUnsubscribed(ch)
+	}()
+	<-hold.entered // The cleanup decided to remove the key.
+
+	// A map subscribe of the channel which passed its checks commits now.
+	client.mu.Lock()
+	if client.mapSubscribing == nil {
+		client.mapSubscribing = map[string]*mapSubscribeState{}
+	}
+	client.mapSubscribing[ch] = &mapSubscribeState{subGen: 7}
+	client.mu.Unlock()
+	committed := make(chan bool, 1)
+	go func() {
+		_, ok := client.commitSubscription(ch, ChannelContext{subGen: 7}, reservationMap)
+		committed <- ok
+	}()
+	select {
+	case <-committed:
+		close(hold.release)
+		t.Fatal("map subscribe committed before the key cleanup finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(hold.release)
+	<-cleanupDone
+	select {
+	case ok := <-committed:
+		require.True(t, ok)
+	case <-time.After(time.Second):
+		t.Fatal("map subscribe did not commit after the key cleanup")
+	}
+	client.mu.Lock()
+	delete(client.channels, ch)
+	client.mu.Unlock()
+}

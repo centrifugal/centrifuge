@@ -3376,13 +3376,19 @@ func (c *Client) handleMapPublish(req *protocol.PublishRequest, cmd *protocol.Co
 // on unsubscribe (MapRemoveClientOnUnsubscribe) ended: that cleanup may have run
 // before the publish, and the key would stay until its TTL.
 func (c *Client) cleanupMapKeyIfUnsubscribed(channel string) {
-	c.mu.RLock()
+	c.mu.Lock()
 	chCtx, ok := c.channels[channel]
 	keep := c.status != statusClosed && ok && channelHasFlag(chCtx.flags, flagSubscribed) && channelHasFlag(chCtx.flags, flagCleanupOnUnsubscribe)
-	c.mu.RUnlock()
+	if !keep {
+		// A subscribe to the channel waits for the removal: it must not remove
+		// the key of a subscription which went live meanwhile.
+		c.addPendingLeaveLocked(channel)
+	}
+	c.mu.Unlock()
 	if keep {
 		return
 	}
+	defer c.finishPendingLeave(channel)
 	if _, err := c.node.MapRemove(context.Background(), channel, c.uid, MapRemoveOptions{}); err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error cleaning up map state after unsubscribe", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 	}
@@ -4926,6 +4932,21 @@ func (c *Client) removeSubscribePresence(channel string, flags uint16) {
 // the connection is already being force-closed by the timeout path.
 func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind reservationKind) (chan struct{}, bool) {
 	c.mu.Lock()
+	if kind == reservationMap {
+		// A map subscribe can pass its pending leave check in SubscribeHandler
+		// while loading, and a presence removal or key cleanup of an earlier
+		// subscription (see compensateRacedPresence, cleanupMapKeyIfUnsubscribed)
+		// can be decided after that: what it removes the subscription adds again
+		// once live, after the commit. Wait for it here.
+		var waitDeadline time.Time
+		for c.status != statusClosed && c.mustWaitPendingLeaveLocked(channel, &waitDeadline) {
+			c.mu.Unlock()
+			if !c.waitUntil(func() bool { return !c.tracking.channelLeaves.has(channel) }, time.Until(waitDeadline)) {
+				c.logLeaveNotFinished(channel)
+			}
+			c.mu.Lock()
+		}
+	}
 	var subscribingCh chan struct{}
 	reservationLost := false
 	// Every map reservation belongs to an attempt SubscribeHandler allowed.
