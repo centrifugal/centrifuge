@@ -662,3 +662,49 @@ func TestKeyed_UnsubscribeRechecksTrackBeforeRemoval(t *testing.T) {
 	hub := node.keyedManager.getHub(channel)
 	require.True(t, hub == nil || !hub.hasSubscriber(key, client), "client left in the keyed hub after unsubscribe")
 }
+
+// An untrack of a key whose track committed but did not join the keyed hub yet
+// finds the client not in the hub: the track joins only for keys still
+// tracked, so the client is not left in the hub for the untracked key.
+func TestKeyed_UntrackBeforeTrackJoin_NoOrphanInHub(t *testing.T) {
+	t.Parallel()
+	const channel = "test:untrack_before_join"
+	const key = "k1"
+	node := newTestNodeWithSharedPoll(t)
+	setupSharedPollHandlersWithExpiry(node, time.Now().Unix()+3600)
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, channel)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	trackDone := make(chan struct{})
+	go func() {
+		defer close(trackDone)
+		rw := &replyWriter{write: func(*protocol.Reply) {
+			close(entered)
+			<-release
+		}}
+		require.NoError(t, client.handleSubRefresh(&protocol.SubRefreshRequest{
+			Channel: channel,
+			Type:    typeTrack,
+			Track:   []*protocol.TrackBatch{{Items: []*protocol.KeyedItem{{Key: key}}}},
+		}, &protocol.Command{Id: 2}, time.Now(), rw))
+	}()
+	<-entered // The track committed its keys and writes its reply.
+
+	require.NoError(t, client.handleSubRefresh(&protocol.SubRefreshRequest{
+		Channel: channel,
+		Type:    typeUntrack,
+		Untrack: []string{key},
+	}, &protocol.Command{Id: 3}, time.Now(), testReplyWriterWrapper().rw))
+	close(release)
+	<-trackDone
+
+	client.mu.RLock()
+	_, tracked := client.keyed.trackedKeys[channel][key]
+	client.mu.RUnlock()
+	require.False(t, tracked)
+	hub := node.keyedManager.getHub(channel)
+	require.True(t, hub == nil || !hub.hasSubscriber(key, client), "client left in the keyed hub for an untracked key")
+}

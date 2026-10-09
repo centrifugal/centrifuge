@@ -445,10 +445,30 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		// the finalizeShutdown then deletes from the manager, leaving the
 		// client orphaned from future broadcasts (which look up via
 		// getHub).
-		c.node.keyedManager.addSubscribers(channel, allKeys, c, keyedOpts)
+		//
+		// Joined under c.mu, and only for keys this subscription still tracks: an
+		// untrack, an expiry or an unsubscribe which removed a key since the commit
+		// found the client not in the hub yet, so joining for it would leave the
+		// client in the hub with nothing to remove it. Lock order c.mu → keyed
+		// manager → hub, as in cleanupKeyed.
+		c.mu.Lock()
+		joinKeys := make([]string, 0, len(allKeys))
+		if cc, ok := c.channels[channel]; ok && cc.subGen == trackSubGen && channelHasFlag(cc.flags, flagSubscribed) && c.keyed != nil {
+			chanKeys := c.keyed.trackedKeys[channel]
+			for _, key := range allKeys {
+				if _, tracked := chanKeys[key]; tracked {
+					joinKeys = append(joinKeys, key)
+				}
+			}
+		}
+		if len(joinKeys) > 0 {
+			c.node.keyedManager.addSubscribers(channel, joinKeys, c, keyedOpts)
+		}
+		c.mu.Unlock()
 		// Release the pendingHubJoin reservation now that we're in the hub.
-		// hub.subscriberCount(key) is now >= 1 for each key we tracked, so
-		// release just decrements the counter — no entries are deleted.
+		// hub.subscriberCount(key) is now >= 1 for each key we joined, so
+		// release just decrements the counter for them; keys not joined are
+		// dropped like on the rollback paths.
 		releaseTrackReservation()
 		finishTrack()
 		hub := c.node.keyedManager.getHub(channel)
