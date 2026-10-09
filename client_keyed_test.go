@@ -603,3 +603,62 @@ func TestKeyed_UnsubscribeWaitsForTrackInProgress(t *testing.T) {
 	hub := node.keyedManager.getHub(channel)
 	require.True(t, hub == nil || !hub.hasSubscriber(key, client), "client left in the keyed hub after unsubscribe")
 }
+
+// A track which commits its keys after an unsubscribe found no track in
+// progress, but before its removal, still joins the keyed hub and writes its
+// reply before the removal: the client is not left in the hub.
+func TestKeyed_UnsubscribeRechecksTrackBeforeRemoval(t *testing.T) {
+	const channel = "test:track_before_removal"
+	const key = "k1"
+	node := newTestNodeWithSharedPoll(t)
+	setupSharedPollHandlersWithExpiry(node, time.Now().Unix()+3600)
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, channel)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	trackDone := make(chan struct{})
+	var once sync.Once
+	hook := func(ch string) {
+		if ch != channel {
+			return
+		}
+		once.Do(func() {
+			go func() {
+				defer close(trackDone)
+				rw := &replyWriter{write: func(*protocol.Reply) {
+					close(entered)
+					<-release
+				}}
+				require.NoError(t, client.handleSubRefresh(&protocol.SubRefreshRequest{
+					Channel: channel,
+					Type:    typeTrack,
+					Track:   []*protocol.TrackBatch{{Items: []*protocol.KeyedItem{{Key: key}}}},
+				}, &protocol.Command{Id: 2}, time.Now(), rw))
+			}()
+			<-entered // The track committed its keys and writes its reply.
+		})
+	}
+	testBeforeUnsubscribeRemoval.Store(&hook)
+	t.Cleanup(func() { testBeforeUnsubscribeRemoval.Store(nil) })
+
+	unsubscribed := make(chan struct{})
+	go func() {
+		defer close(unsubscribed)
+		client.Unsubscribe(channel)
+	}()
+	<-entered
+	select {
+	case <-unsubscribed:
+		close(release)
+		t.Fatal("unsubscribe removed the subscription before the track joined the hub")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	<-trackDone
+	<-unsubscribed
+
+	hub := node.keyedManager.getHub(channel)
+	require.True(t, hub == nil || !hub.hasSubscriber(key, client), "client left in the keyed hub after unsubscribe")
+}

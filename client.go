@@ -3803,6 +3803,9 @@ var (
 	// testAfterMapCommit (if set) runs for map subscriptions to channels with
 	// testChannelRecoveryOrderingPrefix between their commit and their reply.
 	testAfterMapCommit atomic.Pointer[func(channel string)]
+	// testBeforeUnsubscribeRemoval (if set) runs in unsubscribeWaiting between
+	// its waits and the removal.
+	testBeforeUnsubscribeRemoval atomic.Pointer[func(channel string)]
 )
 
 // testSyncPoint runs at the sync point of subscriptions to channels with
@@ -6192,7 +6195,26 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 		}
 	}
 
+	if f := testBeforeUnsubscribeRemoval.Load(); f != nil {
+		(*f)(channel)
+	}
 	c.mu.Lock()
+	// A shared poll track may have committed its keys since the snapshot: it must
+	// join the keyed hub and write its reply before the removal below, see
+	// startKeyedTrackLocked. Checked here, in the removal's critical section, so
+	// no track commits between the check and the removal.
+	var trackDeadline time.Time
+	for c.keyedTracks[channel] > 0 {
+		if trackDeadline.IsZero() {
+			trackDeadline = time.Now().Add(maxWaitTimeout)
+		} else if !time.Now().Before(trackDeadline) {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "timeout waiting for shared poll track to finish", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+			break
+		}
+		c.mu.Unlock()
+		c.waitUntil(func() bool { return c.keyedTracks[channel] == 0 }, time.Until(trackDeadline))
+		c.mu.Lock()
+	}
 	// Clean up normal subscription. Identity-match on subGen (mirrors the
 	// mapSubscribing cleanup below): only tear down the entry if it is still the
 	// subscription this unsubscribe targeted. A concurrent subscribe may have
