@@ -350,6 +350,9 @@ type Client struct {
 	// keyedTracks counts shared poll track requests of a channel between their
 	// commit and their join to the keyed hub, see startKeyedTrackLocked.
 	keyedTracks map[string]int
+	// trackRequests counts shared poll track requests of a channel from their
+	// OnTrack call to the end of its callback, see handleUntrack.
+	trackRequests map[string]int
 
 	// keyed holds per-connection keyed subscription state (shared poll).
 	// nil until first keyed subscribe.
@@ -2727,6 +2730,7 @@ func (c *Client) finishAttemptEnd(channel string) {
 // calls already running, as close() does for its own: it can be generous.
 var (
 	pendingUnsubscribesSubscribeTimeout  = newWaitTimeout(5 * time.Second)
+	untrackTrackTimeout                  = newWaitTimeout(5 * time.Second)
 	pendingUnsubscribesDisconnectTimeout = newWaitTimeout(30 * time.Second)
 )
 

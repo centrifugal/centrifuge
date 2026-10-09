@@ -604,6 +604,63 @@ func TestKeyed_UnsubscribeWaitsForTrackInProgress(t *testing.T) {
 	require.True(t, hub == nil || !hub.hasSubscriber(key, client), "client left in the keyed hub after unsubscribe")
 }
 
+// An untrack waits for a track request of the channel sent before it whose
+// OnTrack handler completes asynchronously (Centrifugo with client concurrency):
+// otherwise the track commits after the untrack, and the server keeps a key
+// the client untracked.
+func TestKeyed_UntrackWaitsForTrackInProgress(t *testing.T) {
+	t.Parallel()
+	const channel = "test:untrack_after_track"
+	const key = "k1"
+	node := newTestNodeWithSharedPoll(t)
+	setupSharedPollHandlersWithExpiry(node, time.Now().Unix()+3600)
+	client := newTestClientV2(t, node, "user1")
+	connectClientV2(t, client)
+	subscribeSharedPollClient(t, client, channel)
+
+	release := make(chan struct{})
+	client.eventHub.trackHandler = func(_ TrackEvent, cb TrackCallback) {
+		go func() {
+			<-release
+			cb(TrackReply{}, nil)
+		}()
+	}
+	trackDone := make(chan struct{})
+	rw := &replyWriter{write: func(*protocol.Reply) {}}
+	require.NoError(t, client.handleSubRefresh(&protocol.SubRefreshRequest{
+		Channel: channel,
+		Type:    typeTrack,
+		Track:   []*protocol.TrackBatch{{Items: []*protocol.KeyedItem{{Key: key}}}},
+	}, &protocol.Command{Id: 2}, time.Now(), &replyWriter{write: func(*protocol.Reply) { close(trackDone) }}))
+
+	untracked := make(chan struct{})
+	go func() {
+		defer close(untracked)
+		require.NoError(t, client.handleSubRefresh(&protocol.SubRefreshRequest{
+			Channel: channel,
+			Type:    typeUntrack,
+			Untrack: []string{key},
+		}, &protocol.Command{Id: 3}, time.Now(), rw))
+	}()
+	select {
+	case <-untracked:
+		close(release)
+		<-trackDone
+		t.Fatal("untrack did not wait for the track in progress")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	<-trackDone
+	<-untracked
+
+	client.mu.RLock()
+	_, tracked := client.keyed.trackedKeys[channel][key]
+	client.mu.RUnlock()
+	require.False(t, tracked, "key tracked after the client untracked it")
+	hub := node.keyedManager.getHub(channel)
+	require.True(t, hub == nil || !hub.hasSubscriber(key, client), "client left in the keyed hub after untrack")
+}
+
 // A track which commits its keys after an unsubscribe found no track in
 // progress, but before its removal, still joins the keyed hub and writes its
 // reply before the removal: the client is not left in the hub.

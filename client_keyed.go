@@ -178,7 +178,11 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 	}
 	event := TrackEvent{Channel: channel, Batches: eventBatches}
 
+	c.mu.Lock()
+	c.startTrackRequestLocked(channel)
+	c.mu.Unlock()
 	c.eventHub.trackHandler(event, func(reply TrackReply, err error) {
+		defer c.finishTrackRequest(channel)
 		if err != nil {
 			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, err, started, rw)
 			return
@@ -602,6 +606,14 @@ func (c *Client) handleUntrack(req *protocol.SubRefreshRequest, cmd *protocol.Co
 		return ErrorBadRequest
 	}
 
+	// An OnTrack handler may complete asynchronously: a track request of the
+	// channel sent before this untrack may not have committed its keys yet.
+	// Untracking before that commit would leave the keys tracked although the
+	// client untracked them.
+	if !c.waitTrackRequests(channel, untrackTrackTimeout.get()) {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "timeout waiting for shared poll track before untrack", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+	}
+
 	var actualUntrack []string
 	c.mu.Lock()
 	if c.keyed != nil {
@@ -1003,6 +1015,37 @@ func (c *Client) keyedWriteRemoval(channel string, key string, pub *protocol.Pub
 	if write {
 		_ = c.writeEncodedPushData(data, channel, pub.Key, protocol.FrameTypePushPublication, batchConfig)
 	}
+}
+
+// startTrackRequestLocked marks a track request of the channel in progress
+// from its OnTrack call until its callback has returned: an untrack of the
+// channel handled meanwhile waits for it (see handleUntrack). c.mu must be held.
+func (c *Client) startTrackRequestLocked(channel string) {
+	if c.trackRequests == nil {
+		c.trackRequests = make(map[string]int)
+	}
+	c.trackRequests[channel]++
+}
+
+func (c *Client) finishTrackRequest(channel string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.trackRequests[channel]--; c.trackRequests[channel] <= 0 {
+		delete(c.trackRequests, channel)
+	}
+	c.signalLocked()
+}
+
+// waitTrackRequests waits at most timeout for the track requests of the channel
+// in progress, reporting whether they finished.
+func (c *Client) waitTrackRequests(channel string, timeout time.Duration) bool {
+	c.mu.RLock()
+	pending := c.trackRequests[channel] > 0
+	c.mu.RUnlock()
+	if !pending {
+		return true
+	}
+	return c.waitUntil(func() bool { return c.trackRequests[channel] == 0 }, timeout)
 }
 
 // startKeyedTrackLocked marks a track request of the channel committed to the
