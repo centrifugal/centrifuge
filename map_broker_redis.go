@@ -2804,6 +2804,16 @@ func (e *RedisMapBroker) makePubSubCallbacks(s *brokerShardWrapper) pubSubCallba
 		shardForChannel: func(ch string) *RedisShard {
 			return e.getShard(ch).shard
 		},
+		hubChannels: func() []string {
+			channels := e.node.hub.channelsOfKind(true)
+			own := channels[:0]
+			for _, ch := range channels {
+				if e.node.getMapBroker(ch) == MapBroker(e) {
+					own = append(own, ch)
+				}
+			}
+			return own
+		},
 		// extraResubscribeChannels is not set: shared poll key channels are
 		// subscribed via node.getBroker which returns Broker implementations
 		// only — RedisMapBroker is not one, so no key channels can live here.

@@ -117,6 +117,10 @@ type pubSubCallbacks struct {
 	messageChannelID func(ch string) string
 	// shardForChannel returns the RedisShard for a given channel (for filtering during resubscribe).
 	shardForChannel func(ch string) *RedisShard
+	// hubChannels returns the Hub channels the broker owns: the node routes their
+	// subscriptions to it. A PUB/SUB reconnect resubscribes only them, other
+	// channels belong to other brokers (GetBroker, map brokers).
+	hubChannels func() []string
 	// extraResubscribeChannels returns broker-level channel subscriptions that
 	// must survive PUB/SUB reconnects but are not tracked in the Hub (shared
 	// poll key channels). May be nil.
@@ -296,7 +300,7 @@ func runPubSubLoop(
 		return
 	}
 
-	channels := node.Hub().Channels()
+	channels := cb.hubChannels()
 	if cb.extraResubscribeChannels != nil {
 		// Broker-level subscriptions not tracked in the Hub (shared poll key
 		// channels) go through the same per-shard/partition filters below.

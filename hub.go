@@ -289,6 +289,16 @@ func (h *Hub) Channels() []string {
 	return channels
 }
 
+// channelsOfKind returns the active channels of map subscriptions (isMap) or of
+// the other subscription types.
+func (h *Hub) channelsOfKind(isMap bool) []string {
+	var channels []string
+	for i := 0; i < numHubShards; i++ {
+		channels = append(channels, h.subShards[i].channelsOfKind(isMap)...)
+	}
+	return channels
+}
+
 // NumClients returns total number of client connections.
 func (h *Hub) NumClients() int {
 	var total int
@@ -1706,6 +1716,20 @@ func (s *subShard) Channels() []string {
 	for ch := range s.subs {
 		channels[i] = ch
 		i++
+	}
+	return channels
+}
+
+// channelsOfKind returns the active channels of map subscriptions (isMap) or of
+// the other subscription types.
+func (s *subShard) channelsOfKind(isMap bool) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	channels := make([]string, 0, len(s.subs))
+	for ch := range s.subs {
+		if s.mapChannels[ch] == isMap {
+			channels = append(channels, ch)
+		}
 	}
 	return channels
 }
