@@ -53,8 +53,8 @@ type Upgrader struct {
 	// the next frame reading its first byte directly from the connection, so
 	// idle connections hold no read buffer. The cost is an extra 1-byte read
 	// for each frame arriving at an idle connection. The buffered reader of
-	// the hijacked HTTP connection is used for the first frames and then goes
-	// to the pool if it has the pool's size. ReadBufferSize is not used when
+	// the hijacked HTTP connection, if it has the pool's size, is used for the
+	// first frames and then goes to the pool. ReadBufferSize is not used when
 	// the pool is set. Ignored for HTTP/2 connections.
 	ReadBufferPool *ReadBufferPool
 
@@ -270,9 +270,12 @@ func (u *Upgrader) upgradeH1(w http.ResponseWriter, r *http.Request, responseHea
 
 	var br *bufio.Reader
 	if u.ReadBufferPool != nil {
-		// Read the first frames with the hijacked buffered reader, it goes to
-		// the pool once nothing is buffered.
-		br = brw.Reader
+		if brw.Reader.Size() == u.ReadBufferPool.size {
+			// Read the first frames with the hijacked buffered reader, it goes
+			// to the pool once nothing is buffered. Otherwise the first frame
+			// takes a reader from the pool.
+			br = brw.Reader
+		}
 	} else if u.ReadBufferSize == 0 && brw.Reader.Size() > 256 {
 		// Reuse hijacked buffered reader as connection reader.
 		br = brw.Reader

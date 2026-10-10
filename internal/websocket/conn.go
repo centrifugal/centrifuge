@@ -243,7 +243,7 @@ type writePoolData struct{ buf []byte }
 // ReadBufferPool is a pool of read buffers of one size. Connections using it
 // hold a read buffer only while reading frames.
 type ReadBufferPool struct {
-	pool BufferPool
+	pool sync.Pool
 	size int
 }
 
@@ -255,7 +255,12 @@ func NewReadBufferPool(size int) *ReadBufferPool {
 	} else if size < maxControlFramePayloadSize {
 		size = maxControlFramePayloadSize
 	}
-	return &ReadBufferPool{pool: &sync.Pool{}, size: size}
+	return &ReadBufferPool{size: size}
+}
+
+// Size returns the size of read buffers in the pool.
+func (p *ReadBufferPool) Size() int {
+	return p.size
 }
 
 func (p *ReadBufferPool) get(r io.Reader) *bufio.Reader {
@@ -304,7 +309,7 @@ type Conn struct {
 	// as bits 0-15 = code, bit 16 = incoming flag; 0 means none observed yet.
 	closeCode        atomic.Int32
 	firstByte        [1]byte // first byte of a frame read without a read buffer.
-	frameRead        bool    // whether a frame was read, see readFrameStart.
+	frameRead        bool    // whether a frame was read, see readFrameStartPooled.
 	compressionLevel int
 	readMaskPos      int
 	writeBufSize     int
@@ -405,6 +410,10 @@ func (c *Conn) writeFatal(err error) error {
 // connection. The reader passed to newConn (from the hijacked HTTP connection)
 // is kept until the first frame is read, it is about to arrive and needs a
 // buffer anyway.
+//
+// The buffer goes to a pool shared by other connections, so control frame
+// payloads passed to handlers are overwritten by other connections' data once
+// the handler returns.
 func (c *Conn) readFrameStartPooled() (byte, byte, error) {
 	if c.br != nil && c.br.Buffered() == 0 && c.frameRead {
 		c.readPool.put(c.br)
@@ -1329,7 +1338,8 @@ func (c *Conn) defaultPingHandler(message []byte) error {
 
 // SetPingHandler sets the handler for ping messages received from the peer.
 // The appData argument to h is the PING message application data. The default
-// ping handler sends a pong to the peer.
+// ping handler sends a pong to the peer. The appData slice is only valid until
+// h returns, copy it to keep.
 //
 // The handler function is called from the NextReader, ReadMessage and message
 // reader Read methods. The application must read the connection to process
@@ -1347,7 +1357,8 @@ func (c *Conn) defaultPongHandler(_ []byte) error {
 
 // SetPongHandler sets the handler for pong messages received from the peer.
 // The appData argument to h is the PONG message application data. The default
-// pong handler does nothing.
+// pong handler does nothing. The appData slice is only valid until h returns,
+// copy it to keep.
 //
 // The handler function is called from the NextReader, ReadMessage and message
 // reader Read methods. The application must read the connection to process

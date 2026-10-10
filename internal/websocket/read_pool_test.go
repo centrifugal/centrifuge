@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,7 +18,8 @@ import (
 var testReadBufferPool *ReadBufferPool
 
 // TestReadBufferPool runs read tests again with connections taking read
-// buffers from a pool.
+// buffers from a pool. The tests must not be parallel: the pool is set in
+// package-level variables only while TestReadBufferPool runs.
 func TestReadBufferPool(t *testing.T) {
 	testReadBufferPool = NewReadBufferPool(0)
 	cstUpgrader.ReadBufferPool = NewReadBufferPool(0)
@@ -48,32 +48,53 @@ func TestReadBufferPool(t *testing.T) {
 		{"Handshake", TestHandshake},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, tt.f)
+		done := false
+		t.Run(tt.name, func(t *testing.T) {
+			tt.f(t)
+			done = true
+		})
+		// A parallel test would run after the pool is unset.
+		if !done {
+			t.Fatalf("%s must not be parallel", tt.name)
+		}
 	}
 }
 
-type countingPool struct {
-	p          sync.Pool
-	gets, puts atomic.Int64
+// countingListener counts 1-byte reads of accepted connections: a connection
+// with a read buffer pool waits for a frame with such a read after returning
+// its read buffer, and takes a buffer from the pool once it returns.
+type countingListener struct {
+	net.Listener
+	started, returned *atomic.Int64
 }
 
-func (p *countingPool) Get() any {
-	p.gets.Add(1)
-	return p.p.Get()
+func (l countingListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return countingConn{Conn: c, l: l}, nil
 }
 
-func (p *countingPool) Put(x any) {
-	p.puts.Add(1)
-	p.p.Put(x)
+type countingConn struct {
+	net.Conn
+	l countingListener
+}
+
+func (c countingConn) Read(p []byte) (int, error) {
+	if len(p) != 1 {
+		return c.Conn.Read(p)
+	}
+	c.l.started.Add(1)
+	defer c.l.returned.Add(1)
+	return c.Conn.Read(p)
 }
 
 func TestReadBufferPoolIdle(t *testing.T) {
-	pool := &countingPool{}
-	readPool := NewReadBufferPool(0)
-	readPool.pool = pool
-	upgrader := Upgrader{ReadBufferPool: readPool}
+	var started, returned atomic.Int64
+	upgrader := Upgrader{ReadBufferPool: NewReadBufferPool(0)}
 	serverConn := make(chan *Conn, 1)
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, _, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			t.Error(err)
@@ -81,6 +102,8 @@ func TestReadBufferPoolIdle(t *testing.T) {
 		}
 		serverConn <- c
 	}))
+	s.Listener = countingListener{Listener: s.Listener, started: &started, returned: &returned}
+	s.Start()
 	defer s.Close()
 
 	wc, resp, _, err := (&Dialer{}).Dial("ws"+strings.TrimPrefix(s.URL, "http"), nil)
@@ -92,8 +115,12 @@ func TestReadBufferPoolIdle(t *testing.T) {
 	rc := <-serverConn
 	defer func() { _ = rc.Close() }()
 
+	// The hijacked reader is used for the first frames if it has the pool's
+	// size (true for net/http at the time of writing), otherwise the first
+	// frame takes a reader from the pool.
+	var firstGets int64
 	if rc.br == nil {
-		t.Fatal("hijacked reader not used for the first frames")
+		firstGets = 1
 	}
 
 	messages := make(chan string)
@@ -108,22 +135,25 @@ func TestReadBufferPoolIdle(t *testing.T) {
 		}
 	}()
 
-	// waitPooled waits until the pool holds all readers taken from it plus the
-	// hijacked one, so the connection holds none.
-	waitPooled := func() {
+	// waitIdle waits until the connection waits for a frame without a read
+	// buffer.
+	waitIdle := func() {
 		t.Helper()
 		deadline := time.Now().Add(5 * time.Second)
-		for pool.puts.Load()-pool.gets.Load() != 1 {
+		for started.Load()-returned.Load() != 1 {
 			if time.Now().After(deadline) {
-				t.Fatalf("read buffer not returned to pool: %d gets, %d puts", pool.gets.Load(), pool.puts.Load())
+				t.Fatal("read buffer not returned to pool")
 			}
 			time.Sleep(time.Millisecond)
 		}
 	}
 
-	expectGets := func(msgs []string, want int64) {
+	// expectGets sends messages in one write and checks the number of readers
+	// taken from the pool to read them. Loopback TCP may still deliver one
+	// write in several reads, then frames after a split take another reader.
+	expectGets := func(msgs []string, wantMin, wantMax int64) {
 		t.Helper()
-		gets := pool.gets.Load()
+		gets := returned.Load()
 		var batch []byte
 		for _, msg := range msgs {
 			w := &bufferWriter{}
@@ -133,7 +163,6 @@ func TestReadBufferPoolIdle(t *testing.T) {
 			}
 			batch = append(batch, w.buf...)
 		}
-		// One write, so frames arrive together.
 		if _, err := wc.NetConn().Write(batch); err != nil {
 			t.Fatal(err)
 		}
@@ -142,18 +171,18 @@ func TestReadBufferPoolIdle(t *testing.T) {
 				t.Fatalf("got message of len %d, want %d", len(got), len(msg))
 			}
 		}
-		waitPooled()
-		if n := pool.gets.Load() - gets; n != want {
-			t.Fatalf("got %d pool gets, want %d", n, want)
+		waitIdle()
+		if n := returned.Load() - gets; n < wantMin || n > wantMax {
+			t.Fatalf("got %d pool gets, want %d to %d", n, wantMin, wantMax)
 		}
 	}
 
 	// The first frame is read with the hijacked reader, which then goes to the pool.
-	expectGets([]string{`{"id":1,"connect":{"token":"` + strings.Repeat("t", 300) + `"}}`}, 0)
+	expectGets([]string{`{"id":1,"connect":{"token":"` + strings.Repeat("t", 300) + `"}}`}, firstGets, firstGets)
 	// Later frames take a reader from the pool, one for frames arriving together.
-	expectGets([]string{"{}"}, 1)
-	expectGets([]string{strings.Repeat("x", 10000)}, 1)
-	expectGets([]string{strings.Repeat("a", 100), strings.Repeat("b", 100), strings.Repeat("c", 100)}, 1)
+	expectGets([]string{"{}"}, 1, 1)
+	expectGets([]string{strings.Repeat("x", 10000)}, 1, 1)
+	expectGets([]string{strings.Repeat("a", 100), strings.Repeat("b", 100), strings.Repeat("c", 100)}, 1, 3)
 
 	// Ping arriving at an idle connection is answered.
 	pong := make(chan struct{}, 1)
@@ -173,10 +202,45 @@ func TestReadBufferPoolIdle(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no pong")
 	}
-	waitPooled()
+	waitIdle()
 
 	_ = wc.NetConn().Close()
 	for range messages {
+	}
+}
+
+// TestReadBufferPoolHijackedReaderSize checks that the hijacked reader is
+// used only if it has the pool's size.
+func TestReadBufferPoolHijackedReaderSize(t *testing.T) {
+	for _, size := range []int{0, 128, 8192} {
+		upgrader := Upgrader{ReadBufferPool: NewReadBufferPool(size)}
+		serverConn := make(chan *Conn, 1)
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c, _, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			serverConn <- c
+		}))
+		wc, resp, _, err := (&Dialer{}).Dial("ws"+strings.TrimPrefix(s.URL, "http"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		rc := <-serverConn
+		if rc.br != nil && rc.br.Size() != upgrader.ReadBufferPool.Size() {
+			t.Fatalf("%d: hijacked reader of size %d used", size, rc.br.Size())
+		}
+		if err := wc.WriteMessage(TextMessage, []byte("hello")); err != nil {
+			t.Fatal(err)
+		}
+		if _, p, err := rc.ReadMessage(); err != nil || string(p) != "hello" {
+			t.Fatalf("%d: got %q, %v", size, p, err)
+		}
+		_ = wc.Close()
+		_ = rc.Close()
+		s.Close()
 	}
 }
 
