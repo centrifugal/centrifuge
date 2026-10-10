@@ -313,9 +313,9 @@ func (n *Node) Hub() *Hub {
 func (n *Node) Run() error {
 	// Initialize shared poll manager if configured. This must happen before
 	// any broker registration below: brokers start goroutines from their
-	// Register*EventHandler methods, and those goroutines read
-	// n.sharedPollManager (see extraBrokerPubSubChannels) for the rest of the
-	// node lifetime. Assigning the field after they start is a data race.
+	// Register*EventHandler methods, which may reach n.sharedPollManager for
+	// the rest of the node lifetime. Assigning the field after they start is a
+	// data race.
 	if n.config.SharedPoll.GetSharedPollChannelOptions != nil {
 		if n.clientEvents.sharedPollHandler == nil {
 			return errors.New("GetSharedPollChannelOptions is set but OnSharedPoll handler is not registered")
@@ -1279,7 +1279,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 			if mediumOptions.isMediumEnabled() {
 				medium, err := newChannelMedium(ch, n, mediumOptions)
 				if err != nil {
-					_, _, _ = n.hub.removeSub(ch, sub.client, sub.subGen)
+					n.rollbackSub(ch, sub)
 					return 0, err
 				}
 				medium.isMap = sub.isMap
@@ -1296,7 +1296,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 				n.metrics.incActionCount("map_broker_subscribe", ch)
 				err := mapBroker.Subscribe(ch)
 				if err != nil {
-					_, _, _ = n.hub.removeSub(ch, sub.client, sub.subGen)
+					n.rollbackSub(ch, sub)
 					if n.config.GetChannelMediumOptions != nil {
 						mediumMu := n.mediumLock(ch)
 						mediumMu.Lock()
@@ -1314,7 +1314,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 			n.metrics.incActionCount("broker_subscribe", ch)
 			err := n.getBroker(ch).Subscribe(ch)
 			if err != nil {
-				_, _, _ = n.hub.removeSub(ch, sub.client, sub.subGen)
+				n.rollbackSub(ch, sub)
 				if n.config.GetChannelMediumOptions != nil {
 					mediumMu := n.mediumLock(ch)
 					mediumMu.Lock()
@@ -1342,52 +1342,69 @@ func (n *Node) removeSubscription(ch string, c *Client, subGen uint64) error {
 	// subscriptionsInflight is Dec'd inside hub.removeSub (co-located with numSubs).
 	empty, _, wasMap := n.hub.removeSub(ch, c, subGen)
 	if empty {
-		submittedAt := time.Now()
-		_ = n.subDissolver.Submit(func() error {
-			timeSpent := time.Since(submittedAt)
-			if timeSpent < time.Second {
-				time.Sleep(time.Second - timeSpent)
-			}
-			subMu := n.subLock(ch)
-			subMu.Lock()
-			defer subMu.Unlock()
-			noSubscribers := n.hub.NumSubscribers(ch) == 0
-			if noSubscribers {
-				// Unsubscribe from appropriate broker based on channel type.
-				if wasMap {
-					if mapBroker := n.getMapBroker(ch); mapBroker != nil {
-						n.metrics.incActionCount("map_broker_unsubscribe", ch)
-						err := mapBroker.Unsubscribe(ch)
-						if err != nil {
-							time.Sleep(500 * time.Millisecond)
-							return err
-						}
-					}
-				} else {
-					n.metrics.incActionCount("broker_unsubscribe", ch)
-					err := n.getBroker(ch).Unsubscribe(ch)
+		n.unsubscribeFromBrokerWhenEmpty(ch, wasMap)
+	}
+	return nil
+}
+
+// rollbackSub removes a subscription addSubscription added to the Hub but
+// could not complete. If the channel has no local subscribers then, it is
+// unsubscribed from its broker too: a PUB/SUB reconnect meanwhile may have
+// subscribed it already, from the Hub's channels.
+func (n *Node) rollbackSub(ch string, sub subInfo) {
+	if empty, _, wasMap := n.hub.removeSub(ch, sub.client, sub.subGen); empty {
+		n.unsubscribeFromBrokerWhenEmpty(ch, wasMap)
+	}
+}
+
+// unsubscribeFromBrokerWhenEmpty unsubscribes the channel from its broker once
+// it has no local subscribers left. Asynchronous, after a second, and only if no
+// subscriber came meanwhile (checked under the channel's subLock).
+func (n *Node) unsubscribeFromBrokerWhenEmpty(ch string, wasMap bool) {
+	submittedAt := time.Now()
+	_ = n.subDissolver.Submit(func() error {
+		timeSpent := time.Since(submittedAt)
+		if timeSpent < time.Second {
+			time.Sleep(time.Second - timeSpent)
+		}
+		subMu := n.subLock(ch)
+		subMu.Lock()
+		defer subMu.Unlock()
+		noSubscribers := n.hub.NumSubscribers(ch) == 0
+		if noSubscribers {
+			// Unsubscribe from appropriate broker based on channel type.
+			if wasMap {
+				if mapBroker := n.getMapBroker(ch); mapBroker != nil {
+					n.metrics.incActionCount("map_broker_unsubscribe", ch)
+					err := mapBroker.Unsubscribe(ch)
 					if err != nil {
-						// Cool down a bit since broker is not ready to process unsubscription.
 						time.Sleep(500 * time.Millisecond)
 						return err
 					}
 				}
-				n.hub.removeSubID(ch)
-				if n.config.GetChannelMediumOptions != nil {
-					mediumMu := n.mediumLock(ch)
-					mediumMu.Lock()
-					medium, ok := n.mediumShard(ch)[ch]
-					if ok {
-						medium.close()
-						delete(n.mediumShard(ch), ch)
-					}
-					mediumMu.Unlock()
+			} else {
+				n.metrics.incActionCount("broker_unsubscribe", ch)
+				err := n.getBroker(ch).Unsubscribe(ch)
+				if err != nil {
+					// Cool down a bit since broker is not ready to process unsubscription.
+					time.Sleep(500 * time.Millisecond)
+					return err
 				}
 			}
-			return nil
-		})
-	}
-	return nil
+			n.hub.removeSubID(ch)
+			if n.config.GetChannelMediumOptions != nil {
+				mediumMu := n.mediumLock(ch)
+				mediumMu.Lock()
+				medium, ok := n.mediumShard(ch)[ch]
+				if ok {
+					medium.close()
+					delete(n.mediumShard(ch), ch)
+				}
+				mediumMu.Unlock()
+			}
+		}
+		return nil
+	})
 }
 
 // nodeCmd handles node control command i.e. updates information about known nodes.
@@ -1700,19 +1717,6 @@ func (n *Node) getBroker(ch string) Broker {
 		}
 	}
 	return n.broker
-}
-
-// extraBrokerPubSubChannels returns channels subscribed at the given broker
-// outside the Hub. The Hub is not the complete registry of broker-level
-// subscriptions: shared poll subscribes per-key channels directly and tracks
-// them itself. PUB/SUB reconnect paths must restore these together with
-// Hub().Channels(), otherwise key channels are silently lost on every
-// reconnect and key events stop flowing until keys are re-tracked.
-func (n *Node) extraBrokerPubSubChannels(b Broker) []string {
-	if n.sharedPollManager == nil {
-		return nil
-	}
-	return n.sharedPollManager.brokerChannelsSnapshot(b)
 }
 
 func (n *Node) getMapBroker(ch string) MapBroker {
