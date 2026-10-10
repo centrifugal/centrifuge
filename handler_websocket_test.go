@@ -78,6 +78,78 @@ func TestWebsocketHandlerProtocolV2(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 }
 
+func TestWebsocketHandlerReadBufferPool(t *testing.T) {
+	t.Parallel()
+	for _, compression := range []bool{false, true} {
+		t.Run(fmt.Sprintf("compression=%v", compression), func(t *testing.T) {
+			n := defaultNodeNoHandlers()
+			defer func() { _ = n.Shutdown(context.Background()) }()
+			n.OnConnecting(func(_ context.Context, _ ConnectEvent) (ConnectReply, error) {
+				return ConnectReply{Credentials: &Credentials{UserID: "test"}}, nil
+			})
+			n.OnConnect(func(client *Client) {
+				client.OnSubscribe(func(_ SubscribeEvent, cb SubscribeCallback) {
+					cb(SubscribeReply{}, nil)
+				})
+				client.OnPublish(func(_ PublishEvent, cb PublishCallback) {
+					cb(PublishReply{}, nil)
+				})
+			})
+			mux := http.NewServeMux()
+			mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
+				UseReadBufferPool: true,
+				Compression:       compression,
+			}))
+			server := httptest.NewServer(mux)
+			defer server.Close()
+
+			conn := newRealConnJSONConnect(t, "ws"+server.URL[4:], compression)
+			defer func() { _ = conn.Close() }()
+
+			// roundTrip sends commands in one write and waits for all replies.
+			roundTrip := func(cmds ...*protocol.Command) {
+				t.Helper()
+				var data []byte
+				waiting := map[uint32]struct{}{}
+				for _, cmd := range cmds {
+					b, err := json.Marshal(cmd)
+					require.NoError(t, err)
+					if len(data) > 0 {
+						data = append(data, '\n')
+					}
+					data = append(data, b...)
+					waiting[cmd.Id] = struct{}{}
+				}
+				require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
+				require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+				for len(waiting) > 0 {
+					_, msg, err := conn.ReadMessage()
+					require.NoError(t, err)
+					for _, line := range strings.Split(strings.TrimSpace(string(msg)), "\n") {
+						var reply struct {
+							ID    uint32          `json:"id"`
+							Error json.RawMessage `json:"error"`
+						}
+						require.NoError(t, json.Unmarshal([]byte(line), &reply))
+						require.Empty(t, reply.Error)
+						delete(waiting, reply.ID)
+					}
+				}
+			}
+
+			roundTrip(&protocol.Command{Id: 2, Subscribe: &protocol.SubscribeRequest{Channel: "test"}})
+			data := []byte(`{"input":"` + strings.Repeat("x", 10000) + `"}`)
+			for i := uint32(0); i < 3; i++ {
+				roundTrip(&protocol.Command{Id: 3 + i, Publish: &protocol.PublishRequest{Channel: "test", Data: data}})
+			}
+			roundTrip(
+				&protocol.Command{Id: 10, Publish: &protocol.PublishRequest{Channel: "test", Data: []byte(`{}`)}},
+				&protocol.Command{Id: 11, Publish: &protocol.PublishRequest{Channel: "test", Data: []byte(`{}`)}},
+			)
+		})
+	}
+}
+
 func TestWebsocketHandlerSubprotocol(t *testing.T) {
 	t.Parallel()
 	node := defaultNodeNoHandlers()
@@ -2092,6 +2164,27 @@ func BenchmarkWsFootprint_OffReadLoop(b *testing.B) {
 		// Only needs to be non-zero to put the writer in timer mode, which is what
 		// removes the writer goroutine. Kept small because every command round
 		// trip waits for it and each connection makes five of them.
+		writeDelay:      time.Millisecond,
+		writeWithTimer:  true,
+		commandsPerConn: 3,
+	})
+}
+
+// Read buffer held for the connection lifetime vs taken from a pool only while
+// data arrives. Default read buffer size, which is what the pool saves on.
+
+func BenchmarkWsFootprint_ReadBuffer(b *testing.B) {
+	benchWsConnFootprint(b, wsFootprintParams{
+		ws:              WebsocketConfig{UseWriteBufferPool: true},
+		writeDelay:      time.Millisecond,
+		writeWithTimer:  true,
+		commandsPerConn: 3,
+	})
+}
+
+func BenchmarkWsFootprint_ReadBufferPool(b *testing.B) {
+	benchWsConnFootprint(b, wsFootprintParams{
+		ws:              WebsocketConfig{UseWriteBufferPool: true, UseReadBufferPool: true},
 		writeDelay:      time.Millisecond,
 		writeWithTimer:  true,
 		commandsPerConn: 3,

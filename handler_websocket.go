@@ -48,6 +48,16 @@ type WebsocketConfig struct {
 	// UseWriteBufferPool enables using buffer pool for writes.
 	UseWriteBufferPool bool
 
+	// UseReadBufferPool enables using buffer pool for reads. Connections then return
+	// the read buffer to the pool when nothing is left buffered and take it back
+	// when a frame arrives, so idle connections hold no read buffer. This reduces
+	// memory usage for setups with many mostly idle connections at the cost of an
+	// extra 1-byte read syscall for each frame arriving at an idle connection.
+	// Only the WebSocket read buffer is saved: with TLS terminated by the Go
+	// server, tls.Conn still keeps its own per-connection buffers.
+	// Not used for WebSocket over HTTP/2.
+	UseReadBufferPool bool
+
 	// MessageSizeLimit sets the maximum size in bytes of allowed message from client.
 	// By default, 65536 bytes (64KB) will be used.
 	// Note that with Compression enabled this only bounds the compressed bytes
@@ -142,6 +152,9 @@ type WebsocketHandler struct {
 
 var writeBufferPool = &sync.Pool{}
 
+// readBufferPools holds a *websocket.ReadBufferPool per effective read buffer size.
+var readBufferPools sync.Map
+
 // NewWebsocketHandler creates new WebsocketHandler.
 func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 	upgrade := &websocket.Upgrader{
@@ -149,6 +162,11 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 		EnableCompression:   config.Compression,
 		Subprotocols:        []string{"centrifuge-json", "centrifuge-protobuf"},
 		DisableHTTP1Upgrade: config.DisableHTTP1Upgrade,
+	}
+	if config.UseReadBufferPool {
+		pool := websocket.NewReadBufferPool(config.ReadBufferSize)
+		actual, _ := readBufferPools.LoadOrStore(pool.Size(), pool)
+		upgrade.ReadBufferPool = actual.(*websocket.ReadBufferPool)
 	}
 	if config.UseWriteBufferPool {
 		upgrade.WriteBufferPool = writeBufferPool
