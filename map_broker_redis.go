@@ -2997,7 +2997,10 @@ func (e *RedisMapBroker) subscribe(s *brokerShardWrapper, ch string) error {
 // subscribed set. A connection published for the slot since may have
 // resubscribed them from a snapshot which still had them: they are unsubscribed
 // there (best effort). The caller considers them not subscribed and may never
-// unsubscribe them.
+// unsubscribe them. Redis does not fail an unsubscribe on a healthy connection,
+// and a broken one loses its subscriptions anyway; if it still failed, the
+// connection would only receive (and drop) their publications until it
+// reconnects.
 func (e *RedisMapBroker) subscribeFailed(s *brokerShardWrapper, partition, psShardIndex int, conn rueidis.DedicatedClient, channels []string) {
 	s.subClientsMu.Lock()
 	for _, ch := range channels {
