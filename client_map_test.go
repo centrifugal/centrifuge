@@ -3299,15 +3299,20 @@ func TestMapSubscribe_CatchUpTimeout_SweptForgotten(t *testing.T) {
 	require.True(t, sweptB)
 }
 
-type slowStateMapBroker struct {
+// blockingStateMapBroker blocks ReadState of blockChannel until release is
+// closed, after closing entered.
+type blockingStateMapBroker struct {
 	*MemoryMapBroker
-	slowChannel string
-	delay       time.Duration
+	blockChannel string
+	enteredOnce  sync.Once
+	entered      chan struct{}
+	release      chan struct{}
 }
 
-func (b *slowStateMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
-	if ch == b.slowChannel {
-		time.Sleep(b.delay)
+func (b *blockingStateMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
+	if ch == b.blockChannel {
+		b.enteredOnce.Do(func() { close(b.entered) })
+		<-b.release
 	}
 	return b.MemoryMapBroker.ReadState(ctx, ch, opts)
 }
@@ -3326,7 +3331,8 @@ func TestMapSubscribe_CatchUpTimeout_SweptDuringStateRead(t *testing.T) {
 	require.NoError(t, err)
 	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
 	require.NoError(t, err)
-	node.SetMapBroker(&slowStateMapBroker{MemoryMapBroker: mapBroker, slowChannel: "ch_a", delay: 150 * time.Millisecond})
+	blocking := &blockingStateMapBroker{MemoryMapBroker: mapBroker, blockChannel: "ch_a", entered: make(chan struct{}), release: make(chan struct{})}
+	node.SetMapBroker(blocking)
 	require.NoError(t, node.Run())
 	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
 	ctx := context.Background()
@@ -3354,7 +3360,12 @@ func TestMapSubscribe_CatchUpTimeout_SweptDuringStateRead(t *testing.T) {
 		Phase:   MapPhaseState,
 		Limit:   10,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw))
-	time.Sleep(60 * time.Millisecond) // ch_a reads its page, its catch-up expired.
+	select {
+	case <-blocking.entered: // ch_a reads its page.
+	case <-time.After(2 * time.Second):
+		t.Fatal("ch_a did not read its state")
+	}
+	time.Sleep(40 * time.Millisecond) // ch_a's catch-up expires.
 	// ch_b's subscribe sweeps ch_a.
 	subscribeMapClient(t, client, &protocol.SubscribeRequest{
 		Channel: "ch_b",
@@ -3362,6 +3373,7 @@ func TestMapSubscribe_CatchUpTimeout_SweptDuringStateRead(t *testing.T) {
 		Phase:   MapPhaseState,
 		Limit:   10,
 	})
+	close(blocking.release)
 	require.Eventually(t, func() bool {
 		transport.mu.Lock()
 		defer transport.mu.Unlock()
