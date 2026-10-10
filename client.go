@@ -347,6 +347,12 @@ type Client struct {
 	mapSubscribing map[string]*mapSubscribeState
 	// mapPaginationLocks tracks channels currently being paginated to prevent concurrent pagination.
 	mapPaginationLocks map[string]struct{}
+	// keyedTracks counts shared poll track requests of a channel between their
+	// commit and their join to the keyed hub, see startKeyedTrackLocked.
+	keyedTracks map[string]int
+	// trackRequests counts shared poll track requests of a channel from their
+	// OnTrack call to the end of its callback, see handleUntrack.
+	trackRequests map[string]int
 
 	// keyed holds per-connection keyed subscription state (shared poll).
 	// nil until first keyed subscribe.
@@ -2724,6 +2730,7 @@ func (c *Client) finishAttemptEnd(channel string) {
 // calls already running, as close() does for its own: it can be generous.
 var (
 	pendingUnsubscribesSubscribeTimeout  = newWaitTimeout(5 * time.Second)
+	untrackTrackTimeout                  = newWaitTimeout(5 * time.Second)
 	pendingUnsubscribesDisconnectTimeout = newWaitTimeout(30 * time.Second)
 )
 
@@ -3373,13 +3380,19 @@ func (c *Client) handleMapPublish(req *protocol.PublishRequest, cmd *protocol.Co
 // on unsubscribe (MapRemoveClientOnUnsubscribe) ended: that cleanup may have run
 // before the publish, and the key would stay until its TTL.
 func (c *Client) cleanupMapKeyIfUnsubscribed(channel string) {
-	c.mu.RLock()
+	c.mu.Lock()
 	chCtx, ok := c.channels[channel]
 	keep := c.status != statusClosed && ok && channelHasFlag(chCtx.flags, flagSubscribed) && channelHasFlag(chCtx.flags, flagCleanupOnUnsubscribe)
-	c.mu.RUnlock()
+	if !keep {
+		// A subscribe to the channel waits for the removal: it must not remove
+		// the key of a subscription which went live meanwhile.
+		c.addPendingLeaveLocked(channel)
+	}
+	c.mu.Unlock()
 	if keep {
 		return
 	}
+	defer c.finishPendingLeave(channel)
 	if _, err := c.node.MapRemove(context.Background(), channel, c.uid, MapRemoveOptions{}); err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error cleaning up map state after unsubscribe", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 	}
@@ -3794,6 +3807,9 @@ var (
 	// testAfterMapCommit (if set) runs for map subscriptions to channels with
 	// testChannelRecoveryOrderingPrefix between their commit and their reply.
 	testAfterMapCommit atomic.Pointer[func(channel string)]
+	// testBeforeUnsubscribeRemoval (if set) runs in unsubscribeWaiting between
+	// its waits and the removal.
+	testBeforeUnsubscribeRemoval atomic.Pointer[func(channel string)]
 )
 
 // testSyncPoint runs at the sync point of subscriptions to channels with
@@ -4923,6 +4939,21 @@ func (c *Client) removeSubscribePresence(channel string, flags uint16) {
 // the connection is already being force-closed by the timeout path.
 func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind reservationKind) (chan struct{}, bool) {
 	c.mu.Lock()
+	if kind == reservationMap {
+		// A map subscribe can pass its pending leave check in SubscribeHandler
+		// while loading, and a presence removal or key cleanup of an earlier
+		// subscription (see compensateRacedPresence, cleanupMapKeyIfUnsubscribed)
+		// can be decided after that: what it removes the subscription adds again
+		// once live, after the commit. Wait for it here.
+		var waitDeadline time.Time
+		for c.status != statusClosed && c.mustWaitPendingLeaveLocked(channel, &waitDeadline) {
+			c.mu.Unlock()
+			if !c.waitUntil(func() bool { return !c.tracking.channelLeaves.has(channel) }, time.Until(waitDeadline)) {
+				c.logLeaveNotFinished(channel)
+			}
+			c.mu.Lock()
+		}
+	}
 	var subscribingCh chan struct{}
 	reservationLost := false
 	// Every map reservation belongs to an attempt SubscribeHandler allowed.
@@ -6045,6 +6076,7 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 	// A map subscribe request in progress holds the channel's pagination lock,
 	// also after its go-live commit moved the channel into c.channels.
 	_, paginating := c.mapPaginationLocks[channel]
+	paginating = paginating || c.keyedTracks[channel] > 0
 	c.mu.RUnlock()
 
 	// If channel is not in channels map, check if it's only in mapSubscribing.
@@ -6116,7 +6148,7 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 				// A fresh subscribe replaced the reservation this unsubscribe targets.
 				return true
 			}
-			if _, paginating := c.mapPaginationLocks[channel]; paginating {
+			if _, paginating := c.mapPaginationLocks[channel]; paginating || c.keyedTracks[channel] > 0 {
 				return false
 			}
 			return !wholeLoad || !hasKeyedState || !exists
@@ -6128,6 +6160,8 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 			loading := exists && state == keyedState
 			c.mu.RUnlock()
 			if !ok && !loading {
+				// Another unsubscribe may have removed it meanwhile.
+				c.waitOtherUnsubscribe(channel, unsubscribe, disconnect, maxWaitTimeout)
 				return nil
 			}
 		} else {
@@ -6165,7 +6199,26 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 		}
 	}
 
+	if f := testBeforeUnsubscribeRemoval.Load(); f != nil {
+		(*f)(channel)
+	}
 	c.mu.Lock()
+	// A shared poll track may have committed its keys since the snapshot: it must
+	// join the keyed hub and write its reply before the removal below, see
+	// startKeyedTrackLocked. Checked here, in the removal's critical section, so
+	// no track commits between the check and the removal.
+	var trackDeadline time.Time
+	for c.keyedTracks[channel] > 0 {
+		if trackDeadline.IsZero() {
+			trackDeadline = time.Now().Add(maxWaitTimeout)
+		} else if !time.Now().Before(trackDeadline) {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "timeout waiting for shared poll track to finish", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+			break
+		}
+		c.mu.Unlock()
+		c.waitUntil(func() bool { return c.keyedTracks[channel] == 0 }, time.Until(trackDeadline))
+		c.mu.Lock()
+	}
 	// Clean up normal subscription. Identity-match on subGen (mirrors the
 	// mapSubscribing cleanup below): only tear down the entry if it is still the
 	// subscription this unsubscribe targeted. A concurrent subscribe may have

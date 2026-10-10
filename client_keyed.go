@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"sync"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
@@ -177,7 +178,11 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 	}
 	event := TrackEvent{Channel: channel, Batches: eventBatches}
 
+	c.mu.Lock()
+	c.startTrackRequestLocked(channel)
+	c.mu.Unlock()
 	c.eventHub.trackHandler(event, func(reply TrackReply, err error) {
+		defer c.finishTrackRequest(channel)
 		if err != nil {
 			c.writeDisconnectOrErrorFlush(channel, protocol.FrameTypeSubRefresh, cmd, err, started, rw)
 			return
@@ -334,7 +339,10 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		if cs := c.keyed.channels[channel]; cs != nil {
 			channelIsDelta = cs.deltaType != deltaTypeNone
 		}
+		c.startKeyedTrackLocked(channel)
 		c.mu.Unlock()
+		finishTrack := sync.OnceFunc(func() { c.finishKeyedTrack(channel) })
+		defer finishTrack()
 
 		// Step 2: Collect cached data for items where server has newer version.
 		var cachedItems []*protocol.Publication
@@ -441,11 +449,32 @@ func (c *Client) handleTrack(req *protocol.SubRefreshRequest, cmd *protocol.Comm
 		// the finalizeShutdown then deletes from the manager, leaving the
 		// client orphaned from future broadcasts (which look up via
 		// getHub).
-		c.node.keyedManager.addSubscribers(channel, allKeys, c, keyedOpts)
+		//
+		// Joined under c.mu, and only for keys this subscription still tracks: an
+		// untrack, an expiry or an unsubscribe which removed a key since the commit
+		// found the client not in the hub yet, so joining for it would leave the
+		// client in the hub with nothing to remove it. Lock order c.mu → keyed
+		// manager → hub, as in cleanupKeyed.
+		c.mu.Lock()
+		joinKeys := make([]string, 0, len(allKeys))
+		if cc, ok := c.channels[channel]; ok && cc.subGen == trackSubGen && channelHasFlag(cc.flags, flagSubscribed) && c.keyed != nil {
+			chanKeys := c.keyed.trackedKeys[channel]
+			for _, key := range allKeys {
+				if _, tracked := chanKeys[key]; tracked {
+					joinKeys = append(joinKeys, key)
+				}
+			}
+		}
+		if len(joinKeys) > 0 {
+			c.node.keyedManager.addSubscribers(channel, joinKeys, c, keyedOpts)
+		}
+		c.mu.Unlock()
 		// Release the pendingHubJoin reservation now that we're in the hub.
-		// hub.subscriberCount(key) is now >= 1 for each key we tracked, so
-		// release just decrements the counter — no entries are deleted.
+		// hub.subscriberCount(key) is now >= 1 for each key we joined, so
+		// release just decrements the counter for them; keys not joined are
+		// dropped like on the rollback paths.
 		releaseTrackReservation()
+		finishTrack()
 		hub := c.node.keyedManager.getHub(channel)
 
 		// Compute warm key delivery plan AFTER addSubscriber. KeepLatestData →
@@ -575,6 +604,14 @@ func (c *Client) handleUntrack(req *protocol.SubRefreshRequest, cmd *protocol.Co
 
 	if len(req.Untrack) == 0 {
 		return ErrorBadRequest
+	}
+
+	// An OnTrack handler may complete asynchronously: a track request of the
+	// channel sent before this untrack may not have committed its keys yet.
+	// Untracking before that commit would leave the keys tracked although the
+	// client untracked them.
+	if !c.waitTrackRequests(channel, untrackTrackTimeout.get()) {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "timeout waiting for shared poll track before untrack", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
 	}
 
 	var actualUntrack []string
@@ -948,27 +985,87 @@ func (c *Client) keyedWritePublication(channel string, key string, pubVersion ui
 // keyedWriteRemoval writes a removal publication and removes the key from
 // per-connection tracking.
 func (c *Client) keyedWriteRemoval(channel string, key string, pub *protocol.Publication) {
-	c.mu.Lock()
-	if c.keyed == nil {
-		c.mu.Unlock()
-		return
-	}
-	chanKeys, ok := c.keyed.trackedKeys[channel]
-	if !ok {
-		c.mu.Unlock()
-		return
-	}
-	delete(chanKeys, key)
-	c.mu.Unlock()
-
 	data, err := c.encodeKeyedPush(channel, pub)
 	if err != nil {
 		return
 	}
-
+	// Resolve batch config — user-supplied callback, must run outside c.mu.
 	var batchConfig ChannelBatchConfig
 	if c.node.config.GetChannelBatchConfig != nil {
 		batchConfig = c.node.config.GetChannelBatchConfig(channel)
 	}
-	_ = c.writePublication(channel, pub, preparedData{fullData: data}, StreamPosition{}, false, batchConfig)
+	write := !hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication)
+	if write && c.node.logEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: channel, Pub: pub})
+	}
+
+	// The removal is written under c.mu, like keyedWritePublication: an
+	// unsubscribe removes the tracked keys under c.mu before its reply or push,
+	// so the removal can't come after them.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.keyed == nil {
+		return
+	}
+	chanKeys, ok := c.keyed.trackedKeys[channel]
+	if !ok {
+		return
+	}
+	delete(chanKeys, key)
+	if write {
+		_ = c.writeEncodedPushData(data, channel, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+	}
+}
+
+// startTrackRequestLocked marks a track request of the channel in progress
+// from its OnTrack call until its callback has returned: an untrack of the
+// channel handled meanwhile waits for it (see handleUntrack). c.mu must be held.
+func (c *Client) startTrackRequestLocked(channel string) {
+	if c.trackRequests == nil {
+		c.trackRequests = make(map[string]int)
+	}
+	c.trackRequests[channel]++
+}
+
+func (c *Client) finishTrackRequest(channel string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.trackRequests[channel]--; c.trackRequests[channel] <= 0 {
+		delete(c.trackRequests, channel)
+	}
+	c.signalLocked()
+}
+
+// waitTrackRequests waits at most timeout for the track requests of the channel
+// in progress, reporting whether they finished.
+func (c *Client) waitTrackRequests(channel string, timeout time.Duration) bool {
+	c.mu.RLock()
+	pending := c.trackRequests[channel] > 0
+	c.mu.RUnlock()
+	if !pending {
+		return true
+	}
+	return c.waitUntil(func() bool { return c.trackRequests[channel] == 0 }, timeout)
+}
+
+// startKeyedTrackLocked marks a track request of the channel committed to the
+// tracked keys: until finishKeyedTrack, after its reply and its join to the
+// keyed hub, an unsubscribe of the channel waits for it (see
+// unsubscribeWaiting). Otherwise the unsubscribe's reply or push could come
+// before the track reply with the channel's items, and its keyed hub cleanup
+// before the join, leaving the client in the hub. c.mu must be held.
+func (c *Client) startKeyedTrackLocked(channel string) {
+	if c.keyedTracks == nil {
+		c.keyedTracks = make(map[string]int)
+	}
+	c.keyedTracks[channel]++
+}
+
+func (c *Client) finishKeyedTrack(channel string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.keyedTracks[channel]--; c.keyedTracks[channel] <= 0 {
+		delete(c.keyedTracks, channel)
+	}
+	c.signalLocked()
 }

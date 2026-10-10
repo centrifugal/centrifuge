@@ -6358,3 +6358,73 @@ func TestOrderSharedPollUnsubscribeReplyBeforeSubscribeReply(t *testing.T) {
 	t.Logf("UnsubscribeHandler: code %d", e.Code)
 	require.Equal(t, []uint32{1, 2}, order, "subscribe reply must come before the unsubscribe reply")
 }
+
+// A key removal checks and writes under c.mu: an unsubscribe which removes the
+// tracked keys and writes its push meanwhile is never followed by the removal.
+func TestKeyedWriteRemoval_NotAfterUnsubscribe(t *testing.T) {
+	t.Parallel()
+	var armed atomic.Bool
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	node, err := New(Config{
+		LogLevel:   LogLevelError,
+		LogHandler: func(LogEntry) {},
+		GetChannelBatchConfig: func(string) ChannelBatchConfig {
+			if armed.CompareAndSwap(true, false) {
+				close(entered)
+				<-release
+			}
+			return ChannelBatchConfig{}
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	transport := newTestTransport(func() {})
+	transport.setProtocolType(ProtocolTypeJSON)
+	transport.setProtocolVersion(ProtocolVersion2)
+	sink := make(chan []byte, 100)
+	transport.sink = sink
+	client := newTestClientCustomTransport(t, context.Background(), node, transport, "u")
+	connectClientV2(t, client)
+	drainSink(sink)
+	client.mu.Lock()
+	client.keyed = &keyedState{
+		channels:    map[string]*keyedChannelDeltaState{},
+		trackedKeys: map[string]map[string]*keyedKeyState{"ch": {"k": {version: 1}}},
+	}
+	client.mu.Unlock()
+
+	armed.Store(true)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		client.keyedWriteRemoval("ch", "k", &protocol.Publication{Key: "k", Removed: true})
+	}()
+	<-entered
+	// An unsubscribe removes the tracked keys and writes its push.
+	client.cleanupKeyed("ch")
+	require.NoError(t, client.sendUnsubscribe("ch", unsubscribeServer))
+	close(release)
+	<-done
+
+	var frames []string
+	timeout := time.After(200 * time.Millisecond)
+	for collecting := true; collecting; {
+		select {
+		case data := <-sink:
+			for _, line := range strings.Split(string(data), "\n") {
+				switch {
+				case strings.Contains(line, `"unsubscribe"`):
+					frames = append(frames, "unsubscribe push")
+				case strings.Contains(line, `"pub"`):
+					frames = append(frames, "removal")
+				}
+			}
+		case <-timeout:
+			collecting = false
+		}
+	}
+	require.Equal(t, []string{"unsubscribe push"}, frames)
+}

@@ -2064,3 +2064,49 @@ func TestSubscribeAttempt_Stress(t *testing.T) {
 		t.Logf("  %s: %d", k, n)
 	}
 }
+
+// A client unsubscribe waits for a map request in progress on a live
+// subscription. Meanwhile a server unsubscribe removes the subscription and has
+// not sent its push yet: the client unsubscribe finds nothing to remove and
+// replies only after that push (its leave), as when it finds nothing at once.
+func TestSubscribeAttempt_MapClientUnsubscribeAfterServerUnsubscribeWaitsForPush(t *testing.T) {
+	t.Parallel()
+	node, _ := newTestNodeWithMapBroker(t)
+	client, _ := newAttemptTestClient(t, node, allowSubscribe(SubscribeReply{}))
+	const ch = "map"
+	client.mu.Lock()
+	client.channels[ch] = ChannelContext{flags: flagSubscribed, subGen: 1}
+	if client.mapPaginationLocks == nil {
+		client.mapPaginationLocks = map[string]struct{}{}
+	}
+	client.mapPaginationLocks[ch] = struct{}{} // A map request in progress.
+	client.mu.Unlock()
+
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		_ = client.unsubscribeWaiting(ch, unsubscribeClient, nil, time.Second, false, 0)
+	}()
+	time.Sleep(20 * time.Millisecond) // The client unsubscribe waits for the request.
+
+	// A server unsubscribe removes the subscription, its push is still to come.
+	client.mu.Lock()
+	delete(client.channels, ch)
+	client.addPendingLeaveLocked(ch)
+	client.mu.Unlock()
+	var finishLeave sync.Once
+	t.Cleanup(func() { finishLeave.Do(func() { client.finishPendingLeave(ch) }) })
+	client.releaseMapPaginationLock(ch)
+
+	select {
+	case <-returned:
+		t.Fatal("client unsubscribe returned before the other unsubscribe's push")
+	case <-time.After(50 * time.Millisecond):
+	}
+	finishLeave.Do(func() { client.finishPendingLeave(ch) })
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("client unsubscribe did not return after the other unsubscribe's push")
+	}
+}
