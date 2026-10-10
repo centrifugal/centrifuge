@@ -40,14 +40,14 @@ var (
 )
 
 type brokerShardWrapper struct {
-	shard               *RedisShard
-	subClientsMu        sync.Mutex
-	subClients          [][]rueidis.DedicatedClient
+	shard        *RedisShard
+	subClientsMu sync.Mutex
+	subClients   [][]rueidis.DedicatedClient
 	// subscribed holds the channels this broker's Subscribe added and no
 	// Unsubscribe or failed subscribe removed since: what a PUB/SUB reconnect
 	// resubscribes. Guarded by subClientsMu. Subscribe and Unsubscribe of the
 	// same channel are never called concurrently (see Broker).
-	subscribed map[string]struct{}
+	subscribed          map[string]struct{}
 	pubSubStartChannels [][]*pubSubStart
 	pubSubRunner        mapBrokerPubSubRunner
 }
