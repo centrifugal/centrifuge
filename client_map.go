@@ -150,6 +150,10 @@ func escapeStateForDelta(pubs []*protocol.Publication, deltaEnabled bool, isJSON
 }
 
 // mapSubscribeState tracks state for map subscriptions that are still loading.
+// Each one is the reservation of a subscribe attempt SubscribeHandler allowed
+// (only a request which called SubscribeHandler installs one, see
+// mapSubscribeAttempt), so whoever removes it without committing it ends the
+// attempt with endSubscribeAttempt.
 type mapSubscribeState struct {
 	options             SubscribeOptions // From OnSubscribe callback
 	clientSideRefresh   bool             // From OnSubscribe callback: the client refreshes the subscription
@@ -166,6 +170,116 @@ type mapSubscribeState struct {
 	serverTagsFilter    *tagsFilter      // Server tags filter for state/stream publications
 }
 
+// mapSubscribeAttempt is passed down the phase handlers by a map subscribe
+// request which SubscribeHandler allowed: such a request must install its own
+// mapSubscribing reservation, while a continuation request (nil attempt) must
+// find an existing one. Until reserved is set, the attempt is ended by the
+// subscribe callback (finish), and subscribeTracking.mapSubscribePending marks
+// the channel: other subscribes and unsubscribes can't see the attempt before it
+// reserves.
+type mapSubscribeAttempt struct {
+	client   *Client
+	channel  string
+	answered bool // The SubscribeCallback was invoked. Guarded by c.mu.
+	reserved bool
+}
+
+// start marks the channel for the attempt's SubscribeHandler call. It returns
+// an error instead on a closed client or a channel another subscribe attempt
+// holds (it may have reserved after the request was validated), and mustWait
+// true instead of marking while mustWaitAttemptEndsLocked.
+func (a *mapSubscribeAttempt) start(waitDeadline *time.Time) (mustWait bool, err error) {
+	c := a.client
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, inChannels := c.channels[a.channel]
+	_, inMapSubscribing := c.mapSubscribing[a.channel]
+	if inChannels || inMapSubscribing || c.mapSubscribePendingLocked(a.channel) {
+		return false, ErrorAlreadySubscribed
+	}
+	if c.status == statusClosed {
+		return false, DisconnectConnectionClosed
+	}
+	if c.mustWaitAttemptEndsLocked(a.channel, waitDeadline) {
+		return true, nil
+	}
+	c.trackingLocked().mapSubscribePending.add(a.channel)
+	return false, nil
+}
+
+// unregisterLocked undoes start, waking waitChannelMapSubscribePending. Called
+// under c.mu.
+func (a *mapSubscribeAttempt) unregisterLocked() {
+	a.client.tracking.mapSubscribePending.remove(a.channel)
+	a.client.signalLocked()
+}
+
+// waitAllMapSubscribesPending waits at most timeout until no map subscribe of
+// the client is in SubscribeHandler. Called by close().
+func (c *Client) waitAllMapSubscribesPending(timeout time.Duration) {
+	c.mu.RLock()
+	pending := c.tracking != nil && len(c.tracking.mapSubscribePending) > 0
+	c.mu.RUnlock()
+	if !pending {
+		return
+	}
+	if !c.waitUntil(func() bool { return len(c.tracking.mapSubscribePending) == 0 }, timeout) {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "timeout waiting for map subscribe to finish", map[string]any{"user": c.user, "client": c.uid}))
+	}
+}
+
+// waitChannelMapSubscribePending waits at most timeout until a map subscribe of
+// the channel in SubscribeHandler reserved the channel or ended: an unsubscribe
+// calls it, since the attempt holds no reservation it could remove before. Like
+// the wait for a regular subscribe in progress, it disconnects the client when
+// it times out: the attempt may still become a subscription after the
+// unsubscribe.
+func (c *Client) waitChannelMapSubscribePending(channel string, timeout time.Duration) {
+	c.mu.RLock()
+	pending := c.mapSubscribePendingLocked(channel)
+	c.mu.RUnlock()
+	if !pending {
+		return
+	}
+	if !c.waitUntil(func() bool { return !c.mapSubscribePendingLocked(channel) }, timeout) {
+		go func() {
+			_ = c.close(DisconnectServerError)
+		}()
+		c.node.logger.log(newLogEntry(LogLevelInfo, "timeout waiting for map subscribe to finish", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+	}
+}
+
+// reserve records that the attempt installed its reservation, which close() and
+// other subscribes see from now on, and whose remover ends the attempt. Called
+// under c.mu.
+func (a *mapSubscribeAttempt) reserve() {
+	if a != nil {
+		a.reserved = true
+		a.unregisterLocked()
+	}
+}
+
+// finish unregisters the SubscribeHandler call of an attempt which did not
+// reserve, ending it (end: SubscribeHandler allowed it) in the same critical
+// section, so that close() and a new subscribe to the channel see one or the
+// other.
+func (a *mapSubscribeAttempt) finish(end bool) {
+	c := a.client
+	c.mu.Lock()
+	if a.reserved {
+		c.mu.Unlock()
+		return
+	}
+	if end {
+		c.addAttemptEndLocked(a.channel)
+	}
+	a.unregisterLocked()
+	c.mu.Unlock()
+	if end {
+		c.endSubscribeAttempt(a.channel, nil, nil)
+	}
+}
+
 // handleMapSubscribeCommand handles the full map subscribe command flow:
 // validates, checks for continuation, calls OnSubscribe handler for initial requests.
 func (c *Client) handleMapSubscribeCommand(
@@ -178,7 +292,7 @@ func (c *Client) handleMapSubscribeCommand(
 		return ErrorNotAvailable
 	}
 
-	_, replyError, disconnect := c.validateSubscribeRequest(req)
+	_, _, replyError, disconnect := c.validateSubscribeRequest(req, nil)
 	if disconnect != nil || replyError != nil {
 		if disconnect != nil {
 			return *disconnect
@@ -190,6 +304,12 @@ func (c *Client) handleMapSubscribeCommand(
 	// the client stopped sending requests but stayed connected. The current channel
 	// is skipped — its expiry is checked below with a proper DisconnectStale.
 	c.sweepExpiredMapSubscribing(req.Channel)
+	if c.sweptMapContinuation(req) {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "map subscribe catch-up timeout", map[string]any{
+			"channel": req.Channel, "user": c.user, "client": c.uid,
+		}))
+		return DisconnectSlow
+	}
 
 	// For map subscription continuation requests (pagination or non-state phase with existing state),
 	// bypass the OnSubscribe callback - we already authorized on the first request.
@@ -210,7 +330,7 @@ func (c *Client) handleMapSubscribeCommand(
 			return DisconnectSlow
 		}
 		reply := SubscribeReply{Options: state.options, ClientSideRefresh: state.clientSideRefresh}
-		if handleErr := c.handleMapSubscribe(req, reply, cmd, started, rw); handleErr != nil {
+		if handleErr := c.handleMapSubscribe(req, reply, nil, cmd, started, rw); handleErr != nil {
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
 		}
 		return nil
@@ -226,7 +346,7 @@ func (c *Client) handleMapSubscribeCommand(
 			return DisconnectSlow
 		}
 		reply := SubscribeReply{Options: state.options, ClientSideRefresh: state.clientSideRefresh}
-		if handleErr := c.handleMapSubscribe(req, reply, cmd, started, rw); handleErr != nil {
+		if handleErr := c.handleMapSubscribe(req, reply, nil, cmd, started, rw); handleErr != nil {
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
 		}
 		return nil
@@ -247,28 +367,57 @@ func (c *Client) handleMapSubscribeCommand(
 	// only delete a reservation belonging to a different, concurrent subscribe.
 	// The map reservation and hub entry are rolled back inside the phase handlers,
 	// identity-matched via cleanupMapSubscribingState.
+	// Once the attempt reserved, whoever removes the reservation ends it.
+	attempt := &mapSubscribeAttempt{client: c, channel: req.Channel}
 	cb := func(reply SubscribeReply, err error) {
-		if err != nil {
-			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, err, started, rw)
+		c.mu.Lock()
+		if attempt.answered {
+			c.mu.Unlock()
+			c.node.logger.log(newLogEntry(LogLevelError, "subscribe callback invoked more than once", map[string]any{"channel": req.Channel, "user": c.user, "client": c.uid}))
 			return
 		}
+		attempt.answered = true
+		closed := c.status == statusClosed
+		c.mu.Unlock()
 
-		if reply.Options.Type != event.Type {
-			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, ErrorBadRequest, started, rw)
-			return
+		replyErr := err
+		if err == nil {
+			switch {
+			case closed:
+				// The client is closed. The disconnect reply only completes the
+				// command (event, metrics): the transport is closed.
+				replyErr = DisconnectConnectionClosed
+			case reply.Options.Type != event.Type:
+				replyErr = ErrorBadRequest
+			default:
+				if _, _, expired := subscriptionExpiration(reply.Options.ExpireAt, reply.ClientSideRefresh); expired {
+					c.node.logger.log(newLogEntry(LogLevelInfo, "subscription expiration must be greater than now", map[string]any{"channel": req.Channel, "client": c.uid, "user": c.UserID()}))
+					replyErr = ErrorExpired
+				} else {
+					replyErr = c.handleMapSubscribe(req, reply, attempt, cmd, started, rw)
+				}
+			}
 		}
-
-		if _, _, expired := subscriptionExpiration(reply.Options.ExpireAt, reply.ClientSideRefresh); expired {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "subscription expiration must be greater than now", map[string]any{"channel": req.Channel, "client": c.uid, "user": c.UserID()}))
-			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, ErrorExpired, started, rw)
-			return
-		}
-
-		if handleErr := c.handleMapSubscribe(req, reply, cmd, started, rw); handleErr != nil {
-			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
+		// An allowed attempt which did not reserve ends here. Before the reply: a
+		// client subscribing again once it got the reply must not find this
+		// attempt pending, but its ending (waitAttemptEnds).
+		attempt.finish(err == nil && (closed || replyErr != nil))
+		if replyErr != nil {
+			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, replyErr, started, rw)
 		}
 	}
 
+	var waitDeadline time.Time
+	for {
+		mustWait, err := attempt.start(&waitDeadline)
+		if err != nil {
+			return err
+		}
+		if !mustWait {
+			break
+		}
+		c.waitAttemptEnds(req.Channel, waitDeadline)
+	}
 	c.eventHub.subscribeHandler(event, cb)
 	return nil
 }
@@ -278,6 +427,7 @@ func (c *Client) handleMapSubscribeCommand(
 func (c *Client) handleMapSubscribe(
 	req *protocol.SubscribeRequest,
 	reply SubscribeReply,
+	attempt *mapSubscribeAttempt,
 	cmd *protocol.Command,
 	started time.Time,
 	rw *replyWriter,
@@ -287,7 +437,7 @@ func (c *Client) handleMapSubscribe(
 	// Auto-set positioning flags from Mode.
 	chOpts, err := c.node.resolveMapChannelOptions(channel)
 	if err != nil {
-		c.cleanupMapSubscribing(channel)
+		c.cleanupContinuationMapSubscribing(channel, attempt)
 		return err
 	}
 	if chOpts.Mode.HasStream() {
@@ -301,13 +451,13 @@ func (c *Client) handleMapSubscribe(
 	// Route based on phase.
 	switch req.Phase {
 	case MapPhaseState:
-		return c.handleMapStatePhase(req, reply, cmd, started, rw)
+		return c.handleMapStatePhase(req, reply, attempt, cmd, started, rw)
 	case MapPhaseStream:
-		return c.handleMapStreamPhase(req, reply, cmd, started, rw)
+		return c.handleMapStreamPhase(req, reply, attempt, cmd, started, rw)
 	case MapPhaseLive:
-		return c.handleMapLivePhase(req, reply, cmd, started, rw)
+		return c.handleMapLivePhase(req, reply, attempt, cmd, started, rw)
 	default:
-		c.cleanupMapSubscribing(channel)
+		c.cleanupContinuationMapSubscribing(channel, attempt)
 		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid map phase", map[string]any{
 			"channel": channel, "phase": req.Phase, "user": c.user, "client": c.uid,
 		}))
@@ -319,6 +469,7 @@ func (c *Client) handleMapSubscribe(
 func (c *Client) handleMapStatePhase(
 	req *protocol.SubscribeRequest,
 	reply SubscribeReply,
+	attempt *mapSubscribeAttempt,
 	cmd *protocol.Command,
 	started time.Time,
 	rw *replyWriter,
@@ -339,8 +490,17 @@ func (c *Client) handleMapStatePhase(
 			return err
 		}
 		c.mu.Lock()
+		if c.status == statusClosed {
+			// See errMapSubscribeClosed.
+			c.mu.Unlock()
+			return errMapSubscribeClosed
+		}
 		if c.mapSubscribing == nil {
 			c.mapSubscribing = make(map[string]*mapSubscribeState)
+		}
+		if c.channelReservedLocked(channel) {
+			c.mu.Unlock()
+			return ErrorAlreadySubscribed
 		}
 		if _, exists := c.mapSubscribing[channel]; exists {
 			// A concurrent initial subscribe for this channel installed its state
@@ -370,6 +530,7 @@ func (c *Client) handleMapStatePhase(
 			tagsFilter:        tf,
 			serverTagsFilter:  stf,
 		}
+		attempt.reserve()
 		c.mu.Unlock()
 	} else {
 		// Subsequent request - verify we have authorization.
@@ -479,8 +640,17 @@ func (c *Client) handleMapStatePhase(
 	// Check for direct STATE→LIVE transition on last page.
 	if nextCursor == "" {
 		if state == nil {
-			// Disconnect raced with MapStateRead — subscription is being cleaned up.
-			return nil
+			// The reservation was removed during MapStateRead: by close(), or by a
+			// sweep of another channel's subscribe (unsubscribes wait for the
+			// pagination lock). The catch-up timed out then, so the reply is the
+			// one its own request would get.
+			c.mu.RLock()
+			closed := c.status == statusClosed
+			c.mu.RUnlock()
+			if closed {
+				return nil
+			}
+			return DisconnectSlow
 		}
 		positioning := state.options.EnablePositioning || state.options.EnableRecovery
 
@@ -558,6 +728,9 @@ type mapTransitionToLiveParams struct {
 	// generation). Nil: a reservation is installed on entry so the commit's
 	// generation check and the unsubscribe wait-gate cover this path too.
 	expectedState *mapSubscribeState
+	// attempt is the subscribe attempt a direct-to-LIVE recovery join reserves
+	// for (expectedState nil).
+	attempt *mapSubscribeAttempt
 }
 
 // handleMapTransitionToLive implements the shared buffer-subscribe-read-merge protocol
@@ -610,6 +783,13 @@ func (c *Client) handleMapTransitionToLive(
 		// state and stream phases.
 		c.mu.Unlock()
 		return ErrorAlreadySubscribed
+	} else if c.status == statusClosed {
+		// See errMapSubscribeClosed.
+		c.mu.Unlock()
+		return errMapSubscribeClosed
+	} else if c.channelReservedLocked(channel) {
+		c.mu.Unlock()
+		return ErrorAlreadySubscribed
 	} else {
 		// Direct-to-LIVE recovery join: no STATE/STREAM phase ran, so no
 		// reservation exists. Install one — it carries the generation the commit
@@ -633,6 +813,7 @@ func (c *Client) handleMapTransitionToLive(
 			serverTagsFilter:  params.serverTagsFilterFromState,
 		}
 		c.mapSubscribing[channel] = ourState
+		params.attempt.reserve()
 	}
 	c.mu.Unlock()
 
@@ -805,10 +986,15 @@ func (c *Client) handleMapTransitionToLive(
 		// Merge recovered and buffered publications.
 		var maxSeenOffset uint64
 		var okMerge bool
-		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
+		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs, streamPos.Epoch, streamPos.Offset)
 		if !okMerge {
 			rollback(true)
 			return &DisconnectInsufficientState
+		}
+		if streamPos.Epoch == "" && len(bufferedPubs) > 0 {
+			// The read knew no epoch (a lagging replica): the merged publications
+			// move the position into theirs.
+			streamPos.Epoch = c.pubSubSync.CollectedEpoch(pubSubBuf)
 		}
 
 		// Update offset if we saw higher.
@@ -921,6 +1107,10 @@ func (c *Client) handleMapTransitionToLive(
 		mapUserPresenceChannel:   opts.MapUserPresenceChannel,
 		subGen:                   subGen,
 	}
+	if opts.EmitPresence || opts.EmitJoinLeave || opts.MapClientPresenceChannel != "" {
+		// Presence and join are done after the commit.
+		channelContext.joinGate = &joinGate{}
+	}
 
 	// Install channelContext BEFORE writing the reply so that any follow-up
 	// commands from the SDK that arrive between the reply send and StopBuffering
@@ -963,6 +1153,7 @@ func (c *Client) handleMapTransitionToLive(
 
 	// Add presence and join handling.
 	c.setupMapPresenceAndJoin(channel, opts)
+	c.finishJoin(channel, channelContext)
 
 	return nil
 }
@@ -995,6 +1186,7 @@ func (c *Client) handleMapStateToLive(
 func (c *Client) handleMapStreamPhase(
 	req *protocol.SubscribeRequest,
 	reply SubscribeReply,
+	attempt *mapSubscribeAttempt,
 	cmd *protocol.Command,
 	started time.Time,
 	rw *replyWriter,
@@ -1003,18 +1195,31 @@ func (c *Client) handleMapStreamPhase(
 
 	// Reject stream phase in streamless mode.
 	if !reply.Options.EnablePositioning && !reply.Options.EnableRecovery {
-		c.cleanupMapSubscribing(channel)
+		c.cleanupContinuationMapSubscribing(channel, attempt)
 		return ErrorBadRequest
 	}
+
+	// Acquire pagination lock for this channel. Before the recovery reservation
+	// below: one installed and then refused here would stay behind.
+	if !c.acquireMapPaginationLock(channel) {
+		return ErrorConcurrentPagination
+	}
+	defer c.releaseMapPaginationLock(channel)
 
 	// Check for existing subscription state or recovery mode.
 	c.mu.RLock()
 	state, hasState := c.mapSubscribing[channel]
 	c.mu.RUnlock()
 
+	if hasState && attempt != nil {
+		// A concurrent subscribe reserved the channel after this request was
+		// validated: the reservation belongs to that attempt.
+		return ErrorAlreadySubscribed
+	}
 	if !hasState {
-		if !req.Recover {
-			// No existing state and not recovering - permission denied.
+		if !req.Recover || attempt == nil {
+			// No existing state and not recovering (or a continuation whose
+			// reservation is gone) - permission denied.
 			c.node.logger.log(newLogEntry(LogLevelInfo, "map subscription not authorized for stream", map[string]any{
 				"channel": channel, "user": c.user, "client": c.uid,
 			}))
@@ -1049,6 +1254,15 @@ func (c *Client) handleMapStreamPhase(
 		}
 		state.serverTagsFilter = stf
 		c.mu.Lock()
+		if c.status == statusClosed {
+			// See errMapSubscribeClosed.
+			c.mu.Unlock()
+			return errMapSubscribeClosed
+		}
+		if c.channelReservedLocked(channel) {
+			c.mu.Unlock()
+			return ErrorAlreadySubscribed
+		}
 		if c.mapSubscribing == nil {
 			c.mapSubscribing = make(map[string]*mapSubscribeState)
 		}
@@ -1067,14 +1281,9 @@ func (c *Client) handleMapStreamPhase(
 			return ErrorAlreadySubscribed
 		}
 		c.mapSubscribing[channel] = state
+		attempt.reserve()
 		c.mu.Unlock()
 	}
-
-	// Acquire pagination lock for this channel.
-	if !c.acquireMapPaginationLock(channel) {
-		return ErrorConcurrentPagination
-	}
-	defer c.releaseMapPaginationLock(channel)
 
 	// Validate epoch if provided.
 	if req.Epoch != "" && state.epoch != "" && req.Epoch != state.epoch {
@@ -1261,6 +1470,7 @@ func (c *Client) handleMapStreamToLive(
 func (c *Client) handleMapLivePhase(
 	req *protocol.SubscribeRequest,
 	reply SubscribeReply,
+	attempt *mapSubscribeAttempt,
 	cmd *protocol.Command,
 	started time.Time,
 	rw *replyWriter,
@@ -1295,6 +1505,16 @@ func (c *Client) handleMapLivePhase(
 	state, hasState := c.mapSubscribing[channel]
 	c.mu.RUnlock()
 
+	if hasState && attempt != nil {
+		// A concurrent subscribe reserved the channel after this request was
+		// validated: the reservation belongs to that attempt.
+		return ErrorAlreadySubscribed
+	}
+	if !hasState && attempt == nil {
+		// A continuation whose reservation is gone.
+		return ErrorPermissionDenied
+	}
+
 	if hasState {
 		opts = state.options
 		isPresence = state.isPresence
@@ -1324,7 +1544,7 @@ func (c *Client) handleMapLivePhase(
 	// Recovery or paginated join - stream catch-up needed. state is nil on the
 	// direct-to-LIVE path (no STATE/STREAM phase ran) — the transition installs
 	// a fresh reservation in that case.
-	return c.handleMapRecoveryJoin(req, reply, opts, isPresence, state, tagsFilterFromState, serverTagsFilterFromState, cmd, started, rw)
+	return c.handleMapRecoveryJoin(req, reply, opts, isPresence, state, attempt, tagsFilterFromState, serverTagsFilterFromState, cmd, started, rw)
 }
 
 // handleMapRecoveryJoin handles recovery or paginated join (stream catch-up only).
@@ -1334,6 +1554,7 @@ func (c *Client) handleMapRecoveryJoin(
 	opts SubscribeOptions,
 	isPresence bool,
 	state *mapSubscribeState,
+	attempt *mapSubscribeAttempt,
 	tagsFilterFromState *tagsFilter,
 	serverTagsFilterFromState *tagsFilter,
 	cmd *protocol.Command,
@@ -1348,6 +1569,7 @@ func (c *Client) handleMapRecoveryJoin(
 		serverTagsFilterFromState: serverTagsFilterFromState,
 		metricsAction:             "map_subscribe_recovery_join",
 		expectedState:             state,
+		attempt:                   attempt,
 	})
 }
 
@@ -1498,11 +1720,13 @@ func (c *Client) acquireMapPaginationLock(channel string) bool {
 	return true
 }
 
-// releaseMapPaginationLock releases the pagination lock for the channel.
+// releaseMapPaginationLock releases the pagination lock for the channel, waking
+// an unsubscribe waiting for the request in progress.
 func (c *Client) releaseMapPaginationLock(channel string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.mapPaginationLocks, channel)
+	c.signalLocked()
 }
 
 // sweepExpiredMapSubscribing removes expired mapSubscribing entries for channels
@@ -1550,16 +1774,107 @@ func (c *Client) sweepExpiredMapSubscribing(skipChannel string) {
 	// Delete only entries whose *mapSubscribeState pointer still matches the
 	// snapshot — guards against a resubscribe that replaced the entry between
 	// the RUnlock and the Lock.
+	removed := expired[:0]
+	now := time.Now().UnixNano()
+	// A client loads at most ClientChannelLimit channels at once, which bounds the
+	// swept channels a well-behaved client needs remembered.
+	sweptLimit := c.node.config.ClientChannelLimit
+	if sweptLimit <= 0 {
+		sweptLimit = defaultMapSubscribeSweptLimit
+	}
 	c.mu.Lock()
+	t := c.trackingLocked()
+	for ch, sweptAt := range t.mapSubscribeSwept {
+		if time.Duration(now-sweptAt) > mapSubscribeSweptTTL {
+			delete(t.mapSubscribeSwept, ch)
+		}
+	}
 	for _, e := range expired {
 		if state, ok := c.mapSubscribing[e.ch]; ok && state == e.state {
 			if state.subscribingCh != nil {
 				close(state.subscribingCh)
 			}
 			delete(c.mapSubscribing, e.ch)
+			removed = append(removed, e)
+			c.addAttemptEndLocked(e.ch)
+			if len(t.mapSubscribeSwept) < sweptLimit {
+				if t.mapSubscribeSwept == nil {
+					t.mapSubscribeSwept = make(map[string]int64)
+				}
+				t.mapSubscribeSwept[e.ch] = now
+			}
 		}
 	}
+	if len(removed) > 0 {
+		c.signalLocked()
+	}
 	c.mu.Unlock()
+	for _, e := range removed {
+		c.endSubscribeAttempt(e.ch, nil, nil)
+	}
+}
+
+// errMapSubscribeClosed is returned by a map subscribe request which would
+// install a reservation on a closed client: SubscribeHandler called back after
+// close() already removed the client's reservations, so nothing would ever remove
+// this one or end its attempt (a paginated load waits for requests which never
+// come). Not reserving lets the subscribe callback end the attempt.
+var errMapSubscribeClosed = DisconnectConnectionClosed
+
+// channelReservedLocked reports whether the channel is in c.channels already, which
+// an initial map subscribe must check again when it reserves:
+// validateSubscribeRequest checked before SubscribeHandler was called, and a map
+// subscribe holds no reservation while the handler decides, so another one may
+// have gone live meanwhile. Its commit would overwrite that subscription (which
+// then never gets its UnsubscribeHandler call). Must be called with c.mu held.
+func (c *Client) channelReservedLocked(channel string) bool {
+	_, ok := c.channels[channel]
+	return ok
+}
+
+// cleanupContinuationMapSubscribing removes the channel's map subscribing state
+// on an early exit of a map subscribe request, before the request reserved
+// anything itself. Only a continuation request (nil attempt) owns that state; a
+// request which SubscribeHandler allowed has no reservation yet, so the state
+// present belongs to a concurrent attempt and is left alone.
+func (c *Client) cleanupContinuationMapSubscribing(channel string, attempt *mapSubscribeAttempt) {
+	if attempt == nil {
+		c.cleanupMapSubscribing(channel)
+	}
+}
+
+// mapSubscribeSweptTTL is how long a channel stays in mapSubscribeSwept when
+// the client sends nothing for it.
+const mapSubscribeSweptTTL = time.Minute
+
+// defaultMapSubscribeSweptLimit bounds mapSubscribeSwept without ClientChannelLimit.
+const defaultMapSubscribeSweptLimit = 128
+
+// sweptMapContinuation reports whether req continues a map catch-up which
+// sweepExpiredMapSubscribing dropped. Such a request finds no reservation, and
+// without this it would get ErrorPermissionDenied, which clients treat as
+// permanent, instead of DisconnectSlow, which a catch-up timeout gets when the
+// channel's own request notices it. Any request for the channel forgets it.
+func (c *Client) sweptMapContinuation(req *protocol.SubscribeRequest) bool {
+	c.mu.RLock()
+	swept := false
+	if c.tracking != nil {
+		_, swept = c.tracking.mapSubscribeSwept[req.Channel]
+	}
+	c.mu.RUnlock()
+	if !swept {
+		return false
+	}
+	c.mu.Lock()
+	delete(c.tracking.mapSubscribeSwept, req.Channel)
+	if len(c.tracking.mapSubscribeSwept) == 0 {
+		c.tracking.mapSubscribeSwept = nil
+	}
+	_, hasState := c.mapSubscribing[req.Channel]
+	c.mu.Unlock()
+	// The requests which need the dropped reservation: a state page with a
+	// cursor, or the stream phase without recovery.
+	return !hasState && (req.Cursor != "" || (req.Phase == MapPhaseStream && !req.Recover))
 }
 
 // cleanupMapSubscribing removes map subscribing state for a channel.
@@ -1583,27 +1898,37 @@ func (c *Client) cleanupMapSubscribing(channel string) {
 // unconditional behavior for callers that are the sole owner by construction.
 func (c *Client) cleanupMapSubscribingState(channel string, expected *mapSubscribeState) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if state, ok := c.mapSubscribing[channel]; ok {
-		if expected != nil && state != expected {
-			return
-		}
-		if state.subscribingCh != nil {
-			close(state.subscribingCh)
-		}
-		delete(c.mapSubscribing, channel)
+	state, ok := c.mapSubscribing[channel]
+	if !ok || (expected != nil && state != expected) {
+		c.mu.Unlock()
+		return
+	}
+	delete(c.mapSubscribing, channel)
+	c.addAttemptEndLocked(channel)
+	c.signalLocked()
+	c.mu.Unlock()
+	c.endSubscribeAttempt(channel, nil, nil)
+	if state.subscribingCh != nil {
+		close(state.subscribingCh)
 	}
 }
 
-// cleanupMapSubscribingAll removes all in-progress map subscriptions on disconnect.
-func (c *Client) cleanupMapSubscribingAll() {
+// cleanupMapSubscribingAll removes all in-progress map subscriptions on
+// disconnect, ending their attempts with the disconnect.
+func (c *Client) cleanupMapSubscribingAll(disconnect *Disconnect) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	for channel, state := range c.mapSubscribing {
+	states := c.mapSubscribing
+	c.mapSubscribing = nil
+	for channel := range states {
+		c.addAttemptEndLocked(channel)
+	}
+	c.signalLocked()
+	c.mu.Unlock()
+	for channel, state := range states {
+		c.endSubscribeAttempt(channel, &unsubscribeDisconnect, disconnect)
 		if state.subscribingCh != nil {
 			close(state.subscribingCh)
 		}
-		delete(c.mapSubscribing, channel)
 	}
 }
 
@@ -1617,6 +1942,14 @@ func (c *Client) mapPresenceTTL() time.Duration {
 	return ttl
 }
 
+// presenceContext is the context of map presence writes: not canceled when the
+// client closes. A canceled call can still be applied by the broker after it
+// returned, so after the presence removal which follows it (see joinGate,
+// compensateRacedPresence), and the entry would stay until its TTL.
+func presenceContext(ctx context.Context) context.Context {
+	return context.WithoutCancel(ctx)
+}
+
 // addMapClientPresence adds client presence to the given channel.
 // Key is clientId, stores full ClientInfo.
 func (c *Client) addMapClientPresence(presenceChannel string, info *ClientInfo) error {
@@ -1624,7 +1957,7 @@ func (c *Client) addMapClientPresence(presenceChannel string, info *ClientInfo) 
 	// - Publish JOIN event only if this is a new presence entry
 	// - Refresh TTL without publishing if entry already exists (quick reconnect)
 	// KeyTTL is configured in GetMapChannelOptions for presence channels.
-	_, err := c.node.MapPublish(c.ctx, presenceChannel, c.uid, MapPublishOptions{
+	_, err := c.node.MapPublish(presenceContext(c.ctx), presenceChannel, c.uid, MapPublishOptions{
 		ClientInfo:           info,
 		KeyMode:              KeyModeIfNew,
 		RefreshTTLOnSuppress: true,
@@ -1644,7 +1977,7 @@ func (c *Client) addMapUserPresence(presenceChannel string) error {
 	// - Publish JOIN event only if this is a new user
 	// - Refresh TTL without publishing if user already exists
 	// KeyTTL is configured in GetMapChannelOptions for presence channels.
-	_, err := c.node.MapPublish(c.ctx, presenceChannel, c.user, MapPublishOptions{
+	_, err := c.node.MapPublish(presenceContext(c.ctx), presenceChannel, c.user, MapPublishOptions{
 		KeyMode:              KeyModeIfNew,
 		RefreshTTLOnSuppress: true,
 	})
@@ -1662,7 +1995,7 @@ func (c *Client) updateMapPresence(info *ClientInfo, ctx ChannelContext) error {
 
 	// Update client presence if channel is configured.
 	if ctx.mapClientPresenceChannel != "" {
-		_, err := c.node.MapPublish(c.ctx, ctx.mapClientPresenceChannel, c.uid, MapPublishOptions{
+		_, err := c.node.MapPublish(presenceContext(c.ctx), ctx.mapClientPresenceChannel, c.uid, MapPublishOptions{
 			ClientInfo:           info,
 			KeyMode:              KeyModeIfNew,
 			RefreshTTLOnSuppress: true,
@@ -1675,7 +2008,7 @@ func (c *Client) updateMapPresence(info *ClientInfo, ctx ChannelContext) error {
 	// Update user presence if channel is configured. Skip for anonymous
 	// connections (empty user ID) — user-presence is keyless without a user.
 	if ctx.mapUserPresenceChannel != "" && c.user != "" {
-		_, err := c.node.MapPublish(c.ctx, ctx.mapUserPresenceChannel, c.user, MapPublishOptions{
+		_, err := c.node.MapPublish(presenceContext(c.ctx), ctx.mapUserPresenceChannel, c.user, MapPublishOptions{
 			KeyMode:              KeyModeIfNew,
 			RefreshTTLOnSuppress: true,
 		})

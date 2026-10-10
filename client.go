@@ -106,7 +106,9 @@ func (c *Client) OnSubscribe(h SubscribeHandler) {
 }
 
 // OnUnsubscribe allows setting UnsubscribeHandler.
-// UnsubscribeHandler called when client unsubscribes from channel.
+// UnsubscribeHandler called when client unsubscribes from channel, and once for
+// every subscribe attempt allowed by SubscribeHandler which ended without
+// becoming a subscription (UnsubscribeEvent.Subscribed is false then).
 func (c *Client) OnUnsubscribe(h UnsubscribeHandler) {
 	c.eventHub.unsubscribeHandler = h
 }
@@ -190,12 +192,14 @@ const (
 // Note: this struct is aligned to consume less memory.
 type ChannelContext struct {
 	subscribingCh            chan struct{}
+	joinGate                 *joinGate
 	info                     []byte
 	streamPosition           StreamPosition
 	expireAt                 int64
 	positionCheckTime        int64
 	metaTTLSeconds           int64
 	flags                    uint16
+	subscribeAllowed         bool // Reservation of an attempt SubscribeHandler allowed, see answerSubscribeCallback.
 	mapClientPresenceChannel string
 	mapUserPresenceChannel   string
 	// subGen identifies this subscription generation; it matches the subGen the
@@ -331,6 +335,13 @@ type Client struct {
 	connectedAtMS          int64
 	replyWithoutQueue      bool
 	unusable               bool
+	pendingUnsubscribes    int32 // See addPendingUnsubscribeLocked. Guarded by c.mu.
+	// closeDisconnect is the Disconnect the client was closed with, set together
+	// with statusClosed.
+	closeDisconnect *Disconnect
+	// tracking holds state for subscribe attempts and unsubscribes which most
+	// connections never need, allocated on first use.
+	tracking *subscribeTracking
 
 	// mapSubscribing tracks map subscriptions that are still loading (not yet live).
 	mapSubscribing map[string]*mapSubscribeState
@@ -797,6 +808,119 @@ func (c *Client) spawnCloseUnlessClosing(disconnect Disconnect) {
 	go func() { _ = c.close(disconnect) }()
 }
 
+// joinGate orders the unsubscribe's presence removal and leave after the
+// presence add and join which the subscribe does once it is live. Between the
+// commit and those, an unsubscribe can already remove the subscription: the one
+// of them which comes second does the removal and leave, nobody waits. Set for a
+// subscription which adds presence or publishes join after the commit.
+type joinGate struct {
+	mu     sync.Mutex
+	joined bool
+	left   bool
+}
+
+// join is called by the subscribe after its presence add and join (or where it
+// skips them). Reports whether the subscription was unsubscribed meanwhile, so
+// the caller must do the removal and leave.
+func (g *joinGate) join() bool {
+	if g == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.joined = true
+	return g.left
+}
+
+// leave is called by the unsubscribe. Reports whether it does the removal and
+// leave itself, otherwise join does them.
+func (g *joinGate) leave() bool {
+	if g == nil {
+		return true
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.left = true
+	return g.joined
+}
+
+// finishJoin is called by every subscribe path after the subscription went live
+// and its presence and join were done, see joinGate.
+func (c *Client) finishJoin(channel string, chCtx ChannelContext) {
+	if chCtx.joinGate.join() {
+		c.removePresenceAndLeave(channel, chCtx)
+		c.finishPendingLeave(channel)
+	}
+}
+
+// addPendingLeaveLocked registers the presence removal and leave of a removed
+// subscription, done by the unsubscribe or left to the subscribe still
+// publishing the join (see joinGate). Until it is done, a new subscribe to the
+// channel waits (or it would remove the new subscription's presence and publish
+// a leave after its join), and close() waits before DisconnectHandler.
+func (c *Client) addPendingLeaveLocked(channel string) {
+	c.addPendingUnsubscribeLocked()
+	c.trackingLocked().channelLeaves.add(channel)
+}
+
+func (c *Client) finishPendingLeave(channel string) {
+	c.mu.Lock()
+	c.tracking.channelLeaves.remove(channel)
+	c.signalLocked()
+	c.finishPendingUnsubscribeLocked()
+	c.mu.Unlock()
+}
+
+// mustWaitPendingLeaveLocked reports whether a server-side subscribe to the
+// channel must wait for a pending leave, see addPendingLeaveLocked. The
+// deadline is set on first use.
+func (c *Client) mustWaitPendingLeaveLocked(channel string, deadline *time.Time) bool {
+	if c.tracking == nil || !c.tracking.channelLeaves.has(channel) {
+		return false
+	}
+	now := time.Now()
+	if deadline.IsZero() {
+		*deadline = now.Add(pendingUnsubscribesSubscribeTimeout.get())
+	}
+	return now.Before(*deadline)
+}
+
+// hasPresenceOrLeave reports whether removePresenceAndLeave has something to do
+// for a subscription with these flags.
+func hasPresenceOrLeave(flags uint16) bool {
+	return channelHasFlag(flags, flagEmitPresence|flagEmitJoinLeave|flagMapClientPresence|flagMapUserPresence|flagCleanupOnUnsubscribe)
+}
+
+// removePresenceAndLeave removes the presence of a subscription which ended and
+// publishes its leave.
+func (c *Client) removePresenceAndLeave(channel string, chCtx ChannelContext) {
+	hasMapPresenceOrCleanup := channelHasFlag(chCtx.flags, flagMapClientPresence) ||
+		channelHasFlag(chCtx.flags, flagMapUserPresence) ||
+		channelHasFlag(chCtx.flags, flagCleanupOnUnsubscribe)
+	if hasMapPresenceOrCleanup {
+		err := c.removeMapPresence(channel, chCtx)
+		if err != nil {
+			c.node.logger.log(newErrorLogEntry(err, "error removing channel presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+		}
+	} else if channelHasFlag(chCtx.flags, flagEmitPresence) {
+		err := c.node.removePresence(channel, c.uid, c.user)
+		if err != nil {
+			c.node.logger.log(newErrorLogEntry(err, "error removing channel presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+		}
+	}
+	if channelHasFlag(chCtx.flags, flagEmitJoinLeave) {
+		c.mu.RLock()
+		connInfo := c.info
+		c.mu.RUnlock()
+		_ = c.node.publishLeave(channel, &ClientInfo{
+			ClientID: c.uid,
+			UserID:   c.user,
+			ConnInfo: connInfo,
+			ChanInfo: chCtx.info,
+		})
+	}
+}
+
 // publishJoinAndPresence publishes join notification and sets up map presence
 // for a channel after subscribe. Must be called with non-nil clientInfo.
 func (c *Client) publishJoinAndPresence(channel string, chCtx ChannelContext, clientInfo *ClientInfo) {
@@ -977,24 +1101,88 @@ func (c *Client) updateChannelPresenceItem(item *channelTickItem) {
 // that almost never fires.
 func (c *Client) compensateRacedPresence(snapshot []channelTickItem) {
 	var raced bool
-	c.mu.RLock()
+	c.mu.Lock()
 	for i := range snapshot {
 		if !snapshot[i].presenceAdded {
 			continue
 		}
-		if _, ok := c.channels[snapshot[i].channel]; !ok {
-			snapshot[i].raced = true
-			raced = true
+		current, ok := c.channels[snapshot[i].channel]
+		switch {
+		case ok && current.subGen != snapshot[i].ctx.subGen && !channelHasFlag(current.flags, flagSubscribed) && current.subscribingCh != nil:
+			// A resubscribe in progress, which may have added the same presence
+			// already: decide once it is committed or rolled back.
+			go c.compensateRacedPresenceAfterSubscribe(snapshot[i].channel, snapshot[i].ctx, current.subscribingCh)
+		default:
+			node, mapClient := tickPresenceToRemove(current, ok, snapshot[i].ctx)
+			if node || mapClient {
+				snapshot[i].raced = true
+				snapshot[i].racedNode, snapshot[i].racedMap = node, mapClient
+				raced = true
+				// A subscribe to the channel waits for the removal.
+				c.addPendingLeaveLocked(snapshot[i].channel)
+			}
 		}
 	}
-	c.mu.RUnlock()
+	c.mu.Unlock()
 	if !raced {
 		return
 	}
 	for i := range snapshot {
 		if snapshot[i].raced {
-			c.removeRacedPresence(snapshot[i].channel, snapshot[i].ctx)
+			c.removeRacedPresence(snapshot[i].channel, snapshot[i].ctx, snapshot[i].racedNode, snapshot[i].racedMap)
+			c.finishPendingLeave(snapshot[i].channel)
 		}
+	}
+}
+
+// tickPresenceToRemove reports which presence a tick added for item nothing
+// would remove: none for the subscription it was added for, otherwise each kind
+// the current live subscription (if any) does not have itself. A live
+// resubscribe with the same kind of presence owns that entry now (same key).
+func tickPresenceToRemove(current ChannelContext, ok bool, item ChannelContext) (node, mapClient bool) {
+	if ok && current.subGen == item.subGen {
+		return false, false
+	}
+	live := ok && channelHasFlag(current.flags, flagSubscribed)
+	node = channelHasFlag(item.flags, flagEmitPresence) && (!live || !channelHasFlag(current.flags, flagEmitPresence))
+	mapClient = item.mapClientPresenceChannel != "" && (!live || current.mapClientPresenceChannel != item.mapClientPresenceChannel)
+	return node, mapClient
+}
+
+// compensateRacedPresenceAfterSubscribe is compensateRacedPresence for a channel
+// with a subscribe in progress: it waits (bounded) until the subscribe is
+// committed or rolled back.
+func (c *Client) compensateRacedPresenceAfterSubscribe(ch string, item ChannelContext, subscribingCh chan struct{}) {
+	tm := timers.AcquireTimer(subscribeInProgressTimeout.get())
+	defer timers.ReleaseTimer(tm)
+	var current ChannelContext
+	var ok bool
+	for {
+		timedOut := false
+		select {
+		case <-subscribingCh:
+		case <-tm.C:
+			timedOut = true
+		}
+		c.mu.Lock()
+		current, ok = c.channels[ch]
+		if timedOut || !ok || current.subscribingCh == nil || current.subscribingCh == subscribingCh {
+			break
+		}
+		// The subscribe failed and another one is in progress: it may already
+		// have added presence, under the same key. Decide once it is done.
+		subscribingCh = current.subscribingCh
+		c.mu.Unlock()
+	}
+	node, mapClient := tickPresenceToRemove(current, ok, item)
+	if node || mapClient {
+		// A subscribe to the channel waits for the removal.
+		c.addPendingLeaveLocked(ch)
+	}
+	c.mu.Unlock()
+	if node || mapClient {
+		c.removeRacedPresence(ch, item, node, mapClient)
+		c.finishPendingLeave(ch)
 	}
 }
 
@@ -1004,17 +1192,16 @@ func (c *Client) compensateRacedPresence(snapshot []channelTickItem) {
 // removeMapPresence.
 //
 // Removing twice (here and in unsubscribe) is harmless: removal is idempotent.
-// If a fast re-subscribe raced this removal the entry can be dropped while the
-// client is subscribed, but the next presence tick re-adds it, and unsubscribe's
-// own removePresence already has that same race with a re-subscribe today.
-func (c *Client) removeRacedPresence(ch string, chCtx ChannelContext) {
-	if channelHasFlag(chCtx.flags, flagEmitPresence) {
+// Callers register the removal with addPendingLeaveLocked, so a resubscribe to
+// the channel can't add presence before it.
+func (c *Client) removeRacedPresence(ch string, chCtx ChannelContext, node, mapClient bool) {
+	if node {
 		if err := c.node.removePresence(ch, c.uid, c.user); err != nil {
 			c.node.logger.log(newErrorLogEntry(err, "error removing raced channel presence", map[string]any{
 				"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		}
 	}
-	if chCtx.mapClientPresenceChannel != "" {
+	if mapClient {
 		if _, err := c.node.MapRemove(context.Background(), chCtx.mapClientPresenceChannel, c.uid, MapRemoveOptions{}); err != nil {
 			c.node.logger.log(newErrorLogEntry(err, "error removing raced map client presence", map[string]any{
 				"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
@@ -1085,7 +1272,7 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 					// server-side one can't be resubscribed by the client, so the
 					// connection reconnects, as on insufficient state.
 					if c.isAsyncUnsubscribe(channelHasFlag(channelContext.flags, flagServerSide)) {
-						go c.handleAsyncUnsubscribe(channel, unsub)
+						go c.handleAsyncUnsubscribe(channel, channelContext.subGen, unsub)
 					} else {
 						go func() { _ = c.close(DisconnectInsufficientState) }()
 					}
@@ -1120,6 +1307,8 @@ type channelTickItem struct {
 	// so a racing unsubscribe can be compensated for. See compensateRacedPresence.
 	presenceAdded bool
 	raced         bool
+	racedNode     bool // Raced: remove the channel presence.
+	racedMap      bool // Raced: remove the map client presence.
 	// positionInvalid records the outcome of the stream position check. The check
 	// itself may run concurrently; acting on the result (unsubscribe or
 	// disconnect) is left to the sequential pass.
@@ -1259,7 +1448,7 @@ func (c *Client) updatePresence() {
 				if !result {
 					serverSide := channelHasFlag(channelContext.flags, flagServerSide)
 					if c.isAsyncUnsubscribe(serverSide) {
-						go func(ch string) { c.handleAsyncUnsubscribe(ch, unsubscribeExpired) }(channel)
+						go func(ch string, subGen uint64) { c.handleAsyncUnsubscribe(ch, subGen, unsubscribeExpired) }(channel, channelContext.subGen)
 					} else {
 						go func() { _ = c.close(DisconnectSubExpired) }()
 					}
@@ -1283,7 +1472,7 @@ func (c *Client) updatePresence() {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state from periodic check", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
 			}
 			if c.isAsyncUnsubscribe(serverSide) {
-				go func(ch string) { c.handleAsyncUnsubscribe(ch, unsubscribeInsufficientState) }(channel)
+				go func(ch string, subGen uint64) { c.handleAsyncUnsubscribe(ch, subGen, unsubscribeInsufficientState) }(channel, channelContext.subGen)
 				continue
 			} else {
 				go func() { c.handleInsufficientStateDisconnect() }()
@@ -1487,30 +1676,39 @@ func (c *Client) getSendPushReply(data []byte) ([]byte, error) {
 	})
 }
 
-// Unsubscribe allows unsubscribing client from channel.
+// Unsubscribe allows unsubscribing client from channel. Called before
+// ConnectHandler returned (e.g. Node.Unsubscribe of a subscription made on
+// connect, or from inside ConnectHandler), it takes effect right after
+// ConnectHandler returns: so UnsubscribeHandler set in ConnectHandler gets the
+// call, and not while ConnectHandler runs.
 func (c *Client) Unsubscribe(ch string, unsubscribe ...Unsubscribe) {
 	if len(unsubscribe) > 1 {
 		panic("Client.Unsubscribe called with more than 1 unsubscribe argument")
 	}
-	c.mu.RLock()
-	if c.status == statusClosed {
-		c.mu.RUnlock()
-		return
-	}
-	c.mu.RUnlock()
-
 	unsub := unsubscribeServer
 	if len(unsubscribe) > 0 {
 		unsub = unsubscribe[0]
 	}
 
-	err := c.unsubscribe(ch, unsub, nil)
+	c.mu.Lock()
+	switch c.status {
+	case statusClosed:
+		c.mu.Unlock()
+		return
+	case statusConnecting:
+		t := c.trackingLocked()
+		t.unsubscribesAfterConnect = append(t.unsubscribesAfterConnect, pendingUnsubscribe{channel: ch, unsubscribe: unsub})
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+
+	err := c.unsubscribeWaiting(ch, unsub, nil, subscribeInProgressTimeout.get(), true, 0)
 	if err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error unsubscribe", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		go c.Disconnect(DisconnectServerError)
 		return
 	}
-	_ = c.sendUnsubscribe(ch, unsub)
 }
 
 func (c *Client) sendUnsubscribe(ch string, unsub Unsubscribe) error {
@@ -1586,6 +1784,7 @@ func (c *Client) close(disconnect Disconnect) error {
 	user := c.user
 	authenticated := c.authenticated
 	c.status = statusClosed
+	c.closeDisconnect = &disconnect
 
 	c.stopTimer()
 
@@ -1607,18 +1806,20 @@ func (c *Client) close(disconnect Disconnect) error {
 		c.node.removeClient(c)
 	}
 
-	if disconnect.Code != DisconnectConnectionClosed.Code && !hasFlag(c.transport.DisabledPushFlags(), PushFlagDisconnect) {
-		if replyData, err := c.getDisconnectPushReply(disconnect); err == nil {
-			_ = c.writeEncodedPushData(replyData, "", "", protocol.FrameTypePushDisconnect, ChannelBatchConfig{})
-		}
-	}
-
-	// close writer and send messages remaining in writer queue if any.
+	// close writer and send messages remaining in writer queue if any, the
+	// disconnect push last: the client is still in the hub, publications may
+	// still come.
 	flushRemaining := disconnect.Code != DisconnectConnectionClosed.Code && disconnect.Code != DisconnectSlow.Code
 	if c.perChannelWriter != nil {
 		c.perChannelWriter.Close(flushRemaining)
 	}
-	_ = c.messageWriter.close(flushRemaining)
+	var disconnectPush *queue.Item
+	if disconnect.Code != DisconnectConnectionClosed.Code && !hasFlag(c.transport.DisabledPushFlags(), PushFlagDisconnect) {
+		if replyData, err := c.getDisconnectPushReply(disconnect); err == nil {
+			disconnectPush = &queue.Item{Data: replyData, FrameType: protocol.FrameTypePushDisconnect}
+		}
+	}
+	_ = c.messageWriter.closeWithLast(disconnectPush, flushRemaining)
 
 	// After the writer has closed and flushed, so this cannot overlap an Encode,
 	// and before the transport goes away, so an implementation still has
@@ -1637,16 +1838,35 @@ func (c *Client) close(disconnect Disconnect) error {
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
 
+	// Subscribes in progress (regular, shared poll and map) are waited for, so
+	// that their attempts end before DisconnectHandler: each one for up to
+	// subscribeInProgressTimeout, all of them within closeSubscribesTimeout.
+	subscribesDeadline := time.Now().Add(closeSubscribesTimeout.get())
+	subscribeWait := func() time.Duration {
+		return min(subscribeInProgressTimeout.get(), time.Until(subscribesDeadline))
+	}
+
 	// Unsubscribe from all channels (handles both normal and map subscriptions).
 	for channel := range channels {
-		err := c.unsubscribe(channel, unsubscribeDisconnect, &disconnect)
+		err := c.unsubscribeWaiting(channel, unsubscribeDisconnect, &disconnect, subscribeWait(), false, 0)
 		if err != nil {
 			c.node.logger.log(newErrorLogEntry(err, "error unsubscribing client from channel", map[string]any{"channel": channel, "user": user, "client": c.uid, "error": err.Error()}))
 		}
 	}
 
+	// Wait for map subscribes in SubscribeHandler, like the unsubscribes above
+	// wait for regular subscribes in progress: the callback then ends the
+	// attempt on the closed client before DisconnectHandler.
+	c.waitAllMapSubscribesPending(subscribeWait())
+
 	// Clean up any in-progress map subscriptions that aren't in channels yet.
-	c.cleanupMapSubscribingAll()
+	c.cleanupMapSubscribingAll(&disconnect)
+
+	// UnsubscribeHandler calls for the attempts ended above (made asynchronously)
+	// and for channels a concurrent unsubscribe removed before the loop above come
+	// before DisconnectHandler. Only for those: a SubscribeCallback invoked after
+	// this point still ends its attempt, after DisconnectHandler.
+	c.waitPendingUnsubscribes(pendingUnsubscribesDisconnectTimeout.get())
 
 	if disconnect.Code != DisconnectConnectionClosed.Code {
 		c.node.logger.log(newLogEntry(LogLevelDebug, "closing client connection", map[string]any{"client": c.uid, "user": user, "reason": disconnect.Reason}))
@@ -2078,6 +2298,16 @@ func (c *Client) handleConnect(req *protocol.ConnectRequest, cmd *protocol.Comma
 }
 
 func (c *Client) triggerConnect() {
+	pending := c.connect()
+	// After ConnectHandler, outside connectMu: see Unsubscribe.
+	for _, p := range pending {
+		c.Unsubscribe(p.channel, p.unsubscribe)
+	}
+}
+
+// connect calls ConnectHandler and marks the client connected. It returns the
+// unsubscribes called meanwhile.
+func (c *Client) connect() []pendingUnsubscribe {
 	c.connectMu.Lock()
 	defer c.connectMu.Unlock()
 	// c.status is guarded by c.mu, not connectMu — other code (e.g. Unsubscribe
@@ -2089,14 +2319,20 @@ func (c *Client) triggerConnect() {
 	connecting := c.status == statusConnecting
 	c.mu.RUnlock()
 	if !connecting {
-		return
+		return nil
 	}
 	if c.node.clientEvents.connectHandler != nil {
 		c.node.clientEvents.connectHandler(c)
 	}
 	c.mu.Lock()
 	c.status = statusConnected
+	var pending []pendingUnsubscribe
+	if c.tracking != nil {
+		pending = c.tracking.unsubscribesAfterConnect
+		c.tracking.unsubscribesAfterConnect = nil
+	}
 	c.mu.Unlock()
+	return pending
 }
 
 func (c *Client) scheduleOnConnectTimers() {
@@ -2282,6 +2518,9 @@ func (c *Client) handleRefresh(req *protocol.RefreshRequest, cmd *protocol.Comma
 // The hub entry is removed generation-matched either way, so it is cleaned up
 // even when the reservation is already gone (the subscribe may have registered
 // in the hub before stalling).
+//
+// If the removed reservation belongs to an attempt SubscribeHandler allowed, the
+// attempt is ended (endSubscribeAttempt) before its waiters are released.
 func (c *Client) onSubscribeErrorGen(channel string, expectGen uint64) {
 	if expectGen == anySubGen {
 		// Programming error: 0 means "any generation" to the hub, so passing it
@@ -2300,12 +2539,361 @@ func (c *Client) onSubscribeErrorGen(channel string, expectGen uint64) {
 	if owns {
 		subscribingCh = chCtx.subscribingCh
 		delete(c.channels, channel)
+		if chCtx.subscribeAllowed {
+			c.addAttemptEndLocked(channel)
+		}
 	}
 	c.mu.Unlock()
 	_ = c.node.removeSubscription(channel, c, expectGen)
+	if owns && chCtx.subscribeAllowed {
+		c.endSubscribeAttempt(channel, nil, nil)
+	}
 	if subscribingCh != nil {
 		close(subscribingCh)
 	}
+}
+
+// channelCounts is a multiset of channel names. A slice rather than a map: it
+// holds a few entries for a short time, and keeping its small backing array
+// when it empties saves allocating on every use.
+type channelCounts []string
+
+// maxRetainedChannelCounts is the capacity an emptied channelCounts keeps.
+const maxRetainedChannelCounts = 4
+
+func (m *channelCounts) add(channel string) {
+	*m = append(*m, channel)
+}
+
+// remove removes one occurrence of the channel.
+func (m *channelCounts) remove(channel string) {
+	s := *m
+	for i := range s {
+		if s[i] != channel {
+			continue
+		}
+		last := len(s) - 1
+		s[i] = s[last]
+		s[last] = ""
+		s = s[:last]
+		if len(s) == 0 && cap(s) > maxRetainedChannelCounts {
+			s = nil
+		}
+		*m = s
+		return
+	}
+}
+
+func (m channelCounts) has(channel string) bool {
+	return slices.Contains(m, channel)
+}
+
+// subscribeTracking holds subscribe state which most connections never need
+// (see Client.tracking). Guarded by c.mu.
+type subscribeTracking struct {
+	// mapSubscribePending holds channels whose map subscribe is in
+	// SubscribeHandler (until the allowed attempt reserved the channel in
+	// mapSubscribing or ended). Such a subscribe holds no other reservation, so
+	// this keeps one subscribe attempt per channel: a second one would call
+	// SubscribeHandler again for the same channel, and the application could not
+	// tell their UnsubscribeHandler calls apart.
+	mapSubscribePending channelCounts
+	// mapSubscribeSwept holds channels whose catch-up sweepExpiredMapSubscribing
+	// dropped (UnixNano of the sweep), see sweptMapContinuation.
+	mapSubscribeSwept map[string]int64
+	// attemptEnds counts UnsubscribeHandler calls still to come for ended
+	// attempts (see addAttemptEndLocked), in total and per channel.
+	attemptEnds        int
+	channelAttemptEnds channelCounts
+	// attemptEndsTimedOut is set when a subscribe gave up waiting for them, until
+	// they are all made: stuck UnsubscribeHandler calls hold up one subscribe,
+	// not each of the client's subscribes in turn.
+	attemptEndsTimedOut bool
+	// channelLeaves counts per channel the presence removals and leaves of
+	// removed subscriptions still to be done, see addPendingLeaveLocked.
+	channelLeaves channelCounts
+	// unsubscribesAfterConnect holds Client.Unsubscribe calls made before
+	// ConnectHandler returned, see Unsubscribe.
+	unsubscribesAfterConnect []pendingUnsubscribe
+	// changed is closed (and reset) by signalLocked, for waitUntil.
+	changed chan struct{}
+}
+
+type pendingUnsubscribe struct {
+	channel     string
+	unsubscribe Unsubscribe
+}
+
+// trackingLocked returns c.tracking, allocating it. Must be called with c.mu held.
+func (c *Client) trackingLocked() *subscribeTracking {
+	if c.tracking == nil {
+		c.tracking = &subscribeTracking{}
+	}
+	return c.tracking
+}
+
+// signalLocked wakes waitUntil callers. Must be called with c.mu held.
+func (c *Client) signalLocked() {
+	if c.tracking != nil && c.tracking.changed != nil {
+		close(c.tracking.changed)
+		c.tracking.changed = nil
+	}
+}
+
+// waitUntil waits until done() (evaluated with c.mu held) returns true,
+// evaluating it again after each signalLocked. Returns false after timeout.
+func (c *Client) waitUntil(done func() bool, timeout time.Duration) bool {
+	var tm *time.Timer
+	defer func() {
+		if tm != nil {
+			timers.ReleaseTimer(tm)
+		}
+	}()
+	for {
+		c.mu.Lock()
+		if done() {
+			c.mu.Unlock()
+			return true
+		}
+		t := c.trackingLocked()
+		if t.changed == nil {
+			t.changed = make(chan struct{})
+		}
+		changed := t.changed
+		c.mu.Unlock()
+		if tm == nil {
+			tm = timers.AcquireTimer(timeout)
+		}
+		select {
+		case <-changed:
+		case <-tm.C:
+			return false
+		}
+	}
+}
+
+// addPendingUnsubscribeLocked registers an UnsubscribeHandler call to come, in
+// the c.mu critical section which removed the channel subscription or subscribe
+// attempt it is for (identity-matched, so once per subscription or attempt).
+// finishPendingUnsubscribe unregisters it once the call is done. close() waits
+// for them before DisconnectHandler. Must be called with c.mu held.
+func (c *Client) addPendingUnsubscribeLocked() {
+	c.pendingUnsubscribes++
+}
+
+func (c *Client) finishPendingUnsubscribeLocked() {
+	c.pendingUnsubscribes--
+	if c.pendingUnsubscribes == 0 {
+		c.signalLocked()
+	}
+}
+
+func (c *Client) finishPendingUnsubscribe() {
+	c.mu.Lock()
+	c.finishPendingUnsubscribeLocked()
+	c.mu.Unlock()
+}
+
+// addAttemptEndLocked is addPendingUnsubscribeLocked for an attempt which ended
+// without becoming a subscription (endSubscribeAttempt must follow). Such calls
+// are also tracked per channel: a subscribe request to the channel waits for
+// them before calling SubscribeHandler (mustWaitAttemptEndsLocked).
+func (c *Client) addAttemptEndLocked(channel string) {
+	c.addPendingUnsubscribeLocked()
+	t := c.trackingLocked()
+	t.attemptEnds++
+	t.channelAttemptEnds.add(channel)
+}
+
+func (c *Client) finishAttemptEnd(channel string) {
+	c.mu.Lock()
+	t := c.tracking
+	t.attemptEnds--
+	t.channelAttemptEnds.remove(channel)
+	if t.attemptEnds == 0 {
+		t.attemptEndsTimedOut = false
+	}
+	c.signalLocked()
+	c.finishPendingUnsubscribeLocked()
+	c.mu.Unlock()
+}
+
+// Bounds of the waits for UnsubscribeHandler calls in progress. Before
+// SubscribeHandler (waitAttemptEnds) it blocks the processing of the client's
+// commands. Before DisconnectHandler (waitPendingUnsubscribes) it waits for
+// calls already running, as close() does for its own: it can be generous.
+var (
+	pendingUnsubscribesSubscribeTimeout  = newWaitTimeout(5 * time.Second)
+	pendingUnsubscribesDisconnectTimeout = newWaitTimeout(30 * time.Second)
+)
+
+// waitTimeout is a bound of a wait which tests shorten while clients of other
+// tests may still be running, hence atomic.
+type waitTimeout struct{ d atomic.Int64 }
+
+func newWaitTimeout(d time.Duration) *waitTimeout {
+	t := &waitTimeout{}
+	t.set(d)
+	return t
+}
+
+func (t *waitTimeout) get() time.Duration  { return time.Duration(t.d.Load()) }
+func (t *waitTimeout) set(d time.Duration) { t.d.Store(int64(d)) }
+
+// maxPendingAttemptEnds is the number of UnsubscribeHandler calls for ended
+// attempts a client may have in progress before its next subscribe request waits
+// for them: a client can't pile them up, while a normal client only waits for
+// the calls of the channel it subscribes to.
+const maxPendingAttemptEnds = 16
+
+// waitPendingUnsubscribes waits until the UnsubscribeHandler calls registered
+// with addPendingUnsubscribeLocked were made. Called by close() before
+// DisconnectHandler. Not for use where an UnsubscribeHandler may call it.
+func (c *Client) waitPendingUnsubscribes(timeout time.Duration) {
+	if c.waitUntil(func() bool { return c.pendingUnsubscribes == 0 }, timeout) {
+		return
+	}
+	c.node.logger.log(newLogEntry(LogLevelWarn, "unsubscribe handler not finished within timeout, calling disconnect handler", map[string]any{"client": c.uid, "user": c.user, "timeout": timeout.String()}))
+}
+
+// mustWaitAttemptEndsLocked tells a subscribe request, in the c.mu critical
+// section where it would reserve its channel, to wait (waitAttemptEnds) and try
+// again, until the deadline (set on the first wait), when UnsubscribeHandler
+// calls for ended attempts on the channel are still to come (an application may
+// keep its per-subscription state by channel name, so they must come before
+// SubscribeHandler of the new attempt), or too many of them on the client. It
+// must not reserve before waiting: an UnsubscribeHandler may unsubscribe the
+// client from the channel, waiting for a subscribe in progress there. A nil
+// deadline means don't wait. Must be called with c.mu held.
+func (c *Client) mustWaitAttemptEndsLocked(channel string, deadline *time.Time) bool {
+	t := c.tracking
+	if t == nil || deadline == nil {
+		return false
+	}
+	if !t.channelLeaves.has(channel) && (t.attemptEnds == 0 || t.attemptEndsTimedOut ||
+		(!t.channelAttemptEnds.has(channel) && t.attemptEnds < maxPendingAttemptEnds)) {
+		return false
+	}
+	now := time.Now()
+	if deadline.IsZero() {
+		*deadline = now.Add(pendingUnsubscribesSubscribeTimeout.get())
+	}
+	return now.Before(*deadline)
+}
+
+// waitAttemptEnds waits until mustWaitAttemptEndsLocked no longer holds for the
+// channel, or the deadline.
+func (c *Client) waitAttemptEnds(channel string, deadline time.Time) {
+	if c.waitUntil(func() bool {
+		t := c.tracking
+		return !t.channelLeaves.has(channel) && (t.attemptEndsTimedOut ||
+			(!t.channelAttemptEnds.has(channel) && t.attemptEnds < maxPendingAttemptEnds))
+	}, time.Until(deadline)) {
+		return
+	}
+	c.mu.Lock()
+	if c.tracking.attemptEnds > 0 {
+		c.tracking.attemptEndsTimedOut = true
+	}
+	leavePending := c.tracking.channelLeaves.has(channel)
+	c.mu.Unlock()
+	if leavePending {
+		c.logLeaveNotFinished(channel)
+		return
+	}
+	c.node.logger.log(newLogEntry(LogLevelWarn, "unsubscribe handler not finished within timeout, calling subscribe handler", map[string]any{"channel": channel, "client": c.uid, "user": c.user, "timeout": pendingUnsubscribesSubscribeTimeout.get().String()}))
+}
+
+// logLeaveNotFinished logs a subscribe which stopped waiting for the leave of
+// the channel's previous subscription, see addPendingLeaveLocked.
+func (c *Client) logLeaveNotFinished(channel string) {
+	c.node.logger.log(newLogEntry(LogLevelWarn, "leave of previous subscription not finished within timeout, subscribing", map[string]any{"channel": channel, "client": c.uid, "user": c.user, "timeout": pendingUnsubscribesSubscribeTimeout.get().String()}))
+}
+
+// endSubscribeAttempt calls UnsubscribeHandler for a subscribe attempt allowed
+// by SubscribeHandler which did not become a subscription, registered with
+// addAttemptEndLocked where the attempt was removed. A nil unsub means
+// Centrifuge itself ended the attempt: reported as a server unsubscribe, or as a
+// disconnect once the client is closed.
+//
+// The handler is called asynchronously: the attempt may end inside the
+// SubscribeCallback call, where the application may hold a lock its
+// UnsubscribeHandler takes.
+func (c *Client) endSubscribeAttempt(channel string, unsub *Unsubscribe, disconnect *Disconnect) {
+	handler := c.eventHub.unsubscribeHandler
+	if handler == nil {
+		c.finishAttemptEnd(channel)
+		return
+	}
+	if unsub == nil {
+		c.mu.RLock()
+		closed, closeDisconnect := c.status == statusClosed, c.closeDisconnect
+		c.mu.RUnlock()
+		unsub = &unsubscribeServer
+		if closed {
+			unsub, disconnect = &unsubscribeDisconnect, closeDisconnect
+		}
+	}
+	event := UnsubscribeEvent{Channel: channel, Unsubscribe: *unsub, Disconnect: disconnect}
+	go func() {
+		defer c.finishAttemptEnd(channel)
+		handler(event)
+	}()
+}
+
+// mapSubscribePendingLocked reports whether a map subscribe to the channel is in
+// SubscribeHandler. Must be called with c.mu held.
+func (c *Client) mapSubscribePendingLocked(channel string) bool {
+	if c.tracking == nil {
+		return false
+	}
+	return c.tracking.mapSubscribePending.has(channel)
+}
+
+// numChannelsLocked returns the number of channels counted against
+// ClientChannelLimit: subscribed (or reserved), loading map subscriptions and
+// map subscriptions whose SubscribeHandler decides. Must be called with c.mu held.
+func (c *Client) numChannelsLocked() int {
+	n := len(c.channels) + len(c.mapSubscribing)
+	if c.tracking != nil {
+		n += len(c.tracking.mapSubscribePending)
+	}
+	return n
+}
+
+// answerSubscribeCallback handles the SubscribeCallback invocation of an
+// attempt holding the c.channels reservation of generation subGen (regular and
+// shared poll subscriptions). If the handler allowed, it marks the reservation:
+// from then on whoever removes it without committing it ends the attempt. If
+// the reservation is already gone (removed while the handler decided), nobody
+// else can end the attempt, so it is ended here. It reports whether the client
+// is closed, in which case the caller rolls the reservation back, and returns ok
+// false for a repeated invocation, which the caller ignores.
+func (c *Client) answerSubscribeCallback(channel string, subGen uint64, allowed bool, answered *bool) (closed bool, ok bool) {
+	c.mu.Lock()
+	if *answered {
+		c.mu.Unlock()
+		c.node.logger.log(newLogEntry(LogLevelError, "subscribe callback invoked more than once", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+		return false, false
+	}
+	*answered = true
+	closed = c.status == statusClosed
+	reservationGone := false
+	if allowed {
+		resv, has := c.channels[channel]
+		if has && resv.subGen == subGen {
+			resv.subscribeAllowed = true
+			c.channels[channel] = resv
+		} else {
+			reservationGone = true
+			c.addAttemptEndLocked(channel)
+		}
+	}
+	c.mu.Unlock()
+	if reservationGone {
+		c.endSubscribeAttempt(channel, nil, nil)
+	}
+	return closed, true
 }
 
 // rollbackConnectServerSideSubs undoes connect-time server-side subscriptions
@@ -2344,6 +2932,9 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 	if req.Type == int32(SubscriptionTypeSharedPoll) {
 		return c.handleSharedPollSubscribe(req, cmd, started, rw)
 	}
+	if req.Type < 0 || req.Type > int32(SubscriptionTypeSharedPoll) {
+		return ErrorBadRequest
+	}
 
 	// Route map subscription types (map, client presence, user presence) to map handler.
 	if req.Type == int32(SubscriptionTypeMap) || req.Type == int32(SubscriptionTypeMapClients) || req.Type == int32(SubscriptionTypeMapUsers) {
@@ -2361,12 +2952,21 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 		}
 	}
 
-	subGen, replyError, disconnect := c.validateSubscribeRequest(req)
-	if disconnect != nil || replyError != nil {
-		if disconnect != nil {
-			return *disconnect
+	var subGen uint64
+	var waitDeadline time.Time
+	for {
+		gen, mustWait, replyError, disconnect := c.validateSubscribeRequest(req, &waitDeadline)
+		if disconnect != nil || replyError != nil {
+			if disconnect != nil {
+				return *disconnect
+			}
+			return replyError
 		}
-		return replyError
+		if !mustWait {
+			subGen = gen
+			break
+		}
+		c.waitAttemptEnds(req.Channel, waitDeadline)
 	}
 
 	event := SubscribeEvent{
@@ -2378,9 +2978,23 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 		JoinLeave:   req.JoinLeave,
 	}
 
+	answered := false // Guarded by c.mu.
 	cb := func(reply SubscribeReply, err error) {
 		if reply.SubscriptionReady != nil {
 			defer close(reply.SubscriptionReady)
+		}
+
+		closed, ok := c.answerSubscribeCallback(req.Channel, subGen, err == nil, &answered)
+		if !ok {
+			return
+		}
+		if closed {
+			// The client is closed: roll back (ending the attempt if it was
+			// allowed). The disconnect reply only completes the command (event,
+			// metrics): the transport is closed.
+			c.onSubscribeErrorGen(req.Channel, subGen)
+			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, DisconnectConnectionClosed, started, rw)
+			return
 		}
 
 		// Gen-matched cleanup: this callback may be asynchronous (proxy auth), so
@@ -2394,7 +3008,8 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 			return
 		}
 
-		// Regular subscription flow.
+		// Regular subscription flow. Every failure below happens before the commit,
+		// so the rollback ends the allowed attempt (before the reply is written).
 		ctx := c.subscribeCmd(req, reply, cmd, false, started, rw)
 		if ctx.disconnect != nil {
 			c.onSubscribeErrorGen(req.Channel, subGen)
@@ -2417,6 +3032,7 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 				c.publishJoinAndPresence(req.Channel, ctx.channelContext, ctx.clientInfo)
 			}
 		}
+		c.finishJoin(req.Channel, ctx.channelContext)
 	}
 	c.eventHub.subscribeHandler(event, cb)
 	return nil
@@ -2549,7 +3165,11 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 			// After the reply: the refresh itself succeeded, and SDKs wait for
 			// the reply to the command. The unsubscribe push which follows
 			// makes them resubscribe with the new filter.
-			c.Unsubscribe(channel, unsub)
+			// Only this subscription: a resubscribe may have come meanwhile.
+			if err := c.unsubscribeWaiting(channel, unsub, nil, subscribeInProgressTimeout.get(), true, ctx.subGen); err != nil {
+				c.node.logger.log(newErrorLogEntry(err, "error unsubscribe", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+				go c.Disconnect(DisconnectServerError)
+			}
 		}
 	})
 	return nil
@@ -2685,6 +3305,8 @@ func (c *Client) handleMapPublish(req *protocol.PublishRequest, cmd *protocol.Co
 
 	c.mu.RLock()
 	info := c.clientInfo(channel)
+	chCtx, subscribed := c.channels[channel]
+	cleanupOnUnsubscribe := subscribed && channelHasFlag(chCtx.flags, flagSubscribed) && channelHasFlag(chCtx.flags, flagCleanupOnUnsubscribe)
 	c.mu.RUnlock()
 
 	event := MapPublishEvent{
@@ -2726,6 +3348,9 @@ func (c *Client) handleMapPublish(req *protocol.PublishRequest, cmd *protocol.Co
 				c.logWriteInternalErrorFlush(channel, protocol.FrameTypePublish, cmd, err, "error map publish", started, rw)
 				return
 			}
+			if cleanupOnUnsubscribe && key == c.uid {
+				c.cleanupMapKeyIfUnsubscribed(channel)
+			}
 		}
 
 		res := &protocol.PublishResult{}
@@ -2741,6 +3366,23 @@ func (c *Client) handleMapPublish(req *protocol.PublishRequest, cmd *protocol.Co
 
 	c.eventHub.mapPublishHandler(event, cb)
 	return nil
+}
+
+// cleanupMapKeyIfUnsubscribed removes the client's key from the channel when a
+// client map publish of it completes after the subscription which cleans it up
+// on unsubscribe (MapRemoveClientOnUnsubscribe) ended: that cleanup may have run
+// before the publish, and the key would stay until its TTL.
+func (c *Client) cleanupMapKeyIfUnsubscribed(channel string) {
+	c.mu.RLock()
+	chCtx, ok := c.channels[channel]
+	keep := c.status != statusClosed && ok && channelHasFlag(chCtx.flags, flagSubscribed) && channelHasFlag(chCtx.flags, flagCleanupOnUnsubscribe)
+	c.mu.RUnlock()
+	if keep {
+		return
+	}
+	if _, err := c.node.MapRemove(context.Background(), channel, c.uid, MapRemoveOptions{}); err != nil {
+		c.node.logger.log(newErrorLogEntry(err, "error cleaning up map state after unsubscribe", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+	}
 }
 
 func (c *Client) handleMapRemove(req *protocol.PublishRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
@@ -3614,10 +4256,6 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	}
 	c.mu.Unlock()
 
-	for _, sc := range reservedSubChs {
-		close(sc)
-	}
-
 	// The connect reply is written, so the publications queued since each
 	// subscription's sync point can follow it. Subscriptions which are rolled back
 	// below drop theirs: their channel may already belong to another subscription.
@@ -3629,6 +4267,12 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		if c.pubSubSync.StopBuffering(subCtx.pubSubBuffer, c.writePendingPublication) {
 			go c.handleInsufficientState(channel, true)
 		}
+	}
+
+	// Only now release unsubscribes waiting for these subscribes: their pushes
+	// must not come before the publications queued since the sync points.
+	for _, sc := range reservedSubChs {
+		close(sc)
 	}
 
 	// Roll back connect-time subscriptions whose reservation was lost: remove the
@@ -3666,6 +4310,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			// Join after Leave on the wire.
 			c.publishJoinAndPresence(channel, subCtx.channelContext, subCtx.clientInfo)
 		}
+		c.finishJoin(channel, subCtx.channelContext)
 	}
 
 	return nil
@@ -3831,12 +4476,20 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	// c.channels write into an inconsistent state. The reservation carries a
 	// subscribingCh (with flags==0, so flagServerSide is not yet set), which the
 	// existing unsubscribe wait-gate uses to synchronize a racing Unsubscribe.
+	var waitDeadline time.Time
 	c.mu.Lock()
+	for c.status != statusClosed && c.mustWaitPendingLeaveLocked(channel, &waitDeadline) {
+		c.mu.Unlock()
+		if !c.waitUntil(func() bool { return !c.tracking.channelLeaves.has(channel) }, time.Until(waitDeadline)) {
+			c.logLeaveNotFinished(channel)
+		}
+		c.mu.Lock()
+	}
 	if c.status == statusClosed {
 		c.mu.Unlock()
 		return nil
 	}
-	numChannels := len(c.channels)
+	numChannels := c.numChannelsLocked()
 	if channelLimit > 0 && numChannels >= channelLimit {
 		c.mu.Unlock()
 		go func() { _ = c.close(DisconnectChannelLimit) }()
@@ -3855,6 +4508,10 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	// position are discarded and its OnUnsubscribe never fires. Rejecting here
 	// keeps "one subscription per channel per client" true at the source.
 	if _, ok := c.mapSubscribing[channel]; ok {
+		c.mu.Unlock()
+		return ErrorAlreadySubscribed
+	}
+	if c.mapSubscribePendingLocked(channel) {
 		c.mu.Unlock()
 		return ErrorAlreadySubscribed
 	}
@@ -3903,15 +4560,21 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	if !committed {
 		return DisconnectServerError
 	}
-	if subscribingCh != nil {
-		close(subscribingCh)
-	}
+	defer c.finishJoin(channel, subCtx.channelContext)
 	if writeErr != nil {
+		if subscribingCh != nil {
+			close(subscribingCh)
+		}
 		return writeErr
 	}
 	// Publications which came since the sync point follow the recovered ones.
 	if c.pubSubSync.StopBuffering(subCtx.pubSubBuffer, c.writePendingPublication) {
 		go c.handleInsufficientState(channel, true)
+	}
+	// Only now release an unsubscribe waiting for this subscribe: its push must
+	// not come before the publications queued since the sync point.
+	if subscribingCh != nil {
+		close(subscribingCh)
 	}
 	if subscribePushDisabled {
 		return nil
@@ -3990,11 +4653,13 @@ func (c *Client) getSubscribePushReply(channel string, res *protocol.SubscribeRe
 // (non-map) flow, installs the channel reservation. It returns the generation
 // minted for that reservation so error paths can undo exactly their own
 // attempt; map subscribes reserve c.mapSubscribing instead and get 0.
-func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (uint64, *Error, *Disconnect) {
+// For a regular subscribe it returns mustWait true instead of reserving the
+// channel while mustWaitAttemptEndsLocked.
+func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest, waitDeadline *time.Time) (uint64, bool, *Error, *Disconnect) {
 	channel := cmd.Channel
 	if channel == "" {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel required for subscribe", map[string]any{"user": c.user, "client": c.uid}))
-		return 0, nil, &DisconnectBadRequest
+		return 0, false, nil, &DisconnectBadRequest
 	}
 
 	config := c.node.config
@@ -4003,7 +4668,7 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (uint6
 
 	if channelMaxLength > 0 && len(channel) > channelMaxLength {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel too long", map[string]any{"max": channelMaxLength, "channel": channel, "user": c.user, "client": c.uid}))
-		return 0, ErrorBadRequest, nil
+		return 0, false, ErrorBadRequest, nil
 	}
 
 	c.mu.Lock()
@@ -4016,39 +4681,45 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (uint6
 		_, inMapSubscribing := c.mapSubscribing[channel]
 		_, inChannels := c.channels[channel]
 
+		if c.mapSubscribePendingLocked(channel) {
+			c.mu.Unlock()
+			c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribing on channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+			return 0, false, ErrorAlreadySubscribed, nil
+		}
+
 		// Allow continuation requests (cursor set or non-state phase).
 		if inMapSubscribing && (cmd.Cursor != "" || cmd.Phase != MapPhaseState) {
 			c.mu.Unlock()
-			return 0, nil, nil
+			return 0, false, nil, nil
 		}
 
 		// If already fully subscribed, reject.
 		if inChannels {
 			c.mu.Unlock()
 			c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-			return 0, ErrorAlreadySubscribed, nil
+			return 0, false, ErrorAlreadySubscribed, nil
 		}
 
 		// If already in map subscribing and this is an initial request, reject.
 		if inMapSubscribing && cmd.Cursor == "" && cmd.Phase == MapPhaseState {
 			c.mu.Unlock()
 			c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribing on channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-			return 0, ErrorAlreadySubscribed, nil
+			return 0, false, ErrorAlreadySubscribed, nil
 		}
 
 		// New map subscription - check channel limit.
-		numChannels := len(c.channels) + len(c.mapSubscribing)
+		numChannels := c.numChannelsLocked()
 		if channelLimit > 0 && numChannels >= channelLimit {
 			c.mu.Unlock()
 			c.node.logger.log(newLogEntry(LogLevelInfo, "maximum limit of channels per client reached", map[string]any{"limit": channelLimit, "user": c.user, "client": c.uid}))
-			return 0, ErrorLimitExceeded, nil
+			return 0, false, ErrorLimitExceeded, nil
 		}
 		c.mu.Unlock()
-		return 0, nil, nil
+		return 0, false, nil, nil
 	} // TODO: it would be better to combine with normal flow, including having subscribingCh for map subs also.
 
 	// Regular subscription validation.
-	numChannels := len(c.channels) + len(c.mapSubscribing)
+	numChannels := c.numChannelsLocked()
 	_, ok := c.channels[channel]
 	if !ok {
 		// Also reject if a map subscribe is loading this channel: it reserves
@@ -4058,20 +4729,32 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (uint6
 		// overwrite the normal reservation and orphan its subscribingCh.
 		_, ok = c.mapSubscribing[channel]
 	}
+	if !ok {
+		ok = c.mapSubscribePendingLocked(channel)
+	}
 	if ok {
 		c.mu.Unlock()
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-		return 0, ErrorAlreadySubscribed, nil
+		return 0, false, ErrorAlreadySubscribed, nil
 	}
 	if channelLimit > 0 && numChannels >= channelLimit {
 		c.mu.Unlock()
 		c.node.logger.log(newLogEntry(LogLevelInfo, "maximum limit of channels per client reached", map[string]any{"limit": channelLimit, "user": c.user, "client": c.uid}))
-		return 0, ErrorLimitExceeded, nil
+		return 0, false, ErrorLimitExceeded, nil
 	}
 	// Put channel to a map to track duplicate subscriptions. This channel should
 	// be removed from a map upon an error during subscribe. Also initialize subscribingCh
 	// which is used to sync unsubscribe requests with inflight subscriptions (useful when
 	// subscribe is performed in a separate goroutine).
+	if c.status == statusClosed {
+		// SubscribeHandler is not called on a closed client.
+		c.mu.Unlock()
+		return 0, false, nil, &DisconnectConnectionClosed
+	}
+	if c.mustWaitAttemptEndsLocked(channel, waitDeadline) {
+		c.mu.Unlock()
+		return 0, true, nil, nil
+	}
 	subGen := c.subGenCounter.Add(1)
 	c.channels[channel] = ChannelContext{
 		subscribingCh: make(chan struct{}),
@@ -4079,7 +4762,7 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (uint6
 	}
 	c.mu.Unlock()
 
-	return subGen, nil, nil
+	return subGen, false, nil, nil
 }
 
 func errorDisconnectContext(replyError *Error, disconnect *Disconnect) subscribeContext {
@@ -4242,10 +4925,13 @@ func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind res
 	c.mu.Lock()
 	var subscribingCh chan struct{}
 	reservationLost := false
+	// Every map reservation belongs to an attempt SubscribeHandler allowed.
+	allowed := kind == reservationMap
 	switch kind {
 	case reservationChannels:
 		if resv, ok := c.channels[channel]; ok && resv.subGen == ctx.subGen {
 			subscribingCh = resv.subscribingCh
+			allowed = resv.subscribeAllowed
 		} else {
 			reservationLost = true
 		}
@@ -4276,7 +4962,8 @@ func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind res
 		// The entry (if any) belongs to a different subscription attempt — do not
 		// touch it or its subscribingCh. Roll back only what this attempt owns:
 		// its hub entry (gen-matched, so a no-op if the unsubscribe already
-		// removed it). The caller cancels its recovery buffer.
+		// removed it). The caller cancels its recovery buffer. The attempt was
+		// ended by whoever removed the reservation (or by answerSubscribeCallback).
 		c.mu.Unlock()
 		_ = c.node.removeSubscription(channel, c, ctx.subGen)
 		if kind == reservationChannels {
@@ -4294,6 +4981,9 @@ func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind res
 		if kind == reservationChannels {
 			delete(c.channels, channel)
 		}
+		if allowed {
+			c.addAttemptEndLocked(channel)
+		}
 		c.mu.Unlock()
 		// The caller cancels the recovery buffer.
 		_ = c.node.removeSubscription(channel, c, ctx.subGen)
@@ -4302,6 +4992,9 @@ func (c *Client) commitSubscription(channel string, ctx ChannelContext, kind res
 			// snapshotted c.channels before this channel entered it — remove the
 			// entry here or it lingers until PresenceTTL.
 			c.removeSubscribePresence(channel, ctx.flags)
+		}
+		if allowed {
+			c.endSubscribeAttempt(channel, nil, nil)
 		}
 		// Wake any waiter only after this attempt's rollback is complete (same
 		// ordering as onSubscribeErrorGen). The waiter is typically the unsubscribe
@@ -4441,9 +5134,11 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	// client-side subscriptions, by the caller (through ctx.pubSubBuffer) for
 	// server-side ones.
 	var pubSubBuf *recovery.Buffer[pendingPublication]
-	needPubSubSync := reply.Options.EnablePositioning || reply.Options.EnableRecovery
-	if needPubSubSync {
+	if reply.Options.EnablePositioning || reply.Options.EnableRecovery {
 		pubSubBuf = c.pubSubSync.StartBuffering(channel)
+	} else {
+		// Nothing to merge, but publications must still come after the result.
+		pubSubBuf = c.pubSubSync.StartQueueing(channel)
 	}
 
 	// Delta compression isn't used together with tags filters: publications
@@ -4669,11 +5364,17 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			return ctx
 		}
 		var okMerge bool
-		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
+		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs, latestEpoch, latestOffset)
 		if !okMerge {
 			c.pubSubSync.CancelBuffering(pubSubBuf)
 			ctx.disconnect = &DisconnectInsufficientState
 			return ctx
+		}
+		if latestEpoch == "" && len(bufferedPubs) > 0 {
+			// The read knew no epoch (a lagging replica): the merged publications
+			// move the position into theirs.
+			latestEpoch = c.pubSubSync.CollectedEpoch(pubSubBuf)
+			res.Epoch = latestEpoch
 		}
 		if reply.Options.RecoveryMode == RecoveryModeCache && len(recoveredPubs) > 1 && req.Delta == "" {
 			// In RecoveryModeCache case client is only interested in last message. So if delta encoding is
@@ -4806,6 +5507,10 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	}
 	if reply.Options.EnableRecovery || reply.Options.EnablePositioning {
 		channelContext.positionCheckTime = time.Now().Unix()
+	}
+	if reply.Options.EmitJoinLeave || reply.Options.MapClientPresenceChannel != "" {
+		// Join and map presence are done after the commit.
+		channelContext.joinGate = &joinGate{}
 	}
 
 	if !serverSide {
@@ -4966,7 +5671,7 @@ func (c *Client) getSubscribeCommandReply(res *protocol.SubscribeResult) (*proto
 
 func (c *Client) handleInsufficientState(ch string, serverSide bool) {
 	if c.isAsyncUnsubscribe(serverSide) {
-		c.handleAsyncUnsubscribe(ch, unsubscribeInsufficientState)
+		c.handleAsyncUnsubscribe(ch, 0, unsubscribeInsufficientState)
 	} else {
 		c.handleInsufficientStateDisconnect()
 	}
@@ -4980,16 +5685,14 @@ func (c *Client) handleInsufficientStateDisconnect() {
 	_ = c.close(DisconnectInsufficientState)
 }
 
-func (c *Client) handleAsyncUnsubscribe(ch string, unsub Unsubscribe) {
-	err := c.unsubscribe(ch, unsub, nil)
+// handleAsyncUnsubscribe unsubscribes the client from the channel on the
+// server's initiative. A non-zero subGen restricts it to that subscription, see
+// unsubscribeWaiting.
+func (c *Client) handleAsyncUnsubscribe(ch string, subGen uint64, unsub Unsubscribe) {
+	err := c.unsubscribeWaiting(ch, unsub, nil, subscribeInProgressTimeout.get(), true, subGen)
 	if err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error async unsubscribing", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		_ = c.close(DisconnectServerError)
-		return
-	}
-	err = c.sendUnsubscribe(ch, unsub)
-	if err != nil {
-		_ = c.close(DisconnectWriteError)
 		return
 	}
 }
@@ -4999,45 +5702,51 @@ func (c *Client) writePublicationUpdatePosition(
 	batchConfig ChannelBatchConfig,
 ) error {
 	c.mu.Lock()
+	data, ok := c.publicationDataUpdatePositionLocked(ch, pub, prep, sp, maxLagExceeded)
+	c.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	if c.node.logEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
+	}
+	return c.writeEncodedPushData(data, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+}
+
+// publicationDataUpdatePositionLocked checks a publication with offset against
+// the subscription to ch and advances its position. It returns the data to write
+// to the client, ok is false if nothing must be written. c.mu must be held.
+func (c *Client) publicationDataUpdatePositionLocked(
+	ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool,
+) ([]byte, bool) {
 	channelContext, ok := c.channels[ch]
 	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
-		c.mu.Unlock()
-		return nil
+		return nil, false
 	}
 	deltaAllowed := channelHasFlag(channelContext.flags, flagDeltaAllowed)
 	if !channelHasFlag(channelContext.flags, flagPositioning) {
 		// Publication with Offset, but client does not use positioning.
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
-			c.mu.Unlock()
-			return nil
+			return nil, false
 		}
-		c.mu.Unlock()
 		if pub.Offset == math.MaxUint64 {
 			// This is a special pub to trigger insufficient state. Noop in non-positioning case.
-			return nil
+			return nil, false
 		}
 
 		// For non-positioning case, if publication should be filtered, skip it
 		if prep.wasFiltered && !prep.deltaSub {
-			return nil
+			return nil, false
 		}
 
 		if prep.deltaSub {
 			if deltaAllowed {
-				return c.writeEncodedPushData(prep.localDeltaData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+				return prep.localDeltaData, true
 			}
-			c.mu.Lock()
-			if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
-				chCtx.flags |= flagDeltaAllowed
-				c.channels[ch] = chCtx
-			}
-			c.mu.Unlock()
+			channelContext.flags |= flagDeltaAllowed
+			c.channels[ch] = channelContext
 		}
-
-		if c.node.logEnabled(LogLevelTrace) {
-			c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
-		}
-		return c.writeEncodedPushData(prep.fullData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+		return prep.fullData, true
 	}
 	serverSide := channelHasFlag(channelContext.flags, flagServerSide)
 	currentPositionOffset := channelContext.streamPosition.Offset
@@ -5055,8 +5764,7 @@ func (c *Client) writePublicationUpdatePosition(
 		}
 		// Tell client about insufficient state, can reconnect/resubscribe to recover the state.
 		go func() { c.handleInsufficientState(ch, serverSide) }()
-		c.mu.Unlock()
-		return nil
+		return nil, false
 	}
 	if pubEpoch != channelContext.streamPosition.Epoch {
 		if channelContext.streamPosition.Epoch == "" {
@@ -5074,8 +5782,7 @@ func (c *Client) writePublicationUpdatePosition(
 				c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state (epoch)", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "epoch": pubEpoch, "expectedEpoch": channelContext.streamPosition.Epoch}))
 			}
 			go func() { c.handleInsufficientState(ch, serverSide) }()
-			c.mu.Unlock()
-			return nil
+			return nil, false
 		}
 	}
 	if pubOffset > nextExpectedOffset {
@@ -5089,45 +5796,33 @@ func (c *Client) writePublicationUpdatePosition(
 		}
 		// Tell client about insufficient state, can reconnect/resubscribe to recover the state.
 		go func() { c.handleInsufficientState(ch, serverSide) }()
-		c.mu.Unlock()
-		return nil
+		return nil, false
 	} else if pubOffset < nextExpectedOffset {
 		// Epoch is correct, but due to the lag in PUB/SUB processing we received non-actual update
 		// here. Safe to just skip for the subscriber.
-		c.mu.Unlock()
-		return nil
+		return nil, false
 	}
 	channelContext.positionCheckTime = time.Now().Unix()
 	channelContext.streamPosition.Offset = pub.Offset
-	c.channels[ch] = channelContext
-	c.mu.Unlock()
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
-		return nil
+		c.channels[ch] = channelContext
+		return nil, false
 	}
 
 	// If publication should be filtered, skip sending it but keep the offset updated
 	if prep.wasFiltered && !prep.deltaSub {
-		return nil
+		c.channels[ch] = channelContext
+		return nil, false
 	}
 	if prep.deltaSub {
 		if deltaAllowed {
-			if c.node.logEnabled(LogLevelTrace) {
-				c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
-			}
-			return c.writeEncodedPushData(prep.brokerDeltaData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+			c.channels[ch] = channelContext
+			return prep.brokerDeltaData, true
 		}
-		c.mu.Lock()
-		if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
-			chCtx.flags |= flagDeltaAllowed
-			c.channels[ch] = chCtx
-		}
-		c.mu.Unlock()
+		channelContext.flags |= flagDeltaAllowed
 	}
-
-	if c.node.logEnabled(LogLevelTrace) {
-		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
-	}
-	return c.writeEncodedPushData(prep.fullData, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
+	c.channels[ch] = channelContext
+	return prep.fullData, true
 }
 
 func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition, batchConfig ChannelBatchConfig) error {
@@ -5217,8 +5912,22 @@ type pendingPublication struct {
 	batchConfig    ChannelBatchConfig
 }
 
+// writePendingPublication checks and writes a queued publication under c.mu. The
+// subscription is committed already, so an unsubscribe of it does not wait for
+// StopBuffering: it removes the subscription under c.mu and then writes its reply
+// or push. The publication is written either before that or not at all, never
+// after the unsubscribe or, as a duplicate, after the result of a resubscribe.
+// Broadcasts get the same order from the hub shard lock.
 func (c *Client) writePendingPublication(q pendingPublication) {
-	_ = c.writePublicationUpdatePosition(q.channel, q.pub, q.prep, q.sp, q.maxLagExceeded, q.batchConfig)
+	c.mu.Lock()
+	data, ok := c.publicationDataUpdatePositionLocked(q.channel, q.pub, q.prep, q.sp, q.maxLagExceeded)
+	if ok {
+		_ = c.writeEncodedPushData(data, q.channel, q.pub.Key, protocol.FrameTypePushPublication, q.batchConfig)
+	}
+	c.mu.Unlock()
+	if ok && c.node.logEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: q.channel, Pub: q.pub})
+	}
 }
 
 func (c *Client) writeJoin(ch string, join *protocol.Join, data []byte, batchConfig ChannelBatchConfig) error {
@@ -5263,10 +5972,50 @@ func (c *Client) writeLeave(ch string, leave *protocol.Leave, data []byte, batch
 	return c.writeEncodedPushData(data, ch, "", protocol.FrameTypePushLeave, batchConfig)
 }
 
-// Lock must be held outside.
+// Lock must not be held.
 func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect *Disconnect) error {
+	return c.unsubscribeWaiting(channel, unsubscribe, disconnect, subscribeInProgressTimeout.get(), false, 0)
+}
+
+// subscribeInProgressTimeout bounds how long an unsubscribe waits for a
+// subscribe to the channel in progress.
+var subscribeInProgressTimeout = newWaitTimeout(5 * time.Second)
+
+// closeSubscribesTimeout bounds how long close() waits for all subscribes in
+// progress together (regular, shared poll and map ones), each of them for up to
+// subscribeInProgressTimeout.
+var closeSubscribesTimeout = newWaitTimeout(10 * time.Second)
+
+// waitOtherUnsubscribe is called by a client unsubscribe which found nothing
+// to remove: another unsubscribe may have removed the subscription, so the
+// reply waits for its leave and unsubscribe push (see addPendingLeaveLocked).
+// Otherwise the client could subscribe again and get the push of the previous
+// subscription after the new one's reply.
+func (c *Client) waitOtherUnsubscribe(channel string, unsubscribe Unsubscribe, disconnect *Disconnect, timeout time.Duration) {
+	if disconnect != nil || unsubscribe.Code != UnsubscribeCodeClient {
+		return
+	}
+	c.waitUntil(func() bool {
+		return c.tracking == nil || !c.tracking.channelLeaves.has(channel)
+	}, timeout)
+}
+
+// unsubscribeWaiting is unsubscribe waiting at most maxWaitTimeout for a
+// subscribe to the channel in progress. With push, a server-side unsubscribe
+// also sends the unsubscribe push when it removed something: a new subscribe to
+// the channel waits for it (see addPendingLeaveLocked), so the push can't come
+// after that subscribe's reply.
+//
+// A non-zero subGen restricts the unsubscribe to that subscription: it does
+// nothing if the channel holds another one, e.g. a resubscribe came after the
+// check which decided to unsubscribe.
+func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, disconnect *Disconnect, maxWaitTimeout time.Duration, push bool, subGen uint64) error {
+	// A map subscribe of the channel may be in SubscribeHandler, holding no
+	// reservation the unsubscribe could remove yet. Wait for it, like for a
+	// regular subscribe in progress below.
+	c.waitChannelMapSubscribePending(channel, maxWaitTimeout)
+
 	c.mu.RLock()
-	info := c.clientInfo(channel)
 	chCtx, ok := c.channels[channel]
 	subscribingCh := chCtx.subscribingCh
 	// Identity of the subscription this unsubscribe targets. subGen is stable from
@@ -5289,10 +6038,18 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 			targetSubGen = keyedState.subGen
 		}
 	}
+	if subGen != 0 && targetSubGen != subGen {
+		c.mu.RUnlock()
+		return nil
+	}
+	// A map subscribe request in progress holds the channel's pagination lock,
+	// also after its go-live commit moved the channel into c.channels.
+	_, paginating := c.mapPaginationLocks[channel]
 	c.mu.RUnlock()
 
 	// If channel is not in channels map, check if it's only in mapSubscribing.
 	if !ok && !hasKeyedState {
+		c.waitOtherUnsubscribe(channel, unsubscribe, disconnect, maxWaitTimeout)
 		return nil
 	}
 
@@ -5303,7 +6060,6 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		// We hang no longer than maxWaitTimeout here, if timeout happens - it's a signal
 		// of server malfunction since long subscribes should not happen. In this case,
 		// we disconnect client to let it re-init the state from scratch.
-		maxWaitTimeout := 5 * time.Second
 		tm := timers.AcquireTimer(maxWaitTimeout)
 		select {
 		case <-subscribingCh:
@@ -5317,6 +6073,8 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 			// after ours was removed, its generation differs and we must not adopt
 			// it as our target and tear it down.
 			if !ok {
+				// Another unsubscribe removed it meanwhile.
+				c.waitOtherUnsubscribe(channel, unsubscribe, disconnect, maxWaitTimeout)
 				return nil
 			}
 		case <-tm.C:
@@ -5337,38 +6095,73 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		}
 	}
 
-	// Wait for map subscription in progress.
-	if hasKeyedState && mapSubscribingCh != nil {
-		maxWaitTimeout := 5 * time.Second
-		tm := timers.AcquireTimer(maxWaitTimeout)
-		select {
-		case <-mapSubscribingCh:
-			timers.ReleaseTimer(tm)
+	// Wait for a map subscribe in progress. A state or stream page, or the
+	// go-live transition, hold the channel's pagination lock until their reply,
+	// the buffered publications and presence are written (a go-live commit moves
+	// the channel into c.channels before that, so neither the loading reservation
+	// nor the subscription tells whether it is done).
+	//
+	// A client unsubscribe (and a disconnect) waits only for such a request:
+	// between pages the loading reservation is removed right away below. Waiting
+	// for the whole load would stall until the timeout, as the client can't send
+	// its next page while its commands wait for this unsubscribe. A server
+	// unsubscribe waits for the whole load instead: the client's next page may
+	// already be on its way, and must find the load (a stream or live request
+	// without one would subscribe anew).
+	if (hasKeyedState && mapSubscribingCh != nil) || paginating {
+		wholeLoad := disconnect == nil && unsubscribe.Code != UnsubscribeCodeClient
+		settled := c.waitUntil(func() bool {
+			state, exists := c.mapSubscribing[channel]
+			if hasKeyedState && exists && state != keyedState {
+				// A fresh subscribe replaced the reservation this unsubscribe targets.
+				return true
+			}
+			if _, paginating := c.mapPaginationLocks[channel]; paginating {
+				return false
+			}
+			return !wholeLoad || !hasKeyedState || !exists
+		}, maxWaitTimeout)
+		if settled {
 			c.mu.RLock()
 			chCtx, ok = c.channels[channel]
+			state, exists := c.mapSubscribing[channel]
+			loading := exists && state == keyedState
 			c.mu.RUnlock()
-			if !ok {
+			if !ok && !loading {
 				return nil
 			}
-		case <-tm.C:
-			timers.ReleaseTimer(tm)
+		} else {
 			// Identity-match: only close/delete if the entry still corresponds to
 			// the *mapSubscribeState we were waiting on. A fresh resubscribe may
 			// have replaced it between the RUnlock and this Lock — clobbering
 			// that fresh entry would leak its subscribingCh waiters.
 			c.mu.Lock()
+			removedState := false
 			if state, exists := c.mapSubscribing[channel]; exists && state == keyedState {
 				if state.subscribingCh != nil {
 					close(state.subscribingCh)
 				}
 				delete(c.mapSubscribing, channel)
+				removedState = true
+				c.addAttemptEndLocked(channel)
 			}
+			current, committed := c.channels[channel]
 			c.mu.Unlock()
-			go func() {
-				_ = c.close(DisconnectServerError)
-			}()
+			if removedState {
+				c.endSubscribeAttempt(channel, &unsubscribe, disconnect)
+			}
 			c.node.logger.log(newLogEntry(LogLevelInfo, "timeout waiting for keyed subscribe to finish", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-			return nil
+			if disconnect == nil || !committed || current.subGen != targetSubGen {
+				go func() {
+					_ = c.close(DisconnectServerError)
+				}()
+				return nil
+			}
+			// close() waited for a go-live which committed the subscription but
+			// still adds presence or publishes join: nothing would remove the
+			// subscription after close() moves on, so remove it below. Its presence
+			// removal and leave come after the go-live's, see joinGate.
+			chCtx = current
 		}
 	}
 
@@ -5381,6 +6174,9 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	// c.channels with no hub routing (and, for a gen-0 reservation, unconditionally
 	// remove its hub entry).
 	removedNow := false
+	// endedAttempt is set when the removed entry is a subscribe attempt allowed by
+	// SubscribeHandler which did not become a subscription yet.
+	endedAttempt := false
 	var removedSubGen uint64
 	if currentChCtx, exists := c.channels[channel]; exists && currentChCtx.subGen == targetSubGen {
 		if currentChCtx.subscribingCh != nil {
@@ -5391,6 +6187,10 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		removedSubGen = currentChCtx.subGen
 		delete(c.channels, channel)
 		removedNow = true
+		// Describe what is actually removed: the snapshot taken before the wait
+		// may predate the commit of this same subscription.
+		chCtx = currentChCtx
+		endedAttempt = chCtx.subscribeAllowed && !channelHasFlag(chCtx.flags, flagSubscribed)
 	}
 	// Clean up map subscribing state. Identity-match against the snapshot so we
 	// don't close a fresh entry installed by a concurrent resubscribe.
@@ -5401,10 +6201,38 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 			}
 			delete(c.mapSubscribing, channel)
 			removedNow = true
+			endedAttempt = true
 		}
 	}
 	if removedNow && disconnect == nil && c.perChannelWriter != nil {
 		c.perChannelWriter.delWriter(channel, false)
+	}
+	// Remove presence, run map cleanup and publish leave below, unless the
+	// subscribe still has to add presence and publish join: it does this after
+	// them then, see joinGate.
+	leaveNow := false
+	if removedNow {
+		// For the UnsubscribeHandler call below, or for endSubscribeAttempt. A
+		// server unsubscribe of a live subscription is tracked as an attempt end
+		// too, so the next SubscribeHandler of the channel waits for its
+		// UnsubscribeHandler call (the client may subscribe again as soon as it
+		// gets the push). A client unsubscribe makes that call before its reply.
+		if endedAttempt || push {
+			c.addAttemptEndLocked(channel)
+		} else {
+			c.addPendingUnsubscribeLocked()
+		}
+		if channelHasFlag(chCtx.flags, flagSubscribed) {
+			leaveNow = chCtx.joinGate.leave()
+			if !leaveNow || hasPresenceOrLeave(chCtx.flags) {
+				// Done here or by the subscribe, a new subscribe to the channel
+				// must not go live before them.
+				c.addPendingLeaveLocked(channel)
+			}
+		}
+		if push {
+			c.addPendingLeaveLocked(channel)
+		}
 	}
 	c.mu.Unlock()
 
@@ -5418,25 +6246,21 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	// `close(doneCh)` in OnUnsubscribe). Only the goroutine that won the delete
 	// race owns the cleanup; the rest exit here.
 	if !removedNow {
+		c.waitOtherUnsubscribe(channel, unsubscribe, disconnect, maxWaitTimeout)
 		return nil
 	}
+	if endedAttempt {
+		c.endSubscribeAttempt(channel, &unsubscribe, disconnect)
+	} else if push {
+		defer c.finishAttemptEnd(channel)
+	} else {
+		defer c.finishPendingUnsubscribe()
+	}
 
-	// Remove presence and/or run map cleanup on unsubscribe.
-	hasMapPresenceOrCleanup := channelHasFlag(chCtx.flags, flagMapClientPresence) ||
-		channelHasFlag(chCtx.flags, flagMapUserPresence) ||
-		channelHasFlag(chCtx.flags, flagCleanupOnUnsubscribe)
-
-	if channelHasFlag(chCtx.flags, flagSubscribed) {
-		if hasMapPresenceOrCleanup {
-			err := c.removeMapPresence(channel, chCtx)
-			if err != nil {
-				c.node.logger.log(newErrorLogEntry(err, "error removing channel presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-			}
-		} else if channelHasFlag(chCtx.flags, flagEmitPresence) {
-			err := c.node.removePresence(channel, c.uid, c.user)
-			if err != nil {
-				c.node.logger.log(newErrorLogEntry(err, "error removing channel presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-			}
+	if leaveNow {
+		c.removePresenceAndLeave(channel, chCtx)
+		if hasPresenceOrLeave(chCtx.flags) {
+			c.finishPendingLeave(channel)
 		}
 	}
 
@@ -5445,11 +6269,20 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		c.cleanupKeyed(channel)
 	}
 
-	if channelHasFlag(chCtx.flags, flagEmitJoinLeave) && channelHasFlag(chCtx.flags, flagSubscribed) {
-		_ = c.node.publishLeave(channel, info)
+	err := c.node.removeSubscription(channel, c, removedSubGen)
+	if disconnect == nil && c.perChannelWriter != nil {
+		// A broadcast between the removal from c.channels and from the hub could
+		// create the channel's writer again: drop it before the unsubscribe push,
+		// its publications belong to the removed subscription.
+		c.perChannelWriter.delWriter(channel, false)
 	}
-
-	if err := c.node.removeSubscription(channel, c, removedSubGen); err != nil {
+	if push {
+		if err == nil {
+			_ = c.sendUnsubscribe(channel, unsubscribe)
+		}
+		c.finishPendingLeave(channel)
+	}
+	if err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error removing subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		return err
 	}
@@ -5465,6 +6298,7 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 				ServerSide:  channelHasFlag(chCtx.flags, flagServerSide),
 				Unsubscribe: unsubscribe,
 				Disconnect:  disconnect,
+				Subscribed:  true,
 			})
 		}
 	}
