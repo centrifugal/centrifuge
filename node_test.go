@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/controlproto"
 
 	"github.com/centrifugal/protocol"
+	"github.com/centrifugal/protocol/cfprotobuf"
 	"github.com/stretchr/testify/require"
 )
 
@@ -773,7 +775,7 @@ func TestNode_handleControl(t *testing.T) {
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
 		err := n.handleControl([]byte("random"))
-		require.EqualError(t, err, "unexpected EOF")
+		require.ErrorIs(t, err, cfprotobuf.ErrTruncated)
 	})
 
 	t.Run("Node", func(t *testing.T) {
@@ -792,7 +794,7 @@ func TestNode_handleControl(t *testing.T) {
 		require.NoError(t, err)
 
 		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
+		require.ErrorIs(t, err, cfprotobuf.ErrTruncated)
 		err = n.handleControl(cmdBytes)
 		require.NoError(t, err)
 		require.NotContains(t, n.nodes.nodes, "new_node")
@@ -2757,4 +2759,43 @@ func TestNode_AllUsers_ControlMessages(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return len(n.hub.UserConnections("alice")) == 0 && len(n.hub.UserConnections("bob")) == 0
 	}, time.Second, 10*time.Millisecond)
+}
+
+type unsubscribeRecordingBroker struct {
+	*TestBroker
+	mu           sync.Mutex
+	unsubscribed []string
+}
+
+func (b *unsubscribeRecordingBroker) Unsubscribe(chs ...string) error {
+	b.mu.Lock()
+	b.unsubscribed = append(b.unsubscribed, chs...)
+	b.mu.Unlock()
+	return b.TestBroker.Unsubscribe(chs...)
+}
+
+func (b *unsubscribeRecordingBroker) wasUnsubscribed(ch string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Contains(b.unsubscribed, ch)
+}
+
+// A subscription whose broker subscribe fails is rolled back, and the channel,
+// left without local subscribers, is unsubscribed from the broker: a PUB/SUB
+// reconnect meanwhile may have subscribed it from the Hub's channels.
+func TestNodeAddSubscriptionRollbackUnsubscribesBroker(t *testing.T) {
+	t.Parallel()
+	broker := &unsubscribeRecordingBroker{TestBroker: NewTestBroker()}
+	broker.errorOnSubscribe = true
+	node, err := New(Config{LogLevel: LogLevelError, LogHandler: func(LogEntry) {}})
+	require.NoError(t, err)
+	node.SetBroker(broker)
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "u")
+
+	_, err = node.addSubscription("ch", subInfo{client: client, subGen: 1})
+	require.Error(t, err)
+	require.Equal(t, 0, node.Hub().NumSubscribers("ch"))
+	require.Eventually(t, func() bool { return broker.wasUnsubscribed("ch") }, 5*time.Second, 20*time.Millisecond)
 }

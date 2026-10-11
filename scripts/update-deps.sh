@@ -9,13 +9,9 @@ set -euo pipefail
 # Run from repo root (script lives in ./scripts/).
 cd "$(dirname "$0")/.."
 
-# Packages to exclude from automatic updates (updated manually).
-# easyjson is excluded because the generated *_easyjson.go files are pinned to
-# the runtime API of a specific easyjson version — bumping easyjson without
-# regenerating can break the build.
-EXCLUDE=(
-    "github.com/mailru/easyjson"
-)
+# Packages to exclude from automatic updates (updated manually), e.g.
+# "github.com/some/module". Empty for now.
+EXCLUDE=()
 
 MAJOR_FLAG="${1:-}"
 
@@ -29,7 +25,8 @@ update_module() {
 
     # Record current versions of excluded packages.
     local SAVED=()
-    for pkg in "${EXCLUDE[@]}"; do
+    # ${arr[@]+"${arr[@]}"} keeps empty arrays working under set -u in bash 3.2 (macOS).
+    for pkg in ${EXCLUDE[@]+"${EXCLUDE[@]}"}; do
         local ver
         ver=$(grep "^[[:space:]]*${pkg} " go.mod | awk '{print $2}' || true)
         if [[ -n "$ver" ]]; then
@@ -41,7 +38,7 @@ update_module() {
     go get -u ./...
 
     # Restore excluded packages to their original versions.
-    for entry in "${SAVED[@]}"; do
+    for entry in ${SAVED[@]+"${SAVED[@]}"}; do
         echo "==> Pinning $entry (excluded from update)"
         go get "$entry"
     done

@@ -201,9 +201,51 @@ type UnsubscribeEvent struct {
 	// is UnsubscribeCodeDisconnect - i.e. when unsubscribe caused by a client disconnection process.
 	// Otherwise, it's nil.
 	Disconnect *Disconnect
+	// Subscribed is true when the client was subscribed to the channel. It is
+	// false when the event ends a subscribe attempt which SubscribeHandler allowed
+	// but which never became a subscription: Centrifuge refused it after the
+	// handler (for example, an invalid expiration or a failed history or map state
+	// read, reported with UnsubscribeCodeServer), or the attempt was abandoned by an
+	// unsubscribe or by a disconnect while it was in progress (reported with that
+	// unsubscribe's or disconnect's code). Map subscriptions are subscribed only
+	// once they reach the live phase, so an unsubscribe during state or stream
+	// pagination also has Subscribed set to false.
+	Subscribed bool
 }
 
-// UnsubscribeHandler called when client unsubscribed from channel.
+// UnsubscribeHandler called when client unsubscribed from channel, and also when
+// a subscribe attempt allowed by SubscribeHandler ended without becoming a
+// subscription (see UnsubscribeEvent.Subscribed). Every SubscribeHandler call
+// whose SubscribeCallback is invoked with a nil error is followed by exactly one
+// UnsubscribeHandler call for that channel, so per-subscription state created in
+// SubscribeHandler can be released in UnsubscribeHandler. A SubscribeCallback
+// invoked with an error is not followed by UnsubscribeHandler.
+//
+// For an attempt which ended without becoming a subscription, the handler is
+// called from a separate goroutine (never from inside the SubscribeCallback
+// call), possibly after the error reply was sent to the client. A subscribe to
+// the same channel calls SubscribeHandler only after that call was made, so it
+// comes before the SubscribeHandler call of the next attempt on the channel
+// (unless it takes more than 5 seconds: a warning is logged then and
+// SubscribeHandler is called; until all such calls of the client are done, its
+// subscribes don't wait for them). Subscribes to other channels don't wait,
+// unless the client has many such calls in progress. The same holds for the
+// UnsubscribeHandler call of a subscription the server unsubscribes
+// (Client.Unsubscribe, Node.Unsubscribe, expiration, insufficient state); for a
+// client unsubscribe it is made before the reply. This does not apply to
+// server-side subscriptions (Client.Subscribe), which don't call
+// SubscribeHandler.
+//
+// On disconnect, UnsubscribeHandler calls for the connection's subscriptions
+// and the attempts in progress come before DisconnectHandler: Centrifuge waits
+// for subscribes in progress (up to 5 seconds for each, 10 seconds in total),
+// then up to 30 seconds for UnsubscribeHandler calls in progress (a warning is
+// logged then), before calling DisconnectHandler. An attempt whose
+// SubscribeCallback is invoked after that ends after DisconnectHandler. Release
+// per-connection state in DisconnectHandler and per-subscription state in
+// UnsubscribeHandler, in a way which works in either order. If a handler
+// allocates something for an allowed subscription, it should do so before
+// invoking the SubscribeCallback.
 type UnsubscribeHandler func(UnsubscribeEvent)
 
 // DisconnectEvent contains fields related to disconnect event.
@@ -242,7 +284,7 @@ type SubscribeEvent struct {
 }
 
 // SubscribeCallback should be called as soon as handler decides what to do
-// with connection subscribe event.
+// with connection subscribe event, exactly once.
 type SubscribeCallback func(SubscribeReply, error)
 
 // SubscribeReply contains fields determining the reaction on subscribe event.
@@ -268,7 +310,17 @@ type SubscribeReply struct {
 	SubscriptionReady chan struct{}
 }
 
-// SubscribeHandler called when client wants to subscribe on channel.
+// SubscribeHandler called when client wants to subscribe on channel. If the
+// SubscribeCallback is invoked with a nil error, exactly one UnsubscribeHandler
+// call follows for the channel: when the subscription ends, or when the attempt
+// ends without becoming a subscription (UnsubscribeEvent.Subscribed is false
+// then). Note that for map subscriptions SubscribeHandler is called on the first
+// subscribe request only, not on further pagination requests.
+//
+// An unsubscribe of the client from the channel (Client.Unsubscribe,
+// Node.Unsubscribe) waits for the subscribe in progress, up to 5 seconds, and
+// disconnects the client if it does not finish: don't unsubscribe the client
+// from the channel inside SubscribeHandler before invoking the callback.
 type SubscribeHandler func(SubscribeEvent, SubscribeCallback)
 
 // PublishEvent contains fields related to publish event. Note that this event
@@ -383,11 +435,23 @@ type SubRefreshReply struct {
 	ExpireAt int64
 	// Info is a new channel-scope info. Zero value means do not change previous one.
 	Info []byte
-	// ServerTagsFilter is an optional updated server-side tags filter. When nil,
-	// the existing filter is left unchanged. When set, Centrifuge compares it
-	// with the current filter — if different, the filter is updated in the hub
-	// and for map subscriptions the client is unsubscribed with
-	// UnsubscribeCodeStateInvalidated to force a full state re-sync.
+	// ServerTagsFilter is an optional updated server-side tags filter, see
+	// SubscribeOptions.ServerTagsFilter. It is applied on both client-side and
+	// server-side subscription refresh. When nil, the existing filter is left
+	// unchanged. When set, Centrifuge compares it with the current filter, and
+	// if different, starts delivering by the new one. A subscription which
+	// can't just switch filters must start over:
+	//   - a map subscription is unsubscribed with UnsubscribeCodeStateInvalidated
+	//     to re-sync its state;
+	//   - a subscription using delta compression is unsubscribed with
+	//     UnsubscribeCodeInsufficient to resubscribe without delta, as delta is
+	//     not negotiated together with a server tags filter;
+	//   - a server-side subscription which needs either is disconnected with
+	//     DisconnectInsufficientState, since a client can't resubscribe to it.
+	// Once a subscription has a server tags filter, it is refused history, as
+	// subscribing with one is. Return the same filter in subscribe or connect
+	// options as on refresh: otherwise every subscription starts without it,
+	// and a server-side delta subscription reconnects on every expiration.
 	ServerTagsFilter *FilterNode
 }
 

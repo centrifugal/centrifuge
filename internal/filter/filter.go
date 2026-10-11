@@ -40,6 +40,10 @@ const (
 
 // Match checks if the provided tags match the filter.
 func Match(f *protocol.FilterNode, tags map[string]string) (bool, error) {
+	if f == nil {
+		// Validate refuses nil nodes; never panic on a filter which skipped it.
+		return false, errors.New("filter node must not be nil")
+	}
 	switch f.Op {
 	case OpLeaf:
 		val, ok := tags[f.Key]
@@ -131,6 +135,9 @@ func Match(f *protocol.FilterNode, tags map[string]string) (bool, error) {
 // Validate ensures the filter tree is well-formed.
 // Called at subscription time.
 func Validate(f *protocol.FilterNode) error {
+	if f == nil {
+		return errors.New("filter node must not be nil")
+	}
 	switch f.Op {
 	case OpLeaf:
 		// Leaf must have a comparison operator.
@@ -197,8 +204,8 @@ func Validate(f *protocol.FilterNode) error {
 
 // Hash computes filter hash.
 func Hash(f *protocol.FilterNode) [32]byte {
-	bb := bpool.GetByteBuffer(f.SizeVT())
+	bb := bpool.GetByteBuffer(f.SizeCF())
 	defer bpool.PutByteBuffer(bb)
-	n, _ := f.MarshalToVT(bb.B)    // get canonical hash.
+	n, _ := f.MarshalToCF(bb.B)    // get canonical hash.
 	return sha256.Sum256(bb.B[:n]) // SHA-256 hash.
 }

@@ -177,6 +177,8 @@ type Broker interface {
 	RegisterBrokerEventHandler(BrokerEventHandler) error
 
 	// Subscribe node on channels to listen all messages coming from them.
+	// Subscribe and Unsubscribe of the same channel are never called
+	// concurrently: callers serialize them per channel.
 	Subscribe(channels ...string) error
 	// Unsubscribe node from channels to stop listening messages from them.
 	Unsubscribe(channels ...string) error

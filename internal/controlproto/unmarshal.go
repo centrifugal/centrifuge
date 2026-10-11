@@ -20,7 +20,7 @@ func NewProtobufDecoder() *ProtobufDecoder {
 // DecodeCommand ...
 func (e *ProtobufDecoder) DecodeCommand(data []byte) (*controlpb.Command, error) {
 	var cmd controlpb.Command
-	err := cmd.UnmarshalVT(data)
+	err := cmd.UnmarshalCF(data)
 	if err != nil {
 		return nil, err
 	}

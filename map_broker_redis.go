@@ -40,9 +40,14 @@ var (
 )
 
 type brokerShardWrapper struct {
-	shard               *RedisShard
-	subClientsMu        sync.Mutex
-	subClients          [][]rueidis.DedicatedClient
+	shard        *RedisShard
+	subClientsMu sync.Mutex
+	subClients   [][]rueidis.DedicatedClient
+	// subscribed holds the channels this broker's Subscribe added and no
+	// Unsubscribe or failed subscribe removed since: what a PUB/SUB reconnect
+	// resubscribes. Guarded by subClientsMu. Subscribe and Unsubscribe of the
+	// same channel are never called concurrently (see Broker).
+	subscribed          map[string]struct{}
 	pubSubStartChannels [][]*pubSubStart
 	pubSubRunner        mapBrokerPubSubRunner
 }
@@ -240,7 +245,7 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 
 	shardWrappers := make([]*brokerShardWrapper, 0, len(conf.Shards))
 	for _, s := range conf.Shards {
-		shardWrappers = append(shardWrappers, &brokerShardWrapper{shard: s})
+		shardWrappers = append(shardWrappers, &brokerShardWrapper{shard: s, subscribed: map[string]struct{}{}})
 	}
 
 	e := &RedisMapBroker{
@@ -559,7 +564,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		}
 		protoPub.Delta = opts.UseDelta
 
-		pubBytes, err := protoPub.MarshalVT()
+		pubBytes, err := protoPub.MarshalCF()
 		if err != nil {
 			return MapUpdateResult{}, err
 		}
@@ -586,7 +591,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		Key:   key,
 		Score: opts.score,
 	}
-	streamBytes, err := streamProtoPub.MarshalVT()
+	streamBytes, err := streamProtoPub.MarshalCF()
 	if err != nil {
 		return MapUpdateResult{}, err
 	}
@@ -798,15 +803,21 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 
 	now := time.Now().UnixMilli()
 
-	// Create a Publication with key and removed=true to signal removal.
-	// Include opts.Tags so server-side tags filtering can route the removal correctly.
+	// Create a Publication with key and removed=true to signal removal. Tags
+	// route the removal through tags filters: when the caller gives none, the
+	// script publishes it with the tags of the entry it removes, as the other
+	// map brokers do.
 	protoPub := &protocol.Publication{
 		Key:     key,
 		Removed: true,
 		Time:    now,
 		Tags:    opts.Tags,
 	}
-	pubBytes, err := protoPub.MarshalVT()
+	copyEntryTags := "0"
+	if opts.Tags == nil {
+		copyEntryTags = "1"
+	}
+	pubBytes, err := protoPub.MarshalCF()
 	if err != nil {
 		return MapUpdateResult{}, err
 	}
@@ -894,6 +905,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 			versionField,               // version_field (pre-computed "v:KEY" or "")
 			versionEpochField,          // version_epoch_field (pre-computed "ve:KEY" or "")
 			strconv.FormatInt(now, 10), // now (current time in milliseconds)
+			copyEntryTags,              // copy_entry_tags (publish with the removed entry's tags)
 		},
 	).ToArray()
 	if err != nil {
@@ -987,7 +999,7 @@ func (e *RedisMapBroker) readSingleKeyWithOpts(ctx context.Context, ch string, o
 			return MapStateResult{}, fmt.Errorf("failed to parse state value: %w", err)
 		}
 		var protoPub protocol.Publication
-		if err := protoPub.UnmarshalVT(payload); err != nil {
+		if err := protoPub.UnmarshalCF(payload); err != nil {
 			return MapStateResult{}, fmt.Errorf("failed to unmarshal publication: %w", err)
 		}
 		pub := pubFromProto(&protoPub)
@@ -1043,7 +1055,7 @@ func (e *RedisMapBroker) readSingleKeyWithOpts(ctx context.Context, ch string, o
 
 	// Unmarshal Publication from protobuf payload
 	var protoPub protocol.Publication
-	if err := protoPub.UnmarshalVT(payload); err != nil {
+	if err := protoPub.UnmarshalCF(payload); err != nil {
 		return MapStateResult{Position: streamPos}, fmt.Errorf("failed to unmarshal publication: %w", err)
 	}
 
@@ -1138,7 +1150,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 
 		// Unmarshal Publication from protobuf payload
 		var protoPub protocol.Publication
-		if err := protoPub.UnmarshalVT(payload); err != nil {
+		if err := protoPub.UnmarshalCF(payload); err != nil {
 			// Skip malformed entries
 			continue
 		}
@@ -1274,7 +1286,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 //				}
 //				// Unmarshal Publication from protobuf payload
 //				var protoPub protocol.Publication
-//				if err := protoPub.UnmarshalVT(payloadBytes); err != nil {
+//				if err := protoPub.UnmarshalCF(payloadBytes); err != nil {
 //					// Skip malformed entries
 //					continue
 //				}
@@ -1395,7 +1407,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 
 		// Unmarshal Publication from protobuf payload
 		var protoPub protocol.Publication
-		if err := protoPub.UnmarshalVT(payload); err != nil {
+		if err := protoPub.UnmarshalCF(payload); err != nil {
 			// Skip malformed entries
 			continue
 		}
@@ -1614,7 +1626,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 //				}
 //
 //				var protoPub protocol.Publication
-//				if err := protoPub.UnmarshalVT(payload.B); err != nil {
+//				if err := protoPub.UnmarshalCF(payload.B); err != nil {
 //					bpool.PutByteBuffer(payload)
 //					return err
 //				}
@@ -1860,7 +1872,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 //			}
 //
 //			var protoPub protocol.Publication
-//			if err := protoPub.UnmarshalVT(payload.B); err != nil {
+//			if err := protoPub.UnmarshalCF(payload.B); err != nil {
 //				bpool.PutByteBuffer(payload)
 //				return err
 //			}
@@ -2029,7 +2041,7 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 		}
 
 		var protoPub protocol.Publication
-		err = protoPub.UnmarshalVT(payload)
+		err = protoPub.UnmarshalCF(payload)
 		if err != nil {
 			return MapStreamResult{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 		}
@@ -2207,7 +2219,7 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 		}
 
 		var protoPub protocol.Publication
-		err = protoPub.UnmarshalVT(payload)
+		err = protoPub.UnmarshalCF(payload)
 		if err != nil {
 			return MapStreamResult{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 		}
@@ -2629,7 +2641,7 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 				_, _, payload, parseErr := parseStateValue(entry.stateValue)
 				if parseErr == nil && len(payload) > 0 {
 					var pub protocol.Publication
-					if unmarshalErr := pub.UnmarshalVT(payload); unmarshalErr == nil {
+					if unmarshalErr := pub.UnmarshalCF(payload); unmarshalErr == nil {
 						tags = pub.Tags
 					}
 				}
@@ -2642,7 +2654,7 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 				Time:    now,
 				Tags:    tags,
 			}
-			pubBytes, marshalErr := removePub.MarshalVT()
+			pubBytes, marshalErr := removePub.MarshalCF()
 			if marshalErr != nil {
 				continue
 			}
@@ -2797,9 +2809,6 @@ func (e *RedisMapBroker) makePubSubCallbacks(s *brokerShardWrapper) pubSubCallba
 		shardForChannel: func(ch string) *RedisShard {
 			return e.getShard(ch).shard
 		},
-		// extraResubscribeChannels is not set: shared poll key channels are
-		// subscribed via node.getBroker which returns Broker implementations
-		// only — RedisMapBroker is not one, so no key channels can live here.
 	}
 }
 
@@ -2813,6 +2822,7 @@ func (e *RedisMapBroker) runPubSub(s *brokerShardWrapper, logFields map[string]a
 		s.shard,
 		&s.subClientsMu,
 		s.subClients,
+		s.subscribed,
 		cb,
 		e.node,
 		e.conf.Name,
@@ -2906,7 +2916,7 @@ func (e *RedisMapBroker) handleRedisClientMessage(isCluster bool, eventHandler B
 
 	// Unmarshal as Publication (unified format)
 	var protoPub protocol.Publication
-	err = protoPub.UnmarshalVT(protobuf)
+	err = protoPub.UnmarshalCF(protobuf)
 	if err != nil {
 		return fmt.Errorf("can not unmarshal value to Publication: %v", err)
 	}
@@ -2923,7 +2933,7 @@ func (e *RedisMapBroker) handleRedisClientMessage(isCluster bool, eventHandler B
 		_, _, payload, parseErr := parseStateValue(prevProtobuf)
 		if parseErr == nil {
 			var prevPub protocol.Publication
-			if err := prevPub.UnmarshalVT(payload); err == nil {
+			if err := prevPub.UnmarshalCF(payload); err == nil {
 				prevPubPtr = pubFromProto(&prevPub)
 			}
 		}
@@ -2953,14 +2963,22 @@ func (e *RedisMapBroker) subscribe(s *brokerShardWrapper, ch string) error {
 	if e.useShardedPubSub(s.shard) {
 		clusterShardIndex = consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
 	}
-	clusterShardIndex = s.pubSubRunner.subClientsIndex(clusterShardIndex)
 
+	partition := clusterShardIndex
 	s.subClientsMu.Lock()
+	// The slot index (node-grouped: the partition mapping) is read under
+	// subClientsMu, which a topology rebuild changes it under: a subscribe either
+	// uses the mapping of before the rebuild, and a loop started after it has
+	// the channel in its snapshot, or the new one.
+	clusterShardIndex = s.pubSubRunner.subClientsIndex(partition)
 	conn := s.subClients[clusterShardIndex][psShardIndex]
 	if conn == nil {
 		s.subClientsMu.Unlock()
 		return errPubSubConnUnavailable
 	}
+	// Recorded together with the connection read: a reconnect's resubscribe
+	// snapshot, taken once this connection left its slot, has the channel.
+	s.subscribed[ch] = struct{}{}
 	s.subClientsMu.Unlock()
 
 	var err error
@@ -2969,7 +2987,43 @@ func (e *RedisMapBroker) subscribe(s *brokerShardWrapper, ch string) error {
 	} else {
 		err = conn.Do(context.Background(), conn.B().Subscribe().Channel(e.messageChannelID(s.shard, ch)).Build()).Error()
 	}
+	if err != nil {
+		e.subscribeFailed(s, partition, psShardIndex, conn, []string{ch})
+	}
 	return err
+}
+
+// subscribeFailed removes channels whose subscribe on conn failed from the
+// subscribed set. A connection published for the slot since may have
+// resubscribed them from a snapshot which still had them: they are unsubscribed
+// there (best effort). The caller considers them not subscribed and may never
+// unsubscribe them. Redis does not fail an unsubscribe on a healthy connection,
+// and a broken one loses its subscriptions anyway; if it still failed, the
+// connection would only receive (and drop) their publications until it
+// reconnects.
+func (e *RedisMapBroker) subscribeFailed(s *brokerShardWrapper, partition, psShardIndex int, conn rueidis.DedicatedClient, channels []string) {
+	s.subClientsMu.Lock()
+	for _, ch := range channels {
+		delete(s.subscribed, ch)
+	}
+	cur := s.subClients[s.pubSubRunner.subClientsIndex(partition)][psShardIndex]
+	s.subClientsMu.Unlock()
+	if cur != nil && cur != conn {
+		e.unsubscribeOn(s, cur, channels)
+	}
+}
+
+// unsubscribeOn unsubscribes channels on conn, ignoring errors.
+func (e *RedisMapBroker) unsubscribeOn(s *brokerShardWrapper, conn rueidis.DedicatedClient, channels []string) {
+	chIDs := make([]string, len(channels))
+	for i, ch := range channels {
+		chIDs[i] = e.messageChannelID(s.shard, ch)
+	}
+	if e.useShardedPubSub(s.shard) {
+		_ = conn.Do(context.Background(), conn.B().Sunsubscribe().Channel(chIDs...).Build()).Error()
+	} else {
+		_ = conn.Do(context.Background(), conn.B().Unsubscribe().Channel(chIDs...).Build()).Error()
+	}
 }
 
 type mapBrokerConnKey struct {
@@ -2996,7 +3050,7 @@ func (e *RedisMapBroker) subscribeBatch(channels []string, unsub bool) error {
 		if e.useShardedPubSub(s.shard) {
 			clusterShardIdx = consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
 		}
-		clusterShardIdx = s.pubSubRunner.subClientsIndex(clusterShardIdx)
+		// Mapped to the slot index under subClientsMu below (see subscribe).
 		key := mapBrokerConnKey{shardIdx: shardIdx, clusterShardIdx: clusterShardIdx, psShardIdx: psShardIdx}
 		g, ok := groups[key]
 		if !ok {
@@ -3010,13 +3064,26 @@ func (e *RedisMapBroker) subscribeBatch(channels []string, unsub bool) error {
 	for key, g := range groups {
 		s := g.shard
 		s.subClientsMu.Lock()
-		conn := s.subClients[key.clusterShardIdx][key.psShardIdx]
+		slotIdx := s.pubSubRunner.subClientsIndex(key.clusterShardIdx)
+		if unsub {
+			// See unsubscribe.
+			for _, ch := range g.channels {
+				delete(s.subscribed, ch)
+			}
+		}
+		conn := s.subClients[slotIdx][key.psShardIdx]
 		if conn == nil {
 			s.subClientsMu.Unlock()
 			if !unsub {
 				e.rollbackSubscribeBatch(groups, completed)
 			}
 			return errPubSubConnUnavailable
+		}
+		if !unsub {
+			// See subscribe.
+			for _, ch := range g.channels {
+				s.subscribed[ch] = struct{}{}
+			}
 		}
 		s.subClientsMu.Unlock()
 
@@ -3041,6 +3108,7 @@ func (e *RedisMapBroker) subscribeBatch(channels []string, unsub bool) error {
 		}
 		if err != nil {
 			if !unsub {
+				e.subscribeFailed(s, key.clusterShardIdx, key.psShardIdx, conn, g.channels)
 				e.rollbackSubscribeBatch(groups, completed)
 			}
 			return err
@@ -3057,7 +3125,10 @@ func (e *RedisMapBroker) rollbackSubscribeBatch(groups map[mapBrokerConnKey]*map
 		g := groups[key]
 		s := g.shard
 		s.subClientsMu.Lock()
-		conn := s.subClients[key.clusterShardIdx][key.psShardIdx]
+		for _, ch := range g.channels {
+			delete(s.subscribed, ch)
+		}
+		conn := s.subClients[s.pubSubRunner.subClientsIndex(key.clusterShardIdx)][key.psShardIdx]
 		s.subClientsMu.Unlock()
 		if conn == nil {
 			continue
@@ -3094,9 +3165,17 @@ func (e *RedisMapBroker) unsubscribe(s *brokerShardWrapper, ch string) error {
 	if e.useShardedPubSub(s.shard) {
 		clusterShardIndex = consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
 	}
-	clusterShardIndex = s.pubSubRunner.subClientsIndex(clusterShardIndex)
 
 	s.subClientsMu.Lock()
+	// The slot index (node-grouped: the partition mapping) is read under
+	// subClientsMu, which a topology rebuild changes it under: a subscribe either
+	// uses the mapping of before the rebuild, and a loop started after it has
+	// the channel in its snapshot, or the new one.
+	clusterShardIndex = s.pubSubRunner.subClientsIndex(clusterShardIndex)
+	// The channel leaves the subscribed set whatever the outcome below: a
+	// reconnect does not resubscribe it, and a failed unsubscribe is retried by
+	// the caller.
+	delete(s.subscribed, ch)
 	conn := s.subClients[clusterShardIndex][psShardIndex]
 	if conn == nil {
 		s.subClientsMu.Unlock()
@@ -3273,7 +3352,7 @@ func parseAddScriptResult(replies []rueidis.RedisMessage) (MapUpdateResult, erro
 				entryOffset, _, payload, parseErr := parseStateValue(currentValue)
 				if parseErr == nil {
 					var protoPub protocol.Publication
-					if protoPub.UnmarshalVT(payload) == nil {
+					if protoPub.UnmarshalCF(payload) == nil {
 						result.CurrentEntry = &MapCurrentEntry{Offset: entryOffset, Data: protoPub.Data}
 					}
 				}

@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -3143,6 +3144,288 @@ func TestMapSubscribe_CatchUpTimeout_Sweep(t *testing.T) {
 	require.False(t, hasA, "expired ch_a catch-up should be swept")
 }
 
+// A continuation of a catch-up which another channel's subscribe swept gets
+// DisconnectSlow, as when its own request notices the timeout, not
+// ErrorPermissionDenied, which clients treat as permanent.
+func TestMapSubscribe_CatchUpTimeout_SweptContinuation(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name     string
+		next     func(result *protocol.SubscribeResult) *protocol.SubscribeRequest
+		wantSlow bool
+	}{
+		{"state_page", func(result *protocol.SubscribeResult) *protocol.SubscribeRequest {
+			return &protocol.SubscribeRequest{Phase: MapPhaseState, Limit: 1, Cursor: result.Cursor, Offset: result.Offset, Epoch: result.Epoch}
+		}, true},
+		{"stream_phase", func(result *protocol.SubscribeResult) *protocol.SubscribeRequest {
+			return &protocol.SubscribeRequest{Phase: MapPhaseStream, Offset: result.Offset, Epoch: result.Epoch}
+		}, true},
+		{"resubscribe", func(_ *protocol.SubscribeResult) *protocol.SubscribeRequest {
+			return &protocol.SubscribeRequest{Phase: MapPhaseState, Limit: 100}
+		}, false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			node, broker := newTestNodeWithMapBroker(t)
+			var catchUpTimeout atomic.Int64
+			catchUpTimeout.Store(int64(time.Hour))
+			node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:                    MapModeRecoverable,
+					KeyTTL:                  60 * time.Second,
+					MinPageSize:             1,
+					SubscribeCatchUpTimeout: time.Duration(catchUpTimeout.Load()),
+				}
+			}
+			ctx := context.Background()
+			for _, key := range []string{"key1", "key2"} {
+				_, err := broker.Publish(ctx, "ch_a", key, MapPublishOptions{Data: []byte(`{"v":"data"}`)})
+				require.NoError(t, err)
+			}
+			_, err := broker.Publish(ctx, "ch_b", "key1", MapPublishOptions{Data: []byte(`{"v":"data"}`)})
+			require.NoError(t, err)
+
+			node.OnConnect(func(client *Client) {
+				client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+					cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+				})
+			})
+			client := newTestConnectedClientV2(t, node, "user1")
+
+			result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+				Channel: "ch_a",
+				Type:    int32(SubscriptionTypeMap),
+				Phase:   MapPhaseState,
+				Limit:   1,
+			})
+			require.NotEmpty(t, result.Cursor)
+
+			// ch_b's subscribe sweeps the expired catch-up of ch_a.
+			catchUpTimeout.Store(int64(time.Nanosecond))
+			subscribeMapClient(t, client, &protocol.SubscribeRequest{
+				Channel: "ch_b",
+				Type:    int32(SubscriptionTypeMap),
+				Phase:   MapPhaseState,
+				Limit:   100,
+			})
+			client.mu.RLock()
+			_, hasA := client.mapSubscribing["ch_a"]
+			client.mu.RUnlock()
+			require.False(t, hasA)
+
+			catchUpTimeout.Store(int64(time.Hour))
+			req := tc.next(result)
+			req.Channel = "ch_a"
+			req.Type = int32(SubscriptionTypeMap)
+			rwWrapper := testReplyWriterWrapper()
+			err = client.handleSubscribe(req, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+			if tc.wantSlow {
+				require.ErrorIs(t, err, DisconnectSlow)
+			} else {
+				require.NoError(t, err)
+				require.Len(t, rwWrapper.replies, 1)
+				require.Nil(t, rwWrapper.replies[0].Error)
+			}
+			client.mu.RLock()
+			var swept map[string]int64
+			if client.tracking != nil {
+				swept = client.tracking.mapSubscribeSwept
+			}
+			client.mu.RUnlock()
+			require.Nil(t, swept)
+		})
+	}
+}
+
+// Channels whose catch-up was swept are forgotten after mapSubscribeSweptTTL
+// if the client sends nothing for them.
+func TestMapSubscribe_CatchUpTimeout_SweptForgotten(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{
+			Mode:                    MapModeEphemeral,
+			KeyTTL:                  60 * time.Second,
+			MinPageSize:             1,
+			SubscribeCatchUpTimeout: time.Nanosecond,
+		}
+	}
+	ctx := context.Background()
+	for _, ch := range []string{"ch_a", "ch_b", "ch_c"} {
+		for _, key := range []string{"key1", "key2"} {
+			_, err := broker.Publish(ctx, ch, key, MapPublishOptions{Data: []byte(`{"v":"data"}`)})
+			require.NoError(t, err)
+		}
+	}
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	for _, ch := range []string{"ch_a", "ch_b"} {
+		result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+			Channel: ch,
+			Type:    int32(SubscriptionTypeMap),
+			Phase:   MapPhaseState,
+			Limit:   1,
+		})
+		require.NotEmpty(t, result.Cursor)
+	}
+	client.mu.Lock()
+	_, sweptA := client.tracking.mapSubscribeSwept["ch_a"]
+	if sweptA {
+		client.tracking.mapSubscribeSwept["ch_a"] = time.Now().Add(-2 * mapSubscribeSweptTTL).UnixNano()
+	}
+	client.mu.Unlock()
+	require.True(t, sweptA)
+
+	// ch_c's subscribe sweeps ch_b and forgets ch_a.
+	subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: "ch_c",
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   1,
+	})
+	client.mu.RLock()
+	_, sweptA = client.tracking.mapSubscribeSwept["ch_a"]
+	_, sweptB := client.tracking.mapSubscribeSwept["ch_b"]
+	client.mu.RUnlock()
+	require.False(t, sweptA)
+	require.True(t, sweptB)
+}
+
+// blockingStateMapBroker blocks ReadState of blockChannel until release is
+// closed, after closing entered.
+type blockingStateMapBroker struct {
+	*MemoryMapBroker
+	blockChannel string
+	enteredOnce  sync.Once
+	entered      chan struct{}
+	release      chan struct{}
+}
+
+func (b *blockingStateMapBroker) ReadState(ctx context.Context, ch string, opts MapReadStateOptions) (MapStateResult, error) {
+	if ch == b.blockChannel {
+		b.enteredOnce.Do(func() { close(b.entered) })
+		<-b.release
+	}
+	return b.MemoryMapBroker.ReadState(ctx, ch, opts)
+}
+
+// A catch-up swept while its last state page is read gets DisconnectSlow, not no
+// reply at all.
+func TestMapSubscribe_CatchUpTimeout_SweptDuringStateRead(t *testing.T) {
+	t.Parallel()
+	node, err := New(Config{
+		LogLevel:   LogLevelError,
+		LogHandler: func(entry LogEntry) {},
+		Map: MapConfig{GetMapChannelOptions: func(string) MapChannelOptions {
+			return MapChannelOptions{Mode: MapModeEphemeral, KeyTTL: time.Minute, MinPageSize: 1, SubscribeCatchUpTimeout: 20 * time.Millisecond}
+		}},
+	})
+	require.NoError(t, err)
+	mapBroker, err := NewMemoryMapBroker(node, MemoryMapBrokerConfig{})
+	require.NoError(t, err)
+	blocking := &blockingStateMapBroker{MemoryMapBroker: mapBroker, blockChannel: "ch_a", entered: make(chan struct{}), release: make(chan struct{})}
+	node.SetMapBroker(blocking)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+	ctx := context.Background()
+	for _, ch := range []string{"ch_a", "ch_b"} {
+		_, err := mapBroker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte(`{"v":"data"}`)})
+		require.NoError(t, err)
+	}
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			reply := SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}
+			if e.Channel == "ch_a" {
+				go cb(reply, nil)
+				return
+			}
+			cb(reply, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+	transport := client.transport.(*testTransport)
+
+	rwWrapper := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "ch_a",
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   10,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw))
+	select {
+	case <-blocking.entered: // ch_a reads its page.
+	case <-time.After(2 * time.Second):
+		t.Fatal("ch_a did not read its state")
+	}
+	time.Sleep(40 * time.Millisecond) // ch_a's catch-up expires.
+	// ch_b's subscribe sweeps ch_a.
+	subscribeMapClient(t, client, &protocol.SubscribeRequest{
+		Channel: "ch_b",
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   10,
+	})
+	close(blocking.release)
+	require.Eventually(t, func() bool {
+		transport.mu.Lock()
+		defer transport.mu.Unlock()
+		return transport.closed
+	}, 2*time.Second, 5*time.Millisecond)
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	require.Equal(t, DisconnectSlow.Code, transport.disconnect.Code)
+}
+
+// Swept channels are remembered up to ClientChannelLimit.
+func TestMapSubscribe_CatchUpTimeout_SweptLimit(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	node.config.ClientChannelLimit = 2
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		return MapChannelOptions{Mode: MapModeEphemeral, KeyTTL: time.Minute, MinPageSize: 1, SubscribeCatchUpTimeout: time.Nanosecond}
+	}
+	ctx := context.Background()
+	channels := []string{"ch_a", "ch_b", "ch_c", "ch_d"}
+	for _, ch := range channels {
+		for _, key := range []string{"key1", "key2"} {
+			_, err := broker.Publish(ctx, ch, key, MapPublishOptions{Data: []byte(`{"v":"data"}`)})
+			require.NoError(t, err)
+		}
+	}
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Each subscribe sweeps the previous channel's load.
+	for _, ch := range channels {
+		result := subscribeMapClient(t, client, &protocol.SubscribeRequest{
+			Channel: ch,
+			Type:    int32(SubscriptionTypeMap),
+			Phase:   MapPhaseState,
+			Limit:   1,
+		})
+		require.NotEmpty(t, result.Cursor)
+	}
+	client.mu.RLock()
+	swept := make([]string, 0)
+	for ch := range client.tracking.mapSubscribeSwept {
+		swept = append(swept, ch)
+	}
+	client.mu.RUnlock()
+	require.ElementsMatch(t, []string{"ch_a", "ch_b"}, swept)
+}
+
 func TestMapSubscribe_CatchUpTimeout_Disabled(t *testing.T) {
 	t.Parallel()
 	node, broker := newTestNodeWithMapBroker(t)
@@ -4523,6 +4806,9 @@ func TestSubRefresh_ServerTagsFilter_MapUnsubscribed(t *testing.T) {
 	})
 
 	unsubscribeCh := make(chan UnsubscribeEvent, 1)
+	// The number of replies to the refresh when the subscription is unsubscribed.
+	repliesOnUnsubscribe := make(chan int, 1)
+	rwWrapper := testReplyWriterWrapper()
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
@@ -4542,6 +4828,7 @@ func TestSubRefresh_ServerTagsFilter_MapUnsubscribed(t *testing.T) {
 		})
 		client.OnUnsubscribe(func(e UnsubscribeEvent) {
 			unsubscribeCh <- e
+			repliesOnUnsubscribe <- len(rwWrapper.replies)
 		})
 	})
 
@@ -4554,11 +4841,10 @@ func TestSubRefresh_ServerTagsFilter_MapUnsubscribed(t *testing.T) {
 	})
 
 	// Refresh with a different filter — should trigger unsubscribe with state invalidated.
-	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
 		Channel: channel,
 		Token:   "new_token",
-	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	}, &protocol.Command{Id: 2}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 
 	select {
@@ -4568,6 +4854,11 @@ func TestSubRefresh_ServerTagsFilter_MapUnsubscribed(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout waiting for unsubscribe event")
 	}
+	// The refresh command is replied to before the unsubscribe.
+	require.Equal(t, 1, <-repliesOnUnsubscribe, "sub refresh must be replied to before the unsubscribe")
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	require.NotNil(t, rwWrapper.replies[0].SubRefresh)
 }
 
 func TestSubRefresh_ServerTagsFilter_SameFilterNoUnsubscribe(t *testing.T) {
@@ -5088,6 +5379,10 @@ func TestBuildMapChannelFlags(t *testing.T) {
 	// ClientSideRefresh from reply.
 	flags = client.buildMapChannelFlags(false, "", false, SubscribeOptions{}, SubscribeReply{ClientSideRefresh: true})
 	require.True(t, flags&flagClientSideRefresh != 0)
+
+	// A server tags filter, which refuses history as on stream subscriptions.
+	flags = client.buildMapChannelFlags(false, "", false, SubscribeOptions{ServerTagsFilter: &FilterNode{Key: "k", Cmp: "eq", Val: "v"}}, SubscribeReply{})
+	require.True(t, flags&flagServerTagsFilter != 0)
 }
 
 // TestCleanupMapSubscribingAll covers the loop body of cleanupMapSubscribingAll.
@@ -5108,7 +5403,7 @@ func TestCleanupMapSubscribingAll(t *testing.T) {
 	client.mapSubscribing["b"] = &mapSubscribeState{} // no subscribingCh
 	client.mu.Unlock()
 
-	client.cleanupMapSubscribingAll()
+	client.cleanupMapSubscribingAll(&DisconnectConnectionClosed)
 
 	client.mu.Lock()
 	require.Empty(t, client.mapSubscribing)
@@ -6086,4 +6381,65 @@ func TestMapSubscribe_StreamPhaseAfterStreamExpired(t *testing.T) {
 			require.Equal(t, ErrorUnrecoverablePosition.Code, protoErr.Code)
 		})
 	}
+}
+
+type holdRemoveMapBroker struct {
+	*MemoryMapBroker
+	entered, release chan struct{}
+}
+
+func (b *holdRemoveMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapUpdateResult, error) {
+	close(b.entered)
+	<-b.release
+	return b.MemoryMapBroker.Remove(ctx, ch, key, opts)
+}
+
+// The cleanup of a client map publish which completed after its subscription
+// ended registers a pending leave, and a map subscribe of the channel commits
+// only after the cleanup removed the key: the key the new subscription
+// publishes once live is not removed.
+func TestMapKeyCleanupBeforeNextMapCommit(t *testing.T) {
+	t.Parallel()
+	node, broker := newTestNodeWithMapBroker(t)
+	hold := &holdRemoveMapBroker{MemoryMapBroker: broker, entered: make(chan struct{}), release: make(chan struct{})}
+	node.SetMapBroker(hold)
+	client, _ := newAttemptTestClient(t, node, allowSubscribe(SubscribeReply{}))
+	const ch = "map"
+
+	cleanupDone := make(chan struct{})
+	go func() {
+		defer close(cleanupDone)
+		client.cleanupMapKeyIfUnsubscribed(ch)
+	}()
+	<-hold.entered // The cleanup decided to remove the key.
+
+	// A map subscribe of the channel which passed its checks commits now.
+	client.mu.Lock()
+	if client.mapSubscribing == nil {
+		client.mapSubscribing = map[string]*mapSubscribeState{}
+	}
+	client.mapSubscribing[ch] = &mapSubscribeState{subGen: 7}
+	client.mu.Unlock()
+	committed := make(chan bool, 1)
+	go func() {
+		_, ok := client.commitSubscription(ch, ChannelContext{subGen: 7}, reservationMap)
+		committed <- ok
+	}()
+	select {
+	case <-committed:
+		close(hold.release)
+		t.Fatal("map subscribe committed before the key cleanup finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(hold.release)
+	<-cleanupDone
+	select {
+	case ok := <-committed:
+		require.True(t, ok)
+	case <-time.After(time.Second):
+		t.Fatal("map subscribe did not commit after the key cleanup")
+	}
+	client.mu.Lock()
+	delete(client.channels, ch)
+	client.mu.Unlock()
 }

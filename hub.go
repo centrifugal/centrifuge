@@ -14,7 +14,7 @@ import (
 
 	"github.com/centrifugal/fdelta"
 	"github.com/centrifugal/protocol"
-	"github.com/segmentio/encoding/json"
+	"github.com/centrifugal/protocol/cfjson"
 )
 
 const numHubShards = 64
@@ -234,8 +234,8 @@ func (h *Hub) removeSub(ch string, c *Client, subGen uint64) (bool, bool, bool) 
 	return h.subShards[index(ch, numHubShards)].removeSub(ch, c, subGen)
 }
 
-func (h *Hub) updateServerTagsFilter(ch string, clientID string, tf *tagsFilter) (bool, bool, bool) {
-	return h.subShards[index(ch, numHubShards)].updateServerTagsFilter(ch, clientID, tf)
+func (h *Hub) updateServerTagsFilter(ch string, clientID string, subGen uint64, tf *tagsFilter) (bool, bool, bool) {
+	return h.subShards[index(ch, numHubShards)].updateServerTagsFilter(ch, clientID, subGen, tf)
 }
 
 func (h *Hub) removeSubID(ch string) {
@@ -749,6 +749,21 @@ type tagsFilter struct {
 	hash   [32]byte
 }
 
+// newServerTagsFilter validates a server tags filter given by the application
+// (SubscribeOptions.ServerTagsFilter, SubRefreshReply.ServerTagsFilter) and
+// prepares it for matching. Client filters are validated on subscribe; a server
+// filter needs it too, as it may be built from external input (e.g. a proxy
+// response where a null node decodes to nil). A nil filter means no filter.
+func newServerTagsFilter(f *FilterNode) (*tagsFilter, error) {
+	if f == nil {
+		return nil, nil
+	}
+	if err := filter.Validate(f); err != nil {
+		return nil, err
+	}
+	return &tagsFilter{filter: f, hash: filter.Hash(f)}, nil
+}
+
 type subInfo struct {
 	client           *Client
 	deltaType        DeltaType
@@ -839,10 +854,12 @@ func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
 	if sub.useID {
 		existingChanID, hasChanID := s.chanIDs[ch]
 		if !hasChanID {
-			// Generate unique ID using shard index + (counter * numHubShards)
-			// This ensures each shard generates non-overlapping ID ranges
+			// Generate unique ID using shard index + 1 + ((counter - 1) * numHubShards)
+			// This ensures each shard generates non-overlapping ID ranges. IDs start
+			// from 1: zero is not sent over the wire (proto3 default), so a push with
+			// ID 0 would carry neither ID nor channel and clients could not route it.
 			counter := s.lastChanID.Add(1)
-			chanID = int64(s.shardIndex) + ((counter - 1) * numHubShards)
+			chanID = int64(s.shardIndex) + 1 + ((counter - 1) * numHubShards)
 			s.chanIDs[ch] = chanID
 		} else {
 			chanID = existingChanID
@@ -858,8 +875,10 @@ func (s *subShard) addSub(ch string, sub subInfo) (int64, bool, error) {
 // updateServerTagsFilter updates the server-side tags filter for a specific
 // client subscription. Returns (found, changed, usesDelta) where changed is true
 // only if the filter hash differs from the current one, and usesDelta is true if
-// the subscription negotiated delta compression.
-func (s *subShard) updateServerTagsFilter(ch string, clientID string, tf *tagsFilter) (bool, bool, bool) {
+// the subscription negotiated delta compression. A subscription of another
+// generation than subGen is reported as not found: the filter was made for one
+// a concurrent resubscribe already replaced (see subInfo.subGen).
+func (s *subShard) updateServerTagsFilter(ch string, clientID string, subGen uint64, tf *tagsFilter) (bool, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	chSubs, ok := s.subs[ch]
@@ -867,7 +886,7 @@ func (s *subShard) updateServerTagsFilter(ch string, clientID string, tf *tagsFi
 		return false, false, false
 	}
 	sub, ok := chSubs[clientID]
-	if !ok {
+	if !ok || sub.subGen != subGen {
 		return false, false, false
 	}
 	usesDelta := sub.deltaType != deltaTypeNone
@@ -1010,7 +1029,7 @@ func getDeltaPub(prevPub *Publication, prevUTF8 *lazyutf8.Validator, fullPub *pr
 			deltaData = fullPub.Data
 		}
 		if key.ProtocolType == protocol.TypeJSON {
-			deltaData = json.Escape(convert.BytesToString(deltaData))
+			deltaData = cfjson.AppendString(nil, convert.BytesToString(deltaData))
 		}
 		deltaPub = &protocol.Publication{
 			Offset:  fullPub.Offset,
@@ -1027,7 +1046,7 @@ func getDeltaPub(prevPub *Publication, prevUTF8 *lazyutf8.Validator, fullPub *pr
 		// In JSON and Fossil case we need to send full state in JSON string format.
 		deltaPub = &protocol.Publication{
 			Offset:  fullPub.Offset,
-			Data:    json.Escape(convert.BytesToString(fullPub.Data)),
+			Data:    cfjson.AppendString(nil, convert.BytesToString(fullPub.Data)),
 			Info:    fullPub.Info,
 			Tags:    fullPub.Tags,
 			Key:     fullPub.Key,
@@ -1263,7 +1282,7 @@ func (s *subShard) broadcastPublication(
 					if key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
 						pubToUse = &protocol.Publication{
 							Offset:  fullPub.Offset,
-							Data:    json.Escape(convert.BytesToString(fullPub.Data)),
+							Data:    cfjson.AppendString(nil, convert.BytesToString(fullPub.Data)),
 							Info:    fullPub.Info,
 							Tags:    fullPub.Tags,
 							Channel: fullPub.Channel,
@@ -1290,7 +1309,7 @@ func (s *subShard) broadcastPublication(
 					if key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
 						pubToUse = &protocol.Publication{
 							Offset:  fullPub.Offset,
-							Data:    json.Escape(convert.BytesToString(fullPub.Data)),
+							Data:    cfjson.AppendString(nil, convert.BytesToString(fullPub.Data)),
 							Info:    fullPub.Info,
 							Tags:    fullPub.Tags,
 							Channel: fullPub.Channel,

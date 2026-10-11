@@ -1,12 +1,12 @@
 package filter
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
 
 	"github.com/centrifugal/protocol"
-	"github.com/segmentio/encoding/json"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1045,4 +1045,33 @@ func TestValidateNestedErrors(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "in comparison must not use Val")
 	})
+}
+
+func TestValidateNilNode(t *testing.T) {
+	require.Error(t, Validate(nil))
+	for _, op := range []string{OpAnd, OpOr, OpNot} {
+		err := Validate(&protocol.FilterNode{Op: op, Nodes: []*protocol.FilterNode{nil}})
+		require.Error(t, err, op)
+		require.Contains(t, err.Error(), "must not be nil")
+	}
+}
+
+// Match never panics on a nil node: Validate refuses them, but a filter which
+// was not validated must still not crash publication delivery.
+func TestMatchNilNode(t *testing.T) {
+	tags := map[string]string{"team": "eng"}
+	for _, f := range []*protocol.FilterNode{
+		nil,
+		{Op: OpAnd, Nodes: []*protocol.FilterNode{nil}},
+		{Op: OpOr, Nodes: []*protocol.FilterNode{nil, {Key: "team", Cmp: CompareEQ, Val: "eng"}}},
+		{Op: OpNot, Nodes: []*protocol.FilterNode{nil}},
+	} {
+		require.NotPanics(t, func() {
+			_, _ = Match(f, tags)
+		})
+	}
+	match, err := Match(&protocol.FilterNode{Op: OpAnd, Nodes: []*protocol.FilterNode{nil}}, tags)
+	require.Error(t, err)
+	require.False(t, match)
+	require.Error(t, Validate(&protocol.FilterNode{Op: OpAnd, Nodes: []*protocol.FilterNode{nil}}))
 }

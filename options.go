@@ -221,7 +221,9 @@ type SubscribeOptions struct {
 	// Unlike AllowTagsFilter (which enables client-side filtering), this filter is set by the server
 	// (via subscribe proxy or JWT) and cannot be overridden by the client. When both server and
 	// client filters are set, they are applied independently (AND semantics). ServerTagsFilter
-	// can not be used together with Delta Compression in subscription.
+	// can not be used together with Delta Compression in subscription. History is not filtered
+	// by it, so a subscription with ServerTagsFilter is refused history requests; recovery on
+	// subscribe applies the filter and stays the way to get missed publications.
 	ServerTagsFilter *FilterNode
 
 	// Type defines the subscription type. Use SubscriptionTypeMap for map subscriptions.

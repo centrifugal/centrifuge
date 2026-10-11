@@ -1,0 +1,66 @@
+name: fuzz
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: Fuzz time of the client lifecycle targets
+        default: 20m
+      short_fuzztime:
+        description: Fuzz time of the other targets
+        default: 5m
+permissions:
+  contents: read
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: FuzzClientSubscribeLifecycle
+            package: .
+            long: true
+          - target: FuzzClientConnectLifecycle
+            package: .
+            long: true
+          - target: FuzzExtractPushData
+            package: .
+          - target: FuzzParseMapMessage
+            package: .
+          - target: FuzzAlign
+            package: ./internal/fossilutf8
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          # The fuzz cache is saved below, after every run, so that it grows.
+          cache: false
+      - name: Locate fuzz cache
+        run: echo "FUZZ_CACHE=$(go env GOCACHE)/fuzz" >> "$GITHUB_ENV"
+      - uses: actions/cache@v6
+        with:
+          path: ${{ env.FUZZ_CACHE }}
+          key: fuzz-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-${{ matrix.target }}-
+      - name: Fuzz
+        env:
+          FUZZTIME: ${{ matrix.long && (inputs.fuzztime || '20m') || (inputs.short_fuzztime || '5m') }}
+        # Minimizing each new interesting input for the default 60s takes most
+        # of the time of the lifecycle targets.
+        run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime "$FUZZTIME" -fuzzminimizetime 10x -parallel 4 ${{ matrix.package }}
+      - name: Collect failing inputs
+        if: failure()
+        run: |
+          mkdir -p fuzz-failures
+          git ls-files --others --exclude-standard -- '*testdata/fuzz/*' | xargs -r cp --parents -t fuzz-failures
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: fuzz-failures-${{ matrix.target }}
+          path: fuzz-failures
+          if-no-files-found: ignore

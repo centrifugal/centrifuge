@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strconv"
@@ -15,7 +16,6 @@ import (
 
 	"github.com/centrifugal/fdelta"
 	"github.com/centrifugal/protocol"
-	"github.com/segmentio/encoding/json"
 	"github.com/stretchr/testify/require"
 )
 
@@ -2201,7 +2201,7 @@ func TestSharedPollDelta_DeltaApplicable(t *testing.T) {
 		select {
 		case data := <-sink:
 			reply := &protocol.Reply{}
-			err := reply.UnmarshalVT(data)
+			err := reply.UnmarshalCF(data)
 			if err == nil && reply.Push != nil && reply.Push.Pub != nil {
 				firstPubData = reply.Push.Pub.Data
 				goto gotFirst
@@ -2231,7 +2231,7 @@ gotFirst:
 		select {
 		case data := <-sink:
 			reply := &protocol.Reply{}
-			err := reply.UnmarshalVT(data)
+			err := reply.UnmarshalCF(data)
 			if err == nil && reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 2 {
 				// Apply the fossil delta to first data.
 				require.True(t, reply.Push.Pub.Delta)
@@ -3646,7 +3646,7 @@ func TestSharedPoll_PrevDataNotUsedWhenKeepLatestData(t *testing.T) {
 		select {
 		case d := <-sink:
 			reply := &protocol.Reply{}
-			err := reply.UnmarshalVT(d)
+			err := reply.UnmarshalCF(d)
 			if err == nil && reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 5 {
 				require.False(t, reply.Push.Pub.Delta, "first delivery should be full")
 				v5Data = reply.Push.Pub.Data
@@ -3680,7 +3680,7 @@ gotV5:
 		select {
 		case d := <-sink:
 			reply := &protocol.Reply{}
-			err := reply.UnmarshalVT(d)
+			err := reply.UnmarshalCF(d)
 			if err == nil && reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 10 {
 				v10Reply = reply
 				goto gotV10
@@ -3731,7 +3731,7 @@ gotV10:
 		select {
 		case d := <-sink:
 			reply := &protocol.Reply{}
-			err := reply.UnmarshalVT(d)
+			err := reply.UnmarshalCF(d)
 			if err == nil && reply.Push != nil && reply.Push.Pub != nil && reply.Push.Pub.Version == 12 {
 				v12Reply = reply
 			}
@@ -4096,18 +4096,23 @@ func setEpochAwareSharedPollHandler(node *Node, initial string) func(string) {
 // setEpochAwareSharedPollHandlerBlocking is the deterministic variant: the
 // FIRST handler call (the cold-key auto-poll triggered by track) blocks
 // until the test calls release(); subsequent calls run unblocked. This
-// eliminates a race where the auto-poll's response — captured before the
-// test sets up its initial epoch — lands AFTER the test flips to a new
-// epoch and reverts state back. Use whenever the test plans to do a
+// eliminates a race where the auto-poll's response lands AFTER the test flips
+// to a new epoch and reverts state back. Use whenever the test plans to do a
 // setPublisherEpoch(...) after the initial setup.
+//
+// Release only AFTER the flip: the handler reads the epoch when it returns,
+// so its response then carries the new epoch and applying it is a no-op
+// whenever it lands. Released before the flip, the response may carry the
+// old epoch and still be applied after the flip - release() does not wait
+// for the response to be applied.
 //
 // Returns (setEpoch, release). Typical usage:
 //
 //	setPub, release := setEpochAwareSharedPollHandlerBlocking(node, "epochA")
 //	subscribe + track
 //	SharedPollPublish(... "epochA" ...)
-//	release()                       // now the auto-poll's response is safe
 //	setPub("epochB"); SharedPollPublish(... "epochB" ...)
+//	release()                       // the auto-poll's response carries "epochB"
 func setEpochAwareSharedPollHandlerBlocking(node *Node, initial string) (func(string), func()) {
 	var epoch atomic.Pointer[string]
 	epoch.Store(&initial)
@@ -4236,13 +4241,13 @@ func TestSharedPollEpoch_FlipUnsubscribesClient(t *testing.T) {
 		return node.sharedPollManager.Epoch("test:channel", false) == "epochA"
 	}, time.Second, 10*time.Millisecond)
 
-	// Release the cold-key auto-poll. Its response carries "epochA" (no flip).
-	releaseAutoPoll()
-
 	// Flip with new epoch — update the refresh handler in lockstep so the
 	// publisher stays consistent across both paths.
 	setPublisherEpoch("epochB")
 	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 1, "epochB", []byte(`{"v":1-newepoch"}`)))
+	// Release the cold-key auto-poll after the flip: its response carries
+	// "epochB", so it can't revert the epoch whenever it is applied.
+	releaseAutoPoll()
 
 	// Channel epoch updated.
 	require.Eventually(t, func() bool {
@@ -4281,12 +4286,12 @@ func TestSharedPollEpoch_FlipResetsEntries(t *testing.T) {
 		return node.sharedPollManager.Epoch("test:channel", false) == "epochA"
 	}, time.Second, 10*time.Millisecond)
 
-	// Release the cold-key auto-poll. Its response carries "epochA" (no flip).
-	releaseAutoPoll()
-
 	// New epoch with low version: must be accepted (entries reset on flip).
 	setPublisherEpoch("epochB")
 	require.NoError(t, node.SharedPollPublish(ctx, "test:channel", "k1", 1, "epochB", []byte(`{"v":1-postflip"}`)))
+	// Release the cold-key auto-poll after the flip: its response carries
+	// "epochB", so it can't revert the epoch whenever it is applied.
+	releaseAutoPoll()
 
 	// Re-track client (it was unsubbed by the flip). Then verify that the
 	// post-flip publish data is reachable by re-subscribing and tracking.
@@ -5033,12 +5038,13 @@ func TestSharedPollTrack_WarmKey_DeliversLatestSnapshot(t *testing.T) {
 // keyedManager.getOrCreateChannel followed later by getHub).
 //
 // Scenario:
-//   client A tracks → untracks (immediate shutdown removes both
-//   sharedPollManager state and keyedManager state)
-//   client B handleTrack runs concurrently — getOrCreateChannel may create
-//   the keyedManager state just before A's finalizeShutdown calls
-//   removeChannel, leaving B's later getHub returning nil → panic at
-//   addSubscriber.
+//
+//	client A tracks → untracks (immediate shutdown removes both
+//	sharedPollManager state and keyedManager state)
+//	client B handleTrack runs concurrently — getOrCreateChannel may create
+//	the keyedManager state just before A's finalizeShutdown calls
+//	removeChannel, leaving B's later getHub returning nil → panic at
+//	addSubscriber.
 //
 // The test runs many iterations and expects no panic / no missed
 // broadcasts. With ChannelShutdownDelay=-1 (immediate), the race window
@@ -5100,7 +5106,6 @@ func TestSharedPollTrack_RaceWithChannelShutdownStress(t *testing.T) {
 		_ = clientB.close(DisconnectForceNoReconnect)
 	}
 }
-
 
 // TestKeyedBroadcast_OrderedDeliveryUnderConcurrentBroadcasts asserts that
 // concurrent broadcasts for the same key to the same client are delivered to
@@ -5183,7 +5188,7 @@ drain:
 		select {
 		case data := <-sink:
 			reply := &protocol.Reply{}
-			if err := reply.UnmarshalVT(data); err != nil {
+			if err := reply.UnmarshalCF(data); err != nil {
 				continue
 			}
 			if reply.Push == nil || reply.Push.Pub == nil {
@@ -5360,7 +5365,7 @@ drain:
 		select {
 		case data := <-sink:
 			reply := &protocol.Reply{}
-			if err := reply.UnmarshalVT(data); err != nil {
+			if err := reply.UnmarshalCF(data); err != nil {
 				continue
 			}
 			if reply.Push == nil || reply.Push.Pub == nil {
@@ -6263,4 +6268,163 @@ func TestSharedPollRevokeKeys_PartialUserFilter_KeepsBrokerSubscribed(t *testing
 		return !exists
 	}, 300*time.Millisecond, 30*time.Millisecond,
 		"broker subscription must persist while at least one subscriber remains for the key")
+}
+
+// A client unsubscribe processed while an asynchronously answered shared poll
+// subscribe is being installed waits for it: the client gets the subscribe reply
+// first, then the unsubscribe reply, and UnsubscribeHandler comes after the
+// subscribe reply.
+func TestOrderSharedPollUnsubscribeReplyBeforeSubscribeReply(t *testing.T) {
+	var armed atomic.Bool
+	inOptions := make(chan struct{})
+	release := make(chan struct{})
+	node, err := New(Config{
+		LogLevel:   LogLevelError,
+		LogHandler: func(LogEntry) {},
+		SharedPoll: SharedPollConfig{
+			GetSharedPollChannelOptions: func(channel string) (SharedPollChannelOptions, bool) {
+				if armed.CompareAndSwap(true, false) {
+					// Called by the subscribe callback after the subscription was
+					// installed and before the reply.
+					close(inOptions)
+					<-release
+				}
+				return SharedPollChannelOptions{RefreshInterval: time.Second, RefreshBatchSize: 100, MaxKeysPerConnection: 100}, true
+			},
+		},
+	})
+	require.NoError(t, err)
+	node.OnSharedPoll(func(context.Context, SharedPollEvent) (SharedPollResult, error) {
+		return SharedPollResult{}, nil
+	})
+	unsubscribeEvents := make(chan UnsubscribeEvent, 1)
+	answer := make(chan SubscribeCallback, 1)
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) { answer <- cb })
+		client.OnUnsubscribe(func(e UnsubscribeEvent) { unsubscribeEvents <- e })
+	})
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := newTestTransport(cancel)
+	transport.sink = make(chan []byte, 100)
+	client, _, err := NewClient(SetCredentials(ctx, &Credentials{UserID: "u"}), node, transport)
+	require.NoError(t, err)
+	require.True(t, client.HandleCommand(&protocol.Command{Id: 100, Connect: &protocol.ConnectRequest{}}, 0))
+	<-transport.sink
+
+	require.True(t, client.HandleCommand(&protocol.Command{Id: 1, Subscribe: &protocol.SubscribeRequest{
+		Channel: "poll", Type: int32(SubscriptionTypeSharedPoll),
+	}}, 0))
+	cb := <-answer
+	armed.Store(true)
+	go cb(SubscribeReply{Options: SubscribeOptions{ExpireAt: time.Now().Unix() + 3600}, ClientSideRefresh: true}, nil)
+	<-inOptions
+	// The client unsubscribes while the subscribe is between its install and its reply.
+	unsubscribed := make(chan struct{})
+	go func() {
+		defer close(unsubscribed)
+		client.HandleCommand(&protocol.Command{Id: 2, Unsubscribe: &protocol.UnsubscribeRequest{Channel: "poll"}}, 0)
+	}()
+	select {
+	case <-unsubscribed: // Did not wait for the subscribe in progress (the bug).
+	case <-time.After(50 * time.Millisecond): // Waits for it.
+	}
+	close(release)
+	<-unsubscribed
+
+	var order []uint32
+	timeout := time.After(2 * time.Second)
+	for len(order) < 2 {
+		select {
+		case data := <-transport.sink:
+			decoder := protocol.NewJSONReplyDecoder(data)
+			for {
+				reply, err := decoder.Decode()
+				if err != nil {
+					break
+				}
+				if reply.Id != 0 {
+					order = append(order, reply.Id)
+				}
+			}
+		case <-timeout:
+			t.Fatalf("replies: %v", order)
+		}
+	}
+	e := <-unsubscribeEvents
+	t.Logf("UnsubscribeHandler: code %d", e.Code)
+	require.Equal(t, []uint32{1, 2}, order, "subscribe reply must come before the unsubscribe reply")
+}
+
+// A key removal checks and writes under c.mu: an unsubscribe which removes the
+// tracked keys and writes its push meanwhile is never followed by the removal.
+func TestKeyedWriteRemoval_NotAfterUnsubscribe(t *testing.T) {
+	t.Parallel()
+	var armed atomic.Bool
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	node, err := New(Config{
+		LogLevel:   LogLevelError,
+		LogHandler: func(LogEntry) {},
+		GetChannelBatchConfig: func(string) ChannelBatchConfig {
+			if armed.CompareAndSwap(true, false) {
+				close(entered)
+				<-release
+			}
+			return ChannelBatchConfig{}
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	transport := newTestTransport(func() {})
+	transport.setProtocolType(ProtocolTypeJSON)
+	transport.setProtocolVersion(ProtocolVersion2)
+	sink := make(chan []byte, 100)
+	transport.sink = sink
+	client := newTestClientCustomTransport(t, context.Background(), node, transport, "u")
+	connectClientV2(t, client)
+	drainSink(sink)
+	client.mu.Lock()
+	client.keyed = &keyedState{
+		channels:    map[string]*keyedChannelDeltaState{},
+		trackedKeys: map[string]map[string]*keyedKeyState{"ch": {"k": {version: 1}}},
+	}
+	client.mu.Unlock()
+
+	armed.Store(true)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		client.keyedWriteRemoval("ch", "k", &protocol.Publication{Key: "k", Removed: true})
+	}()
+	<-entered
+	// An unsubscribe removes the tracked keys and writes its push.
+	client.cleanupKeyed("ch")
+	require.NoError(t, client.sendUnsubscribe("ch", unsubscribeServer))
+	close(release)
+	<-done
+
+	var frames []string
+	timeout := time.After(200 * time.Millisecond)
+	for collecting := true; collecting; {
+		select {
+		case data := <-sink:
+			for _, line := range strings.Split(string(data), "\n") {
+				switch {
+				case strings.Contains(line, `"unsubscribe"`):
+					frames = append(frames, "unsubscribe push")
+				case strings.Contains(line, `"pub"`):
+					frames = append(frames, "removal")
+				}
+			}
+		case <-timeout:
+			collecting = false
+		}
+	}
+	require.Equal(t, []string{"unsubscribe push"}, frames)
 }

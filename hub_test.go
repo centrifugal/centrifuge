@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strconv"
@@ -19,7 +20,7 @@ import (
 
 	"github.com/centrifugal/fdelta"
 	"github.com/centrifugal/protocol"
-	"github.com/segmentio/encoding/json"
+	"github.com/centrifugal/protocol/cfjson"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1498,7 +1499,7 @@ func TestJsonStringEncode(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, testDeltaJsonData)
 
-	alternativeDeltaJsonData := json.Escape(convert.BytesToString(testBenchmarkDeltaFossilPatch))
+	alternativeDeltaJsonData := cfjson.AppendString(nil, convert.BytesToString(testBenchmarkDeltaFossilPatch))
 	require.Equal(t, testDeltaJsonData, alternativeDeltaJsonData)
 }
 
@@ -1507,7 +1508,7 @@ var testBenchmarkEncodeData []byte
 func BenchmarkEncodeJSONString(b *testing.B) {
 	jsonData := []byte(`{"input": "test"}`)
 	for i := 0; i < b.N; i++ {
-		testBenchmarkEncodeData = json.Escape(convert.BytesToString(jsonData))
+		testBenchmarkEncodeData = cfjson.AppendString(nil, convert.BytesToString(jsonData))
 		if len(testBenchmarkEncodeData) == 0 {
 			b.Fatal("empty data")
 		}
@@ -1695,8 +1696,10 @@ func TestSubIDShardDistribution(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, isNew, "Should be new channel")
 
-			// Verify the sub ID follows our shard pattern
-			expectedShardIndex := int(subID % numHubShards)
+			// Verify the sub ID follows our shard pattern. IDs start from 1, 0 is
+			// never assigned.
+			require.Positive(t, subID)
+			expectedShardIndex := int((subID - 1) % numHubShards)
 			require.Equal(t, shardIdx, expectedShardIndex,
 				"Sub ID %d should belong to shard %d, but belongs to shard %d",
 				subID, shardIdx, expectedShardIndex)
@@ -1710,9 +1713,9 @@ func TestSubIDShardDistribution(t *testing.T) {
 		ids := idsByShard[shardIdx]
 		require.Len(t, ids, channelsPerShard, "Should have exactly %d IDs for shard %d", channelsPerShard, shardIdx)
 
-		// Verify the IDs follow the pattern: shardIndex, shardIndex + numHubShards, shardIndex + 2*numHubShards, etc.
+		// Verify the IDs follow the pattern: shardIndex + 1, shardIndex + 1 + numHubShards, shardIndex + 1 + 2*numHubShards, etc.
 		for i, id := range ids {
-			expectedID := int64(shardIdx) + int64(i)*numHubShards
+			expectedID := int64(shardIdx) + 1 + int64(i)*numHubShards
 			require.Equal(t, expectedID, id,
 				"Shard %d, ID %d: expected %d, got %d", shardIdx, i, expectedID, id)
 		}
@@ -2104,7 +2107,7 @@ func TestGetDeltaPubPreservesMapFields(t *testing.T) {
 	require.Equal(t, "map_channel", result.Channel)
 	require.False(t, result.Delta)
 	// Data should be JSON-escaped.
-	require.Equal(t, []byte(json.Escape(convert.BytesToString(fullPub.Data))), []byte(result.Data))
+	require.Equal(t, []byte(cfjson.AppendString(nil, convert.BytesToString(fullPub.Data))), []byte(result.Data))
 
 	// Test 3: Protobuf+Fossil with prevPub — data is not JSON-escaped.
 	keyProto := preparedKey{
@@ -2116,7 +2119,7 @@ func TestGetDeltaPubPreservesMapFields(t *testing.T) {
 	require.Equal(t, "user:1", result.Key)
 	require.Equal(t, int64(42), result.Score)
 	// Protobuf delta data should NOT be JSON-escaped.
-	require.NotEqual(t, []byte(json.Escape(convert.BytesToString(fullPub.Data))), []byte(result.Data))
+	require.NotEqual(t, []byte(cfjson.AppendString(nil, convert.BytesToString(fullPub.Data))), []byte(result.Data))
 
 	// Test 4: Removed publication preserves Removed flag.
 	removedPub := &protocol.Publication{
@@ -2151,10 +2154,10 @@ func TestEscapeStateForDelta(t *testing.T) {
 		{Offset: 3, Key: "c"}, // no data
 	}
 	result = escapeStateForDelta(pubs2, true, true)
-	require.Equal(t, []byte(json.Escape(`{"x":1}`)), []byte(result[0].Data))
+	require.Equal(t, []byte(cfjson.AppendString(nil, `{"x":1}`)), []byte(result[0].Data))
 	require.Equal(t, "a", result[0].Key)
 	require.Equal(t, int64(10), result[0].Score)
-	require.Equal(t, []byte(json.Escape(`{"y":2}`)), []byte(result[1].Data))
+	require.Equal(t, []byte(cfjson.AppendString(nil, `{"y":2}`)), []byte(result[1].Data))
 	require.Equal(t, "b", result[1].Key)
 	require.True(t, result[1].Removed)
 	require.Equal(t, int64(20), result[1].Score)
@@ -2611,7 +2614,7 @@ func TestSubShard_UpdateServerTagsFilter_NotFound(t *testing.T) {
 	shard := hub.subShards[0]
 
 	// Channel not in shard at all → both returns false.
-	found, changed, _ := shard.updateServerTagsFilter("ghost-channel", "anyone", nil)
+	found, changed, _ := shard.updateServerTagsFilter("ghost-channel", "anyone", 1, nil)
 	require.False(t, found)
 	require.False(t, changed)
 
@@ -2622,24 +2625,58 @@ func TestSubShard_UpdateServerTagsFilter_NotFound(t *testing.T) {
 	client := newTestSubscribedClientV2(t, node, "u-tags", "test-tags-channel")
 	t.Cleanup(func() { _ = client.close(DisconnectForceNoReconnect) })
 
+	client.mu.RLock()
+	subGen := client.channels["test-tags-channel"].subGen
+	client.mu.RUnlock()
+
 	chShard := hub.subShards[index("test-tags-channel", numHubShards)]
-	_, _, _ = chShard.updateServerTagsFilter("test-tags-channel", "no-such-client", nil)
+	_, _, _ = chShard.updateServerTagsFilter("test-tags-channel", "no-such-client", subGen, nil)
 
 	// Same client, no existing filter, new filter is also nil → both-nil no-op.
-	found, changed, _ = chShard.updateServerTagsFilter("test-tags-channel", client.uid, nil)
+	found, changed, _ = chShard.updateServerTagsFilter("test-tags-channel", client.uid, subGen, nil)
 	require.True(t, found)
 	require.False(t, changed)
 
 	// Now set a real filter and assert it changed.
 	tf := &tagsFilter{filter: &FilterNode{Key: "k", Cmp: "eq", Val: "v"}}
-	found, changed, _ = chShard.updateServerTagsFilter("test-tags-channel", client.uid, tf)
+	found, changed, _ = chShard.updateServerTagsFilter("test-tags-channel", client.uid, subGen, tf)
 	require.True(t, found)
 	require.True(t, changed)
 
 	// Same hash again — no-op.
-	found, changed, _ = chShard.updateServerTagsFilter("test-tags-channel", client.uid, tf)
+	found, changed, _ = chShard.updateServerTagsFilter("test-tags-channel", client.uid, subGen, tf)
 	require.True(t, found)
 	require.False(t, changed)
+}
+
+// TestSubShard_UpdateServerTagsFilter_GenMismatch checks that a filter made for
+// an older generation of a subscription is not applied to the one a resubscribe
+// registered since: it is reported as not found and leaves the filter alone.
+func TestSubShard_UpdateServerTagsFilter_GenMismatch(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestSubscribedClientV2(t, node, "u-tags", "test-tags-channel")
+	t.Cleanup(func() { _ = client.close(DisconnectForceNoReconnect) })
+
+	client.mu.RLock()
+	subGen := client.channels["test-tags-channel"].subGen
+	client.mu.RUnlock()
+
+	shard := node.hub.subShards[index("test-tags-channel", numHubShards)]
+	tf := &tagsFilter{filter: &FilterNode{Key: "k", Cmp: "eq", Val: "v"}}
+
+	found, changed, _ := shard.updateServerTagsFilter("test-tags-channel", client.uid, subGen+1, tf)
+	require.False(t, found)
+	require.False(t, changed)
+	shard.mu.RLock()
+	require.Nil(t, shard.subs["test-tags-channel"][client.uid].serverTagsFilter)
+	shard.mu.RUnlock()
+
+	found, changed, _ = shard.updateServerTagsFilter("test-tags-channel", client.uid, subGen, tf)
+	require.True(t, found)
+	require.True(t, changed)
 }
 
 // ---------------------------------------------------------------------------
@@ -3214,6 +3251,75 @@ func waitSinkPublication(t *testing.T, transport *testTransport) string {
 			}
 		case <-time.After(2 * time.Second):
 			t.Fatal("no publication frame in sink")
+		}
+	}
+}
+
+// Channel IDs start from 1 on every hub shard. ID 0 is the proto3 default and
+// is not sent over the wire, so a compacted push with ID 0 would carry neither
+// the ID nor the channel, and the client could not route it.
+func TestHubChannelCompactionIDNeverZero(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{AllowChannelCompaction: true}}, nil)
+		})
+	})
+
+	// Before the fix the first compacted channel of shard 0 got ID 0.
+	channelOnShard := func(shard int) string {
+		for i := 0; ; i++ {
+			ch := "compaction" + strconv.Itoa(i)
+			if index(ch, numHubShards) == shard {
+				return ch
+			}
+		}
+	}
+
+	seen := map[int64]string{}
+	for _, shard := range []int{0, 1, numHubShards - 1} {
+		ch := channelOnShard(shard)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		transport := newTestTransport(cancel)
+		transport.sink = make(chan []byte, 100)
+		transport.setProtocolType(ProtocolTypeJSON)
+		transport.setProtocolVersion(ProtocolVersion2)
+		client := newTestConnectedClientWithTransport(t, ctx, node, transport, "u")
+
+		rw := testReplyWriterWrapper()
+		require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
+			Channel: ch, Flag: subscriptionFlagChannelCompression,
+		}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+		require.Len(t, rw.replies, 1)
+		require.Nil(t, rw.replies[0].Error)
+		id := rw.replies[0].Subscribe.Id
+		require.Positive(t, id, "channel %q on shard %d got no channel ID", ch, shard)
+		require.NotContains(t, seen, id, "channel ID %d reused for %q and %q", id, seen[id], ch)
+		seen[id] = ch
+
+		_, err := node.Publish(ch, []byte(`{"x":1}`))
+		require.NoError(t, err)
+		timeout := time.After(2 * time.Second)
+	waitPub:
+		for {
+			select {
+			case data := <-transport.sink:
+				if !strings.Contains(string(data), `"pub"`) {
+					continue
+				}
+				var reply protocol.Reply
+				require.NoError(t, json.Unmarshal(data, &reply))
+				require.NotNil(t, reply.Push)
+				require.Equal(t, id, reply.Push.Id, "publication push must be routable by channel ID")
+				require.Empty(t, reply.Push.Channel)
+				break waitPub
+			case <-timeout:
+				t.Fatal("no publication frame in sink")
+			}
 		}
 	}
 }

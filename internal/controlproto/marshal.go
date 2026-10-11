@@ -19,5 +19,5 @@ func NewProtobufEncoder() *ProtobufEncoder {
 
 // EncodeCommand ...
 func (e *ProtobufEncoder) EncodeCommand(cmd *controlpb.Command) ([]byte, error) {
-	return cmd.MarshalVT()
+	return cmd.MarshalCF()
 }

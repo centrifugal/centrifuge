@@ -106,6 +106,63 @@ func pubSubProbeRestartBackoff(interval time.Duration, consecutiveRestarts int) 
 	return backoff
 }
 
+// publishResubscribed puts a resubscribed connection into its slot. A channel of
+// the snapshot which left the subscribed set while the connection resubscribed
+// (an Unsubscribe, a failed subscribe) is unsubscribed on it first, as nobody
+// else would. The check and the publication happen under subClientsMu, which
+// Subscribe and Unsubscribe take to read the slot; unsubscribing happens outside
+// it, while no one else uses the connection. Reports false if an unsubscribe failed.
+func publishResubscribed(
+	conn rueidis.DedicatedClient,
+	subClientsMu *sync.Mutex,
+	subClients [][]rueidis.DedicatedClient,
+	subscribed map[string]struct{},
+	resubscribed [][]string,
+	clusterShardIndex, psShardIndex int,
+	useShardedPubSub bool,
+	cb pubSubCallbacks,
+) bool {
+	var pending []string
+	for _, chs := range resubscribed {
+		pending = append(pending, chs...)
+	}
+	for {
+		subClientsMu.Lock()
+		var stale []string
+		kept := pending[:0]
+		for _, ch := range pending {
+			if _, ok := subscribed[ch]; ok {
+				kept = append(kept, ch)
+			} else {
+				stale = append(stale, ch)
+			}
+		}
+		pending = kept
+		if len(stale) == 0 {
+			subClients[clusterShardIndex][psShardIndex] = conn
+			subClientsMu.Unlock()
+			return true
+		}
+		subClientsMu.Unlock()
+		for i := 0; i < len(stale); i += redisSubscribeBatchLimit {
+			end := min(i+redisSubscribeBatchLimit, len(stale))
+			chIDs := make([]string, 0, end-i)
+			for _, ch := range stale[i:end] {
+				chIDs = append(chIDs, cb.messageChannelID(ch))
+			}
+			var err error
+			if useShardedPubSub {
+				err = conn.Do(context.Background(), conn.B().Sunsubscribe().Channel(chIDs...).Build()).Error()
+			} else {
+				err = conn.Do(context.Background(), conn.B().Unsubscribe().Channel(chIDs...).Build()).Error()
+			}
+			if err != nil {
+				return false
+			}
+		}
+	}
+}
+
 // pubSubCallbacks carries the type-varying behavior as function pointers.
 // Both RedisBroker and RedisMapBroker provide their own callbacks.
 type pubSubCallbacks struct {
@@ -117,10 +174,6 @@ type pubSubCallbacks struct {
 	messageChannelID func(ch string) string
 	// shardForChannel returns the RedisShard for a given channel (for filtering during resubscribe).
 	shardForChannel func(ch string) *RedisShard
-	// extraResubscribeChannels returns broker-level channel subscriptions that
-	// must survive PUB/SUB reconnects but are not tracked in the Hub (shared
-	// poll key channels). May be nil.
-	extraResubscribeChannels func() []string
 }
 
 func getPubSubStartLogFields(s *RedisShard, logFields map[string]any) map[string]any {
@@ -150,6 +203,7 @@ func runPubSubLoop(
 	shard *RedisShard,
 	subClientsMu *sync.Mutex,
 	subClients [][]rueidis.DedicatedClient,
+	subscribed map[string]struct{},
 	cb pubSubCallbacks,
 	node *Node,
 	name string,
@@ -296,15 +350,21 @@ func runPubSubLoop(
 		return
 	}
 
-	channels := node.Hub().Channels()
-	if cb.extraResubscribeChannels != nil {
-		// Broker-level subscriptions not tracked in the Hub (shared poll key
-		// channels) go through the same per-shard/partition filters below.
-		channels = append(channels, cb.extraResubscribeChannels()...)
+	// The broker's subscribed set: what its Subscribe added and no Unsubscribe
+	// or failed subscribe removed. Taken after the connection of the previous run
+	// left its slot, so it has every channel subscribed on that connection.
+	subClientsMu.Lock()
+	channels := make([]string, 0, len(subscribed))
+	for ch := range subscribed {
+		channels = append(channels, ch)
 	}
+	subClientsMu.Unlock()
 
 	var wg sync.WaitGroup
 	started := time.Now()
+	// The channels each resubscribe goroutine subscribed, for the check before
+	// the connection is published.
+	resubscribed := make([][]string, numResubscribeShards)
 
 	for i := 0; i < numResubscribeShards; i++ {
 		wg.Add(1)
@@ -330,6 +390,7 @@ func runPubSubLoop(
 					continue
 				}
 				chIDs = append(chIDs, cb.messageChannelID(ch))
+				resubscribed[subscriberIndex] = append(resubscribed[subscriberIndex], ch)
 			}
 
 			subscribeBatch := func(batch []string) error {
@@ -375,9 +436,13 @@ func runPubSubLoop(
 		case <-done:
 			startOnce(errors.New("error resubscribing"))
 		default:
-			subClientsMu.Lock()
-			subClients[clusterShardIndex][psShardIndex] = conn
-			subClientsMu.Unlock()
+			if !publishResubscribed(conn, subClientsMu, subClients, subscribed, resubscribed,
+				clusterShardIndex, psShardIndex, useShardedPubSub, cb) {
+				psm.incErrors(name, "subscribe_channel")
+				closeDoneOnce()
+				startOnce(errors.New("error resubscribing"))
+				break
+			}
 			defer func() {
 				// Compare-and-swap: only nil the slot if it still holds OUR
 				// conn. A subsequent run of this same loop (after topology

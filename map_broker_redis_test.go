@@ -1253,6 +1253,58 @@ func TestRedisMapBroker_RemovePreservesTags(t *testing.T) {
 	})
 }
 
+// A removal without tags of its own carries the tags of the entry it removes,
+// as with the memory broker: tags filters route removals the way they routed
+// the entry, and map_remove has no way to pass tags. Explicit tags win, an
+// entry without tags gives a removal without tags.
+func TestRedisMapBroker_RemoveCarriesEntryTags(t *testing.T) {
+	t.Parallel()
+	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
+		node, _ := New(Config{
+			Map: MapConfig{
+				GetMapChannelOptions: func(channel string) MapChannelOptions {
+					return MapChannelOptions{
+						Mode:       MapModePersistent,
+						StreamSize: 100,
+						StreamTTL:  300 * time.Second,
+					}
+				},
+			},
+		})
+		broker := mb.make(t, node)
+		ctx := context.Background()
+
+		removalTags := func(channel string, entryTags, removeTags map[string]string) map[string]string {
+			_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{
+				Data: []byte(`{"v":1,"text":"value with: colons"}`),
+				Tags: entryTags,
+			})
+			require.NoError(t, err)
+			_, err = broker.Remove(ctx, channel, "key1", MapRemoveOptions{Tags: removeTags})
+			require.NoError(t, err)
+			streamResult, err := broker.ReadStream(ctx, channel, MapReadStreamOptions{
+				Filter: StreamFilter{Limit: -1},
+			})
+			require.NoError(t, err)
+			var removal *Publication
+			for _, pub := range streamResult.Publications {
+				if pub.Removed {
+					removal = pub
+				}
+			}
+			require.NotNil(t, removal)
+			require.Equal(t, "key1", removal.Key)
+			return removal.Tags
+		}
+
+		entryTags := map[string]string{"role": "admin", "team": "eng"}
+		require.Equal(t, entryTags, removalTags(randomChannel("remove_entry_tags"), entryTags, nil))
+		require.Equal(t, map[string]string{"role": "viewer"},
+			removalTags(randomChannel("remove_explicit_tags"), entryTags, map[string]string{"role": "viewer"}))
+		require.Empty(t, removalTags(randomChannel("remove_no_tags"), nil, nil))
+	})
+}
+
 // TestRedisMapBroker_CleanupExpiry verifies that cleanup removes expired entries
 // and publishes removal events to the stream. Uses two channels with different
 // TTLs to verify that only expired channel entries are cleaned up.

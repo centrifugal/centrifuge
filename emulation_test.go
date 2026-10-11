@@ -319,7 +319,7 @@ func TestEmulationHandlerProtobufInvalid(t *testing.T) {
 	_ = resp.Body.Close()
 }
 
-// TestEmulationSurveyHandler_BadProtobuf covers the UnmarshalVT-error branch
+// TestEmulationSurveyHandler_BadProtobuf covers the UnmarshalCF-error branch
 // of emulationSurveyHandler.HandleEmulation.
 func TestEmulationSurveyHandler_BadProtobuf(t *testing.T) {
 	t.Parallel()
@@ -353,7 +353,7 @@ func TestEmulationSurveyHandler_NoSession(t *testing.T) {
 		Session: "missing-session",
 		Data:    []byte(`""`),
 	}
-	data, err := req.MarshalVT()
+	data, err := req.MarshalCF()
 	require.NoError(t, err)
 
 	got := make(chan SurveyReply, 1)
@@ -388,7 +388,7 @@ func TestEmulationHandler_NodeNotFoundProtobuf(t *testing.T) {
 		Session: "sess",
 		Data:    []byte("payload"),
 	}
-	body, err := req.MarshalVT()
+	body, err := req.MarshalCF()
 	require.NoError(t, err)
 
 	resp, err := http.Post(server.URL+"/emulation", "application/octet-stream", bytes.NewReader(body))

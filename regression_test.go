@@ -1665,7 +1665,7 @@ func TestBroadcastFiltered_MultipleKeys_NoNilBufferedPub(t *testing.T) {
 		for _, p := range buffered {
 			require.NotNil(t, p, "filtered broadcast buffered a nil publication (missing filteredPub marker)")
 		}
-		_, _, ok := recovery.MergePublications(nil, buffered)
+		_, _, ok := recovery.MergePublications(nil, buffered, "", 0)
 		require.True(t, ok)
 		c.pubSubSync.StopBuffering(bufs[c], c.writePendingPublication)
 	}
@@ -2301,7 +2301,7 @@ func TestValidateSubscribeRequest_RejectsNormalWhileMapLoading(t *testing.T) {
 	client.mu.Unlock()
 
 	// A concurrent normal subscribe for the same channel must be rejected.
-	gotGen, replyErr, disconnect := client.validateSubscribeRequest(&protocol.SubscribeRequest{Channel: ch})
+	gotGen, _, replyErr, disconnect := client.validateSubscribeRequest(&protocol.SubscribeRequest{Channel: ch}, nil)
 	require.Nil(t, disconnect)
 	require.Equal(t, ErrorAlreadySubscribed, replyErr,
 		"normal subscribe must be rejected while a map subscribe is loading the same channel")
@@ -3934,7 +3934,7 @@ func TestMapStatePhase_DuplicateReservationRejected(t *testing.T) {
 	rw := testReplyWriterWrapper()
 	err := client.handleMapStatePhase(
 		&protocol.SubscribeRequest{Channel: ch, Type: int32(SubscriptionTypeMap), Phase: MapPhaseState},
-		SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}},
+		SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, &mapSubscribeAttempt{},
 		&protocol.Command{Id: 1}, time.Now(), rw.rw,
 	)
 	require.Equal(t, ErrorAlreadySubscribed, err, "duplicate map state reservation must be rejected")

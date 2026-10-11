@@ -32,8 +32,11 @@ func uniqueNonFilteredPublications(s []*protocol.Publication) ([]*protocol.Publi
 
 // MergePublications allows to merge recovered pubs with buffered pubs
 // collected during extracting recovered so result is ordered and with
-// duplicates removed.
-func MergePublications(recoveredPubs []*protocol.Publication, bufferedPubs []*protocol.Publication) ([]*protocol.Publication, uint64, bool) {
+// duplicates removed. readEpoch and readOffset are the stream position the
+// recovered pubs were read at: the buffered pubs must continue it without a gap
+// (one lost by PUB/SUB while subscribing), unless the read knew nothing about the
+// stream (empty epoch). It reports false if the result has a gap.
+func MergePublications(recoveredPubs []*protocol.Publication, bufferedPubs []*protocol.Publication, readEpoch string, readOffset uint64) ([]*protocol.Publication, uint64, bool) {
 	var maxSeenOffset uint64
 	if len(bufferedPubs) > 0 {
 		recoveredPubs = append(recoveredPubs, bufferedPubs...)
@@ -46,6 +49,9 @@ func MergePublications(recoveredPubs []*protocol.Publication, bufferedPubs []*pr
 	// contain filtered markers, and the returned set must never carry a marker.
 	var skippedOffsets []uint64
 	recoveredPubs, maxSeenOffset, skippedOffsets = uniqueNonFilteredPublications(recoveredPubs)
+	if len(bufferedPubs) > 0 && readEpoch != "" && !continuesFrom(readOffset, recoveredPubs, skippedOffsets) {
+		return nil, 0, false
+	}
 	if len(bufferedPubs) > 0 {
 		if len(recoveredPubs) > 1 {
 			prevOffset := recoveredPubs[0].Offset
@@ -71,4 +77,28 @@ func MergePublications(recoveredPubs []*protocol.Publication, bufferedPubs []*pr
 		}
 	}
 	return recoveredPubs, maxSeenOffset, true
+}
+
+// continuesFrom reports whether the offsets after offset, of pubs and of filtered
+// pubs, follow it without a gap.
+func continuesFrom(offset uint64, pubs []*protocol.Publication, skippedOffsets []uint64) bool {
+	var offsets []uint64
+	for _, p := range pubs {
+		if p.Offset > offset {
+			offsets = append(offsets, p.Offset)
+		}
+	}
+	for _, o := range skippedOffsets {
+		if o > offset {
+			offsets = append(offsets, o)
+		}
+	}
+	slices.Sort(offsets)
+	offsets = slices.Compact(offsets)
+	for i, o := range offsets {
+		if o != offset+uint64(i)+1 {
+			return false
+		}
+	}
+	return true
 }

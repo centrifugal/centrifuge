@@ -27,7 +27,7 @@ func TestMergePublicationsNoBuffered(t *testing.T) {
 		{Offset: 1},
 		{Offset: 2},
 	}
-	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, nil)
+	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, nil, "", 0)
 	require.True(t, ok)
 	require.Len(t, pubs, 2)
 	// maxSeenOffset is now the max offset seen even without buffered pubs (the
@@ -45,7 +45,7 @@ func TestMergePublicationsBuffered(t *testing.T) {
 	bufferedPubs := []*protocol.Publication{
 		{Offset: 3},
 	}
-	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, bufferedPubs)
+	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, bufferedPubs, "", 0)
 	require.True(t, ok)
 	require.Len(t, pubs, 3)
 	require.Equal(t, uint64(3), maxSeenOffset)
@@ -64,7 +64,7 @@ func TestMergePublications_AllBufferedFiltered_NoBrokerPubs(t *testing.T) {
 		{Offset: 5, Time: -1},
 		{Offset: 6, Time: -1},
 	}
-	pubs, maxSeenOffset, ok := MergePublications(nil, bufferedPubs)
+	pubs, maxSeenOffset, ok := MergePublications(nil, bufferedPubs, "", 0)
 	require.True(t, ok,
 		"merge must succeed when no real pubs survive filtering; got ok=false (a downstream check would re-subscribe the client even though continuity is intact)")
 	require.Empty(t, pubs)
@@ -85,7 +85,7 @@ func TestMergePublications_AllBufferedFiltered_WithBrokerPubs(t *testing.T) {
 		{Offset: 6, Time: -1},
 		{Offset: 7, Time: -1},
 	}
-	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, bufferedPubs)
+	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, bufferedPubs, "", 0)
 	require.True(t, ok)
 	require.Len(t, pubs, 1)
 	require.Equal(t, uint64(5), pubs[0].Offset)
@@ -112,7 +112,7 @@ func TestMergePublications_OverlapDeduplicated(t *testing.T) {
 		{Offset: 3},
 		{Offset: 4},
 	}
-	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, bufferedPubs)
+	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, bufferedPubs, "", 0)
 	require.True(t, ok)
 	require.Equal(t, []uint64{1, 2, 3, 4}, pubOffsets(pubs))
 	require.Equal(t, uint64(4), maxSeenOffset)
@@ -129,7 +129,7 @@ func TestMergePublications_GapWithoutFiltered(t *testing.T) {
 	bufferedPubs := []*protocol.Publication{
 		{Offset: 4},
 	}
-	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, bufferedPubs)
+	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, bufferedPubs, "", 0)
 	require.False(t, ok)
 	require.Nil(t, pubs)
 	require.Zero(t, maxSeenOffset)
@@ -146,7 +146,7 @@ func TestMergePublications_GapCoveredByFiltered(t *testing.T) {
 		{Offset: 3, Time: -1},
 		{Offset: 4},
 	}
-	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, bufferedPubs)
+	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, bufferedPubs, "", 0)
 	require.True(t, ok)
 	require.Equal(t, []uint64{1, 4}, pubOffsets(pubs))
 	require.Equal(t, uint64(4), maxSeenOffset)
@@ -162,8 +162,35 @@ func TestMergePublications_GapPartiallyCoveredByFiltered(t *testing.T) {
 		{Offset: 2, Time: -1},
 		{Offset: 4},
 	}
-	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, bufferedPubs)
+	pubs, maxSeenOffset, ok := MergePublications(recoveredPubs, bufferedPubs, "", 0)
 	require.False(t, ok)
 	require.Nil(t, pubs)
 	require.Zero(t, maxSeenOffset)
+}
+
+// Buffered publications must continue the position the recovered ones were read
+// at: one lost by PUB/SUB right after it is a gap, also with nothing recovered.
+func TestMergePublicationsGapAfterReadPosition(t *testing.T) {
+	_, _, ok := MergePublications(nil, []*protocol.Publication{{Offset: 7}}, "e", 5)
+	require.False(t, ok)
+
+	_, _, ok = MergePublications([]*protocol.Publication{{Offset: 5}}, []*protocol.Publication{{Offset: 7}, {Offset: 8}}, "e", 5)
+	require.False(t, ok)
+
+	pubs, maxSeenOffset, ok := MergePublications(nil, []*protocol.Publication{{Offset: 6}, {Offset: 7}}, "e", 5)
+	require.True(t, ok)
+	require.Len(t, pubs, 2)
+	require.Equal(t, uint64(7), maxSeenOffset)
+
+	// A filtered publication fills its offset.
+	pubs, _, ok = MergePublications(nil, []*protocol.Publication{{Offset: 6, Time: -1}, {Offset: 7}}, "e", 5)
+	require.True(t, ok)
+	require.Len(t, pubs, 1)
+	_, _, ok = MergePublications(nil, []*protocol.Publication{{Offset: 7, Time: -1}}, "e", 5)
+	require.False(t, ok)
+
+	// The read knew nothing about the stream: buffered publications only need to
+	// follow each other.
+	_, _, ok = MergePublications(nil, []*protocol.Publication{{Offset: 7}, {Offset: 8}}, "", 0)
+	require.True(t, ok)
 }

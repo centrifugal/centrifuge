@@ -334,6 +334,13 @@ func (w *writer) enqueueMany(item ...queue.Item) *Disconnect {
 }
 
 func (w *writer) close(flushRemaining bool) error {
+	return w.closeWithLast(nil, flushRemaining)
+}
+
+// closeWithLast closes the writer like close, and with flushRemaining writes
+// last (if not nil) after the remaining messages: nothing can be written after
+// it, an enqueue fails once the queue is closed.
+func (w *writer) closeWithLast(last *queue.Item, flushRemaining bool) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
@@ -348,6 +355,9 @@ func (w *writer) close(flushRemaining bool) error {
 
 	if flushRemaining {
 		remaining := w.messages.CloseRemaining()
+		if last != nil {
+			remaining = append(remaining, *last)
+		}
 		if len(remaining) > 0 {
 			_ = w.config.WriteManyFn(remaining...)
 		}
