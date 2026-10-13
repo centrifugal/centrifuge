@@ -248,7 +248,20 @@ func (b *MemoryBroker) RemoveHistory(ch string) error {
 	return b.historyHub.remove(ch)
 }
 
+// numHistoryShards is the number of independently locked parts of the
+// in-memory history. Publications to different channels take different shard
+// locks, so they don't serialize on one lock (order within a channel comes from
+// MemoryBroker.pubLock).
+const numHistoryShards = 64
+
 type historyHub struct {
+	shards  [numHistoryShards]*historyShard
+	closeCh chan struct{}
+}
+
+// historyShard keeps the streams of the channels which hash to it, with their
+// expiration and removal schedules.
+type historyShard struct {
 	sync.RWMutex
 	streams         map[string]*memstream.Stream
 	nextExpireCheck int64
@@ -258,19 +271,25 @@ type historyHub struct {
 	nextRemoveCheck int64
 	removeQueue     priority.Queue
 	removes         map[string]int64
-	closeCh         chan struct{}
 }
 
 func newHistoryHub(historyMetaTTL time.Duration, closeCh chan struct{}) *historyHub {
-	return &historyHub{
-		streams:        make(map[string]*memstream.Stream),
-		expireQueue:    priority.MakeQueue(),
-		expires:        make(map[string]int64),
-		historyMetaTTL: historyMetaTTL,
-		removeQueue:    priority.MakeQueue(),
-		removes:        make(map[string]int64),
-		closeCh:        closeCh,
+	h := &historyHub{closeCh: closeCh}
+	for i := range h.shards {
+		h.shards[i] = &historyShard{
+			streams:        make(map[string]*memstream.Stream),
+			expireQueue:    priority.MakeQueue(),
+			expires:        make(map[string]int64),
+			historyMetaTTL: historyMetaTTL,
+			removeQueue:    priority.MakeQueue(),
+			removes:        make(map[string]int64),
+		}
 	}
+	return h
+}
+
+func (h *historyHub) shard(ch string) *historyShard {
+	return h.shards[index(ch, numHistoryShards)]
 }
 
 func (h *historyHub) close() {
@@ -278,91 +297,99 @@ func (h *historyHub) close() {
 }
 
 func (h *historyHub) runCleanups() {
-	go h.expireStreams()
-	go h.removeStreams()
+	go h.runEverySecond((*historyShard).removeStreams)
+	go h.runEverySecond((*historyShard).expireStreams)
 }
 
-func (h *historyHub) removeStreams() {
+// runEverySecond runs f on every shard once a second until the hub is closed.
+func (h *historyHub) runEverySecond(f func(*historyShard)) {
+	for {
+		select {
+		case <-time.After(time.Second):
+		case <-h.closeCh:
+			return
+		}
+		for _, s := range h.shards {
+			f(s)
+		}
+	}
+}
+
+func (h *historyShard) removeStreams() {
+	h.Lock()
+	defer h.Unlock()
+	if h.nextRemoveCheck == 0 || h.nextRemoveCheck > time.Now().Unix() {
+		return
+	}
 	var nextRemoveCheck int64
-	for {
-		select {
-		case <-time.After(time.Second):
-		case <-h.closeCh:
-			return
+	for h.removeQueue.Len() > 0 {
+		item := heap.Pop(&h.removeQueue).(*priority.Item)
+		expireAt := item.Priority
+		if expireAt > time.Now().Unix() {
+			heap.Push(&h.removeQueue, item)
+			nextRemoveCheck = expireAt
+			break
 		}
-		h.Lock()
-		if h.nextRemoveCheck == 0 || h.nextRemoveCheck > time.Now().Unix() {
-			h.Unlock()
+		ch := item.Value
+		exp, ok := h.removes[ch]
+		if !ok {
 			continue
 		}
-		nextRemoveCheck = 0
-		for h.removeQueue.Len() > 0 {
-			item := heap.Pop(&h.removeQueue).(*priority.Item)
-			expireAt := item.Priority
-			if expireAt > time.Now().Unix() {
-				heap.Push(&h.removeQueue, item)
-				nextRemoveCheck = expireAt
-				break
-			}
-			ch := item.Value
-			exp, ok := h.removes[ch]
-			if !ok {
-				continue
-			}
-			if exp <= expireAt {
-				delete(h.removes, ch)
-				delete(h.streams, ch)
-			} else {
-				heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: exp})
-			}
+		if exp <= expireAt {
+			delete(h.removes, ch)
+			delete(h.streams, ch)
+		} else {
+			heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: exp})
 		}
-		h.nextRemoveCheck = nextRemoveCheck
-		h.Unlock()
 	}
+	h.nextRemoveCheck = nextRemoveCheck
 }
 
-func (h *historyHub) expireStreams() {
+func (h *historyShard) expireStreams() {
+	h.Lock()
+	defer h.Unlock()
+	if h.nextExpireCheck == 0 || h.nextExpireCheck > time.Now().Unix() {
+		return
+	}
 	var nextExpireCheck int64
-	for {
-		select {
-		case <-time.After(time.Second):
-		case <-h.closeCh:
-			return
+	for h.expireQueue.Len() > 0 {
+		item := heap.Pop(&h.expireQueue).(*priority.Item)
+		expireAt := item.Priority
+		if expireAt > time.Now().Unix() {
+			heap.Push(&h.expireQueue, item)
+			nextExpireCheck = expireAt
+			break
 		}
-		h.Lock()
-		if h.nextExpireCheck == 0 || h.nextExpireCheck > time.Now().Unix() {
-			h.Unlock()
+		ch := item.Value
+		exp, ok := h.expires[ch]
+		if !ok {
 			continue
 		}
-		nextExpireCheck = 0
-		for h.expireQueue.Len() > 0 {
-			item := heap.Pop(&h.expireQueue).(*priority.Item)
-			expireAt := item.Priority
-			if expireAt > time.Now().Unix() {
-				heap.Push(&h.expireQueue, item)
-				nextExpireCheck = expireAt
-				break
+		if exp <= expireAt {
+			delete(h.expires, ch)
+			if stream, ok := h.streams[ch]; ok {
+				stream.Clear()
 			}
-			ch := item.Value
-			exp, ok := h.expires[ch]
-			if !ok {
-				continue
-			}
-			if exp <= expireAt {
-				delete(h.expires, ch)
-				if stream, ok := h.streams[ch]; ok {
-					stream.Clear()
-				}
-			} else {
-				heap.Push(&h.expireQueue, &priority.Item{Value: ch, Priority: exp})
-			}
+		} else {
+			heap.Push(&h.expireQueue, &priority.Item{Value: ch, Priority: exp})
 		}
-		h.nextExpireCheck = nextExpireCheck
-		h.Unlock()
 	}
+	h.nextExpireCheck = nextExpireCheck
 }
 
 func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (StreamPosition, *Publication, bool, error) {
+	return h.shard(ch).add(ch, pub, opts)
+}
+
+func (h *historyHub) get(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
+	return h.shard(ch).get(ch, opts)
+}
+
+func (h *historyHub) remove(ch string) error {
+	return h.shard(ch).remove(ch)
+}
+
+func (h *historyShard) add(ch string, pub *Publication, opts PublishOptions) (StreamPosition, *Publication, bool, error) {
 	h.Lock()
 	defer h.Unlock()
 
@@ -435,7 +462,7 @@ func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (Stre
 }
 
 // Lock must be held outside.
-func (h *historyHub) createStream(ch string) StreamPosition {
+func (h *historyShard) createStream(ch string) StreamPosition {
 	stream := memstream.New()
 	h.streams[ch] = stream
 	streamPosition := StreamPosition{}
@@ -451,14 +478,14 @@ func getPosition(stream *memstream.Stream) StreamPosition {
 	return streamPosition
 }
 
-func (h *historyHub) get(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
+func (h *historyShard) get(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
 	h.Lock()
 	defer h.Unlock()
 	return h.getLocked(ch, opts)
 }
 
 // Lock must be held outside.
-func (h *historyHub) getLocked(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
+func (h *historyShard) getLocked(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
 	filter := opts.Filter
 
 	historyMetaTTL := opts.MetaTTL
@@ -526,7 +553,7 @@ func (h *historyHub) getLocked(ch string, opts HistoryOptions) ([]*Publication, 
 	return pubs, streamPosition, nil
 }
 
-func (h *historyHub) remove(ch string) error {
+func (h *historyShard) remove(ch string) error {
 	h.Lock()
 	defer h.Unlock()
 	if stream, ok := h.streams[ch]; ok {

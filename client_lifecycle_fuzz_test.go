@@ -2052,9 +2052,10 @@ func (w *fzWorld) streamPublish(ch string, kind byte, i int) int {
 		if kind == fzPubEpoch && i == 0 {
 			// As when the stream's meta expires: the next publication starts a
 			// new epoch.
-			w.broker.historyHub.Lock()
-			delete(w.broker.historyHub.streams, ch)
-			w.broker.historyHub.Unlock()
+			hs := w.broker.historyHub.shard(ch)
+			hs.Lock()
+			delete(hs.streams, ch)
+			hs.Unlock()
 			w.tracef("  [history reset %s]", ch)
 		}
 		res, _ := w.node.Publish(ch, data, WithHistory(100, time.Minute))
