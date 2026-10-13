@@ -5899,18 +5899,21 @@ func (c *Client) writeOffsetlessPublication(ch string, pub *protocol.Publication
 		return nil
 	}
 
+	// The client is in the hub from addSubscription on, but subscribed only once the
+	// subscription is committed. A subscribe attempt which fails after
+	// addSubscription cancels its buffer before it leaves the hub: without this
+	// check its publications would reach the client meanwhile.
+	c.mu.RLock()
+	channelContext, ok := c.channels[ch]
+	c.mu.RUnlock()
+	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
+		return nil
+	}
+
 	if prep.deltaSub {
 		// For this path (no Offset) delta may come from channel medium layer, so that we can use it
 		// here if allowed for the connection.
-		c.mu.RLock()
-		channelContext, ok := c.channels[ch]
-		if !ok {
-			c.mu.RUnlock()
-			return nil
-		}
 		deltaAllowed := channelHasFlag(channelContext.flags, flagDeltaAllowed)
-		c.mu.RUnlock()
-
 		if deltaAllowed {
 			if c.node.logEnabled(LogLevelTrace) {
 				c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
