@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/memstream"
+
 	"github.com/centrifugal/protocol"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -316,13 +318,43 @@ func TestMemoryBrokerSubscribeUnsubscribe(t *testing.T) {
 	require.NoError(t, e.Unsubscribe("channel"))
 }
 
+// testNumStreams returns the number of streams in all shards.
+func (h *historyHub) testNumStreams() int {
+	n := 0
+	for _, s := range h.shards {
+		s.RLock()
+		n += len(s.streams)
+		s.RUnlock()
+	}
+	return n
+}
+
+// testStreamGetAll reads the whole stream of ch under its shard lock.
+func (h *historyHub) testStreamGetAll(ch string) ([]memstream.Item, uint64, error) {
+	s := h.shard(ch)
+	s.RLock()
+	defer s.RUnlock()
+	return s.streams[ch].Get(0, false, -1, false)
+}
+
+// testRemoveScheduled reports whether any shard has a stream removal scheduled.
+func (h *historyHub) testRemoveScheduled() bool {
+	for _, s := range h.shards {
+		s.RLock()
+		scheduled := s.nextRemoveCheck != 0
+		s.RUnlock()
+		if scheduled {
+			return true
+		}
+	}
+	return false
+}
+
 func TestMemoryHistoryHub(t *testing.T) {
 	t.Parallel()
 	h := newHistoryHub(0, make(chan struct{}))
 	h.runCleanups()
-	h.RLock()
-	require.Equal(t, 0, len(h.streams))
-	h.RUnlock()
+	require.Equal(t, 0, h.testNumStreams())
 	ch1 := "channel1"
 	ch2 := "channel2"
 	pub := newTestPublication()
@@ -348,17 +380,15 @@ func TestMemoryHistoryHub(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// test that stream data cleaned up by periodic task
-	h.RLock()
-	require.Equal(t, 2, len(h.streams))
-	items, top, err := h.streams[ch1].Get(0, false, -1, false)
+	require.Equal(t, 2, h.testNumStreams())
+	items, top, err := h.testStreamGetAll(ch1)
 	require.NoError(t, err)
 	require.Nil(t, items)
 	require.NotZero(t, top)
-	items, top, err = h.streams[ch2].Get(0, false, -1, false)
+	items, top, err = h.testStreamGetAll(ch2)
 	require.NoError(t, err)
 	require.Nil(t, items)
 	require.NotZero(t, top)
-	h.RUnlock()
 	hist, _, err = h.get(ch1, HistoryOptions{
 		Filter: HistoryFilter{
 			Limit: -1,
@@ -407,17 +437,13 @@ func TestMemoryHistoryHubMetaTTL(t *testing.T) {
 	ch1 := "channel1"
 	ch2 := "channel2"
 	pub := newTestPublication()
-	h.RLock()
-	require.Equal(t, int64(0), h.nextRemoveCheck)
-	h.RUnlock()
+	require.False(t, h.testRemoveScheduled())
 	_, _, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
 	_, _, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
 	_, _, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
 	_, _, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
-	h.RLock()
-	require.True(t, h.nextRemoveCheck > 0)
-	require.Equal(t, 2, len(h.streams))
-	h.RUnlock()
+	require.True(t, h.testRemoveScheduled())
+	require.Equal(t, 2, h.testNumStreams())
 	pubs, _, err := h.get(ch1, HistoryOptions{
 		Filter: HistoryFilter{Limit: -1},
 	})
@@ -433,9 +459,7 @@ func TestMemoryHistoryHubMetaTTL(t *testing.T) {
 	// the TTL under load (e.g. the full -race suite), so poll rather than asserting
 	// once after a fixed sleep.
 	require.Eventually(t, func() bool {
-		h.RLock()
-		defer h.RUnlock()
-		return len(h.streams) == 0 && h.nextRemoveCheck == 0
+		return h.testNumStreams() == 0 && !h.testRemoveScheduled()
 	}, 10*time.Second, 50*time.Millisecond, "history streams should be cleaned up by the periodic task after TTL")
 }
 
@@ -447,17 +471,13 @@ func TestMemoryHistoryHubMetaTTLPerChannel(t *testing.T) {
 	ch1 := "channel1"
 	ch2 := "channel2"
 	pub := newTestPublication()
-	h.RLock()
-	require.Equal(t, int64(0), h.nextRemoveCheck)
-	h.RUnlock()
+	require.False(t, h.testRemoveScheduled())
 	_, _, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
 	_, _, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
 	_, _, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
 	_, _, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
-	h.RLock()
-	require.True(t, h.nextRemoveCheck > 0)
-	require.Equal(t, 2, len(h.streams))
-	h.RUnlock()
+	require.True(t, h.testRemoveScheduled())
+	require.Equal(t, 2, h.testNumStreams())
 	pubs, _, err := h.get(ch1, HistoryOptions{
 		Filter:  HistoryFilter{Limit: -1},
 		MetaTTL: time.Second,
@@ -475,9 +495,7 @@ func TestMemoryHistoryHubMetaTTLPerChannel(t *testing.T) {
 	// the TTL under load (e.g. the full -race suite), so poll rather than asserting
 	// once after a fixed sleep.
 	require.Eventually(t, func() bool {
-		h.RLock()
-		defer h.RUnlock()
-		return len(h.streams) == 0 && h.nextRemoveCheck == 0
+		return h.testNumStreams() == 0 && !h.testRemoveScheduled()
 	}, 10*time.Second, 50*time.Millisecond, "history streams should be cleaned up by the periodic task after TTL")
 }
 
@@ -898,9 +916,7 @@ func TestMemoryHistoryHubPrevPub(t *testing.T) {
 	t.Parallel()
 	h := newHistoryHub(0, make(chan struct{}))
 	h.runCleanups()
-	h.RLock()
-	require.Equal(t, 0, len(h.streams))
-	h.RUnlock()
+	require.Equal(t, 0, h.testNumStreams())
 	defer h.close()
 	ch1 := "channel1"
 	pub := newTestPublication()
