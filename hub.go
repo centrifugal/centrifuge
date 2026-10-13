@@ -1146,6 +1146,9 @@ func (s *subShard) broadcastPublication(
 	// about insufficient state in the stream.
 	var maxLagExceeded bool
 	now := time.Now()
+	// Read once here, not per subscriber: subscribers with positioning stamp it as
+	// the time of their last position check.
+	nowUnix := now.Unix()
 	if pubTime > 0 {
 		timeLagMilli := now.UnixMilli() - pubTime
 		if s.maxTimeLagMilli > 0 && timeLagMilli > s.maxTimeLagMilli {
@@ -1414,7 +1417,7 @@ func (s *subShard) broadcastPublication(
 
 		// Even filtered publications need to reach writePublication for offset tracking,
 		// but they will be marked as filtered so the client can skip them without adding to the queue.
-		_ = sub.client.writePublication(channel, fullPub, prepValue, sp, maxLagExceeded, batchConfig)
+		_ = sub.client.writePublication(channel, fullPub, prepValue, sp, maxLagExceeded, batchConfig, nowUnix)
 	}
 	if jsonEncodeErr != nil && s.logger.enabled(LogLevelWarn) {
 		// Log that we had clients with inappropriate protocol, and point to the first such client.
