@@ -12,6 +12,7 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/redispartition"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/redis/rueidis"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1517,6 +1518,150 @@ func TestRedisMapBroker_CleanupRegistration(t *testing.T) {
 			shardWrapper.shard.client.B().Zscore().Key(cleanupKey).Member(channel).Build(),
 		).AsFloat64()
 		require.Error(t, err, "Channel should be removed from cleanup ZSET after all entries expired")
+	})
+}
+
+func newCleanupTestBroker(t *testing.T, mb redisMapBrokerFactory) *RedisMapBroker {
+	node, _ := New(Config{
+		Map: MapConfig{
+			GetMapChannelOptions: func(channel string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:   MapModeEphemeral,
+					KeyTTL: 10 * time.Second,
+				}
+			},
+		},
+	})
+	// Own prefix: the test drives a whole cleanup partition.
+	prefix := "cleanup_test_" + randString(8)
+	return mb.makeCustom(t, node, nil, func(c *RedisMapBrokerConfig) {
+		c.Prefix = prefix
+		c.CleanupInterval = -1
+	})
+}
+
+func cleanupRegistrationScore(t *testing.T, broker *RedisMapBroker, channel string) (int64, bool) {
+	shard := broker.shards[0].shard
+	cleanupKey := broker.cleanupRegistrationKeyForChannel(shard, channel)
+	res := shard.client.Do(context.Background(), shard.client.B().Zscore().Key(cleanupKey).Member(channel).Build())
+	if rueidis.IsRedisNil(res.Error()) {
+		return 0, false
+	}
+	score, err := res.AsFloat64()
+	require.NoError(t, err)
+	return int64(score), true
+}
+
+func runCleanupPartition(t *testing.T, broker *RedisMapBroker, channel string, now int64) {
+	shard := broker.shards[0].shard
+	cleanupKey := broker.cleanupRegistrationKeyForChannel(shard, channel)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		broker.cleanupPartition(ctx, shard, cleanupKey, now)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("cleanup partition did not finish")
+	}
+}
+
+// TestRedisMapBroker_CleanupStaleRegistration verifies that a registration due
+// before the channel's earliest expiry (a refreshed key moved past it) moves to
+// that expiry, instead of keeping the cleanup worker spinning on the channel.
+func TestRedisMapBroker_CleanupStaleRegistration(t *testing.T) {
+	t.Parallel()
+	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
+		broker := newCleanupTestBroker(t, mb)
+		ctx := context.Background()
+		channel := randomChannel("test_cleanup_stale_reg")
+
+		_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{Data: []byte(`{"v":1}`)})
+		require.NoError(t, err)
+		expireAt, ok := cleanupRegistrationScore(t, broker, channel)
+		require.True(t, ok)
+
+		// A republish only lowers the registration, so a refreshed key leaves it
+		// behind its own expiry. Recreate that state.
+		shard := broker.shards[0].shard
+		cleanupKey := broker.cleanupRegistrationKeyForChannel(shard, channel)
+		staleScore := expireAt - 5000
+		require.NoError(t, shard.client.Do(ctx, shard.client.B().Zadd().Key(cleanupKey).ScoreMember().
+			ScoreMember(float64(staleScore), channel).Build()).Error())
+
+		runCleanupPartition(t, broker, channel, staleScore+1000)
+
+		score, ok := cleanupRegistrationScore(t, broker, channel)
+		require.True(t, ok)
+		require.Equal(t, expireAt, score)
+
+		stateRes, err := broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+		require.NoError(t, err)
+		require.Len(t, stateRes.Publications, 1)
+
+		// The entry still expires on time.
+		runCleanupPartition(t, broker, channel, expireAt)
+		_, ok = cleanupRegistrationScore(t, broker, channel)
+		require.False(t, ok)
+		stateRes, err = broker.ReadState(ctx, channel, MapReadStateOptions{Limit: 100})
+		require.NoError(t, err)
+		require.Empty(t, stateRes.Publications)
+	})
+}
+
+// TestRedisMapBroker_CleanupRegistrationOnRemove verifies that removing keys
+// moves the registration to the next expiry and drops it with the last key.
+func TestRedisMapBroker_CleanupRegistrationOnRemove(t *testing.T) {
+	t.Parallel()
+	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
+		broker := newCleanupTestBroker(t, mb)
+		ctx := context.Background()
+		channel := randomChannel("test_cleanup_remove_reg")
+
+		_, err := broker.Publish(ctx, channel, "key1", MapPublishOptions{Data: []byte(`{"v":1}`)})
+		require.NoError(t, err)
+		first, ok := cleanupRegistrationScore(t, broker, channel)
+		require.True(t, ok)
+		time.Sleep(5 * time.Millisecond)
+		_, err = broker.Publish(ctx, channel, "key2", MapPublishOptions{Data: []byte(`{"v":1}`)})
+		require.NoError(t, err)
+
+		_, err = broker.Remove(ctx, channel, "key1", MapRemoveOptions{})
+		require.NoError(t, err)
+		score, ok := cleanupRegistrationScore(t, broker, channel)
+		require.True(t, ok)
+		require.Greater(t, score, first)
+
+		_, err = broker.Remove(ctx, channel, "key2", MapRemoveOptions{})
+		require.NoError(t, err)
+		_, ok = cleanupRegistrationScore(t, broker, channel)
+		require.False(t, ok)
+	})
+}
+
+// TestRedisMapBroker_CleanupRegistrationWithoutEntries verifies that the cleanup
+// worker drops a due registration of a channel that has no entries left.
+func TestRedisMapBroker_CleanupRegistrationWithoutEntries(t *testing.T) {
+	t.Parallel()
+	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
+		broker := newCleanupTestBroker(t, mb)
+		ctx := context.Background()
+		channel := randomChannel("test_cleanup_empty_reg")
+
+		shard := broker.shards[0].shard
+		cleanupKey := broker.cleanupRegistrationKeyForChannel(shard, channel)
+		now := time.Now().UnixMilli()
+		require.NoError(t, shard.client.Do(ctx, shard.client.B().Zadd().Key(cleanupKey).ScoreMember().
+			ScoreMember(float64(now-1000), channel).Build()).Error())
+
+		runCleanupPartition(t, broker, channel, now)
+		_, ok := cleanupRegistrationScore(t, broker, channel)
+		require.False(t, ok)
 	})
 }
 

@@ -972,6 +972,10 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 			if h.nextKeyExpireCheck == 0 || h.nextKeyExpireCheck > expireAt {
 				h.nextKeyExpireCheck = expireAt
 			}
+		} else {
+			// The key no longer expires (KeyTTL was turned off): drop the deadline
+			// of a previous publish, its heap entry is skipped when popped.
+			delete(h.keyExpires, h.makeChKey(ch, key))
 		}
 	}
 

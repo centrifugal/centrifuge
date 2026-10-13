@@ -3257,6 +3257,54 @@ func TestMemoryMapBroker_KeyTTLRefresh(t *testing.T) {
 	require.Len(t, stateRes.Publications, 1, "key should still exist after TTL refresh")
 }
 
+// TestMemoryMapBroker_KeyTTLDisabled verifies that a key republished after its
+// namespace switched to persistent mode loses its deadline: it doesn't expire,
+// and its tracking entry is dropped instead of being kept forever.
+func TestMemoryMapBroker_KeyTTLDisabled(t *testing.T) {
+	t.Parallel()
+	node, _ := New(Config{})
+	var persistent atomic.Bool
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		opts := MapChannelOptions{
+			Mode:       MapModeRecoverable,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     time.Millisecond,
+		}
+		if persistent.Load() {
+			opts.Mode = MapModePersistent
+			opts.KeyTTL = 0
+		}
+		return opts
+	}
+	broker := newTestMemoryMapBroker(t, node)
+	ctx := context.Background()
+	ch := "test_key_ttl_disabled"
+
+	_, err := broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+	persistent.Store(true)
+	_, err = broker.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v2")})
+	require.NoError(t, err)
+
+	broker.mapHub.Lock()
+	require.Empty(t, broker.mapHub.keyExpires)
+	broker.mapHub.Unlock()
+
+	// Run expiration passes until the first publish's deadline is popped.
+	require.Eventually(t, func() bool {
+		var next int64
+		broker.mapHub.expireKeysIteration(&next)
+		broker.mapHub.Lock()
+		defer broker.mapHub.Unlock()
+		return broker.mapHub.keyExpireQueue.Len() == 0
+	}, 5*time.Second, time.Millisecond)
+
+	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, stateRes.Publications, 1)
+}
+
 // TestMemoryMapBroker_StreamTTLExpiration tests that stream entries are cleared after StreamTTL.
 func TestMemoryMapBroker_StreamTTLExpiration(t *testing.T) {
 	t.Parallel()
