@@ -250,12 +250,30 @@ type ReadBufferPool struct {
 // NewReadBufferPool creates a pool of read buffers of the given size. Zero
 // size means the default one.
 func NewReadBufferPool(size int) *ReadBufferPool {
-	if size == 0 {
-		size = defaultReadBufferSize
-	} else if size < maxControlFramePayloadSize {
-		size = maxControlFramePayloadSize
+	return &ReadBufferPool{size: effectiveReadBufferSize(size)}
+}
+
+// sharedReadBufferPools holds a *ReadBufferPool per effective read buffer size.
+var sharedReadBufferPools sync.Map
+
+// SharedReadBufferPool returns the pool of read buffers of the given size
+// shared by all its callers. Zero size means the default one.
+func SharedReadBufferPool(size int) *ReadBufferPool {
+	size = effectiveReadBufferSize(size)
+	if p, ok := sharedReadBufferPools.Load(size); ok {
+		return p.(*ReadBufferPool)
 	}
-	return &ReadBufferPool{size: size}
+	p, _ := sharedReadBufferPools.LoadOrStore(size, &ReadBufferPool{size: size})
+	return p.(*ReadBufferPool)
+}
+
+// effectiveReadBufferSize returns the read buffer size used for the configured
+// one: zero means the default, and a buffer must fit a control frame payload.
+func effectiveReadBufferSize(size int) int {
+	if size == 0 {
+		return defaultReadBufferSize
+	}
+	return max(size, maxControlFramePayloadSize)
 }
 
 // Size returns the size of read buffers in the pool.
@@ -309,7 +327,6 @@ type Conn struct {
 	// as bits 0-15 = code, bit 16 = incoming flag; 0 means none observed yet.
 	closeCode        atomic.Int32
 	firstByte        [1]byte // first byte of a frame read without a read buffer.
-	frameRead        bool    // whether a frame was read, see readFrameStartPooled.
 	compressionLevel int
 	readMaskPos      int
 	writeBufSize     int
@@ -326,13 +343,7 @@ type Conn struct {
 
 func newConn(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int, readBufferPool *ReadBufferPool, writeBufferPool BufferPool, br *bufio.Reader, writeBuf []byte) *Conn {
 	if br == nil && readBufferPool == nil {
-		if readBufferSize == 0 {
-			readBufferSize = defaultReadBufferSize
-		} else if readBufferSize < maxControlFramePayloadSize {
-			// must be large enough for control frame
-			readBufferSize = maxControlFramePayloadSize
-		}
-		br = bufio.NewReaderSize(conn, readBufferSize)
+		br = bufio.NewReaderSize(conn, effectiveReadBufferSize(readBufferSize))
 	}
 
 	if writeBufferSize <= 0 {
@@ -407,19 +418,16 @@ func (c *Conn) writeFatal(err error) error {
 // readFrameStartPooled reads the first two bytes of a frame for a connection
 // with a read buffer pool. It returns the read buffer to the pool if nothing is
 // buffered, then waits for the frame reading its first byte directly from the
-// connection. The reader passed to newConn (from the hijacked HTTP connection)
-// is kept until the first frame is read, it is about to arrive and needs a
-// buffer anyway.
+// connection.
 //
 // The buffer goes to a pool shared by other connections, so control frame
 // payloads passed to handlers are overwritten by other connections' data once
 // the handler returns.
 func (c *Conn) readFrameStartPooled() (byte, byte, error) {
-	if c.br != nil && c.br.Buffered() == 0 && c.frameRead {
+	if c.br != nil && c.br.Buffered() == 0 {
 		c.readPool.put(c.br)
 		c.br = nil
 	}
-	c.frameRead = true
 	if c.br == nil {
 		if err := c.readFirstByte(); err != nil {
 			return 0, 0, err
@@ -436,6 +444,16 @@ func (c *Conn) readFrameStartPooled() (byte, byte, error) {
 		return 0, 0, err
 	}
 	return p[0], p[1], nil
+}
+
+// releaseReadBuffer returns the read buffer to the pool once reading failed:
+// read errors are permanent, the buffer is not used again. Called by the
+// reading goroutine only, the one which uses the buffer.
+func (c *Conn) releaseReadBuffer() {
+	if c.readPool != nil && c.br != nil {
+		c.readPool.put(c.br)
+		c.br = nil
+	}
 }
 
 func (c *Conn) readFirstByte() error {
@@ -455,9 +473,17 @@ func (c *Conn) readFirstByte() error {
 	return io.ErrNoProgress
 }
 
-// readLarge reads n bytes not fitting the read buffer: a control frame payload
-// larger than the small read buffer used for HTTP/2. Rare, so allocate instead
-// of making the buffer bigger.
+// readControlPayload reads a control frame payload. One larger than the read
+// buffer (the small one used for HTTP/2) is read into a new slice: rare, so
+// allocate instead of making the buffer bigger.
+func (c *Conn) readControlPayload(n int) ([]byte, error) {
+	if n > c.br.Size() {
+		return c.readLarge(n)
+	}
+	return c.read(n)
+}
+
+// readLarge reads n bytes not fitting the read buffer.
 func (c *Conn) readLarge(n int) ([]byte, error) {
 	p := make([]byte, n)
 	_, err := io.ReadFull(c.br, p)
@@ -469,13 +495,8 @@ func (c *Conn) readLarge(n int) ([]byte, error) {
 
 func (c *Conn) read(n int) ([]byte, error) {
 	p, err := c.br.Peek(n)
-	if err != nil {
-		if err == bufio.ErrBufferFull {
-			return c.readLarge(n)
-		}
-		if err == io.EOF {
-			err = errUnexpectedEOF
-		}
+	if err == io.EOF {
+		err = errUnexpectedEOF
 	}
 	_, _ = c.br.Discard(len(p))
 	return p, err
@@ -1034,7 +1055,7 @@ func (c *Conn) advanceFrame() (int, error) {
 
 	var payload []byte
 	if c.readRemaining > 0 {
-		payload, err = c.read(int(c.readRemaining))
+		payload, err = c.readControlPayload(int(c.readRemaining))
 		_ = c.setReadRemaining(0)
 		if err != nil {
 			return noFrame, err
@@ -1140,6 +1161,7 @@ func (c *Conn) NextReader() (messageType int, r io.Reader, err error) {
 		}
 	}
 
+	c.releaseReadBuffer()
 	return noFrame, nil, c.readErr
 }
 
@@ -1168,6 +1190,9 @@ func (r *messageReader) Read(b []byte) (int, error) {
 			if c.readRemaining > 0 && c.readErr == io.EOF {
 				c.readErr = errUnexpectedEOF
 			}
+			if c.readErr != nil {
+				c.releaseReadBuffer()
+			}
 			return n, c.readErr
 		}
 
@@ -1185,6 +1210,7 @@ func (r *messageReader) Read(b []byte) (int, error) {
 		}
 	}
 
+	c.releaseReadBuffer()
 	err := c.readErr
 	if err == io.EOF && c.messageReader == r {
 		err = errUnexpectedEOF
@@ -1243,6 +1269,7 @@ func (l *limitedReader) limitExceeded() error {
 	// every subsequent NextReader call returns ErrReadLimit, honoring the gorilla
 	// contract that read errors are permanent.
 	l.c.readErr = ErrReadLimit
+	l.c.releaseReadBuffer()
 	return ErrReadLimit
 }
 

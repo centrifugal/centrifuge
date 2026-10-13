@@ -152,9 +152,6 @@ type WebsocketHandler struct {
 
 var writeBufferPool = &sync.Pool{}
 
-// readBufferPools holds a *websocket.ReadBufferPool per effective read buffer size.
-var readBufferPools sync.Map
-
 // NewWebsocketHandler creates new WebsocketHandler.
 func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 	upgrade := &websocket.Upgrader{
@@ -164,9 +161,7 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 		DisableHTTP1Upgrade: config.DisableHTTP1Upgrade,
 	}
 	if config.UseReadBufferPool {
-		pool := websocket.NewReadBufferPool(config.ReadBufferSize)
-		actual, _ := readBufferPools.LoadOrStore(pool.Size(), pool)
-		upgrade.ReadBufferPool = actual.(*websocket.ReadBufferPool)
+		upgrade.ReadBufferPool = websocket.SharedReadBufferPool(config.ReadBufferSize)
 	}
 	if config.UseWriteBufferPool {
 		upgrade.WriteBufferPool = writeBufferPool

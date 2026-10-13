@@ -62,10 +62,12 @@ func TestReadBufferPool(t *testing.T) {
 
 // countingListener counts 1-byte reads of accepted connections: a connection
 // with a read buffer pool waits for a frame with such a read after returning
-// its read buffer, and takes a buffer from the pool once it returns.
+// its read buffer, and takes a buffer from the pool once it returns. Each
+// change of the counters is signalled on changed.
 type countingListener struct {
 	net.Listener
 	started, returned *atomic.Int64
+	changed           chan struct{}
 }
 
 func (l countingListener) Accept() (net.Conn, error) {
@@ -86,8 +88,63 @@ func (c countingConn) Read(p []byte) (int, error) {
 		return c.Conn.Read(p)
 	}
 	c.l.started.Add(1)
+	notify(c.l.changed)
+	defer notify(c.l.changed)
 	defer c.l.returned.Add(1)
 	return c.Conn.Read(p)
+}
+
+// readingListener counts reads in progress on accepted connections: a
+// connection waiting for the next frame has one. Each change is signalled on
+// changed.
+type readingListener struct {
+	net.Listener
+	reading *atomic.Int64
+	changed chan struct{}
+}
+
+func (l readingListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return readingConn{Conn: c, l: l}, nil
+}
+
+type readingConn struct {
+	net.Conn
+	l readingListener
+}
+
+func (c readingConn) Read(p []byte) (int, error) {
+	c.l.reading.Add(1)
+	notify(c.l.changed)
+	defer notify(c.l.changed)
+	defer c.l.reading.Add(-1)
+	return c.Conn.Read(p)
+}
+
+// notify signals a change without blocking: changed has a buffer of one, a
+// waiter rechecks its condition after each signal.
+func notify(changed chan struct{}) {
+	select {
+	case changed <- struct{}{}:
+	default:
+	}
+}
+
+// waitFor waits until cond holds, checking it again on each signal on changed.
+func waitFor(tb testing.TB, changed <-chan struct{}, cond func() bool, what string) {
+	tb.Helper()
+	timeout := time.NewTimer(10 * time.Second)
+	defer timeout.Stop()
+	for !cond() {
+		select {
+		case <-changed:
+		case <-timeout.C:
+			tb.Fatal(what)
+		}
+	}
 }
 
 func TestReadBufferPoolIdle(t *testing.T) {
@@ -102,7 +159,8 @@ func TestReadBufferPoolIdle(t *testing.T) {
 		}
 		serverConn <- c
 	}))
-	s.Listener = countingListener{Listener: s.Listener, started: &started, returned: &returned}
+	changed := make(chan struct{}, 1)
+	s.Listener = countingListener{Listener: s.Listener, started: &started, returned: &returned, changed: changed}
 	s.Start()
 	defer s.Close()
 
@@ -114,14 +172,6 @@ func TestReadBufferPoolIdle(t *testing.T) {
 	defer func() { _ = wc.Close() }()
 	rc := <-serverConn
 	defer func() { _ = rc.Close() }()
-
-	// The hijacked reader is used for the first frames if it has the pool's
-	// size (true for net/http at the time of writing), otherwise the first
-	// frame takes a reader from the pool.
-	var firstGets int64
-	if rc.br == nil {
-		firstGets = 1
-	}
 
 	messages := make(chan string)
 	go func() {
@@ -139,13 +189,7 @@ func TestReadBufferPoolIdle(t *testing.T) {
 	// buffer.
 	waitIdle := func() {
 		t.Helper()
-		deadline := time.Now().Add(5 * time.Second)
-		for started.Load()-returned.Load() != 1 {
-			if time.Now().After(deadline) {
-				t.Fatal("read buffer not returned to pool")
-			}
-			time.Sleep(time.Millisecond)
-		}
+		waitFor(t, changed, func() bool { return started.Load()-returned.Load() == 1 }, "read buffer not returned to pool")
 	}
 
 	// expectGets sends messages in one write and checks the number of readers
@@ -177,8 +221,8 @@ func TestReadBufferPoolIdle(t *testing.T) {
 		}
 	}
 
-	// The first frame is read with the hijacked reader, which then goes to the pool.
-	expectGets([]string{`{"id":1,"connect":{"token":"` + strings.Repeat("t", 300) + `"}}`}, firstGets, firstGets)
+	// The first frame takes a reader from the pool, where the hijacked reader went.
+	expectGets([]string{`{"id":1,"connect":{"token":"` + strings.Repeat("t", 300) + `"}}`}, 1, 1)
 	// Later frames take a reader from the pool, one for frames arriving together.
 	expectGets([]string{"{}"}, 1, 1)
 	expectGets([]string{strings.Repeat("x", 10000)}, 1, 1)
@@ -209,8 +253,9 @@ func TestReadBufferPoolIdle(t *testing.T) {
 	}
 }
 
-// TestReadBufferPoolHijackedReaderSize checks that the hijacked reader is
-// used only if it has the pool's size.
+// TestReadBufferPoolHijackedReaderSize checks that the hijacked reader goes to
+// the pool only if it has the pool's size: connections read with readers of
+// the pool's size whatever it is.
 func TestReadBufferPoolHijackedReaderSize(t *testing.T) {
 	for _, size := range []int{0, 128, 8192} {
 		upgrader := Upgrader{ReadBufferPool: NewReadBufferPool(size)}
@@ -229,8 +274,8 @@ func TestReadBufferPoolHijackedReaderSize(t *testing.T) {
 		}
 		_ = resp.Body.Close()
 		rc := <-serverConn
-		if rc.br != nil && rc.br.Size() != upgrader.ReadBufferPool.Size() {
-			t.Fatalf("%d: hijacked reader of size %d used", size, rc.br.Size())
+		if rc.br != nil {
+			t.Fatalf("%d: connection starts with a read buffer", size)
 		}
 		if err := wc.WriteMessage(TextMessage, []byte("hello")); err != nil {
 			t.Fatal(err)
@@ -238,9 +283,58 @@ func TestReadBufferPoolHijackedReaderSize(t *testing.T) {
 		if _, p, err := rc.ReadMessage(); err != nil || string(p) != "hello" {
 			t.Fatalf("%d: got %q, %v", size, p, err)
 		}
+		// The reader of the message is kept until the next frame starts.
+		if rc.br.Size() != upgrader.ReadBufferPool.Size() {
+			t.Fatalf("%d: read with a reader of size %d", size, rc.br.Size())
+		}
 		_ = wc.Close()
 		_ = rc.Close()
 		s.Close()
+	}
+}
+
+// TestReadBufferPoolReleasedOnReadError checks that a connection gives its
+// read buffer back to the pool when reading fails: read errors are permanent.
+func TestReadBufferPoolReleasedOnReadError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  []byte // what the client sends before it goes away.
+	}{
+		// Fails reading the frame header (NextReader).
+		{"header", []byte{0x81, 0x80 | 10, 1, 2}},
+		// Fails reading the payload (the message reader).
+		{"payload", []byte{0x81, 0x80 | 10, 1, 2, 3, 4, 'a', 'b', 'c'}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upgrader := Upgrader{ReadBufferPool: NewReadBufferPool(0)}
+			serverConn := make(chan *Conn, 1)
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				c, _, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				serverConn <- c
+			}))
+			defer s.Close()
+			wc, resp, _, err := (&Dialer{}).Dial("ws"+strings.TrimPrefix(s.URL, "http"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			rc := <-serverConn
+			defer func() { _ = rc.Close() }()
+			if _, err := wc.NetConn().Write(tc.raw); err != nil {
+				t.Fatal(err)
+			}
+			_ = wc.NetConn().Close()
+			if _, _, err := rc.ReadMessage(); err == nil {
+				t.Fatal("expected a read error")
+			}
+			if rc.br != nil {
+				t.Fatal("read buffer kept after a read error")
+			}
+		})
 	}
 }
 
@@ -411,7 +505,9 @@ func BenchmarkConnectFirstFrame(b *testing.B) {
 		}
 		b.Run(name, func(b *testing.B) {
 			read := make(chan struct{}, 1)
-			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var reading atomic.Int64
+			changed := make(chan struct{}, 1)
+			s := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				c, _, err := upgrader.Upgrade(w, r, nil)
 				if err != nil {
 					b.Error(err)
@@ -427,6 +523,8 @@ func BenchmarkConnectFirstFrame(b *testing.B) {
 					}
 				}()
 			}))
+			s.Listener = readingListener{Listener: s.Listener, reading: &reading, changed: changed}
+			s.Start()
 			defer s.Close()
 			url := "ws" + strings.TrimPrefix(s.URL, "http")
 			conns := make([]*Conn, 0, b.N)
@@ -454,8 +552,8 @@ func BenchmarkConnectFirstFrame(b *testing.B) {
 				<-read
 			}
 			b.StopTimer()
-			// Let read loops get back to waiting for the next frame.
-			time.Sleep(100 * time.Millisecond)
+			// Wait until every read loop waits for the next frame.
+			waitFor(b, changed, func() bool { return reading.Load() == int64(b.N) }, "read loops not waiting")
 			for i := 0; i < 4; i++ {
 				runtime.GC()
 			}
