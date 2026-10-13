@@ -6262,6 +6262,7 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 	}
 	// Clean up map subscribing state. Identity-match against the snapshot so we
 	// don't close a fresh entry installed by a concurrent resubscribe.
+	removedMapLoad := false
 	if hasKeyedState {
 		if state, exists := c.mapSubscribing[channel]; exists && state == keyedState {
 			if state.subscribingCh != nil {
@@ -6270,8 +6271,15 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 			delete(c.mapSubscribing, channel)
 			removedNow = true
 			endedAttempt = true
+			removedMapLoad = true
 		}
 	}
+	// The push goes only to a client which knows about the subscription: it got
+	// the subscribe result, or the replies of a map subscribe loading. A
+	// reservation is removed without its subscribe having written a result when
+	// a wait for the subscribe timed out (the client is being disconnected then):
+	// the subscribe fails, nothing of the channel may come before its result.
+	pushUnsubscribe := push && (removedMapLoad || channelHasFlag(chCtx.flags, flagSubscribed))
 	if removedNow && disconnect == nil && c.perChannelWriter != nil {
 		c.perChannelWriter.delWriter(channel, false)
 	}
@@ -6345,7 +6353,7 @@ func (c *Client) unsubscribeWaiting(channel string, unsubscribe Unsubscribe, dis
 		c.perChannelWriter.delWriter(channel, false)
 	}
 	if push {
-		if err == nil {
+		if err == nil && pushUnsubscribe {
 			_ = c.sendUnsubscribe(channel, unsubscribe)
 		}
 		c.finishPendingLeave(channel)
