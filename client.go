@@ -5730,10 +5730,10 @@ func (c *Client) handleAsyncUnsubscribe(ch string, subGen uint64, unsub Unsubscr
 
 func (c *Client) writePublicationUpdatePosition(
 	ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool,
-	batchConfig ChannelBatchConfig,
+	batchConfig ChannelBatchConfig, nowUnix int64,
 ) error {
 	c.mu.Lock()
-	data, ok := c.publicationDataUpdatePositionLocked(ch, pub, prep, sp, maxLagExceeded)
+	data, ok := c.publicationDataUpdatePositionLocked(ch, pub, prep, sp, maxLagExceeded, nowUnix)
 	c.mu.Unlock()
 	if !ok {
 		return nil
@@ -5747,8 +5747,12 @@ func (c *Client) writePublicationUpdatePosition(
 // publicationDataUpdatePositionLocked checks a publication with offset against
 // the subscription to ch and advances its position. It returns the data to write
 // to the client, ok is false if nothing must be written. c.mu must be held.
+//
+// nowUnix is the time the position counts as checked at, read once per broadcast
+// rather than per subscriber. Zero means read it here.
 func (c *Client) publicationDataUpdatePositionLocked(
 	ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool,
+	nowUnix int64,
 ) ([]byte, bool) {
 	channelContext, ok := c.channels[ch]
 	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
@@ -5833,7 +5837,10 @@ func (c *Client) publicationDataUpdatePositionLocked(
 		// here. Safe to just skip for the subscriber.
 		return nil, false
 	}
-	channelContext.positionCheckTime = time.Now().Unix()
+	if nowUnix == 0 {
+		nowUnix = time.Now().Unix()
+	}
+	channelContext.positionCheckTime = nowUnix
 	channelContext.streamPosition.Offset = pub.Offset
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 		c.channels[ch] = channelContext
@@ -5861,10 +5868,12 @@ func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, d
 		ch, pub, preparedData{
 			fullData: data, brokerDeltaData: nil, localDeltaData: nil, deltaSub: false, wasFiltered: false,
 		},
-		sp, false, batchConfig)
+		sp, false, batchConfig, 0)
 }
 
-func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool, batchConfig ChannelBatchConfig) error {
+// writePublication writes a publication broadcast to ch. nowUnix is the broadcast
+// time (see publicationDataUpdatePositionLocked), zero if the caller has none.
+func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool, batchConfig ChannelBatchConfig, nowUnix int64) error {
 	if c.pubSubSync.Buffering() {
 		// The client may be subscribing to ch: the publication goes to its recovery
 		// buffer, or is queued until the subscription's result is written (or, without
@@ -5874,7 +5883,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 			syncPub = prep.filteredPub
 		}
 		if c.pubSubSync.SyncPublication(ch, syncPub, sp.Epoch, len(prep.fullData), pendingPublication{
-			channel: ch, pub: pub, prep: prep, sp: sp, maxLagExceeded: maxLagExceeded, batchConfig: batchConfig,
+			channel: ch, pub: pub, prep: prep, sp: sp, maxLagExceeded: maxLagExceeded, batchConfig: batchConfig, nowUnix: nowUnix,
 		}, c.node.config.ClientQueueMaxSize) {
 			return nil
 		}
@@ -5882,7 +5891,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 	if pub.Offset == 0 {
 		return c.writeOffsetlessPublication(ch, pub, prep, batchConfig)
 	}
-	_ = c.writePublicationUpdatePosition(ch, pub, prep, sp, maxLagExceeded, batchConfig)
+	_ = c.writePublicationUpdatePosition(ch, pub, prep, sp, maxLagExceeded, batchConfig, nowUnix)
 	return nil
 }
 
@@ -5941,6 +5950,9 @@ type pendingPublication struct {
 	sp             StreamPosition
 	maxLagExceeded bool
 	batchConfig    ChannelBatchConfig
+	// nowUnix is the broadcast time: written later, the position counts as
+	// checked a bit earlier than it was, which only brings the next check closer.
+	nowUnix int64
 }
 
 // writePendingPublication checks and writes a queued publication under c.mu. The
@@ -5951,7 +5963,7 @@ type pendingPublication struct {
 // Broadcasts get the same order from the hub shard lock.
 func (c *Client) writePendingPublication(q pendingPublication) {
 	c.mu.Lock()
-	data, ok := c.publicationDataUpdatePositionLocked(q.channel, q.pub, q.prep, q.sp, q.maxLagExceeded)
+	data, ok := c.publicationDataUpdatePositionLocked(q.channel, q.pub, q.prep, q.sp, q.maxLagExceeded, q.nowUnix)
 	if ok {
 		_ = c.writeEncodedPushData(data, q.channel, q.pub.Key, protocol.FrameTypePushPublication, q.batchConfig)
 	}
