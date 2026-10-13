@@ -7647,6 +7647,70 @@ func TestClientConnectSubscriptionFailureCancelsBuffering(t *testing.T) {
 	require.False(t, client.pubSubSync.Buffering(), "recovery buffer leaked")
 }
 
+// A server-side unsubscribe whose wait for a subscribe in progress timed out
+// disconnects the client and releases the subscribe's waiters. An unsubscribe after
+// that finds the subscribe's reservation and removes it, but must not push an
+// unsubscribe: the client never got the subscribe result.
+func TestClientUnsubscribeAfterSubscribeWaitTimeoutNoPush(t *testing.T) {
+	prevTimeout := subscribeInProgressTimeout.get()
+	subscribeInProgressTimeout.set(20 * time.Millisecond)
+	t.Cleanup(func() { subscribeInProgressTimeout.set(prevTimeout) })
+
+	const ch = "timeout_unsubscribe"
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	callbacks := make(chan SubscribeCallback, 1)
+	node.OnConnect(func(c *Client) {
+		c.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			callbacks <- cb // Answered at the end: the subscribe stays in progress.
+		})
+	})
+
+	transport := newTestTransport(func() {})
+	sink := make(chan []byte, 1024)
+	transport.sink = sink
+	client := newTestConnectedClientWithTransport(t, context.Background(), node, transport, "42")
+	drainSink(sink)
+
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{Channel: ch}, &protocol.Command{Id: 2}, time.Now(), testReplyWriterWrapper().rw))
+	cb := <-callbacks
+
+	// Hold the disconnect the timed out wait starts, so that it can't remove the
+	// reservation before the second unsubscribe does. Released before the node
+	// shuts down, also when the test fails.
+	client.connectMu.Lock()
+	defer func() {
+		client.connectMu.Unlock()
+		cb(SubscribeReply{}, nil)
+	}()
+	client.Unsubscribe(ch) // Times out waiting for the subscribe.
+	client.Unsubscribe(ch)
+	// Writes come out in order: everything the unsubscribes wrote is before it.
+	require.NoError(t, client.Send([]byte(`"marker"`)))
+
+	var pushed []string
+	require.Eventually(t, func() bool {
+		for _, frame := range drainSink(sink) {
+			decoder := newReplyDecoder(protocol.TypeJSON, frame)
+			for {
+				reply, err := decoder.Decode()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				require.NoError(t, err)
+				switch {
+				case reply.Push != nil && reply.Push.Channel == ch && reply.Push.Unsubscribe != nil:
+					pushed = append(pushed, "unsubscribe")
+				case reply.Push != nil && reply.Push.Message != nil:
+					pushed = append(pushed, "marker")
+				}
+			}
+		}
+		return slices.Contains(pushed, "marker")
+	}, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, []string{"marker"}, pushed)
+}
+
 // A server-side unsubscribe which comes while a map subscription is in progress waits
 // for it. The map subscription is committed before its reply is written; the
 // unsubscribe must not go ahead (and its push reach the client) before that reply.
