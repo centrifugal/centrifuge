@@ -1232,7 +1232,7 @@ func BenchmarkHub_Contention(b *testing.B) {
 		n.hub.add(c)
 		clients = append(clients, c)
 		for _, ch := range channels {
-			_, _, _ = n.hub.addSub(ch, subInfo{client: c, deltaType: ""})
+			benchAddSub(n, c, ch)
 		}
 	}
 
@@ -1256,6 +1256,15 @@ func BenchmarkHub_Contention(b *testing.B) {
 			wg.Wait()
 		}
 	})
+}
+
+// benchAddSub adds c to the hub as a subscriber of ch which committed its
+// subscription: publications are only written to subscribed channels.
+func benchAddSub(n *Node, c *Client, ch string) {
+	c.mu.Lock()
+	c.channels[ch] = ChannelContext{flags: flagSubscribed}
+	c.mu.Unlock()
+	_, _, _ = n.hub.addSub(ch, subInfo{client: c, deltaType: ""})
 }
 
 var broadcastBenches = []struct {
@@ -1289,7 +1298,7 @@ func BenchmarkHub_MassiveBroadcast(b *testing.B) {
 				t.setSink(sink)
 				c := newTestConnectedClientWithTransport(b, context.Background(), n, t, "12")
 				n.hub.add(c)
-				_, _, _ = n.hub.addSub(channel, subInfo{client: c, deltaType: ""})
+				benchAddSub(n, c, channel)
 			}
 
 			b.ResetTimer()
