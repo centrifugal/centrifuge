@@ -3269,7 +3269,7 @@ func TestMemoryMapBroker_KeyTTLDisabled(t *testing.T) {
 			Mode:       MapModeRecoverable,
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
-			KeyTTL:     200 * time.Millisecond,
+			KeyTTL:     time.Millisecond,
 		}
 		if persistent.Load() {
 			opts.Mode = MapModePersistent
@@ -3291,7 +3291,15 @@ func TestMemoryMapBroker_KeyTTLDisabled(t *testing.T) {
 	require.Empty(t, broker.mapHub.keyExpires)
 	broker.mapHub.Unlock()
 
-	time.Sleep(1500 * time.Millisecond)
+	// Run expiration passes until the first publish's deadline is popped.
+	require.Eventually(t, func() bool {
+		var next int64
+		broker.mapHub.expireKeysIteration(&next)
+		broker.mapHub.Lock()
+		defer broker.mapHub.Unlock()
+		return broker.mapHub.keyExpireQueue.Len() == 0
+	}, 5*time.Second, time.Millisecond)
+
 	stateRes, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, stateRes.Publications, 1)
