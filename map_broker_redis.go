@@ -845,14 +845,24 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 	// Compute slot-aligned nil key for unused KEYS in cluster mode (see Publish for details).
 	nilKey := ""
 	stateOrderKey := ""
+	// Removing a key must move the channel's cleanup registration to the next
+	// expiry, or drop it with the last key: a registration left behind points
+	// the cleanup worker at entries that are gone.
 	cleanupRegKey := ""
+	channelForCleanup := ""
+	if key != "" {
+		cleanupRegKey = e.cleanupRegistrationKeyForChannel(s.shard, ch)
+		channelForCleanup = ch
+	}
 	if s.shard.isCluster {
 		nilKey = e.buildKey(s.shard, ch, ":nil:")
 		if resultKey == "" {
 			resultKey = nilKey
 		}
 		stateOrderKey = nilKey
-		cleanupRegKey = nilKey
+		if cleanupRegKey == "" {
+			cleanupRegKey = nilKey
+		}
 		if streamKey == "" {
 			streamKey = nilKey
 		}
@@ -895,7 +905,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 			"0",                        // score
 			"0",                        // map_member_ttl
 			"0",                        // use_hpexpire
-			"",                         // channel_for_cleanup (not used for unpublish)
+			channelForCleanup,          // channel_for_cleanup (for cleanup registration)
 			"",                         // key_mode (not used for unpublish)
 			"0",                        // refresh_ttl_on_suppress (not used for unpublish)
 			expectedOffset,             // expected_offset (for CAS)
@@ -2593,6 +2603,12 @@ func (e *RedisMapBroker) cleanupPartition(ctx context.Context, shard *RedisShard
 			}(ch)
 		}
 		wg.Wait()
+
+		// A partial batch held every channel due at now. Channels still due
+		// are left for the next cycle, which reads the time again.
+		if len(channels) < cleanupChannelBatchSize {
+			return
+		}
 	}
 }
 
@@ -2629,7 +2645,10 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 			return err
 		}
 		if len(expiredEntries) == 0 {
-			return nil
+			// The registration is due but nothing has expired: the keys were
+			// refreshed or removed since it was set. Move it to the earliest
+			// remaining expiry (or drop it), otherwise the channel stays due.
+			return e.batchRemoveExpired(ctx, shard, ch, cleanupKey, chOpts, nil)
 		}
 
 		// Phase 2: construct removal protobufs in Go (with tags from state), then batch-remove.
@@ -2665,10 +2684,9 @@ func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, 
 			})
 		}
 
-		if len(removals) > 0 {
-			if err := e.batchRemoveExpired(ctx, shard, ch, cleanupKey, chOpts, removals); err != nil {
-				return err
-			}
+		// Runs with no removals too: the script then only resyncs the registration.
+		if err := e.batchRemoveExpired(ctx, shard, ch, cleanupKey, chOpts, removals); err != nil {
+			return err
 		}
 
 		// If we drained less than a full batch, the queue is empty for now.
