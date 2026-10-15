@@ -53,7 +53,8 @@ type Upgrader struct {
 	// its read buffer to the pool when nothing is left buffered, and waits for
 	// the next frame reading its first byte directly from the connection, so
 	// idle connections hold no read buffer. The cost is an extra 1-byte read
-	// for each frame arriving at an idle connection. The buffered reader of
+	// for each frame arriving when nothing is buffered, which is most frames
+	// on active connections too. The buffered reader of
 	// the hijacked HTTP connection goes to the pool if it has the pool's size
 	// (with the default ReadBufferSize it has), so the first frame usually
 	// reads with it. Ignored for HTTP/2 connections.
@@ -273,7 +274,8 @@ func (u *Upgrader) upgradeH1(w http.ResponseWriter, r *http.Request, responseHea
 	var readPool *readBufferPool
 	if u.UseReadBufferPool {
 		// Nothing is buffered (checked above): the hijacked buffered reader
-		// goes to the pool, the first frame takes a reader from there.
+		// goes to the pool, the first frame takes a reader from there. After
+		// Hijack the reader belongs to the caller, nothing else reads with it.
 		readPool = sharedReadBufferPool(u.ReadBufferSize)
 		readPool.put(brw.Reader)
 	} else if u.ReadBufferSize == 0 && brw.Reader.Size() > 256 {
@@ -428,13 +430,12 @@ func (wh *writeHook) Write(p []byte) (int, error) {
 // newHTTP2Conn creates a connection over an HTTP/2 extended CONNECT stream.
 func (u *Upgrader) newHTTP2Conn(stream *http2Stream) *Conn {
 	// HTTP/2 stream already has internal buffering. Make small br to avoid allocating a new
-	// large intermediary buffer inside newConn.
-	// Small reads will be sufficient with 16 bytes buffer, for large reads our intermediary
-	// buffer will be bypassed avoiding any overhead.
+	// large intermediary buffer inside newConn. It still fits a control frame payload, which
+	// is read from the buffer in one piece. Large reads bypass it avoiding any overhead.
 	// This means that for HTTP/2 it's not possible to control the read buffer size
 	// via Upgrader.ReadBufferSize. For write buffers it's better to always use a pool
 	// by setting Upgrader.WriteBufferPool.
-	br := bufio.NewReaderSize(stream, 16)
+	br := bufio.NewReaderSize(stream, maxControlFramePayloadSize)
 	return newConn(stream, true, u.ReadBufferSize, u.WriteBufferSize, nil, u.WriteBufferPool, br, nil)
 }
 

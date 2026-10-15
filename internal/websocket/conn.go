@@ -412,6 +412,11 @@ func (c *Conn) writeFatal(err error) error {
 // The buffer goes to a pool shared by other connections, so control frame
 // payloads passed to handlers are overwritten by other connections' data once
 // the handler returns.
+//
+// Putting the buffer back drops a read error it kept from its last fill. The
+// next read of the connection fails then: net.Conn and tls.Conn return data
+// with an error only at the end of the stream (tls.Conn on close_notify), and
+// keep failing after it.
 func (c *Conn) readFrameStartPooled() (byte, byte, error) {
 	if c.br != nil && c.br.Buffered() == 0 {
 		c.readPool.put(c.br)
@@ -445,41 +450,15 @@ func (c *Conn) releaseReadBuffer() {
 	}
 }
 
+// readFirstByte waits for a frame reading its first byte directly from the
+// connection. An error returned with the byte is not lost: the next read of
+// the connection fails too (see readFrameStartPooled).
 func (c *Conn) readFirstByte() error {
-	for i := 0; i < 100; i++ {
-		n, err := c.conn.Read(c.firstByte[:])
-		if n == 1 {
-			// Like bufio.Reader, leave the error (if any) to the next read.
-			return nil
-		}
-		if err != nil {
-			if err == io.EOF {
-				err = errUnexpectedEOF
-			}
-			return err
-		}
-	}
-	return io.ErrNoProgress
-}
-
-// readControlPayload reads a control frame payload. One larger than the read
-// buffer (the small one used for HTTP/2) is read into a new slice: rare, so
-// allocate instead of making the buffer bigger.
-func (c *Conn) readControlPayload(n int) ([]byte, error) {
-	if n > c.br.Size() {
-		return c.readLarge(n)
-	}
-	return c.read(n)
-}
-
-// readLarge reads n bytes not fitting the read buffer.
-func (c *Conn) readLarge(n int) ([]byte, error) {
-	p := make([]byte, n)
-	_, err := io.ReadFull(c.br, p)
-	if err == io.EOF || err == io.ErrUnexpectedEOF {
+	_, err := io.ReadFull(c.conn, c.firstByte[:])
+	if err == io.EOF {
 		err = errUnexpectedEOF
 	}
-	return p, err
+	return err
 }
 
 func (c *Conn) read(n int) ([]byte, error) {
@@ -1044,7 +1023,7 @@ func (c *Conn) advanceFrame() (int, error) {
 
 	var payload []byte
 	if c.readRemaining > 0 {
-		payload, err = c.readControlPayload(int(c.readRemaining))
+		payload, err = c.read(int(c.readRemaining))
 		_ = c.setReadRemaining(0)
 		if err != nil {
 			return noFrame, err

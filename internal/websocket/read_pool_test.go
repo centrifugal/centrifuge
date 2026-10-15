@@ -471,8 +471,8 @@ func benchReadMessage(b *testing.B, msg []byte) {
 			name = "Pool"
 			pool = sharedReadBufferPool(0)
 		}
-		// Every frame arrives at an idle connection.
-		b.Run(name+"/Idle", func(b *testing.B) {
+		// Request/response: every frame arrives when nothing is buffered.
+		b.Run(name+"/RoundTrip", func(b *testing.B) {
 			sc, cc := newBenchConnPair(b, pool)
 			ack := make([]byte, 1)
 			b.ReportAllocs()
