@@ -240,6 +240,54 @@ type BufferPool interface {
 // added to the pool.
 type writePoolData struct{ buf []byte }
 
+// readBufferPool is a pool of read buffers of one size. Connections using it
+// hold a read buffer only while reading frames.
+type readBufferPool struct {
+	pool sync.Pool
+	size int
+}
+
+// readBufferPools holds a *readBufferPool per effective read buffer size.
+var readBufferPools sync.Map
+
+// sharedReadBufferPool returns the pool of read buffers of the given size
+// shared by all connections using it. Zero size means the default one.
+func sharedReadBufferPool(size int) *readBufferPool {
+	size = effectiveReadBufferSize(size)
+	if p, ok := readBufferPools.Load(size); ok {
+		return p.(*readBufferPool)
+	}
+	p, _ := readBufferPools.LoadOrStore(size, &readBufferPool{size: size})
+	return p.(*readBufferPool)
+}
+
+// effectiveReadBufferSize returns the read buffer size used for the configured
+// one: zero means the default, and a buffer must fit a control frame payload.
+func effectiveReadBufferSize(size int) int {
+	if size == 0 {
+		return defaultReadBufferSize
+	}
+	return max(size, maxControlFramePayloadSize)
+}
+
+func (p *readBufferPool) get(r io.Reader) *bufio.Reader {
+	if br, ok := p.pool.Get().(*bufio.Reader); ok {
+		br.Reset(r)
+		return br
+	}
+	return bufio.NewReaderSize(r, p.size)
+}
+
+// put adds the reader to the pool if it has the pool's size, like the
+// buffered reader of a hijacked HTTP connection usually has.
+func (p *readBufferPool) put(br *bufio.Reader) {
+	if br.Size() != p.size {
+		return
+	}
+	br.Reset(nil)
+	p.pool.Put(br)
+}
+
 // The Conn type represents a WebSocket connection.
 type Conn struct {
 	conn net.Conn
@@ -251,6 +299,7 @@ type Conn struct {
 	writeDeadline time.Time
 	writer        io.WriteCloser // the current writer returned to the application
 	writePool     BufferPool
+	readPool      *readBufferPool // if set, br is nil while waiting for a frame.
 	writeErr      error
 
 	newDecompressionReader func(io.Reader) io.ReadCloser
@@ -266,6 +315,7 @@ type Conn struct {
 	// closeCode holds the first close frame observed on the connection, packed
 	// as bits 0-15 = code, bit 16 = incoming flag; 0 means none observed yet.
 	closeCode        atomic.Int32
+	firstByte        [1]byte // first byte of a frame read without a read buffer.
 	compressionLevel int
 	readMaskPos      int
 	writeBufSize     int
@@ -280,15 +330,9 @@ type Conn struct {
 	isServer               bool
 }
 
-func newConn(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int, writeBufferPool BufferPool, br *bufio.Reader, writeBuf []byte) *Conn {
-	if br == nil {
-		if readBufferSize == 0 {
-			readBufferSize = defaultReadBufferSize
-		} else if readBufferSize < maxControlFramePayloadSize {
-			// must be large enough for control frame
-			readBufferSize = maxControlFramePayloadSize
-		}
-		br = bufio.NewReaderSize(conn, readBufferSize)
+func newConn(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int, readBufferPool *readBufferPool, writeBufferPool BufferPool, br *bufio.Reader, writeBuf []byte) *Conn {
+	if br == nil && readBufferPool == nil {
+		br = bufio.NewReaderSize(conn, effectiveReadBufferSize(readBufferSize))
 	}
 
 	if writeBufferSize <= 0 {
@@ -305,6 +349,7 @@ func newConn(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int, 
 	return &Conn{
 		isServer:               isServer,
 		br:                     br,
+		readPool:               readBufferPool,
 		conn:                   conn,
 		mu:                     mu,
 		readFinal:              true,
@@ -356,6 +401,63 @@ func (c *Conn) writeFatal(err error) error {
 		c.writeErr = err
 	}
 	c.writeErrMu.Unlock()
+	return err
+}
+
+// readFrameStartPooled reads the first two bytes of a frame for a connection
+// with a read buffer pool. It returns the read buffer to the pool if nothing is
+// buffered, then waits for the frame reading its first byte directly from the
+// connection.
+//
+// The buffer goes to a pool shared by other connections, so control frame
+// payloads passed to handlers are overwritten by other connections' data once
+// the handler returns.
+//
+// Putting the buffer back drops a read error it kept from its last fill. The
+// next read of the connection fails then: net.Conn and tls.Conn return data
+// with an error only at the end of the stream (tls.Conn on close_notify), and
+// keep failing after it.
+func (c *Conn) readFrameStartPooled() (byte, byte, error) {
+	if c.br != nil && c.br.Buffered() == 0 {
+		c.readPool.put(c.br)
+		c.br = nil
+	}
+	if c.br == nil {
+		if err := c.readFirstByte(); err != nil {
+			return 0, 0, err
+		}
+		c.br = c.readPool.get(c.conn)
+		p, err := c.read(1)
+		if err != nil {
+			return 0, 0, err
+		}
+		return c.firstByte[0], p[0], nil
+	}
+	p, err := c.read(2)
+	if err != nil {
+		return 0, 0, err
+	}
+	return p[0], p[1], nil
+}
+
+// releaseReadBuffer returns the read buffer to the pool once reading failed:
+// read errors are permanent, the buffer is not used again. Called by the
+// reading goroutine only, the one which uses the buffer.
+func (c *Conn) releaseReadBuffer() {
+	if c.readPool != nil && c.br != nil {
+		c.readPool.put(c.br)
+		c.br = nil
+	}
+}
+
+// readFirstByte waits for a frame reading its first byte directly from the
+// connection. An error returned with the byte is not lost: the next read of
+// the connection fails too (see readFrameStartPooled).
+func (c *Conn) readFirstByte() error {
+	_, err := io.ReadFull(c.conn, c.firstByte[:])
+	if err == io.EOF {
+		err = errUnexpectedEOF
+	}
 	return err
 }
 
@@ -786,7 +888,15 @@ func (c *Conn) advanceFrame() (int, error) {
 
 	var errs []string
 
-	p, err := c.read(2)
+	var p []byte
+	var err error
+	if c.readPool == nil {
+		p, err = c.read(2)
+	} else {
+		var hdr [2]byte
+		hdr[0], hdr[1], err = c.readFrameStartPooled()
+		p = hdr[:]
+	}
 	if err != nil {
 		return noFrame, err
 	}
@@ -1019,6 +1129,7 @@ func (c *Conn) NextReader() (messageType int, r io.Reader, err error) {
 		}
 	}
 
+	c.releaseReadBuffer()
 	return noFrame, nil, c.readErr
 }
 
@@ -1047,6 +1158,9 @@ func (r *messageReader) Read(b []byte) (int, error) {
 			if c.readRemaining > 0 && c.readErr == io.EOF {
 				c.readErr = errUnexpectedEOF
 			}
+			if c.readErr != nil {
+				c.releaseReadBuffer()
+			}
 			return n, c.readErr
 		}
 
@@ -1064,6 +1178,7 @@ func (r *messageReader) Read(b []byte) (int, error) {
 		}
 	}
 
+	c.releaseReadBuffer()
 	err := c.readErr
 	if err == io.EOF && c.messageReader == r {
 		err = errUnexpectedEOF
@@ -1122,6 +1237,7 @@ func (l *limitedReader) limitExceeded() error {
 	// every subsequent NextReader call returns ErrReadLimit, honoring the gorilla
 	// contract that read errors are permanent.
 	l.c.readErr = ErrReadLimit
+	l.c.releaseReadBuffer()
 	return ErrReadLimit
 }
 
@@ -1217,7 +1333,8 @@ func (c *Conn) defaultPingHandler(message []byte) error {
 
 // SetPingHandler sets the handler for ping messages received from the peer.
 // The appData argument to h is the PING message application data. The default
-// ping handler sends a pong to the peer.
+// ping handler sends a pong to the peer. The appData slice is only valid until
+// h returns, copy it to keep.
 //
 // The handler function is called from the NextReader, ReadMessage and message
 // reader Read methods. The application must read the connection to process
@@ -1235,7 +1352,8 @@ func (c *Conn) defaultPongHandler(_ []byte) error {
 
 // SetPongHandler sets the handler for pong messages received from the peer.
 // The appData argument to h is the PONG message application data. The default
-// pong handler does nothing.
+// pong handler does nothing. The appData slice is only valid until h returns,
+// copy it to keep.
 //
 // The handler function is called from the NextReader, ReadMessage and message
 // reader Read methods. The application must read the connection to process
