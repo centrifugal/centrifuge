@@ -48,15 +48,16 @@ type Upgrader struct {
 	// WriteBufferSize.
 	WriteBufferPool BufferPool
 
-	// ReadBufferPool is a pool of read buffers. If set, a connection returns
+	// UseReadBufferPool makes connections take read buffers of ReadBufferSize
+	// from a pool shared by all upgraders with that size. A connection returns
 	// its read buffer to the pool when nothing is left buffered, and waits for
 	// the next frame reading its first byte directly from the connection, so
 	// idle connections hold no read buffer. The cost is an extra 1-byte read
 	// for each frame arriving at an idle connection. The buffered reader of
-	// the hijacked HTTP connection goes to the pool if it has the pool's size,
-	// so the first frame usually reads with it. ReadBufferSize is not used
-	// when the pool is set. Ignored for HTTP/2 connections.
-	ReadBufferPool *ReadBufferPool
+	// the hijacked HTTP connection goes to the pool if it has the pool's size
+	// (with the default ReadBufferSize it has), so the first frame usually
+	// reads with it. Ignored for HTTP/2 connections.
+	UseReadBufferPool bool
 
 	// Subprotocols specifies the server's supported protocols in order of
 	// preference. If this field is not nil, then the Upgrade method negotiates a
@@ -269,10 +270,12 @@ func (u *Upgrader) upgradeH1(w http.ResponseWriter, r *http.Request, responseHea
 	}
 
 	var br *bufio.Reader
-	if u.ReadBufferPool != nil {
+	var readPool *readBufferPool
+	if u.UseReadBufferPool {
 		// Nothing is buffered (checked above): the hijacked buffered reader
 		// goes to the pool, the first frame takes a reader from there.
-		u.ReadBufferPool.put(brw.Reader)
+		readPool = sharedReadBufferPool(u.ReadBufferSize)
+		readPool.put(brw.Reader)
 	} else if u.ReadBufferSize == 0 && brw.Reader.Size() > 256 {
 		// Reuse hijacked buffered reader as connection reader.
 		br = brw.Reader
@@ -286,7 +289,7 @@ func (u *Upgrader) upgradeH1(w http.ResponseWriter, r *http.Request, responseHea
 		writeBuf = buf
 	}
 
-	c := newConn(netConn, true, u.ReadBufferSize, u.WriteBufferSize, u.ReadBufferPool, u.WriteBufferPool, br, writeBuf)
+	c := newConn(netConn, true, u.ReadBufferSize, u.WriteBufferSize, readPool, u.WriteBufferPool, br, writeBuf)
 
 	if compress {
 		c.newCompressionWriter = compressNoContextTakeover

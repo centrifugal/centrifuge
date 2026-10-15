@@ -159,9 +159,7 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 		EnableCompression:   config.Compression,
 		Subprotocols:        []string{"centrifuge-json", "centrifuge-protobuf"},
 		DisableHTTP1Upgrade: config.DisableHTTP1Upgrade,
-	}
-	if config.UseReadBufferPool {
-		upgrade.ReadBufferPool = websocket.SharedReadBufferPool(config.ReadBufferSize)
+		UseReadBufferPool:   config.UseReadBufferPool,
 	}
 	if config.UseWriteBufferPool {
 		upgrade.WriteBufferPool = writeBufferPool

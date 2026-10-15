@@ -15,17 +15,17 @@ import (
 )
 
 // testReadBufferPool is used by newTestConn when set.
-var testReadBufferPool *ReadBufferPool
+var testReadBufferPool *readBufferPool
 
 // TestReadBufferPool runs read tests again with connections taking read
 // buffers from a pool. The tests must not be parallel: the pool is set in
 // package-level variables only while TestReadBufferPool runs.
 func TestReadBufferPool(t *testing.T) {
-	testReadBufferPool = NewReadBufferPool(0)
-	cstUpgrader.ReadBufferPool = NewReadBufferPool(0)
+	testReadBufferPool = sharedReadBufferPool(0)
+	cstUpgrader.UseReadBufferPool = true
 	defer func() {
 		testReadBufferPool = nil
-		cstUpgrader.ReadBufferPool = nil
+		cstUpgrader.UseReadBufferPool = false
 	}()
 	tests := []struct {
 		name string
@@ -149,7 +149,7 @@ func waitFor(tb testing.TB, changed <-chan struct{}, cond func() bool, what stri
 
 func TestReadBufferPoolIdle(t *testing.T) {
 	var started, returned atomic.Int64
-	upgrader := Upgrader{ReadBufferPool: NewReadBufferPool(0)}
+	upgrader := Upgrader{UseReadBufferPool: true}
 	serverConn := make(chan *Conn, 1)
 	s := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, _, err := upgrader.Upgrade(w, r, nil)
@@ -258,7 +258,7 @@ func TestReadBufferPoolIdle(t *testing.T) {
 // the pool's size whatever it is.
 func TestReadBufferPoolHijackedReaderSize(t *testing.T) {
 	for _, size := range []int{0, 128, 8192} {
-		upgrader := Upgrader{ReadBufferPool: NewReadBufferPool(size)}
+		upgrader := Upgrader{UseReadBufferPool: true, ReadBufferSize: size}
 		serverConn := make(chan *Conn, 1)
 		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			c, _, err := upgrader.Upgrade(w, r, nil)
@@ -284,12 +284,35 @@ func TestReadBufferPoolHijackedReaderSize(t *testing.T) {
 			t.Fatalf("%d: got %q, %v", size, p, err)
 		}
 		// The reader of the message is kept until the next frame starts.
-		if rc.br.Size() != upgrader.ReadBufferPool.Size() {
+		if rc.br.Size() != effectiveReadBufferSize(size) {
 			t.Fatalf("%d: read with a reader of size %d", size, rc.br.Size())
 		}
 		_ = wc.Close()
 		_ = rc.Close()
 		s.Close()
+	}
+}
+
+// TestHijackedReaderHasDefaultReadBufferSize checks that the buffered reader of
+// a hijacked HTTP connection has the default read buffer size: only then does
+// it go to the pool, so connecting allocates no extra read buffer.
+func TestHijackedReaderHasDefaultReadBufferSize(t *testing.T) {
+	size := make(chan int, 1)
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, brw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		size <- brw.Reader.Size()
+		_ = c.Close()
+	}))
+	defer s.Close()
+	if resp, err := http.Get(s.URL); err == nil {
+		_ = resp.Body.Close()
+	}
+	if n := <-size; n != defaultReadBufferSize {
+		t.Fatalf("hijacked reader size %d, want %d", n, defaultReadBufferSize)
 	}
 }
 
@@ -306,7 +329,7 @@ func TestReadBufferPoolReleasedOnReadError(t *testing.T) {
 		{"payload", []byte{0x81, 0x80 | 10, 1, 2, 3, 4, 'a', 'b', 'c'}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			upgrader := Upgrader{ReadBufferPool: NewReadBufferPool(0)}
+			upgrader := Upgrader{UseReadBufferPool: true}
 			serverConn := make(chan *Conn, 1)
 			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				c, _, err := upgrader.Upgrade(w, r, nil)
@@ -352,7 +375,7 @@ func TestControlFrameLargerThanReadBuffer(t *testing.T) {
 			return (&Upgrader{}).newHTTP2Conn(stream)
 		},
 		"ReadBufferPool": func(r io.Reader) *Conn {
-			return newConn(fakeNetConn{Reader: r, Writer: io.Discard}, true, 0, 0, NewReadBufferPool(0), nil, nil, nil)
+			return newConn(fakeNetConn{Reader: r, Writer: io.Discard}, true, 0, 0, sharedReadBufferPool(0), nil, nil, nil)
 		},
 	}
 	for name, newRC := range newConns {
@@ -410,7 +433,7 @@ var _ io.Writer = (*bufferWriter)(nil)
 var _ net.Conn = fakeNetConn{}
 
 // newBenchConnPair returns server and client connections over loopback TCP.
-func newBenchConnPair(b *testing.B, pool *ReadBufferPool) (server, client *Conn) {
+func newBenchConnPair(b *testing.B, pool *readBufferPool) (server, client *Conn) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		b.Fatal(err)
@@ -443,10 +466,10 @@ func BenchmarkReadMessage(b *testing.B) {
 func benchReadMessage(b *testing.B, msg []byte) {
 	for _, pooled := range []bool{false, true} {
 		name := "Buffer"
-		var pool *ReadBufferPool
+		var pool *readBufferPool
 		if pooled {
 			name = "Pool"
-			pool = NewReadBufferPool(0)
+			pool = sharedReadBufferPool(0)
 		}
 		// Every frame arrives at an idle connection.
 		b.Run(name+"/Idle", func(b *testing.B) {
@@ -501,7 +524,7 @@ func BenchmarkConnectFirstFrame(b *testing.B) {
 		upgrader := Upgrader{}
 		if pooled {
 			name = "Pool"
-			upgrader.ReadBufferPool = NewReadBufferPool(0)
+			upgrader.UseReadBufferPool = true
 		}
 		b.Run(name, func(b *testing.B) {
 			read := make(chan struct{}, 1)

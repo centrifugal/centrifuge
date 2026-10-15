@@ -240,31 +240,25 @@ type BufferPool interface {
 // added to the pool.
 type writePoolData struct{ buf []byte }
 
-// ReadBufferPool is a pool of read buffers of one size. Connections using it
+// readBufferPool is a pool of read buffers of one size. Connections using it
 // hold a read buffer only while reading frames.
-type ReadBufferPool struct {
+type readBufferPool struct {
 	pool sync.Pool
 	size int
 }
 
-// NewReadBufferPool creates a pool of read buffers of the given size. Zero
-// size means the default one.
-func NewReadBufferPool(size int) *ReadBufferPool {
-	return &ReadBufferPool{size: effectiveReadBufferSize(size)}
-}
+// readBufferPools holds a *readBufferPool per effective read buffer size.
+var readBufferPools sync.Map
 
-// sharedReadBufferPools holds a *ReadBufferPool per effective read buffer size.
-var sharedReadBufferPools sync.Map
-
-// SharedReadBufferPool returns the pool of read buffers of the given size
-// shared by all its callers. Zero size means the default one.
-func SharedReadBufferPool(size int) *ReadBufferPool {
+// sharedReadBufferPool returns the pool of read buffers of the given size
+// shared by all connections using it. Zero size means the default one.
+func sharedReadBufferPool(size int) *readBufferPool {
 	size = effectiveReadBufferSize(size)
-	if p, ok := sharedReadBufferPools.Load(size); ok {
-		return p.(*ReadBufferPool)
+	if p, ok := readBufferPools.Load(size); ok {
+		return p.(*readBufferPool)
 	}
-	p, _ := sharedReadBufferPools.LoadOrStore(size, &ReadBufferPool{size: size})
-	return p.(*ReadBufferPool)
+	p, _ := readBufferPools.LoadOrStore(size, &readBufferPool{size: size})
+	return p.(*readBufferPool)
 }
 
 // effectiveReadBufferSize returns the read buffer size used for the configured
@@ -276,12 +270,7 @@ func effectiveReadBufferSize(size int) int {
 	return max(size, maxControlFramePayloadSize)
 }
 
-// Size returns the size of read buffers in the pool.
-func (p *ReadBufferPool) Size() int {
-	return p.size
-}
-
-func (p *ReadBufferPool) get(r io.Reader) *bufio.Reader {
+func (p *readBufferPool) get(r io.Reader) *bufio.Reader {
 	if br, ok := p.pool.Get().(*bufio.Reader); ok {
 		br.Reset(r)
 		return br
@@ -291,7 +280,7 @@ func (p *ReadBufferPool) get(r io.Reader) *bufio.Reader {
 
 // put adds the reader to the pool if it has the pool's size, like the
 // buffered reader of a hijacked HTTP connection usually has.
-func (p *ReadBufferPool) put(br *bufio.Reader) {
+func (p *readBufferPool) put(br *bufio.Reader) {
 	if br.Size() != p.size {
 		return
 	}
@@ -310,7 +299,7 @@ type Conn struct {
 	writeDeadline time.Time
 	writer        io.WriteCloser // the current writer returned to the application
 	writePool     BufferPool
-	readPool      *ReadBufferPool // if set, br is nil while waiting for a frame.
+	readPool      *readBufferPool // if set, br is nil while waiting for a frame.
 	writeErr      error
 
 	newDecompressionReader func(io.Reader) io.ReadCloser
@@ -341,7 +330,7 @@ type Conn struct {
 	isServer               bool
 }
 
-func newConn(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int, readBufferPool *ReadBufferPool, writeBufferPool BufferPool, br *bufio.Reader, writeBuf []byte) *Conn {
+func newConn(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int, readBufferPool *readBufferPool, writeBufferPool BufferPool, br *bufio.Reader, writeBuf []byte) *Conn {
 	if br == nil && readBufferPool == nil {
 		br = bufio.NewReaderSize(conn, effectiveReadBufferSize(readBufferSize))
 	}
