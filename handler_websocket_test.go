@@ -2497,8 +2497,7 @@ func TestWsDictionaryFrameEncodingIsPerFrame(t *testing.T) {
 			// doc comment), so a tiny fixture like `{"seq":1,"v":"x"}` is not a
 			// reliable way to force protocol.DeflateFrameCodec.Compress down the
 			// compressed path across Go versions.
-			_, err := n.Publish("demo", []byte(`{"seq":1,"v":"`+strings.Repeat("x", 256)+`"}`))
-			require.NoError(t, err)
+			publishWithHistory(t, n, "demo", []byte(`{"seq":1,"v":"`+strings.Repeat("x", 256)+`"}`))
 
 			mt, raw := w.nextFrame()
 			require.Equal(t, tc.wantType, mt)
@@ -2564,8 +2563,7 @@ func TestWsMixedFleetReadsTheSamePublication(t *testing.T) {
 	for _, w := range []*wireClient{plain, a, b} {
 		w.subscribe("demo")
 	}
-	_, err := n.Publish("demo", []byte(`{"seq":1,"v":"x"}`))
-	require.NoError(t, err)
+	publishWithHistory(t, n, "demo", []byte(`{"seq":1,"v":"x"}`))
 
 	for name, w := range map[string]*wireClient{
 		"no support": plain, "dictionary a": a, "dictionary b": b,
@@ -2595,8 +2593,7 @@ func TestWsDictionaryCompressesWholeBatchedFrame(t *testing.T) {
 
 	const published = 8
 	for i := 0; i < published; i++ {
-		_, err := n.Publish("demo", []byte(`{"seq":1,"v":"x"}`))
-		require.NoError(t, err)
+		publishWithHistory(t, n, "demo", []byte(`{"seq":1,"v":"x"}`))
 	}
 
 	// Read until every publication is accounted for, however the writer chose

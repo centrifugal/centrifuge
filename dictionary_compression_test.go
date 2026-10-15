@@ -239,6 +239,16 @@ func (w *wireClient) subscribe(ch string) {
 	require.NotNil(w.t, replies[0].Subscribe)
 }
 
+// publishWithHistory publishes data to a channel a wire client has just
+// subscribed to. With history the publication has an offset: one without is
+// dropped until the server finishes the subscription, which can be after the
+// client got the subscribe reply.
+func publishWithHistory(t *testing.T, n *Node, ch string, data []byte) {
+	t.Helper()
+	_, err := n.Publish(ch, data, WithHistory(10, time.Minute))
+	require.NoError(t, err)
+}
+
 func mustBase64(t *testing.T, s string) []byte {
 	t.Helper()
 	b, err := base64.StdEncoding.DecodeString(s)
@@ -302,8 +312,7 @@ func TestDictionaryArrivesInConnectReply(t *testing.T) {
 	require.NotNil(t, w.codec)
 
 	w.subscribe("demo")
-	_, err := n.Publish("demo", []byte(`{"seq":1,"v":"x"}`))
-	require.NoError(t, err)
+	publishWithHistory(t, n, "demo", []byte(`{"seq":1,"v":"x"}`))
 	replies := w.next()
 	require.NotNil(t, replies[0].Push)
 	require.NotNil(t, replies[0].Push.Pub)
@@ -610,8 +619,7 @@ func TestEngineNamingUnheldDictionaryIsRefused(t *testing.T) {
 
 	// From here it is an ordinary connection.
 	w.subscribe("demo")
-	_, err := n.Publish("demo", []byte(`{"seq":1,"v":"x"}`))
-	require.NoError(t, err)
+	publishWithHistory(t, n, "demo", []byte(`{"seq":1,"v":"x"}`))
 	replies := w.next()
 	require.NotNil(t, replies[0].Push)
 	require.Zero(t, e.last.encoded.Load(), "nothing was compressed")
