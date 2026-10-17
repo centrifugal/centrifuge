@@ -4,7 +4,6 @@ go 1.26.0
 
 require (
 	cel.dev/cel-go v0.32.0
-	github.com/FZambia/eagle v0.2.0
 	github.com/centrifugal/fdelta v0.0.3
 	github.com/centrifugal/protocol v0.23.1
 	github.com/cespare/xxhash/v2 v2.3.0
