@@ -6,7 +6,9 @@ import (
 	"context"
 	"io"
 	"net"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -117,6 +119,39 @@ func (p *testTCPProxy) stop() {
 		_ = c.Close()
 	}
 	p.conns = nil
+}
+
+// RefreshAfter returned from AuthCredentialsFn must re-authenticate established
+// connections (send AUTH with fresh credentials) without reconnecting. Relies on the
+// default user being nopass, so AUTH succeeds with any password.
+func TestRedisShardAuthCredentialsRefreshAfter(t *testing.T) {
+	var numCalls atomic.Int64
+	shard, err := NewRedisShard(nil, RedisShardConfig{
+		Address: "127.0.0.1:6379",
+		AuthCredentialsFn: func(_ RedisAuthCredentialsContext) (RedisAuthCredentials, error) {
+			n := numCalls.Add(1)
+			return RedisAuthCredentials{
+				Username:     "default",
+				Password:     "token-" + strconv.FormatInt(n, 10),
+				RefreshAfter: time.Now().Add(50 * time.Millisecond),
+			}, nil
+		},
+	})
+	require.NoError(t, err)
+	defer shard.Close()
+
+	clientID := func() int64 {
+		id, err := shard.client.Do(context.Background(), shard.client.B().ClientId().Build()).AsInt64()
+		require.NoError(t, err)
+		return id
+	}
+	idBefore := clientID()
+	initialCalls := numCalls.Load()
+	require.Positive(t, initialCalls)
+	require.Eventually(t, func() bool {
+		return numCalls.Load() >= initialCalls+2
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, idBefore, clientID())
 }
 
 // TestRedisShardReadFailsFastDuringOutage pins that Redis commands issued

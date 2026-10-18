@@ -266,7 +266,11 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 			if err != nil {
 				return rueidis.AuthCredentials{}, err
 			}
-			return rueidis.AuthCredentials{Username: creds.Username, Password: creds.Password}, nil
+			return rueidis.AuthCredentials{
+				Username:     creds.Username,
+				Password:     creds.Password,
+				RefreshAfter: creds.RefreshAfter,
+			}, nil
 		}
 	}
 
@@ -425,6 +429,11 @@ type RedisAuthCredentialsContext struct {
 type RedisAuthCredentials struct {
 	Username string
 	Password string
+	// RefreshAfter, when non-zero, schedules AuthCredentialsFn to be called again at this
+	// time to re-authenticate an already established connection with fresh credentials
+	// (sends AUTH). Useful when the server limits the lifetime of a connection authenticated
+	// with a short-lived token (e.g. AWS ElastiCache IAM auth disconnects after 12 hours).
+	RefreshAfter time.Time
 }
 
 type RedisShardMode string
