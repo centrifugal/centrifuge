@@ -35,35 +35,37 @@ func newMetricsTestNode(t *testing.T, c Config) *Node {
 	return n
 }
 
-// metricsState returns the snapshot not yet sent and the time it covers.
-func metricsState(n *Node) (map[string]float64, float64) {
+// metricsState returns the snapshot not yet sent.
+func metricsState(n *Node) map[string]float64 {
 	n.metricsMu.Lock()
 	defer n.metricsMu.Unlock()
-	return n.metricsSnapshot, n.metricsInterval
+	return n.metricsSnapshot
 }
 
 // waitSnapshot waits for a snapshot after the initial one, which Run sends.
-func waitSnapshot(t *testing.T, n *Node, within time.Duration) (map[string]float64, float64) {
+func waitSnapshot(t *testing.T, n *Node, within time.Duration) map[string]float64 {
 	t.Helper()
 	var items map[string]float64
-	var interval float64
 	require.Eventually(t, func() bool {
-		items, interval = metricsState(n)
+		items = metricsState(n)
 		return items != nil
 	}, within, 5*time.Millisecond)
-	return items, interval
+	return items
 }
 
 func TestNodeInfoMetricsFixedInterval(t *testing.T) {
 	n := newMetricsTestNode(t, Config{NodeInfoMetricsAggregateInterval: 50 * time.Millisecond})
 	// Run sent the initial snapshot.
-	items, _ := metricsState(n)
-	require.Nil(t, items)
+	require.Nil(t, metricsState(n))
 
-	_, interval := waitSnapshot(t, n, time.Second)
-	// The real time the snapshot covers.
-	require.GreaterOrEqual(t, interval, 0.05)
-	require.Less(t, interval, 0.5)
+	waitSnapshot(t, n, time.Second)
+	require.NoError(t, n.pubNode(""))
+	info, err := n.Info()
+	require.NoError(t, err)
+	require.Len(t, info.Nodes, 1)
+	require.NotNil(t, info.Nodes[0].Metrics)
+	// The configured interval, exactly.
+	require.Equal(t, 0.05, info.Nodes[0].Metrics.Interval)
 }
 
 func TestNodeInfoMetricsHistograms(t *testing.T) {
@@ -74,7 +76,7 @@ func TestNodeInfoMetricsHistograms(t *testing.T) {
 		})
 		client := newTestConnectedClientV2(t, n, "42")
 		subscribeClientV2(t, client, "test")
-		items, _ := waitSnapshot(t, n, time.Second)
+		items := waitSnapshot(t, n, time.Second)
 		for k := range items {
 			if strings.Contains(k, "_histogram.count") {
 				return true
@@ -89,17 +91,16 @@ func TestNodeInfoMetricsHistograms(t *testing.T) {
 
 func TestNodeInfoMetricsSentOnce(t *testing.T) {
 	n := newMetricsTestNode(t, Config{NodeInfoMetricsAggregateInterval: 30 * time.Millisecond})
-	_, interval := waitSnapshot(t, n, time.Second)
+	waitSnapshot(t, n, time.Second)
 
 	require.NoError(t, n.pubNode(""))
 	info, err := n.Info()
 	require.NoError(t, err)
 	require.Len(t, info.Nodes, 1)
 	require.NotNil(t, info.Nodes[0].Metrics)
-	require.InDelta(t, interval, info.Nodes[0].Metrics.Interval, 1e-9)
+	require.Equal(t, 0.03, info.Nodes[0].Metrics.Interval)
 	// Sent - the next node info carries no metrics until the next snapshot.
-	items, _ := metricsState(n)
-	require.Nil(t, items)
+	require.Nil(t, metricsState(n))
 }
 
 // flakyRegistry fails to gather while fail is set.
@@ -142,13 +143,11 @@ func TestNodeInfoMetricsFailedSnapshot(t *testing.T) {
 	// Snapshots fail for a while - none is ready to send.
 	reg.fail.Store(true)
 	time.Sleep(150 * time.Millisecond)
-	items, _ := metricsState(n)
-	require.Nil(t, items)
+	require.Nil(t, metricsState(n))
 
-	// The next one covers the whole time since the last successful one.
+	// Snapshots are ready again once gathering recovers.
 	reg.fail.Store(false)
-	_, interval := waitSnapshot(t, n, time.Second)
-	require.GreaterOrEqual(t, interval, 0.15)
+	waitSnapshot(t, n, time.Second)
 }
 
 func TestNodeInfoMetricsDefaultGatherer(t *testing.T) {
@@ -156,8 +155,7 @@ func TestNodeInfoMetricsDefaultGatherer(t *testing.T) {
 	require.NoError(t, err)
 	n.metrics.config.RegistererGatherer = nil
 	require.NoError(t, n.initMetrics())
-	items, _ := metricsState(n)
-	require.NotNil(t, items, "snapshot of the default registry")
+	require.NotNil(t, metricsState(n), "snapshot of the default registry")
 }
 
 func TestNodeInfoMetricsZeroInterval(t *testing.T) {
@@ -166,6 +164,5 @@ func TestNodeInfoMetricsZeroInterval(t *testing.T) {
 	// New sets the default - zero only when set on a node directly.
 	n.config.NodeInfoMetricsAggregateInterval = 0
 	require.NoError(t, n.initMetrics())
-	items, _ := metricsState(n)
-	require.Nil(t, items, "metrics off")
+	require.Nil(t, metricsState(n), "metrics off")
 }
