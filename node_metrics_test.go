@@ -53,21 +53,6 @@ func waitSnapshot(t *testing.T, n *Node, within time.Duration) map[string]float6
 	return items
 }
 
-func TestNodeInfoMetricsFixedInterval(t *testing.T) {
-	n := newMetricsTestNode(t, Config{NodeInfoMetricsAggregateInterval: 50 * time.Millisecond})
-	// Run sent the initial snapshot.
-	require.Nil(t, metricsState(n))
-
-	waitSnapshot(t, n, time.Second)
-	require.NoError(t, n.pubNode(""))
-	info, err := n.Info()
-	require.NoError(t, err)
-	require.Len(t, info.Nodes, 1)
-	require.NotNil(t, info.Nodes[0].Metrics)
-	// The configured interval, exactly.
-	require.Equal(t, 0.05, info.Nodes[0].Metrics.Interval)
-}
-
 func TestNodeInfoMetricsHistograms(t *testing.T) {
 	hasHistogram := func(native bool) bool {
 		n := newMetricsTestNode(t, Config{
@@ -90,27 +75,37 @@ func TestNodeInfoMetricsHistograms(t *testing.T) {
 }
 
 func TestNodeInfoMetricsSentOnce(t *testing.T) {
-	n := newMetricsTestNode(t, Config{NodeInfoMetricsAggregateInterval: 30 * time.Millisecond})
-	waitSnapshot(t, n, time.Second)
+	// No snapshot from the ticker during the test - the one sent is set here.
+	n := newMetricsTestNode(t, Config{NodeInfoMetricsAggregateInterval: time.Hour})
+	// Run sent the initial snapshot.
+	require.Nil(t, metricsState(n))
 
+	n.metricsMu.Lock()
+	n.metricsSnapshot = map[string]float64{"test": 1}
+	n.metricsMu.Unlock()
+	// Published here or by the periodic node info - the result is the same.
 	require.NoError(t, n.pubNode(""))
 	info, err := n.Info()
 	require.NoError(t, err)
 	require.Len(t, info.Nodes, 1)
 	require.NotNil(t, info.Nodes[0].Metrics)
-	require.Equal(t, 0.03, info.Nodes[0].Metrics.Interval)
+	require.Equal(t, map[string]float64{"test": 1}, info.Nodes[0].Metrics.Items)
+	// The configured interval, exactly.
+	require.Equal(t, time.Hour.Seconds(), info.Nodes[0].Metrics.Interval)
 	// Sent - the next node info carries no metrics until the next snapshot.
 	require.Nil(t, metricsState(n))
 }
 
-// flakyRegistry fails to gather while fail is set.
+// flakyRegistry fails to gather while fail is set, counting failures.
 type flakyRegistry struct {
 	*prometheus.Registry
-	fail atomic.Bool
+	fail   atomic.Bool
+	failed atomic.Int64
 }
 
 func (r *flakyRegistry) Gather() ([]*dto.MetricFamily, error) {
 	if r.fail.Load() {
+		r.failed.Add(1)
 		return nil, errors.New("gather failed")
 	}
 	return r.Registry.Gather()
@@ -142,7 +137,12 @@ func TestNodeInfoMetricsFailedSnapshot(t *testing.T) {
 
 	// Snapshots fail for a while - none is ready to send.
 	reg.fail.Store(true)
-	time.Sleep(150 * time.Millisecond)
+	// Once a tick failed, a snapshot taken before is already stored - drop it.
+	require.Eventually(t, func() bool { return reg.failed.Load() >= 1 }, time.Second, 5*time.Millisecond)
+	n.metricsMu.Lock()
+	n.metricsSnapshot = nil
+	n.metricsMu.Unlock()
+	require.Eventually(t, func() bool { return reg.failed.Load() >= 3 }, time.Second, 5*time.Millisecond)
 	require.Nil(t, metricsState(n))
 
 	// Snapshots are ready again once gathering recovers.
