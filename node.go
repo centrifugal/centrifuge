@@ -71,9 +71,8 @@ type Node struct {
 
 	metricsMu sync.Mutex
 	// metricsSnapshot is the latest metrics snapshot not yet sent in node
-	// info, nil once sent. metricsInterval is the time in seconds it covers.
+	// info, nil once sent.
 	metricsSnapshot map[string]float64
-	metricsInterval float64
 
 	// subDissolver used to reliably clear unused subscriptions in Broker.
 	subDissolver *dissolve.Dissolver
@@ -512,10 +511,8 @@ func (n *Node) initMetrics() error {
 	}
 	n.metricsMu.Lock()
 	n.metricsSnapshot = initialSnapshot
-	n.metricsInterval = n.config.NodeInfoMetricsAggregateInterval.Seconds()
 	n.metricsMu.Unlock()
 	go func() {
-		last := time.Now()
 		ticker := time.NewTicker(n.config.NodeInfoMetricsAggregateInterval)
 		defer ticker.Stop()
 		for {
@@ -525,12 +522,9 @@ func (n *Node) initMetrics() error {
 			case <-ticker.C:
 				snapshot, err := snapshotter.Snapshot()
 				if err == nil {
-					now := time.Now()
 					n.metricsMu.Lock()
 					n.metricsSnapshot = snapshot
-					n.metricsInterval = now.Sub(last).Seconds()
 					n.metricsMu.Unlock()
-					last = now
 				}
 			}
 		}
@@ -1037,9 +1031,9 @@ func (n *Node) publishControl(cmd *controlpb.Command, nodeID string) error {
 	return n.controller.PublishControl(data, nodeID, "")
 }
 
-func (n *Node) getMetrics(items map[string]float64, interval float64) *controlpb.Metrics {
+func (n *Node) getMetrics(items map[string]float64) *controlpb.Metrics {
 	return &controlpb.Metrics{
-		Interval: interval,
+		Interval: n.config.NodeInfoMetricsAggregateInterval.Seconds(),
 		Items:    items,
 	}
 }
@@ -1067,7 +1061,7 @@ func (n *Node) pubNode(nodeID string) error {
 
 	n.metricsMu.Lock()
 	if n.metricsSnapshot != nil {
-		node.Metrics = n.getMetrics(n.metricsSnapshot, n.metricsInterval)
+		node.Metrics = n.getMetrics(n.metricsSnapshot)
 	}
 	// We only send metrics once when updated.
 	n.metricsSnapshot = nil
