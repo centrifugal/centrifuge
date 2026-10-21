@@ -972,7 +972,9 @@ func fzPubID(data []byte) (int, bool) {
 func (fc *fzConn) onMapReply(r *protocol.Reply, m fzMeta, wc *fzWire) {
 	w := fc.w
 	if r.Error != nil {
-		if r.Error.Code != ErrorAlreadySubscribed.Code && r.Id > wc.since {
+		// A concurrent pagination error is returned before the request touches
+		// any state: the subscribe holding the lock decides it.
+		if r.Error.Code != ErrorAlreadySubscribed.Code && r.Error.Code != ErrorConcurrentPagination.Code && r.Id > wc.since {
 			if wc.state == wSub {
 				w.violate("client %d wire: map subscribe error %d on %s while subscribed", fc.idx, r.Error.Code, m.ch)
 			}
