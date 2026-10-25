@@ -1808,7 +1808,7 @@ func testRedisClientSubscribeRecover(t *testing.T, tt historyRedisTest, rt recov
 	})
 	require.NoError(t, err)
 
-	historyResult, err := node.recoverHistory(channel, StreamPosition{rt.SinceOffset, streamTop.Epoch}, 0)
+	historyResult, err := node.recoverHistory(channel, StreamPosition{rt.SinceOffset, streamTop.Epoch}, 0, 0)
 	require.NoError(t, err)
 	recoveredPubs, recovered := isStreamRecovered(historyResult, rt.SinceOffset, streamTop.Epoch, nil, nil)
 	require.Equal(t, rt.NumRecovered, len(recoveredPubs))

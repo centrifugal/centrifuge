@@ -543,6 +543,12 @@ type HistoryEvent struct {
 // HistoryReply contains fields determining the reaction on history request.
 type HistoryReply struct {
 	Result *HistoryResult
+	// MaxPublicationLimit allows to override Config.HistoryMaxPublicationLimit for
+	// this request: the maximum number of publications returned when Result is nil.
+	// HistoryEvent.Filter carries the limit capped by Config.HistoryMaxPublicationLimit;
+	// with MaxPublicationLimit set, the limit the client asked for is capped by it
+	// instead. Zero value means using Config.HistoryMaxPublicationLimit.
+	MaxPublicationLimit int
 }
 
 // HistoryCallback should be called with HistoryReply or error.

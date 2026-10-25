@@ -781,6 +781,104 @@ func TestClientSubscribeRecover(t *testing.T) {
 	}
 }
 
+// SubscribeOptions.RecoveryMaxPublicationLimit overrides
+// Config.RecoveryMaxPublicationLimit for one subscription, raising or lowering
+// it: 8 publications missed here.
+func TestClientSubscribeRecover_SubscriptionLimit(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		configLimit  int
+		subLimit     int
+		recovered    bool
+		numRecovered int
+	}{
+		{"config limit", 3, 0, false, 0},
+		{"subscription limit raises it", 3, 10, true, 8},
+		{"subscription limit of the missed number", 3, 8, true, 8},
+		{"subscription limit lowers it", 0, 5, false, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			node := defaultNodeNoHandlers()
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			node.config.RecoveryMaxPublicationLimit = tt.configLimit
+			node.OnConnect(func(c *Client) {
+				c.OnSubscribe(func(_ SubscribeEvent, cb SubscribeCallback) {
+					cb(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true, RecoveryMaxPublicationLimit: tt.subLimit}}, nil)
+				})
+			})
+			const ch = "recover_subscription_limit"
+			for i := 1; i <= 10; i++ {
+				_, err := node.Publish(ch, []byte(`{"n":`+strconv.Itoa(i)+`}`), WithHistory(10, time.Minute))
+				require.NoError(t, err)
+			}
+			_, top, err := node.broker.History(ch, HistoryOptions{})
+			require.NoError(t, err)
+
+			client := newTestClientV2(t, node, "u")
+			connectClientV2(t, client)
+			rw := testReplyWriterWrapper()
+			require.Nil(t, client.handleSubscribe(&protocol.SubscribeRequest{Channel: ch, Recover: true, Epoch: top.Epoch, Offset: 2}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+			require.Nil(t, rw.replies[0].Error)
+			res := extractSubscribeResult(rw.replies)
+			require.Equal(t, tt.recovered, res.Recovered)
+			require.Len(t, res.Publications, tt.numRecovered)
+		})
+	}
+}
+
+// In cache recovery with a tags filter, the subscription's limit bounds how
+// far back the newest publication passing the filter is looked for.
+func TestClientSubscribeCacheRecovery_SubscriptionLimit(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name     string
+		subLimit int
+		found    bool
+	}{
+		{"config limit", 0, false},
+		{"subscription limit", 4, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			node := defaultNodeNoHandlers()
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			node.config.RecoveryMaxPublicationLimit = 2
+			node.OnConnect(func(c *Client) {
+				c.OnSubscribe(func(_ SubscribeEvent, cb SubscribeCallback) {
+					cb(SubscribeReply{Options: SubscribeOptions{
+						EnableRecovery:              true,
+						RecoveryMode:                RecoveryModeCache,
+						ServerTagsFilter:            &FilterNode{Key: "team", Cmp: "eq", Val: "eng"},
+						RecoveryMaxPublicationLimit: tt.subLimit,
+					}}, nil)
+				})
+			})
+			const ch = "cache_recovery_subscription_limit"
+			// The newest publication passing the filter is the 4th newest.
+			for i, team := range []string{"eng", "sales", "sales", "sales"} {
+				_, err := node.Publish(ch, []byte(`{"n":`+strconv.Itoa(i)+`}`), WithHistory(10, time.Minute), WithTags(map[string]string{"team": team}))
+				require.NoError(t, err)
+			}
+
+			client := newTestClientV2(t, node, "u")
+			connectClientV2(t, client)
+			rw := testReplyWriterWrapper()
+			require.Nil(t, client.handleSubscribe(&protocol.SubscribeRequest{Channel: ch, Recover: true}, &protocol.Command{Id: 1}, time.Now(), rw.rw))
+			require.Nil(t, rw.replies[0].Error)
+			res := extractSubscribeResult(rw.replies)
+			if !tt.found {
+				require.Empty(t, res.Publications)
+				return
+			}
+			require.Len(t, res.Publications, 1)
+			require.Equal(t, "eng", res.Publications[0].Tags["team"])
+		})
+	}
+}
+
 const historyIterationChannel = "test"
 
 type historyIterationTest struct {
