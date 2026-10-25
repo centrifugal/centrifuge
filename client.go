@@ -5744,8 +5744,9 @@ func (c *Client) writePublicationUpdatePosition(
 	return c.writeEncodedPushData(data, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
 }
 
-// publicationDataUpdatePositionLocked checks a publication with offset against
-// the subscription to ch and advances its position. It returns the data to write
+// publicationDataUpdatePositionLocked checks a publication against the
+// subscription to ch and advances its position (a publication without offset,
+// queued while the client subscribed, has none to advance). It returns the data to write
 // to the client, ok is false if nothing must be written. c.mu must be held.
 //
 // nowUnix is the time the position counts as checked at, read once per broadcast
