@@ -4574,7 +4574,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	// The subscribe push and the recovered publications go before the commit, as
 	// the reply of a client-side subscribe does: an unsubscribe waits for the
 	// subscribe until the commit, so its push can't come before them. A write
-	// error means the client is closing, the commit rolls back then.
+	// error means the client is closing, but the close may run after the commit.
 	subscribePushDisabled := hasFlag(c.transport.DisabledPushFlags(), PushFlagSubscribe)
 	writeErr := c.writeSubscribePush(channel, subCtx.result, subscribePushDisabled)
 	// Commit the reservation into c.channels, or roll back the hub entry if the
@@ -4590,6 +4590,11 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 		if subscribingCh != nil {
 			close(subscribingCh)
 		}
+		// The committed subscription publishes its leave when it ends, so it
+		// publishes its join too.
+		if subCtx.clientInfo != nil {
+			c.publishJoinAndPresence(channel, subCtx.channelContext, subCtx.clientInfo)
+		}
 		return writeErr
 	}
 	// Publications which came since the sync point follow the recovered ones.
@@ -4600,9 +4605,6 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	// not come before the publications queued since the sync point.
 	if subscribingCh != nil {
 		close(subscribingCh)
-	}
-	if subscribePushDisabled {
-		return nil
 	}
 	if subCtx.clientInfo != nil {
 		if isInTest.Load() && channel == testChannelSubscribeJoinRecovery { // Only for tests.
