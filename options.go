@@ -202,6 +202,9 @@ type SubscribeOptions struct {
 	// AllowedDeltaTypes is a whitelist of DeltaType subscribers can negotiate. At this point Centrifuge
 	// only supports DeltaTypeFossil. If zero value – clients won't be able to negotiate delta encoding
 	// within a channel and will receive full data in publications.
+	// With positioning or recovery, all publications to the channel must be published with
+	// history: a subscriber fails to apply the delta of a publication following one published
+	// without history. Delta is not used for subscriptions with a tags filter.
 	// Delta encoding is an EXPERIMENTAL feature and may be changed.
 	AllowedDeltaTypes []DeltaType
 	// Source is a way to mark the source of Subscription - i.e. where it comes from. May be useful

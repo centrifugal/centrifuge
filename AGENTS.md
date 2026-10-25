@@ -13,7 +13,7 @@ For a subscription with positioning or recovery (stream and map paths):
 
 A stream subscription without positioning or recovery uses `StartQueueing` instead of `StartBuffering` and skips step 2: it is in the hub before its result is written, and its publications must still come after the result.
 
-Publications without offset can't be synced: they are dropped until `StopBuffering` has written the queue.
+Publications without offset can't be merged: they are dropped before the sync point (`ReadBuffered`, or `StartQueueing`) and queued after it, as the result is written after it.
 
 All buffers of a client share one limit, `ClientQueueMaxSize`, counted separately from its write queue: it bounds what a connection holds while it subscribes, however many channels it subscribes to.
 
