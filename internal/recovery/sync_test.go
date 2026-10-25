@@ -173,24 +173,36 @@ func TestPubSubSyncCollectOverflow(t *testing.T) {
 }
 
 func TestPubSubSyncWithoutOffset(t *testing.T) {
-	// A publication without offset can't be synced: it is dropped till the queue is
-	// written, then written as usual. Written while the queue is, it could come before
-	// queued publications which were published before it.
+	// A publication without offset can't be merged: it is dropped before the sync
+	// point. After it, it is queued in order with the others: the result is written
+	// then, and a publication which comes after the result must reach the client.
 	s := &testSync{}
 	r := &recorder{}
 	b := s.StartBuffering("ch")
-	r.publish(s, "ch", 0, 1)
+	r.publish(s, "ch", 0, 1) // Dropped.
 	s.ReadBuffered(b, "", 0)
 	r.publish(s, "ch", 0, 1)
 	s.SyncPublication("ch", &protocol.Publication{Offset: 1}, "", 1, func() {
 		r.write(1)()
-		r.publish(s, "ch", 0, 1) // Dropped: publication 2 is still queued.
+		r.publish(s, "ch", 0, 1) // Queued behind publication 2.
 	}, 0)
 	r.publish(s, "ch", 2, 1)
 	require.False(t, s.StopBuffering(b, call))
-	require.Equal(t, []uint64{1, 2}, r.get())
+	require.Equal(t, []uint64{0, 1, 2, 0}, r.get())
 	r.publish(s, "ch", 0, 1)
-	require.Equal(t, []uint64{1, 2, 0}, r.get())
+	require.Equal(t, []uint64{0, 1, 2, 0, 0}, r.get())
+}
+
+func TestPubSubSyncQueueingWithoutOffset(t *testing.T) {
+	// Without a sync point (StartQueueing), a publication without offset is queued
+	// from the start.
+	s := &testSync{}
+	r := &recorder{}
+	b := s.StartQueueing("ch")
+	r.publish(s, "ch", 0, 1)
+	require.Empty(t, r.get())
+	require.False(t, s.StopBuffering(b, call))
+	require.Equal(t, []uint64{0}, r.get())
 }
 
 func TestPubSubSyncNewerBufferForChannel(t *testing.T) {

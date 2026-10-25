@@ -1426,6 +1426,48 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 	}
 }
 
+// A publication without offset which comes after the subscribe reply was written
+// reaches the client: it is published here while the reply is written, before
+// the subscription's buffer is stopped.
+func TestClientSubscribeReceivePublicationWithoutOffsetAfterReply(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"plain", "positioning"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			node := defaultTestNode()
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			transport := newTestTransport(func() {})
+			transport.sink = make(chan []byte, 100)
+			newCtx := SetCredentials(context.Background(), &Credentials{UserID: "42"})
+			client, _ := newClient(newCtx, node, transport)
+			connectClientV2(t, client)
+
+			rw := &replyWriter{write: func(rep *protocol.Reply) {
+				_, err := node.Publish("test", []byte(`{"text": "after reply"}`))
+				require.NoError(t, err)
+			}}
+			client.channels["test"] = ChannelContext{}
+			subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
+				Channel: "test",
+			}, SubscribeReply{Options: SubscribeOptions{EnablePositioning: name == "positioning"}}, &protocol.Command{}, false, time.Now(), rw)
+			require.Nil(t, subCtx.disconnect)
+			require.Nil(t, subCtx.err)
+
+			timeout := time.After(time.Second)
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "after reply") {
+						return
+					}
+				case <-timeout:
+					require.Fail(t, "publication published after the subscribe reply was lost")
+				}
+			}
+		})
+	}
+}
+
 func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
 	t.Parallel()
 	node := defaultTestNode()
@@ -9040,9 +9082,10 @@ func TestClientRecoveryEmptyEpochRead(t *testing.T) {
 }
 
 // A publication without offset (published without history) into a channel which a
-// client subscribes to with recovery can't be synced with the recovery: it is dropped
-// until the subscribe result is written, so nothing of the channel comes before it.
-// After that such publications are delivered as usual.
+// client subscribes to with recovery can't be merged into the recovery: it is
+// dropped before the sync point. After the sync point it is queued with the other
+// publications and written after the subscribe result, so nothing of the channel
+// comes before the result, and nothing which comes after the result is lost.
 func TestClientRecoveryPublicationsWithoutOffsetDuringSubscribe(t *testing.T) {
 	setIsInTest(t)
 
@@ -9135,7 +9178,7 @@ func TestClientRecoveryPublicationsWithoutOffsetDuringSubscribe(t *testing.T) {
 				}
 				return slices.Contains(got, `{"n":"after_subscribe"}`)
 			}, 2*time.Second, 10*time.Millisecond)
-			require.Equal(t, []string{"result", `{"n":"after_subscribe"}`}, got)
+			require.Equal(t, []string{"result", `{"n":"at_sync_point"}`, `{"n":"after_subscribe"}`}, got)
 			require.True(t, client.IsSubscribed(ch))
 		})
 	}
@@ -9154,20 +9197,21 @@ func (b *subscribeHookMapBroker) Subscribe(channels ...string) error {
 	return b.MemoryMapBroker.Subscribe(channels...)
 }
 
-// Publications into an ephemeral (streamless) map channel have no offset, so they
-// can't be synced with a subscribe in progress. They must not reach the client before
-// its subscribe result (clients drop them then): they are dropped until the result is
-// written, and the following ones are delivered as usual.
-func TestClientMapEphemeralDropsPublicationsDuringSubscribe(t *testing.T) {
+// Publications into an ephemeral (streamless) map channel have no offset, so there
+// is nothing to sync them with. They must not reach the client before its subscribe
+// result (clients drop them then), and must not be lost: the client has no stream
+// to recover an update it missed. They are queued from before the subscription is in
+// the hub and written after the result, in order.
+func TestClientMapEphemeralQueuesPublicationsDuringSubscribe(t *testing.T) {
 	setIsInTest(t)
 	for _, route := range []string{"live", "state_then_live"} {
 		t.Run(route, func(t *testing.T) {
-			testMapEphemeralDropsPublicationsDuringSubscribe(t, route)
+			testMapEphemeralQueuesPublicationsDuringSubscribe(t, route)
 		})
 	}
 }
 
-func testMapEphemeralDropsPublicationsDuringSubscribe(t *testing.T, route string) {
+func testMapEphemeralQueuesPublicationsDuringSubscribe(t *testing.T, route string) {
 	ch := testChannelRecoveryOrderingPrefix + "_ephemeral_" + route
 	node, err := New(Config{
 		LogLevel:   LogLevelTrace,
@@ -9247,7 +9291,7 @@ func testMapEphemeralDropsPublicationsDuringSubscribe(t *testing.T, route string
 		}
 		return slices.Contains(got, `{"n":"after"}`)
 	}, 2*time.Second, 10*time.Millisecond)
-	require.Equal(t, []string{"result", `{"n":"after"}`}, got)
+	require.Equal(t, []string{"result", `{"n":"collected"}`, `{"n":"during"}`, `{"n":"after"}`}, got)
 }
 
 // holdJoinBroker holds PublishJoin until released and records the order of

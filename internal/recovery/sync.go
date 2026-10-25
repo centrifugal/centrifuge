@@ -22,8 +22,9 @@ import (
 //  3. StopBuffering is called by the subscriber once its result is written. It
 //     writes the queued publications in order, and lets the following ones through.
 //
-// A publication without offset can't be synced: it is dropped until StopBuffering
-// has written the queue.
+// A publication without offset can't be merged: it is dropped in phase 1, and
+// queued as any other in phase 2. The result is written in phase 2, so a
+// publication which comes after it is never dropped.
 //
 // All buffers of a PubSubSync share one limit, passed to SyncPublication: it bounds
 // what a connection holds while it subscribes, however many channels it subscribes
@@ -134,9 +135,9 @@ func (s *PubSubSync[T]) Buffering() bool {
 
 // SyncPublication takes a publication of the given epoch into the channel's buffer
 // if the channel is buffering: in phase 1 pub is collected, in phase 2 item is
-// queued (a publication without offset is dropped instead, till the queue is
-// written). It returns false if the channel isn't buffering, and then the caller
-// writes the publication itself. It never blocks for long.
+// queued (a publication without offset is dropped in phase 1). It returns false
+// if the channel isn't buffering, and then the caller writes the publication
+// itself. It never blocks for long.
 //
 // size counts towards maxSize, the limit of the size of the data of the
 // publications all buffers hold, zero means no limit. A publication over it
@@ -150,13 +151,12 @@ func (s *PubSubSync[T]) SyncPublication(channel string, pub *protocol.Publicatio
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if pub.Offset == 0 {
-		// Can't be synced: dropped until the queue is written. Written right away
-		// earlier, it could come before the queued publications.
-		return b.phase != phaseStopped
-	}
 	switch b.phase {
 	case phaseCollecting:
+		if pub.Offset == 0 {
+			// Can't be merged into the result, which is not written yet.
+			return true
+		}
 		if b.pubsOverflowed {
 			return true
 		}

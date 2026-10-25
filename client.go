@@ -5753,8 +5753,9 @@ func (c *Client) writePublicationUpdatePosition(
 	return c.writeEncodedPushData(data, ch, pub.Key, protocol.FrameTypePushPublication, batchConfig)
 }
 
-// publicationDataUpdatePositionLocked checks a publication with offset against
-// the subscription to ch and advances its position. It returns the data to write
+// publicationDataUpdatePositionLocked checks a publication against the
+// subscription to ch and advances its position (a publication without offset,
+// queued while the client subscribed, has none to advance). It returns the data to write
 // to the client, ok is false if nothing must be written. c.mu must be held.
 //
 // nowUnix is the time the position counts as checked at, read once per broadcast
@@ -5768,8 +5769,9 @@ func (c *Client) publicationDataUpdatePositionLocked(
 		return nil, false
 	}
 	deltaAllowed := channelHasFlag(channelContext.flags, flagDeltaAllowed)
-	if !channelHasFlag(channelContext.flags, flagPositioning) {
-		// Publication with Offset, but client does not use positioning.
+	if pub.Offset == 0 || !channelHasFlag(channelContext.flags, flagPositioning) {
+		// Publication without offset (queued while the client subscribed), or
+		// with offset, but client does not use positioning.
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			return nil, false
 		}
@@ -5886,7 +5888,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 	if c.pubSubSync.Buffering() {
 		// The client may be subscribing to ch: the publication goes to its recovery
 		// buffer, or is queued until the subscription's result is written (or, without
-		// offset, dropped till then).
+		// offset, dropped before the sync point).
 		syncPub := pub
 		if prep.wasFiltered {
 			syncPub = prep.filteredPub
