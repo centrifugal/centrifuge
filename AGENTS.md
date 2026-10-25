@@ -11,7 +11,7 @@ For a subscription with positioning or recovery (stream and map paths):
 3. Commit, write the result, then `StopBuffering`. It writes the publications queued meanwhile; if it returns true, resubscribe the client with insufficient state. `writePendingPublication` checks and writes each of them under `c.mu`: an unsubscribe of the committed subscription doesn't wait for `StopBuffering`, so it must find each publication either written or not yet checked.
 4. Every other exit calls `CancelBuffering`. A leaked buffer queues the channel's publications forever.
 
-A stream subscription without positioning or recovery uses `StartQueueing` instead of `StartBuffering` and skips step 2: it is in the hub before its result is written, and its publications must still come after the result.
+A subscription without positioning or recovery (stream, or a streamless map) uses `StartQueueing` instead of `StartBuffering` and skips step 2: it is in the hub before its result is written, and its publications must still come after the result.
 
 Publications without offset can't be merged: they are dropped before the sync point (`ReadBuffered`, or `StartQueueing`) and queued after it, as the result is written after it.
 

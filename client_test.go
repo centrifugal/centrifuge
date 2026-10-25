@@ -9154,20 +9154,21 @@ func (b *subscribeHookMapBroker) Subscribe(channels ...string) error {
 	return b.MemoryMapBroker.Subscribe(channels...)
 }
 
-// Publications into an ephemeral (streamless) map channel have no offset, so they
-// can't be synced with a subscribe in progress. They must not reach the client before
-// its subscribe result (clients drop them then): they are dropped until the result is
-// written, and the following ones are delivered as usual.
-func TestClientMapEphemeralDropsPublicationsDuringSubscribe(t *testing.T) {
+// Publications into an ephemeral (streamless) map channel have no offset, so there
+// is nothing to sync them with. They must not reach the client before its subscribe
+// result (clients drop them then), and must not be lost: the client has no stream
+// to recover an update it missed. They are queued from before the subscription is in
+// the hub and written after the result, in order.
+func TestClientMapEphemeralQueuesPublicationsDuringSubscribe(t *testing.T) {
 	setIsInTest(t)
 	for _, route := range []string{"live", "state_then_live"} {
 		t.Run(route, func(t *testing.T) {
-			testMapEphemeralDropsPublicationsDuringSubscribe(t, route)
+			testMapEphemeralQueuesPublicationsDuringSubscribe(t, route)
 		})
 	}
 }
 
-func testMapEphemeralDropsPublicationsDuringSubscribe(t *testing.T, route string) {
+func testMapEphemeralQueuesPublicationsDuringSubscribe(t *testing.T, route string) {
 	ch := testChannelRecoveryOrderingPrefix + "_ephemeral_" + route
 	node, err := New(Config{
 		LogLevel:   LogLevelTrace,
@@ -9247,7 +9248,7 @@ func testMapEphemeralDropsPublicationsDuringSubscribe(t *testing.T, route string
 		}
 		return slices.Contains(got, `{"n":"after"}`)
 	}, 2*time.Second, 10*time.Millisecond)
-	require.Equal(t, []string{"result", `{"n":"after"}`}, got)
+	require.Equal(t, []string{"result", `{"n":"collected"}`, `{"n":"during"}`, `{"n":"after"}`}, got)
 }
 
 // holdJoinBroker holds PublishJoin until released and records the order of

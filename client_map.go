@@ -866,9 +866,13 @@ func (c *Client) handleMapTransitionToLive(
 	positioning := opts.EnablePositioning || opts.EnableRecovery
 
 	// Start coordination: buffer -> add subscription -> read stream -> merge. A
-	// streamless subscription has nothing to merge: its publications, which have no
-	// offset, are dropped until its reply is written.
-	pubSubBuf = c.pubSubSync.StartBuffering(channel)
+	// streamless subscription has nothing to merge: its publications are queued
+	// until its reply is written.
+	if positioning {
+		pubSubBuf = c.pubSubSync.StartBuffering(channel)
+	} else {
+		pubSubBuf = c.pubSubSync.StartQueueing(channel)
+	}
 
 	chanID, err := c.node.addSubscription(channel, sub)
 	if err != nil {

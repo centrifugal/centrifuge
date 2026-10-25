@@ -6443,3 +6443,48 @@ func TestMapKeyCleanupBeforeNextMapCommit(t *testing.T) {
 	delete(client.channels, ch)
 	client.mu.Unlock()
 }
+
+// A publication which comes after the subscribe reply of a streamless map
+// subscription was written reaches the client: it is published here while the
+// reply is written, before the subscription's buffer is stopped.
+func TestMapSubscribe_StreamlessPublicationAfterReply(t *testing.T) {
+	t.Parallel()
+	node, _ := newTestNodeWithMapBroker(t)
+	channel := "test_map_streamless_after_reply"
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+		})
+	})
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	transport.setProtocolVersion(ProtocolVersion2)
+	transport.sink = make(chan []byte, 100)
+	client := newTestConnectedClientWithTransport(t, ctx, node, transport, "user1")
+
+	rw := &replyWriter{write: func(rep *protocol.Reply) {
+		_, err := node.MapPublish(context.Background(), channel, "key1", MapPublishOptions{
+			Data: []byte(`{"value":"after reply"}`),
+		})
+		require.NoError(t, err)
+	}}
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: channel,
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+	}, &protocol.Command{Id: 1}, time.Now(), rw))
+
+	timeout := time.After(time.Second)
+	for {
+		select {
+		case data := <-transport.sink:
+			if strings.Contains(string(data), "after reply") {
+				return
+			}
+		case <-timeout:
+			require.Fail(t, "publication published after the subscribe reply was lost")
+		}
+	}
+}
