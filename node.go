@@ -1809,22 +1809,32 @@ func (n *Node) historySingleFlight(ch string, opts HistoryOptions) (HistoryResul
 	return result.(HistoryResult), err
 }
 
-// recoverHistory recovers publications since StreamPosition last seen by client.
-func (n *Node) recoverHistory(ch string, since StreamPosition, historyMetaTTL time.Duration) (HistoryResult, error) {
-	n.metrics.incActionCount("history_recover", ch)
-	limit := NoLimit
-	maxPublicationLimit := n.config.RecoveryMaxPublicationLimit
-	if maxPublicationLimit > 0 {
-		limit = maxPublicationLimit
+// recoveryLimit returns the History limit for a recovery: maxPublications, the
+// subscription's own limit, when set, Config.RecoveryMaxPublicationLimit otherwise.
+func (n *Node) recoveryLimit(maxPublications int) int {
+	if maxPublications <= 0 {
+		maxPublications = n.config.RecoveryMaxPublicationLimit
 	}
+	if maxPublications > 0 {
+		return maxPublications
+	}
+	return NoLimit
+}
+
+// recoverHistory recovers publications since StreamPosition last seen by client,
+// at most maxPublications of them - see recoveryLimit.
+func (n *Node) recoverHistory(ch string, since StreamPosition, historyMetaTTL time.Duration, maxPublications int) (HistoryResult, error) {
+	n.metrics.incActionCount("history_recover", ch)
+	limit := n.recoveryLimit(maxPublications)
 	return n.History(ch, WithHistoryFilter(HistoryFilter{
 		Limit: limit,
 		Since: &since,
 	}), WithHistoryMetaTTL(historyMetaTTL))
 }
 
-// recoverCache recovers last publication in channel.
-func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, tf *tagsFilter, serverTf *tagsFilter) (*Publication, *Publication, StreamPosition, error) {
+// recoverCache recovers last publication in channel. With a tags filter it looks
+// through at most maxPublications of the latest ones - see recoveryLimit.
+func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, maxPublications int, tf *tagsFilter, serverTf *tagsFilter) (*Publication, *Publication, StreamPosition, error) {
 	n.metrics.incActionCount("history_recover_cache", ch)
 	if tf == nil && serverTf == nil {
 		hr, err := n.History(ch, WithHistoryFilter(HistoryFilter{
@@ -1841,14 +1851,8 @@ func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, tf *tagsFil
 		return latestPublication, latestPublication, hr.StreamPosition, nil
 	}
 
-	limit := NoLimit
-	maxPublicationLimit := n.config.RecoveryMaxPublicationLimit
-	if maxPublicationLimit > 0 {
-		limit = maxPublicationLimit
-	}
-
 	hr, err := n.History(ch, WithHistoryFilter(HistoryFilter{
-		Limit:   limit,
+		Limit:   n.recoveryLimit(maxPublications),
 		Reverse: true,
 	}), WithHistoryMetaTTL(historyMetaTTL))
 	if err != nil {

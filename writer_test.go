@@ -190,6 +190,9 @@ func TestWriterWriteMany(t *testing.T) {
 
 	maxMessagesInFrame := 4
 	numMessages := 4 * maxMessagesInFrame
+	// A timer flush writes under the writer lock, which enqueue below waits for:
+	// the transport must not block until all messages are enqueued.
+	transport.ch = make(chan struct{}, numMessages)
 
 	// Timer-driven mode: run() is non-blocking when writeDelay > 0 and useWriteTimer is true.
 	w.run(10*time.Millisecond, maxMessagesInFrame, 0, true)

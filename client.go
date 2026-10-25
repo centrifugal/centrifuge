@@ -3609,12 +3609,7 @@ func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Comma
 			Epoch:  req.Since.Epoch,
 		}
 	}
-	historyFilter.Limit = int(req.Limit)
-
-	maxPublicationLimit := c.node.config.HistoryMaxPublicationLimit
-	if maxPublicationLimit > 0 && (historyFilter.Limit < 0 || historyFilter.Limit > maxPublicationLimit) {
-		historyFilter.Limit = maxPublicationLimit
-	}
+	historyFilter.Limit = capHistoryLimit(int(req.Limit), c.node.config.HistoryMaxPublicationLimit)
 
 	historyFilter.Reverse = req.Reverse
 
@@ -3633,8 +3628,12 @@ func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Comma
 		var offset uint64
 		var epoch string
 		if reply.Result == nil {
+			filter := event.Filter
+			if reply.MaxPublicationLimit > 0 {
+				filter.Limit = capHistoryLimit(int(req.Limit), reply.MaxPublicationLimit)
+			}
 			result, err := c.node.History(event.Channel,
-				WithHistoryFilter(event.Filter),
+				WithHistoryFilter(filter),
 			)
 			if err != nil {
 				c.logWriteInternalErrorFlush(channel, protocol.FrameTypeHistory, cmd, err, "error getting history", started, rw)
@@ -3671,6 +3670,16 @@ func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Comma
 
 	c.eventHub.historyHandler(event, cb)
 	return nil
+}
+
+// capHistoryLimit returns the limit a client asked history for, capped by
+// maxPublications when that is set: a client asking for all publications (a
+// negative limit) gets maxPublications of them.
+func capHistoryLimit(limit, maxPublications int) int {
+	if maxPublications > 0 && (limit < 0 || limit > maxPublications) {
+		return maxPublications
+	}
+	return limit
 }
 
 func (c *Client) releaseHistoryCommandReply(reply *protocol.Reply) {
@@ -5283,7 +5292,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 				var latestPub *Publication
 				var recoveredPub *Publication
 				var currentSP StreamPosition
-				latestPub, recoveredPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, sub.tagsFilter, sub.serverTagsFilter)
+				latestPub, recoveredPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, reply.Options.RecoveryMaxPublicationLimit, sub.tagsFilter, sub.serverTagsFilter)
 				if err != nil {
 					c.node.logger.log(newErrorLogEntry(err, "error on cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 					return handleErr(err)
@@ -5301,7 +5310,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					}
 					if cacheReply.Populated && !recovered {
 						// One more chance to recover in case we know cache was populated.
-						latestPub, recoveredPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, sub.tagsFilter, sub.serverTagsFilter)
+						latestPub, recoveredPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, reply.Options.RecoveryMaxPublicationLimit, sub.tagsFilter, sub.serverTagsFilter)
 						if err != nil {
 							c.node.logger.log(newErrorLogEntry(err, "error on populated cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 							return handleErr(err)
@@ -5327,7 +5336,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					}
 				}
 			} else {
-				historyResult, err := c.node.recoverHistory(channel, StreamPosition{Offset: cmdOffset, Epoch: cmdEpoch}, reply.Options.HistoryMetaTTL)
+				historyResult, err := c.node.recoverHistory(channel, StreamPosition{Offset: cmdOffset, Epoch: cmdEpoch}, reply.Options.HistoryMetaTTL, reply.Options.RecoveryMaxPublicationLimit)
 				if err != nil {
 					if errors.Is(err, ErrorUnrecoverablePosition) {
 						if req.Flag&subscriptionFlagRejectUnrecovered != 0 {

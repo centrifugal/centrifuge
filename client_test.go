@@ -3331,6 +3331,49 @@ func TestClientHistoryTakeover(t *testing.T) {
 	require.NotZero(t, result.Epoch)
 }
 
+// HistoryReply.MaxPublicationLimit caps the limit the client asked for
+// instead of Config.HistoryMaxPublicationLimit, raising or lowering it.
+func TestClientHistoryReplyMaxPublicationLimit(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name         string
+		configLimit  int
+		replyLimit   int
+		requested    int32
+		numPublished int
+	}{
+		{"config limit", 2, 0, 8, 2},
+		{"reply limit raises it", 2, 6, 8, 6},
+		{"reply limit above the request", 2, 20, 8, 8},
+		{"reply limit for all publications", 2, 6, -1, 6},
+		{"reply limit lowers it", 0, 3, 8, 3},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			node := defaultTestNode()
+			node.config.HistoryMaxPublicationLimit = tt.configLimit
+			defer func() { _ = node.Shutdown(context.Background()) }()
+
+			client := newTestClient(t, node, "42")
+			client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
+				cb(HistoryReply{MaxPublicationLimit: tt.replyLimit}, nil)
+			})
+			for range 10 {
+				_, err := node.Publish("test", []byte(`{}`), WithHistory(10, time.Minute))
+				require.NoError(t, err)
+			}
+			connectClientV2(t, client)
+			subscribeClientV2(t, client, "test")
+
+			rw := testReplyWriterWrapper()
+			require.NoError(t, client.handleHistory(&protocol.HistoryRequest{Channel: "test", Limit: tt.requested}, &protocol.Command{}, time.Now(), rw.rw))
+			require.Len(t, rw.replies, 1)
+			require.Nil(t, rw.replies[0].Error)
+			require.Len(t, rw.replies[0].History.Publications, tt.numPublished)
+		})
+	}
+}
+
 func TestClientHistoryUnrecoverablePositionEpoch(t *testing.T) {
 	t.Parallel()
 	node := defaultTestNode()
