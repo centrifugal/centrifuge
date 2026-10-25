@@ -9389,6 +9389,75 @@ func TestJoinLeaveOrder_UnsubscribeBeforeJoinPublished(t *testing.T) {
 	}
 }
 
+// noSubscribePushTransport is a test transport with the subscribe push disabled.
+type noSubscribePushTransport struct {
+	*testTransport
+}
+
+func (t *noSubscribePushTransport) DisabledPushFlags() uint64 {
+	return t.testTransport.DisabledPushFlags() | PushFlagSubscribe
+}
+
+// A server-side subscription which is committed publishes its join, as it
+// publishes its leave when it ends: also when its subscribe push overflows the
+// client queue (the client is closed after the commit) and when the transport
+// disables the subscribe push.
+func TestJoinLeaveOrder_ServerSideSubscribeWithoutPush(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"queue_overflow", "push_disabled"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			node, err := New(Config{
+				LogLevel:           LogLevelError,
+				LogHandler:         func(entry LogEntry) {},
+				ClientQueueMaxSize: 1000,
+			})
+			require.NoError(t, err)
+			memBroker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+			require.NoError(t, err)
+			broker := &holdJoinBroker{
+				MemoryBroker: memBroker,
+				joinEntered:  make(chan struct{}, 1),
+				releaseJoin:  make(chan struct{}),
+			}
+			close(broker.releaseJoin)
+			node.SetBroker(broker)
+			require.NoError(t, node.Run())
+			t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+			ctx, cancelFn := context.WithCancel(context.Background())
+			transport := newTestTransport(cancelFn)
+			transport.setProtocolVersion(ProtocolVersion2)
+			var tr Transport = transport
+			subscribeOpts := []SubscribeOption{WithEmitJoinLeave(true), WithEmitPresence(true)}
+			if name == "push_disabled" {
+				tr = &noSubscribePushTransport{testTransport: transport}
+			} else {
+				// The push alone is over ClientQueueMaxSize.
+				subscribeOpts = append(subscribeOpts, WithSubscribeData([]byte(`"`+strings.Repeat("x", 2000)+`"`)))
+			}
+			client := newTestConnectedClientWithTransport(t, ctx, node, tr, "user1")
+
+			err = client.Subscribe("ch", subscribeOpts...)
+			if name == "push_disabled" {
+				require.NoError(t, err)
+				require.Equal(t, []string{"join"}, broker.recorded())
+				client.Unsubscribe("ch")
+			} else {
+				require.Error(t, err)
+			}
+			require.Eventually(t, func() bool {
+				return len(broker.recorded()) == 2
+			}, 5*time.Second, 10*time.Millisecond)
+			require.Equal(t, []string{"join", "leave"}, broker.recorded())
+			presence, err := node.Presence("ch")
+			require.NoError(t, err)
+			require.Empty(t, presence.Presence)
+		})
+	}
+}
+
 // Without a concurrent unsubscribe the leave comes when the subscription ends.
 func TestJoinLeaveOrder_UnsubscribeAfterJoin(t *testing.T) {
 	t.Parallel()
