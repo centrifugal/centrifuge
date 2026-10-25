@@ -319,6 +319,7 @@ type Client struct {
 	clientSideRefresh      bool
 	status                 status
 	timerOp                timerOp
+	connectDone            atomic.Bool // See waitConnectReply. Fills padding after timerOp.
 	nextPresence           int64
 	nextExpire             int64
 	nextPing               int64
@@ -1654,6 +1655,7 @@ func (c *Client) Send(data []byte) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagMessage) {
 		return nil
 	}
+	c.waitConnectReply()
 	replyData, err := c.getSendPushReply(data)
 	if err != nil {
 		return err
@@ -1791,6 +1793,8 @@ func (c *Client) close(disconnect Disconnect) error {
 	authenticated := c.authenticated
 	c.status = statusClosed
 	c.closeDisconnect = &disconnect
+	// Wakes waitConnectReply.
+	c.signalLocked()
 
 	c.stopTimer()
 
@@ -2303,6 +2307,38 @@ func (c *Client) handleConnect(req *protocol.ConnectRequest, cmd *protocol.Comma
 	return nil
 }
 
+// waitConnectReply waits until the connect reply is written, or connectCmd
+// failed. The client is in the hub from before its connect reply is written, so
+// Send, Refresh and Subscribe of another goroutine (Node.Refresh,
+// Node.Subscribe) can come before it, but nothing may go to the client before
+// its connect reply. It also returns once the client is closed.
+func (c *Client) waitConnectReply() {
+	if c.connectDone.Load() {
+		return
+	}
+	c.mu.RLock()
+	done := !c.authenticated || c.connectDone.Load() || c.status == statusClosed
+	c.mu.RUnlock()
+	if done {
+		return
+	}
+	c.waitUntil(func() bool {
+		return c.connectDone.Load() || c.status == statusClosed
+	}, math.MaxInt64)
+}
+
+// finishConnectLocked releases waitConnectReply. Must be called with c.mu held.
+func (c *Client) finishConnectLocked() {
+	c.connectDone.Store(true)
+	c.signalLocked()
+}
+
+func (c *Client) finishConnect() {
+	c.mu.Lock()
+	c.finishConnectLocked()
+	c.mu.Unlock()
+}
+
 func (c *Client) triggerConnect() {
 	pending := c.connect()
 	// After ConnectHandler, outside connectMu: see Unsubscribe.
@@ -2370,6 +2406,8 @@ func (c *Client) Refresh(opts ...RefreshOption) error {
 		go func() { _ = c.close(DisconnectExpired) }()
 		return nil
 	}
+	// After connectCmd, which also sets the expiration.
+	c.waitConnectReply()
 
 	nowUnix := time.Now().Unix()
 	expireAt := min(refreshOptions.ExpireAt, nowUnix+maxTTLSeconds)
@@ -3837,6 +3875,10 @@ func testSyncPoint(channel string) {
 // connectCmd handles connect command from client - client must send connect
 // command immediately after establishing connection with server.
 func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
+	// Releases waitConnectReply if the connect fails. Once it succeeds, that is
+	// done after writing the reply: the deferred CommandProcessedHandler may
+	// call Send.
+	defer c.finishConnect()
 	// Client name/version metric labels use fixed sentinels to keep metric
 	// cardinality bounded: a reported value is only used verbatim when it's
 	// explicitly registered, otherwise it collapses to "unregistered". A client
@@ -4034,14 +4076,14 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			})
 			if cc != nil {
 				dict = cc.Dictionary()
-				if dict != nil && len(dict.Data) == 0 && dict.DataB64 == "" && dict.Id != req.GetDict() {
-					// An engine named a dictionary by id that this client never
-					// advertised, so the client does not have those bytes and no
-					// frame compressed against them could be decoded. The
-					// contract says only to name what the client presented; this
-					// is the backstop for an engine that gets it wrong, because
-					// the alternative is a connection that receives nothing it
-					// can read and cannot say why.
+				if dict == nil || (len(dict.Data) == 0 && dict.DataB64 == "" && dict.Id != req.GetDict()) {
+					// No dictionary, or an engine named a dictionary by id that
+					// this client never advertised: either way the client does
+					// not know the bytes, and no frame compressed against them
+					// could be decoded. The contract says only to name what the
+					// client presented; this is the backstop for an engine that
+					// gets it wrong, because the alternative is a connection that
+					// receives nothing it can read and cannot say why.
 					cc.Close()
 					dict = nil
 				} else {
@@ -4249,6 +4291,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	}
 
 	c.mu.Lock()
+	c.finishConnectLocked()
 	closedDuringConnect := c.status == statusClosed
 	var reservedSubChs []chan struct{}
 	var lostReservations map[string]bool
@@ -4491,6 +4534,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	if channel == "" {
 		return fmt.Errorf("channel is empty")
 	}
+	c.waitConnectReply()
 	channelLimit := c.node.config.ClientChannelLimit
 
 	// Reserve the channel before doing any subscribe work. This mirrors the
