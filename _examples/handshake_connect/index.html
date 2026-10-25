@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Handshake connect</title>
+  <style>
+    :root {
+      --bg: #f6f7f9; --card: #fff; --text: #1d2330; --muted: #6b7385;
+      --line: #e3e6ec; --accent: #3b6cf6; --good: #1f9d55; --warn: #c27c0e; --bad: #c4372c;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #12151b; --card: #1b1f27; --text: #e6e9ef; --muted: #8f97a8;
+        --line: #2a303b; --accent: #6e93ff; --good: #3ccf7f; --warn: #f0b13c; --bad: #ff6b5e;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    main { max-width: 1100px; margin: 0 auto; padding: 32px 16px; }
+    h1 { margin: 0 0 4px; font-size: 24px; }
+    p.lead { margin: 0 0 20px; color: var(--muted); }
+    .bar { display: flex; gap: 12px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
+    button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text);
+      padding: 6px 14px; border-radius: 8px; cursor: pointer; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button:disabled { opacity: .5; cursor: default; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px;
+      display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+    .card h2 { margin: 0; font-size: 17px; }
+    .card .desc { margin: 0; color: var(--muted); font-size: 14px; min-height: 42px; }
+    .ready { font-size: 34px; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .ready small { font-size: 15px; font-weight: 400; color: var(--muted); }
+    .meter { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+    .meter div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+    ol.log { margin: 0; padding: 0; list-style: none; font: 12.5px/1.6 ui-monospace, monospace;
+      color: var(--muted); min-height: 120px; overflow-wrap: anywhere; }
+    ol.log b { color: var(--text); font-weight: 600; display: inline-block; min-width: 56px; }
+    .good { color: var(--good); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+    .actions { display: flex; gap: 8px; }
+    .clock { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Handshake connect</h1>
+  <p class="lead">
+    Time from <code>connect()</code> until the subscription is ready, with <span id="rtt">some</span> round trip time added
+    by a proxy in front of the server. With handshake connect the client sends its connect and subscribe commands inside
+    the WebSocket handshake request and saves one round trip.
+  </p>
+  <div class="bar">
+    <button class="primary" id="runAll">Run all</button>
+    <span class="clock" id="clock"></span>
+  </div>
+  <div class="grid" id="grid"></div>
+</main>
+<script src="/centrifuge.js"></script>
+<script>
+  const scenarios = [
+    {
+      title: 'Standard connect',
+      desc: 'Connect and subscribe are sent after the WebSocket opens.',
+      path: '/connection/websocket', maxHandshakeConnectSize: 0,
+    },
+    {
+      title: 'Handshake connect',
+      desc: 'Connect and subscribe travel inside the handshake request, the server replies right after it.',
+      path: '/connection/websocket', maxHandshakeConnectSize: 4096,
+    },
+    {
+      title: 'Behind a strict proxy',
+      desc: 'A proxy rejects the larger handshake: the client retries without the data, and remembers that on reconnect.',
+      path: '/connection/websocket/strict', maxHandshakeConnectSize: 4096, reconnect: true,
+    },
+  ];
+
+  const grid = document.getElementById('grid');
+  const wsBase = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+  let slowest = 1;
+
+  for (const s of scenarios) {
+    const card = document.createElement('section');
+    card.className = 'card';
+    card.innerHTML = `
+      <h2>${s.title}</h2>
+      <p class="desc">${s.desc}</p>
+      <div class="ready">–</div>
+      <div class="meter"><div></div></div>
+      <ol class="log"></ol>
+      <div class="actions"><button class="run">Run</button>${s.reconnect ? '<button class="reconnect" disabled>Reconnect</button>' : ''}</div>`;
+    grid.appendChild(card);
+    s.ready = card.querySelector('.ready');
+    s.meter = card.querySelector('.meter div');
+    s.log = card.querySelector('.log');
+    s.runButton = card.querySelector('.run');
+    s.reconnectButton = card.querySelector('.reconnect');
+    s.runButton.onclick = () => run(s);
+    if (s.reconnectButton) s.reconnectButton.onclick = () => measure(s, false);
+  }
+
+  function log(s, text, cls) {
+    const ms = Math.round(performance.now() - s.started);
+    const li = document.createElement('li');
+    li.innerHTML = `<b>${ms} ms</b> <span class="${cls || ''}">${text}</span>`;
+    s.log.appendChild(li);
+  }
+
+  // A WebSocket which reports the subprotocols offered and selected, to see what
+  // each attempt did. Not needed for the feature itself.
+  function tracedWebSocket(s) {
+    return class extends WebSocket {
+      constructor(url, protocols) {
+        super(url, protocols);
+        const offered = [].concat(protocols || []);
+        const data = offered.find(p => p.startsWith('cf-connect.'));
+        log(s, data ? `handshake with ${data.length - 'cf-connect.'.length} bytes of commands` : 'handshake without commands');
+        s.attempts++;
+        if (!data && s.maxHandshakeConnectSize > 0 && s.attempts === 1) {
+          // The first attempt of a run using the option went without commands.
+          log(s, 'this centrifuge-js build ignores maxHandshakeConnectSize, see README', 'bad');
+        }
+        this.addEventListener('open', () => {
+          const accepted = this.protocol.endsWith('-hc');
+          log(s, `open, subprotocol "${this.protocol}"${accepted ? ' – commands taken' : ''}`, accepted ? 'good' : '');
+        });
+      }
+    };
+  }
+
+  function run(s) {
+    if (s.client) s.client.disconnect();
+    s.attempts = 0;
+    s.client = new Centrifuge(wsBase + s.path, {
+      websocket: tracedWebSocket(s),
+      maxHandshakeConnectSize: s.maxHandshakeConnectSize,
+      minReconnectDelay: 100,
+    });
+    s.client.on('error', ctx => {
+      if (ctx.type === 'transport') log(s, 'transport closed before open – retrying', 'warn');
+    });
+    s.client.on('connected', () => log(s, 'connected'));
+    s.sub = s.client.newSubscription('clock');
+    s.sub.on('publication', ctx => { document.getElementById('clock').textContent = 'server time ' + ctx.data.time; });
+    return measure(s, true);
+  }
+
+  // Resolves when the subscription is ready.
+  function measure(s, fresh) {
+    return new Promise(resolve => {
+      s.log.innerHTML = '';
+      s.ready.textContent = '…';
+      s.meter.style.width = '0';
+      s.started = performance.now();
+      const onSubscribed = () => {
+        s.sub.off('subscribed', onSubscribed);
+        const ms = Math.round(performance.now() - s.started);
+        log(s, 'subscribed', 'good');
+        s.ready.innerHTML = `${ms} <small>ms to ready</small>`;
+        s.ms = ms;
+        slowest = Math.max(slowest, ...scenarios.map(x => x.ms || 0));
+        for (const x of scenarios) if (x.ms) x.meter.style.width = (100 * x.ms / slowest) + '%';
+        if (s.reconnectButton) s.reconnectButton.disabled = false;
+        resolve();
+      };
+      s.sub.on('subscribed', onSubscribed);
+      if (fresh) {
+        s.sub.subscribe();
+      } else {
+        s.client.disconnect();
+        log(s, 'reconnect');
+      }
+      s.client.connect();
+    });
+  }
+
+  document.getElementById('runAll').onclick = async (e) => {
+    e.target.disabled = true;
+    slowest = 1;
+    for (const s of scenarios) { s.ms = 0; }
+    for (const s of scenarios) { await run(s); }
+    e.target.disabled = false;
+  };
+
+  fetch('/rtt').then(r => r.text()).then(t => { document.getElementById('rtt').textContent = t; }).catch(() => {});
+</script>
+</body>
+</html>
