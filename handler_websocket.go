@@ -633,6 +633,11 @@ func (t *websocketTransport) writeFrame(data []byte, binary bool) error {
 			return err
 		}
 	}
+	if binary {
+		// A text frame which follows, one the engine declined, is deflated as it
+		// would be without dictionary compression.
+		t.conn.EnableWriteCompression(true)
+	}
 
 	t.clearWriteDeadline()
 	return nil

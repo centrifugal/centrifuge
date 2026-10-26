@@ -67,8 +67,9 @@ type DictionaryConnectionParams struct {
 // general: a connection may also be using permessage-deflate, delta compression
 // or channel compaction, and none of those go through here.
 type DictionaryConnection interface {
-	// Dictionary returns what to put in ConnectResult.dict, or nil to send
-	// nothing.
+	// Dictionary returns what to put in ConnectResult.dict. Nil, like an id the
+	// client did not advertise without bytes, leaves the connection
+	// uncompressed: Close is called and nothing is encoded.
 	//
 	// It is called once, before the connect reply is written.
 	//
@@ -110,12 +111,13 @@ type DictionaryConnection interface {
 	// an engine holds, so it can only reject an id the client never mentioned.
 	Dictionary() *protocol.Dictionary
 
-	// Encode is called for every frame this connection compresses, on the
-	// connection's write goroutine - including the connect reply when the
-	// client already held the dictionary.
+	// Encode is called for every frame this connection writes after the
+	// connect reply, on the connection's write goroutine.
 	//
 	// It returns the bytes to write and whether they must go out as a binary
-	// message, which compressed payloads need even on a JSON connection.
+	// message, which compressed payloads need even on a JSON connection. frame
+	// is only valid during the call: an implementation which keeps it, as a
+	// cache key say, must copy it.
 	//
 	// One publication reaches every subscriber of a channel as the same bytes,
 	// so implementations are called with an identical frame once per

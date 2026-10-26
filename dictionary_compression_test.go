@@ -51,6 +51,8 @@ type testCompression struct {
 	// nameUnknown makes the engine name a dictionary the client never
 	// advertised, which is the mistake the server has to catch on its behalf.
 	nameUnknown bool
+	// nilDictionary makes the engine return a codec without a dictionary.
+	nilDictionary bool
 	// dictFor gives each connection its own dictionary, so a test can put
 	// clients holding different ones on the same node.
 	dictFor func(DictionaryConnectionParams) []byte
@@ -71,6 +73,7 @@ func (e *testCompression) NewDictionaryConnection(params DictionaryConnectionPar
 		held:        params.HeldDictionaryID,
 		rawFallback: e.rawFallback,
 		nameUnknown: e.nameUnknown,
+		nilDict:     e.nilDictionary,
 	}
 	return e.last
 }
@@ -84,9 +87,13 @@ type testConnCompression struct {
 
 	rawFallback bool
 	nameUnknown bool
+	nilDict     bool
 }
 
 func (c *testConnCompression) Dictionary() *protocol.Dictionary {
+	if c.nilDict {
+		return nil
+	}
 	if c.nameUnknown {
 		// An id naming bytes this client never advertised and is not being
 		// sent, so nothing it receives afterwards could be decoded.
@@ -667,4 +674,208 @@ func TestTransportThatCannotCompressIsLeftAlone(t *testing.T) {
 	require.Zero(t, r.Connect.Flag, "nothing may claim compression this transport cannot carry")
 	require.Nil(t, r.Connect.Dict)
 	require.Nil(t, e.last, "the engine is not even consulted")
+}
+
+// A codec without a dictionary leaves the client nothing to decode with, so it
+// is refused like a dictionary named by an id the client never advertised.
+func TestEngineWithoutDictionaryIsRefused(t *testing.T) {
+	t.Parallel()
+	e := &testCompression{dict: testDictionary(), nilDictionary: true}
+	n, url := newCompressionNode(t, e, nil)
+
+	w := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
+	res := w.connectResult()
+	require.Nil(t, res.Dict)
+	require.Zero(t, res.Flag, "compression must not be claimed")
+	require.EqualValues(t, 1, e.last.closed.Load(), "the refused codec is closed, not leaked")
+
+	w.subscribe("demo")
+	publishWithHistory(t, n, "demo", []byte(`{"seq":1,"v":"x"}`))
+	replies := w.next()
+	require.NotNil(t, replies[0].Push)
+	require.Zero(t, e.last.encoded.Load(), "nothing was compressed")
+}
+
+// blockSubscribeBroker blocks the broker subscribe to channel "block" until
+// released, which holds a connect with a server-side subscription to it between
+// adding the client to the hub and writing its connect reply.
+type blockSubscribeBroker struct {
+	*MemoryBroker
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockSubscribeBroker) Subscribe(chs ...string) error {
+	if len(chs) == 1 && chs[0] == "block" {
+		close(b.entered)
+		<-b.release
+	}
+	return b.MemoryBroker.Subscribe(chs...)
+}
+
+func newBlockedConnectNode(t *testing.T, e DictionaryCompression) (*Node, *blockSubscribeBroker, string) {
+	t.Helper()
+	n, err := New(Config{DictionaryCompression: e})
+	require.NoError(t, err)
+	mb, err := NewMemoryBroker(n, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	b := &blockSubscribeBroker{MemoryBroker: mb, entered: make(chan struct{}), release: make(chan struct{})}
+	n.SetBroker(b)
+	n.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			Credentials:   &Credentials{UserID: "u"},
+			Subscriptions: map[string]SubscribeOptions{"block": {}},
+		}, nil
+	})
+	require.NoError(t, n.Run())
+	t.Cleanup(func() { _ = n.Shutdown(context.Background()) })
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
+		PingPongConfig: PingPongConfig{PingInterval: 10 * time.Minute, PongTimeout: time.Minute},
+	}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return n, b, "ws" + strings.TrimPrefix(srv.URL, "http") + "/connection/websocket"
+}
+
+// connectingClient returns the client of user "u" once a call of another
+// goroutine waits for its connect reply.
+func connectingClient(t *testing.T, n *Node) *Client {
+	t.Helper()
+	var client *Client
+	require.Eventually(t, func() bool {
+		conns := n.Hub().UserConnections("u")
+		for _, c := range conns {
+			c.mu.RLock()
+			waiting := c.tracking != nil && c.tracking.changed != nil
+			c.mu.RUnlock()
+			if waiting {
+				client = c
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, time.Millisecond)
+	return client
+}
+
+// The client is in the hub before its connect reply is written. A push made
+// meanwhile from another goroutine must still come after the reply: the reply
+// carries the dictionary, and the frames after it are compressed.
+func TestPushWhileConnectingComesAfterConnectReply(t *testing.T) {
+	t.Parallel()
+	for name, push := range map[string]func(n *Node, c *Client) error{
+		"refresh": func(n *Node, _ *Client) error {
+			return n.Refresh("u", WithRefreshExpireAt(time.Now().Unix()+3600))
+		},
+		"subscribe": func(n *Node, _ *Client) error {
+			return n.Subscribe("u", "other")
+		},
+		"send": func(_ *Node, c *Client) error {
+			return c.Send([]byte(`{}`))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := &testCompression{dict: testDictionary()}
+			n, b, url := newBlockedConnectNode(t, e)
+			w := dialWire(t, url, &protocol.ConnectRequest{Flag: ConnectionFlagDictionaryCompression})
+			<-b.entered
+
+			var client *Client
+			require.Eventually(t, func() bool {
+				conns := n.Hub().UserConnections("u")
+				for _, c := range conns {
+					client = c
+				}
+				return client != nil
+			}, 5*time.Second, time.Millisecond)
+			errCh := make(chan error, 1)
+			go func() { errCh <- push(n, client) }()
+			connectingClient(t, n)
+			close(b.release)
+			require.NoError(t, <-errCh)
+
+			// The push may be in the frame of the reply, which is not compressed.
+			_, msg := w.nextFrame()
+			lines := bytes.Split(bytes.TrimRight(msg, "\n"), []byte("\n"))
+			r, err := protocol.NewJSONReplyDecoder(lines[0]).Decode()
+			require.NoError(t, err)
+			require.NotNil(t, r.Connect, "nothing comes before the connect reply")
+			require.NotZero(t, r.Connect.Flag&ConnectionFlagDictionaryCompression)
+			if len(lines) > 1 {
+				return
+			}
+			raw, err := protocol.InflateDictionary(mustBase64(t, r.Connect.Dict.DataB64), 1<<20)
+			require.NoError(t, err)
+			w.codec = protocol.NewDeflateFrameCodec(r.Connect.Dict.Id, raw, testDictionaryCompressionLevel)
+			replies := w.next()
+			require.NotNil(t, replies[0].Push, "the push decodes with the dictionary of the reply")
+		})
+	}
+}
+
+// A call waiting for the connect reply returns once the client is closed.
+func TestPushWhileConnectingReturnsOnClose(t *testing.T) {
+	t.Parallel()
+	n, b, url := newBlockedConnectNode(t, nil)
+	_ = dialWire(t, url, &protocol.ConnectRequest{})
+	<-b.entered
+	defer close(b.release)
+
+	var client *Client
+	require.Eventually(t, func() bool {
+		for _, c := range n.Hub().UserConnections("u") {
+			client = c
+		}
+		return client != nil
+	}, 5*time.Second, time.Millisecond)
+	sent := make(chan struct{})
+	go func() {
+		_ = client.Send([]byte(`{}`))
+		close(sent)
+	}()
+	connectingClient(t, n)
+	client.Disconnect(DisconnectForceNoReconnect)
+	select {
+	case <-sent:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "Send still waits for the connect reply of a closed client")
+	}
+}
+
+// CommandProcessedHandler of the connect command runs once the connect reply is
+// written, so a push from it does not wait.
+func TestSendFromConnectCommandProcessedHandler(t *testing.T) {
+	t.Parallel()
+	n, err := New(Config{})
+	require.NoError(t, err)
+	n.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{Credentials: &Credentials{UserID: "u"}}, nil
+	})
+	n.OnCommandProcessed(func(c *Client, e CommandProcessedEvent) {
+		if e.Command.Connect != nil {
+			_ = c.Send([]byte(`{"welcome":true}`))
+		}
+	})
+	require.NoError(t, n.Run())
+	t.Cleanup(func() { _ = n.Shutdown(context.Background()) })
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
+		PingPongConfig: PingPongConfig{PingInterval: 10 * time.Minute, PongTimeout: time.Minute},
+	}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	w := dialWire(t, wsURL(srv), &protocol.ConnectRequest{})
+	var got []*protocol.Reply
+	for len(got) < 2 {
+		got = append(got, w.next()...)
+	}
+	require.NotNil(t, got[0].Connect)
+	require.NotNil(t, got[1].Push.Message)
+}
+
+func wsURL(srv *httptest.Server) string {
+	return "ws" + strings.TrimPrefix(srv.URL, "http") + "/connection/websocket"
 }
