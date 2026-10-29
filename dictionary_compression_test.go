@@ -536,9 +536,8 @@ func TestConnectionParamsCarryUserID(t *testing.T) {
 }
 
 // An engine chooses by client as well: one platform first, or everything but a
-// release that decodes badly. Name and version come from the connect command,
-// and the connection itself carries the rest.
-func TestConnectionParamsDescribeTheClient(t *testing.T) {
+// release that decodes badly. Both come from the connect command.
+func TestConnectionParamsCarryClientNameAndVersion(t *testing.T) {
 	t.Parallel()
 	e := &testCompression{dict: testDictionary()}
 	_, url := newCompressionNode(t, e, nil)
@@ -547,10 +546,6 @@ func TestConnectionParamsDescribeTheClient(t *testing.T) {
 	w.connectResult()
 	require.Equal(t, "js", e.seen.ClientName)
 	require.Equal(t, "5.9.0", e.seen.ClientVersion)
-	require.NotNil(t, e.seen.Client)
-	require.NotEmpty(t, e.seen.Client.ID())
-	require.Equal(t, "u", e.seen.Client.UserID())
-	require.Equal(t, transportWebsocket, e.seen.Client.Transport().Name())
 }
 
 // A client that already holds the dictionary has nothing to wait for, so its

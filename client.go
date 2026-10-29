@@ -4075,7 +4075,6 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 				HeldDictionaryID: req.GetDict(),
 				ClientName:       req.Name,
 				ClientVersion:    req.Version,
-				Client:           c,
 			})
 			if cc != nil {
 				dict = cc.Dictionary()

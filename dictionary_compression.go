@@ -72,16 +72,6 @@ type DictionaryConnectionParams struct {
 	// They are passed here because Client does not keep them.
 	ClientName    string
 	ClientVersion string
-
-	// Client is the connection itself, authenticated but with its connect reply
-	// not yet written. It gives an implementation the rest of what is known
-	// about the connection - transport, labels, info, context - so a decision
-	// that comes to need one of them does not need a new field here.
-	//
-	// It is for reading. Acting on the connection from here - sending,
-	// subscribing, disconnecting - interferes with a handshake that is still in
-	// progress. It may be kept until the DictionaryConnection is closed.
-	Client *Client
 }
 
 // DictionaryConnection compresses one connection's outgoing frames against a
