@@ -4073,6 +4073,9 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 				// identifies content, so if the engine recognises it the dictionary
 				// can be named rather than sent again.
 				HeldDictionaryID: req.GetDict(),
+				ClientName:       req.Name,
+				ClientVersion:    req.Version,
+				Client:           c,
 			})
 			if cc != nil {
 				dict = cc.Dictionary()

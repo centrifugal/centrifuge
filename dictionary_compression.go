@@ -60,6 +60,28 @@ type DictionaryConnectionParams struct {
 	// both sides hold the same bytes and the dictionary can be named rather than
 	// sent. An unrecognised id is simply ignored.
 	HeldDictionaryID string
+
+	// ClientName and ClientVersion are what the client reported in its connect
+	// command - an SDK sends its own name unless the application sets one. They
+	// let an implementation choose by client: try the feature on one platform
+	// first, or leave out a release that turns out to decode badly, without a
+	// change where connections are authenticated. Like a declared profile they
+	// are unverified, so they are fine for deciding who is offered a dictionary
+	// and must not gate anything a client should not be able to opt into.
+	//
+	// They are passed here because Client does not keep them.
+	ClientName    string
+	ClientVersion string
+
+	// Client is the connection itself, authenticated but with its connect reply
+	// not yet written. It gives an implementation the rest of what is known
+	// about the connection - transport, labels, info, context - so a decision
+	// that comes to need one of them does not need a new field here.
+	//
+	// It is for reading. Acting on the connection from here - sending,
+	// subscribing, disconnecting - interferes with a handshake that is still in
+	// progress. It may be kept until the DictionaryConnection is closed.
+	Client *Client
 }
 
 // DictionaryConnection compresses one connection's outgoing frames against a

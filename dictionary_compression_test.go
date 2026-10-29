@@ -535,6 +535,24 @@ func TestConnectionParamsCarryUserID(t *testing.T) {
 	require.Equal(t, "u", e.seen.UserID)
 }
 
+// An engine chooses by client as well: one platform first, or everything but a
+// release that decodes badly. Name and version come from the connect command,
+// and the connection itself carries the rest.
+func TestConnectionParamsDescribeTheClient(t *testing.T) {
+	t.Parallel()
+	e := &testCompression{dict: testDictionary()}
+	_, url := newCompressionNode(t, e, nil)
+	w := dialWire(t, url, &protocol.ConnectRequest{
+		Flag: ConnectionFlagDictionaryCompression, Name: "js", Version: "5.9.0"})
+	w.connectResult()
+	require.Equal(t, "js", e.seen.ClientName)
+	require.Equal(t, "5.9.0", e.seen.ClientVersion)
+	require.NotNil(t, e.seen.Client)
+	require.NotEmpty(t, e.seen.Client.ID())
+	require.Equal(t, "u", e.seen.Client.UserID())
+	require.Equal(t, transportWebsocket, e.seen.Client.Transport().Name())
+}
+
 // A client that already holds the dictionary has nothing to wait for, so its
 // connect reply is compressed like every other frame. The saving is small - a
 // warm reply is a couple of hundred bytes - but the rule is simpler than
