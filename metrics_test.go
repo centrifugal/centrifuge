@@ -1159,3 +1159,55 @@ func TestMetricsSurfaceUnderFullConfig(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+func TestMetricsSecondRegistryOnSameRegisterer(t *testing.T) {
+	t.Parallel()
+	reg := prometheus.NewRegistry()
+	config := MetricsConfig{
+		MetricsNamespace:                     "test_second",
+		RegistererGatherer:                   reg,
+		EnableRecoveredPublicationsHistogram: true,
+	}
+	_, err := newMetricsRegistry(config)
+	require.NoError(t, err)
+	m, err := newMetricsRegistry(config)
+	require.NoError(t, err)
+
+	// Values derived at construction (pre-built label observers, the
+	// pub/sub bundle) and plain collectors of the second registry must
+	// reach the registry.
+	m.incMessagesSent("publication", "")
+	m.setNumClients(3)
+	m.incRedisBrokerPubSubErrors("b", "subscribe")
+	m.mapBrokerPubSub.incErrors("b", "subscribe")
+	m.recoveredPublications.WithLabelValues("").Observe(1)
+
+	values := gatheredValues(t, reg)
+	require.Equal(t, 1.0, values["test_second_node_messages_sent_count"])
+	require.Equal(t, 3.0, values["test_second_node_num_clients"])
+	require.Equal(t, 1.0, values["test_second_broker_redis_pub_sub_errors"])
+	require.Equal(t, 1.0, values["test_second_map_broker_redis_pub_sub_errors"])
+	require.Equal(t, 1.0, values["test_second_client_recovered_publications"])
+}
+
+// gatheredValues sums counter and gauge values, and histogram sample
+// counts, per metric family.
+func gatheredValues(t *testing.T, g prometheus.Gatherer) map[string]float64 {
+	t.Helper()
+	families, err := g.Gather()
+	require.NoError(t, err)
+	values := make(map[string]float64, len(families))
+	for _, f := range families {
+		for _, metric := range f.GetMetric() {
+			switch {
+			case metric.Counter != nil:
+				values[f.GetName()] += metric.GetCounter().GetValue()
+			case metric.Gauge != nil:
+				values[f.GetName()] += metric.GetGauge().GetValue()
+			case metric.Histogram != nil:
+				values[f.GetName()] += float64(metric.GetHistogram().GetSampleCount())
+			}
+		}
+	}
+	return values
+}

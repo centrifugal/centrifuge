@@ -484,6 +484,23 @@ func nativeHistogramOpts(opts prometheus.HistogramOpts, native bool) prometheus.
 	return opts
 }
 
+// registerCollector registers the collector *c points to. If an equal
+// collector is already registered, *c is replaced with the registered one.
+func registerCollector[T prometheus.Collector](registerer prometheus.Registerer, c *T) error {
+	err := registerer.Register(*c)
+	if err == nil {
+		return nil
+	}
+	var alreadyRegistered prometheus.AlreadyRegisteredError
+	if !errors.As(err, &alreadyRegistered) {
+		return err
+	}
+	if existing, ok := alreadyRegistered.ExistingCollector.(T); ok {
+		*c = existing
+	}
+	return nil
+}
+
 func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
@@ -973,15 +990,6 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "Number of messages buffered in Redis PUB/SUB.",
 	}, []string{"broker_name", "channel_type", "pub_sub_processor"})
 
-	m.redisBrokerPubSubDroppedMessages.WithLabelValues("", "control").Add(0)
-	m.redisBrokerPubSubDroppedMessages.WithLabelValues("", "client").Add(0)
-
-	m.brokerPubSub = redisPubSubMetrics{
-		errors:   m.redisBrokerPubSubErrors,
-		dropped:  m.redisBrokerPubSubDroppedMessages,
-		buffered: m.redisBrokerPubSubBufferedMessages,
-	}
-
 	// RedisMapBroker reports the same Redis PUB/SUB metrics under its own
 	// map_broker subsystem so its series never collide with the stream broker's.
 	m.mapBrokerPubSub = redisPubSubMetrics{
@@ -1004,6 +1012,85 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			Help:      "Number of messages buffered in Redis PUB/SUB.",
 		}, []string{"broker_name", "channel_type", "pub_sub_processor"}),
 	}
+
+	// Register every collector before deriving anything from it: when a
+	// collector is already registered (a second Node in the same process),
+	// the registered one is used, so label observers and seeded series below
+	// belong to collectors the registry exposes.
+	if err := errors.Join(
+		registerCollector(registerer, &m.messagesSentCount),
+		registerCollector(registerer, &m.messagesReceivedCount),
+		registerCollector(registerer, &m.actionCount),
+		registerCollector(registerer, &m.numClientsGauge),
+		registerCollector(registerer, &m.numUsersGauge),
+		registerCollector(registerer, &m.numSubsGauge),
+		registerCollector(registerer, &m.numChannelsGauge),
+		registerCollector(registerer, &m.numNodesGauge),
+		registerCollector(registerer, &m.commandDurationSummary),
+		registerCollector(registerer, &m.commandDurationHistogram),
+		registerCollector(registerer, &m.replyErrorCount),
+		registerCollector(registerer, &m.connectionsAccepted),
+		registerCollector(registerer, &m.connectionsInflight),
+		registerCollector(registerer, &m.subscriptionsAccepted),
+		registerCollector(registerer, &m.subscriptionsInflight),
+		registerCollector(registerer, &m.serverUnsubscribeCount),
+		registerCollector(registerer, &m.serverDisconnectCount),
+		registerCollector(registerer, &m.transportOutgoingCloseCount),
+		registerCollector(registerer, &m.transportFrameSizeHistogram),
+		registerCollector(registerer, &m.recoverCount),
+		registerCollector(registerer, &m.pingPongDurationHistogram),
+		registerCollector(registerer, &m.transportMessagesSent),
+		registerCollector(registerer, &m.transportMessagesSentSize),
+		registerCollector(registerer, &m.transportMessagesReceived),
+		registerCollector(registerer, &m.transportMessagesReceivedSize),
+		registerCollector(registerer, &m.tagsFilterDroppedCount),
+		registerCollector(registerer, &m.buildInfoGauge),
+		registerCollector(registerer, &m.surveyDurationSummary),
+		registerCollector(registerer, &m.surveyDurationHistogram),
+		registerCollector(registerer, &m.pubSubLagHistogram),
+		registerCollector(registerer, &m.broadcastDurationHistogram),
+		registerCollector(registerer, &m.brokerPublishSuppressedCount),
+		registerCollector(registerer, &m.mapBrokerPublishSuppressedCount),
+		registerCollector(registerer, &m.mapBrokerRemoveSuppressedCount),
+		registerCollector(registerer, &m.mapBrokerCleanupLag),
+		registerCollector(registerer, &m.mapBrokerCleanupRemoved),
+		registerCollector(registerer, &m.mapBrokerCleanupErrors),
+		registerCollector(registerer, &m.redisBrokerPubSubErrors),
+		registerCollector(registerer, &m.redisBrokerPubSubDroppedMessages),
+		registerCollector(registerer, &m.redisBrokerPubSubBufferedMessages),
+		registerCollector(registerer, &m.mapBrokerPubSub.errors),
+		registerCollector(registerer, &m.mapBrokerPubSub.dropped),
+		registerCollector(registerer, &m.mapBrokerPubSub.buffered),
+		registerCollector(registerer, &m.sharedPollCycleDurationHistogram),
+		registerCollector(registerer, &m.sharedPollCycleWorkDurationHistogram),
+		registerCollector(registerer, &m.sharedPollHandlerDurationHistogram),
+		registerCollector(registerer, &m.sharedPollSemWaitDurationHistogram),
+		registerCollector(registerer, &m.sharedPollHandlerErrorCount),
+		registerCollector(registerer, &m.sharedPollItemsCount),
+		registerCollector(registerer, &m.sharedPollNotifyCount),
+		registerCollector(registerer, &m.sharedPollDroppedNotifyCount),
+		registerCollector(registerer, &m.sharedPollPublishCount),
+		registerCollector(registerer, &m.sharedPollNumChannelsGauge),
+		registerCollector(registerer, &m.sharedPollNumKeysGauge),
+	); err != nil {
+		return nil, err
+	}
+
+	if config.EnableRecoveredPublicationsHistogram {
+		if err := registerCollector(registerer, &m.recoveredPublications); err != nil {
+			return nil, err
+		}
+	}
+
+	m.redisBrokerPubSubDroppedMessages.WithLabelValues("", "control").Add(0)
+	m.redisBrokerPubSubDroppedMessages.WithLabelValues("", "client").Add(0)
+
+	m.brokerPubSub = redisPubSubMetrics{
+		errors:   m.redisBrokerPubSubErrors,
+		dropped:  m.redisBrokerPubSubDroppedMessages,
+		buffered: m.redisBrokerPubSubBufferedMessages,
+	}
+
 	m.mapBrokerPubSub.dropped.WithLabelValues("", "client").Add(0)
 
 	// Helper to build message labels for node-level broker message metrics
@@ -1056,75 +1143,6 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	m.commandDurationRefresh = makeCommandObserver(labelForMethod(protocol.FrameTypeRefresh))
 	m.commandDurationSubRefresh = makeCommandObserver(labelForMethod(protocol.FrameTypeSubRefresh))
 	m.commandDurationUnknown = makeCommandObserver("unknown")
-
-	var alreadyRegistered prometheus.AlreadyRegisteredError
-
-	for _, collector := range []prometheus.Collector{
-		m.messagesSentCount,
-		m.messagesReceivedCount,
-		m.actionCount,
-		m.numClientsGauge,
-		m.numUsersGauge,
-		m.numSubsGauge,
-		m.numChannelsGauge,
-		m.numNodesGauge,
-		m.commandDurationSummary,
-		m.commandDurationHistogram,
-		m.replyErrorCount,
-		m.connectionsAccepted,
-		m.connectionsInflight,
-		m.subscriptionsAccepted,
-		m.subscriptionsInflight,
-		m.serverUnsubscribeCount,
-		m.serverDisconnectCount,
-		m.transportOutgoingCloseCount,
-		m.transportFrameSizeHistogram,
-		m.recoverCount,
-		m.pingPongDurationHistogram,
-		m.transportMessagesSent,
-		m.transportMessagesSentSize,
-		m.transportMessagesReceived,
-		m.transportMessagesReceivedSize,
-		m.tagsFilterDroppedCount,
-		m.buildInfoGauge,
-		m.surveyDurationSummary,
-		m.surveyDurationHistogram,
-		m.pubSubLagHistogram,
-		m.broadcastDurationHistogram,
-		m.brokerPublishSuppressedCount,
-		m.mapBrokerPublishSuppressedCount,
-		m.mapBrokerRemoveSuppressedCount,
-		m.mapBrokerCleanupLag,
-		m.mapBrokerCleanupRemoved,
-		m.mapBrokerCleanupErrors,
-		m.redisBrokerPubSubErrors,
-		m.redisBrokerPubSubDroppedMessages,
-		m.redisBrokerPubSubBufferedMessages,
-		m.mapBrokerPubSub.errors,
-		m.mapBrokerPubSub.dropped,
-		m.mapBrokerPubSub.buffered,
-		m.sharedPollCycleDurationHistogram,
-		m.sharedPollCycleWorkDurationHistogram,
-		m.sharedPollHandlerDurationHistogram,
-		m.sharedPollSemWaitDurationHistogram,
-		m.sharedPollHandlerErrorCount,
-		m.sharedPollItemsCount,
-		m.sharedPollNotifyCount,
-		m.sharedPollDroppedNotifyCount,
-		m.sharedPollPublishCount,
-		m.sharedPollNumChannelsGauge,
-		m.sharedPollNumKeysGauge,
-	} {
-		if err := registerer.Register(collector); err != nil && !errors.As(err, &alreadyRegistered) {
-			return nil, err
-		}
-	}
-
-	if config.EnableRecoveredPublicationsHistogram {
-		if err := registerer.Register(m.recoveredPublications); err != nil && !errors.As(err, &alreadyRegistered) {
-			return nil, err
-		}
-	}
 
 	return m, nil
 }
