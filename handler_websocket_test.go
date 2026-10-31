@@ -22,6 +22,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/websocket"
 
 	"github.com/centrifugal/protocol"
+	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
@@ -1359,7 +1360,9 @@ func TestWebsocketHandlerDecompressionBombRejected(t *testing.T) {
 // by transport and code.
 func TestWebsocketHandlerOutgoingCloseMetric(t *testing.T) {
 	t.Parallel()
-	n, _ := New(Config{})
+	// Own registry: parallel tests send 1009 closes too, and nodes sharing a
+	// registerer share its collectors.
+	n, _ := New(Config{Metrics: MetricsConfig{RegistererGatherer: prometheus.NewRegistry()}})
 	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	mux := http.NewServeMux()
