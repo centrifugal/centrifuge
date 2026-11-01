@@ -24,8 +24,8 @@ github.com/prometheus/common v0.72.1 h1:ZAiQed/nk8IIcsdzb2TlJu23NEUDyDLQ9TXTN2WR
 github.com/prometheus/common v0.72.1/go.mod h1:1IoBY4IRaJnhs2ESjNzjilP1cJ/P8pimGoomq7zRXrA=
 github.com/prometheus/procfs v0.22.0 h1:6q9+/JL9IKAPbCmBrv9n5O5Ty3NKnciV5X7YGw0oics=
 github.com/prometheus/procfs v0.22.0/go.mod h1:CvmFr/GVhIjIvWJZW3tgkODBQMRIf0EyWMQLHCHab58=
-github.com/quagmt/udecimal v1.10.1 h1:h4t88kp/x21hCdhRhzBNW9e7D50l7pLEc1iwIEsCB28=
-github.com/quagmt/udecimal v1.10.1/go.mod h1:ScmJ/xTGZcEoYiyMMzgDLn79PEJHcMBiJ4NNRT3FirA=
+github.com/quagmt/udecimal v1.11.0 h1:WXkJLfCArI1jXg0zgxrdiYHZrX7aTDvPvuDbjnfseGE=
+github.com/quagmt/udecimal v1.11.0/go.mod h1:ScmJ/xTGZcEoYiyMMzgDLn79PEJHcMBiJ4NNRT3FirA=
 github.com/redis/rueidis v1.0.79 h1:2faCYvkq0G8ozDIAn7+3d5k5bBYCc0DBG2THK5WYXF0=
 github.com/redis/rueidis v1.0.79/go.mod h1:L8mnCQJJaSNL6I4pIR6Rz732HTGS9vmuXm0yT9dRvjo=
 github.com/shopspring/decimal v1.4.0 h1:bxl37RwXBklmTi0C79JfXCEBD1cqqHt0bbgBAGFp81k=
