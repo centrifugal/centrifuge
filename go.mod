@@ -10,7 +10,7 @@ require (
 	github.com/maypok86/otter/v2 v2.4.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
-	github.com/quagmt/udecimal v1.10.1
+	github.com/quagmt/udecimal v1.11.0
 	github.com/redis/rueidis v1.0.79
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/sync v0.24.0
