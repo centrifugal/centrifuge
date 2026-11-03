@@ -4531,6 +4531,188 @@ func TestClientCheckPosition(t *testing.T) {
 	require.True(t, got)
 }
 
+// positionCheckTestNode returns a running node using broker, with the clock a
+// periodic position check reads set an hour ahead, so a check is due for every
+// subscription at the first tick.
+func positionCheckTestNode(t *testing.T, broker Broker, checkDelay time.Duration) *Node {
+	t.Helper()
+	node, err := New(Config{
+		LogLevel:                        LogLevelError,
+		LogHandler:                      func(LogEntry) {},
+		ClientChannelPositionCheckDelay: checkDelay,
+	})
+	require.NoError(t, err)
+	node.SetBroker(broker)
+	node.OnConnect(func(*Client) {})
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+	node.mu.Lock()
+	node.nowTimeGetter = func() time.Time { return time.Now().Add(time.Hour) }
+	node.mu.Unlock()
+	return node
+}
+
+// TestClientCheckPositionRace covers the periodic position check racing with
+// publications delivered to the subscription while the stream top is read. The
+// position compared against the top is the one snapshotted before the read, so
+// the comparison says something about the subscription only while that is
+// still its live position.
+func TestClientCheckPositionRace(t *testing.T) {
+	t.Parallel()
+	const channel = "channel"
+	const subGen = 7
+	snapshot := StreamPosition{Epoch: "epoch", Offset: 10}
+	setOffset := func(offset uint64) func(*Client) {
+		return func(c *Client) {
+			chCtx := c.channels[channel]
+			chCtx.streamPosition.Offset = offset
+			c.channels[channel] = chCtx
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		top  StreamPosition
+		// live is applied to the live subscription under c.mu while the stream
+		// top read is in flight; nil leaves it as snapshotted.
+		live    func(*Client)
+		valid   bool
+		stamped bool
+	}{
+		{name: "in_sync", top: snapshot, valid: true, stamped: true},
+		{name: "real_gap", top: StreamPosition{Epoch: "epoch", Offset: 11}},
+		{name: "epoch_changed", top: StreamPosition{Epoch: "other", Offset: 10}},
+		{name: "caught_up", top: StreamPosition{Epoch: "epoch", Offset: 11}, live: setOffset(11), valid: true},
+		{name: "advanced_past_top", top: StreamPosition{Epoch: "epoch", Offset: 11}, live: setOffset(12), valid: true},
+		{name: "moved_still_behind", top: StreamPosition{Epoch: "epoch", Offset: 12}, live: setOffset(11), valid: true},
+		{name: "resubscribed", top: StreamPosition{Epoch: "epoch", Offset: 11}, valid: true, live: func(c *Client) {
+			chCtx := c.channels[channel]
+			chCtx.subGen++
+			chCtx.streamPosition = StreamPosition{Epoch: "new", Offset: 1}
+			c.channels[channel] = chCtx
+		}},
+		{name: "unsubscribed", top: StreamPosition{Epoch: "epoch", Offset: 11}, valid: true, live: func(c *Client) {
+			delete(c.channels, channel)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			entered, release := make(chan struct{}), make(chan struct{})
+			broker := NewTestBroker()
+			broker.historyFunc = func(string, HistoryOptions) ([]*Publication, StreamPosition, error) {
+				close(entered)
+				<-release
+				return nil, tc.top, nil
+			}
+			node := positionCheckTestNode(t, broker, time.Second)
+			client := newTestClient(t, node, "42")
+			chCtx := ChannelContext{subGen: subGen, flags: flagSubscribed | flagPositioning, streamPosition: snapshot}
+			client.mu.Lock()
+			client.channels[channel] = chCtx
+			client.mu.Unlock()
+
+			result := make(chan bool, 1)
+			go func() { result <- client.checkPosition(time.Second, channel, chCtx) }()
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				require.Fail(t, "stream top not read")
+			}
+			if tc.live != nil {
+				client.mu.Lock()
+				tc.live(client)
+				client.mu.Unlock()
+			}
+			close(release)
+			select {
+			case valid := <-result:
+				require.Equal(t, tc.valid, valid, "position valid")
+			case <-time.After(time.Second):
+				require.Fail(t, "position check did not return")
+			}
+			client.mu.Lock()
+			defer client.mu.Unlock()
+			if live, ok := client.channels[channel]; ok {
+				require.Equal(t, tc.stamped, live.positionCheckTime > 0, "positionCheckTime stamped")
+			}
+		})
+	}
+}
+
+// TestClientPeriodicPositionCheckRace is TestClientCheckPositionRace through the
+// periodic tick, for a server-side subscription: one which caught up with the
+// stream top while the top was being read keeps its connection, one which is
+// behind the top and did not move is disconnected with
+// DisconnectInsufficientState.
+func TestClientPeriodicPositionCheckRace(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name             string
+		deliverInCheck   bool
+		wantDisconnected bool
+	}{
+		{name: "caught_up_during_check", deliverInCheck: true},
+		{name: "real_gap", wantDisconnected: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			const channel = "channel"
+			base := StreamPosition{Epoch: "epoch", Offset: 10}
+			top := StreamPosition{Epoch: "epoch", Offset: 11}
+
+			var client *Client
+			var checking atomic.Bool
+			broker := NewTestBroker()
+			broker.historyFunc = func(string, HistoryOptions) ([]*Publication, StreamPosition, error) {
+				if !checking.Load() {
+					return nil, base, nil // The subscribe reads the position to start from.
+				}
+				if tc.deliverInCheck {
+					// A publication reaches the subscription while the top is being read.
+					client.mu.Lock()
+					chCtx := client.channels[channel]
+					chCtx.streamPosition = top
+					client.channels[channel] = chCtx
+					client.mu.Unlock()
+				}
+				return nil, top, nil
+			}
+			node := positionCheckTestNode(t, broker, time.Second)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			transport := newTestTransport(cancel)
+			transport.sink = make(chan []byte, 100)
+			var err error
+			client, _, err = NewClient(SetCredentials(ctx, &Credentials{UserID: "42"}), node, transport)
+			require.NoError(t, err)
+			require.True(t, client.HandleCommand(&protocol.Command{Id: 1, Connect: &protocol.ConnectRequest{}}, 0))
+			<-transport.sink // connect reply
+			require.NoError(t, client.Subscribe(channel, WithPositioning(true)))
+			client.mu.Lock()
+			require.Equal(t, base, client.channels[channel].streamPosition)
+			client.mu.Unlock()
+
+			checking.Store(true)
+			client.updatePresence()
+
+			if tc.wantDisconnected {
+				select {
+				case <-transport.closeCh:
+				case <-time.After(time.Second):
+					require.Fail(t, "client not disconnected")
+				}
+				require.Equal(t, DisconnectInsufficientState.Code, transport.disconnect.Code)
+				return
+			}
+			select {
+			case <-transport.closeCh:
+				require.Fail(t, "client disconnected", "disconnect: %v", transport.disconnect)
+			case <-time.After(100 * time.Millisecond):
+			}
+		})
+	}
+}
+
 func TestErrLogLevel(t *testing.T) {
 	t.Parallel()
 	require.Equal(t, LogLevelInfo, errLogLevel(ErrorNotAvailable))

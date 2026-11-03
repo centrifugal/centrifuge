@@ -1526,18 +1526,33 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx Channe
 		// Check later.
 		return true
 	}
-	if validPosition {
-		c.mu.Lock()
-		// Only stamp the generation we actually validated: a resubscribe in the
-		// window installs a new subGen with its own unvalidated position, and
-		// marking that as freshly checked would defer its first real check.
-		if chContext, ok := c.channels[ch]; ok && chContext.subGen == checkedSubGen {
-			chContext.positionCheckTime = nowUnix
-			c.channels[ch] = chContext
-		}
-		c.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	chContext, ok := c.channels[ch]
+	if !ok || chContext.subGen != checkedSubGen {
+		// The subscription checked is gone: unsubscribed, or replaced by a
+		// resubscribe which installed a new subGen with its own unvalidated
+		// position. There is nothing to act on, and stamping the new generation
+		// as freshly checked would defer its first real check.
+		return true
 	}
-	return validPosition
+	if validPosition {
+		chContext.positionCheckTime = nowUnix
+		c.channels[ch] = chContext
+		return true
+	}
+	if chContext.streamPosition != position {
+		// Publications delivered while the stream top was being read moved the
+		// subscription past the position compared with that top, so the result
+		// says nothing about the live subscription: it may have caught up with
+		// the top read, or still be behind a top which moved as well. Either
+		// way it is receiving publications, and a gap among those is caught by
+		// the per-publication offset check (publicationDataUpdatePositionLocked).
+		// positionCheckTime stays unstamped, so the next tick checks again from
+		// a fresh snapshot.
+		return true
+	}
+	return false
 }
 
 // Profile returns the application context this connection belongs to, as
