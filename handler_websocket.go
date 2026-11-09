@@ -338,12 +338,8 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 
 		_ = conn.SetReadDeadline(time.Now().Add(closeFrameWait))
-		for {
-			if _, _, err := conn.NextReader(); err != nil {
-				close(graceCh)
-				break
-			}
-		}
+		drainUntilClose(conn)
+		close(graceCh)
 	}
 
 	if r.ProtoMajor == 1 {
@@ -697,6 +693,36 @@ func (t *websocketTransport) WriteMany(messages ...[]byte) error {
 }
 
 const closeFrameWait = 5 * time.Second
+
+// closeDrainMaxMessages bounds the data messages read from a connection while
+// waiting for the client's close frame. See drainUntilClose.
+const closeDrainMaxMessages = 32
+
+// drainUntilClose reads from a connection whose commands are no longer
+// processed until the client's close frame arrives (the websocket library
+// answers it, completing the closing handshake), the read deadline passes, or
+// the client sends more than closeDrainMaxMessages data messages.
+//
+// Waiting for the close frame is what lets a client see the server's close
+// code: some browsers report 1006 instead if the TCP connection is closed
+// before the closing handshake completes. A client which is closing sends no
+// more than what it had in flight when it got the server's close frame - or,
+// after a refused connect, when it got the error reply - so the bound does not
+// change anything for it. A client which keeps sending is not closing. Without
+// the bound the server would read everything it sends until closeFrameWait:
+// for a client flooding commands, seconds of reading at full speed after every
+// disconnect, and after every refused connect, which is what such a client
+// gets when it reconnects over its limits.
+//
+// The bodies of drained messages are skipped by the websocket library as raw
+// frame data, never decompressed, and each is bounded by the read limit.
+func drainUntilClose(conn *websocket.Conn) {
+	for i := 0; i <= closeDrainMaxMessages; i++ {
+		if _, _, err := conn.NextReader(); err != nil {
+			return
+		}
+	}
+}
 
 // Close closes transport.
 func (t *websocketTransport) Close(disconnect Disconnect) error {
