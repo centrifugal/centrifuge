@@ -3859,6 +3859,9 @@ func TestRedisMapBroker_UsePrecomputedPartitionTags_ClusterE2E(t *testing.T) {
 	skipIfNoShardedPubSub(t, shard, "centrifuge-test-skip-probe-"+randString(4))
 
 	broker, err := NewRedisMapBroker(node, RedisMapBrokerConfig{
+		// Its own prefix: another partition layout under the same prefix is not
+		// cleaned up by this broker, see TestRedisMapBroker_CleanupDropsOtherLayoutRegistration.
+		Prefix:                      getUniquePrefix(),
 		Shards:                      []*RedisShard{shard},
 		NumShardedPubSubPartitions:  16,
 		UsePrecomputedPartitionTags: true,
@@ -4546,4 +4549,96 @@ func TestRedisMapBroker_StreamReadWipesStreamOnFreshMeta(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(0), streamLen, "stream_key must be wiped after fresh-meta stream_read")
 	})
+}
+
+func newClusterMapBrokerForCleanupTest(t *testing.T, prefix string, numPartitions int, precomputed bool) (*RedisMapBroker, *RedisShard) {
+	t.Helper()
+	node, _ := New(Config{
+		Map: MapConfig{
+			GetMapChannelOptions: func(string) MapChannelOptions {
+				return MapChannelOptions{
+					Mode:       MapModeRecoverable,
+					StreamSize: 100,
+					StreamTTL:  300 * time.Second,
+					MetaTTL:    time.Hour,
+					KeyTTL:     time.Minute,
+				}
+			},
+		},
+	})
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+	shard, err := NewRedisShard(node, RedisShardConfig{
+		ClusterAddresses: []string{"127.0.0.1:7001", "127.0.0.1:7002", "127.0.0.1:7003"},
+		IOTimeout:        10 * time.Second,
+		ConnectTimeout:   10 * time.Second,
+	})
+	require.NoError(t, err)
+	t.Cleanup(shard.Close)
+	skipIfNoShardedPubSub(t, shard, "centrifuge-test-skip-probe-"+randString(4))
+	broker, err := NewRedisMapBroker(node, RedisMapBrokerConfig{
+		Prefix:                      prefix,
+		Shards:                      []*RedisShard{shard},
+		NumShardedPubSubPartitions:  numPartitions,
+		UsePrecomputedPartitionTags: precomputed,
+	})
+	require.NoError(t, err)
+	return broker, shard
+}
+
+// With precomputed partition tags the cleanup reads the registration keys the
+// channels are registered under: expired keys are removed.
+func TestRedisMapBroker_CleanupWithPrecomputedPartitionTags(t *testing.T) {
+	t.Parallel()
+	broker, shard := newClusterMapBrokerForCleanupTest(t, getUniquePrefix(), 16, true)
+	ctx := context.Background()
+
+	channels := make([]string, 8)
+	for i := range channels {
+		channels[i] = randomChannel("test_precomputed_cleanup")
+		_, err := broker.Publish(ctx, channels[i], "key1", MapPublishOptions{Data: []byte("v1")})
+		require.NoError(t, err)
+	}
+
+	// Past the key TTL.
+	broker.cleanupShard(ctx, shard, time.Now().Add(2*time.Minute).UnixMilli())
+
+	for _, ch := range channels {
+		res, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+		require.NoError(t, err)
+		require.Empty(t, res.Publications, "expired key not removed in %s", ch)
+		score, err := shard.client.Do(ctx, shard.client.B().Zscore().
+			Key(broker.cleanupRegistrationKeyForChannel(shard, ch)).Member(ch).Build()).AsFloat64()
+		require.True(t, rueidis.IsRedisNil(err), "registration of %s kept with score %v", ch, score)
+	}
+}
+
+// A registration written under another partition layout with the same prefix
+// (here 1 partition, the broker has 16) is dropped by the cleanup. Building the
+// cleanup script from it mixed hash tags: in Redis Cluster that panicked.
+func TestRedisMapBroker_CleanupDropsOtherLayoutRegistration(t *testing.T) {
+	t.Parallel()
+	prefix := getUniquePrefix()
+	other, _ := newClusterMapBrokerForCleanupTest(t, prefix, 1, false)
+	broker, shard := newClusterMapBrokerForCleanupTest(t, prefix, 16, false)
+	ctx := context.Background()
+
+	// A channel not in partition 0 under 16 partitions: its registration under
+	// the 1-partition layout, in partition 0, has another tag than its keys.
+	var ch string
+	for {
+		ch = randomChannel("test_other_layout")
+		if consistentIndex(ch, 16) != 0 {
+			break
+		}
+	}
+	_, err := other.Publish(ctx, ch, "key1", MapPublishOptions{Data: []byte("v1")})
+	require.NoError(t, err)
+	staleKey := other.cleanupRegistrationKeyForChannel(shard, ch)
+	require.NotEqual(t, staleKey, broker.cleanupRegistrationKeyForChannel(shard, ch))
+	require.Contains(t, broker.cleanupRegistrationKeys(shard), staleKey)
+
+	broker.cleanupShard(ctx, shard, time.Now().Add(2*time.Minute).UnixMilli())
+
+	_, err = shard.client.Do(ctx, shard.client.B().Zscore().Key(staleKey).Member(ch).Build()).AsFloat64()
+	require.True(t, rueidis.IsRedisNil(err), "registration under the other layout kept")
 }
