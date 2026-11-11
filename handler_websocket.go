@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -317,7 +318,11 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		for {
 			_, r, err := conn.NextReader()
 			if err != nil {
-				if s.node.logEnabled(LogLevelTrace) {
+				if errors.Is(err, websocket.ErrTooManyPings) {
+					// Closed with 1008 by the websocket library: worth an
+					// operator's attention, unlike a peer going away.
+					s.node.logger.log(newLogEntry(LogLevelInfo, "disconnect client sending too many websocket pings", map[string]any{"client": c.ID(), "user": c.UserID()}))
+				} else if s.node.logEnabled(LogLevelTrace) {
 					s.node.logger.log(newLogEntry(LogLevelTrace, "websocket next reader error", map[string]any{"client": c.ID(), "error": err.Error()}))
 				}
 				break

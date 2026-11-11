@@ -2650,3 +2650,80 @@ func TestWsCloseDictionaryCompressionIsIdempotent(t *testing.T) {
 		require.EqualValues(t, 1, cc.closed.Load())
 	})
 }
+
+func newPingTestServer(t *testing.T) string {
+	t.Helper()
+	n, _ := New(Config{})
+	require.NoError(t, n.Run())
+	t.Cleanup(func() { _ = n.Shutdown(context.Background()) })
+	n.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{Credentials: &Credentials{UserID: "u"}}, nil
+	})
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{}))
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return "ws" + server.URL[4:] + "/connection/websocket"
+}
+
+// Keepalive pings - a burst, then a ping a second - are answered and leave the
+// connection open.
+func TestWebsocketHandlerKeepalivePingsAnswered(t *testing.T) {
+	t.Parallel()
+	conn, resp, _, err := (&websocket.Dialer{}).Dial(newPingTestServer(t), nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close(); _ = conn.Close() }()
+
+	pongs := make(chan struct{}, 100)
+	conn.SetPongHandler(func([]byte) error { pongs <- struct{}{}; return nil })
+	go func() {
+		for {
+			if _, _, err := conn.NextReader(); err != nil {
+				return
+			}
+		}
+	}()
+	ping := func() {
+		require.NoError(t, conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)))
+		select {
+		case <-pongs:
+		case <-time.After(2 * time.Second):
+			require.Fail(t, "ping not answered")
+		}
+	}
+	for i := 0; i < 10; i++ {
+		ping()
+	}
+	time.Sleep(1100 * time.Millisecond)
+	ping()
+}
+
+// A peer flooding pings is closed with 1008 rather than answered with a pong
+// write per ping.
+func TestWebsocketHandlerPingFloodClosed(t *testing.T) {
+	t.Parallel()
+	conn, resp, _, err := (&websocket.Dialer{}).Dial(newPingTestServer(t), nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close(); _ = conn.Close() }()
+
+	closeErr := make(chan error, 1)
+	go func() {
+		for {
+			if _, _, err := conn.NextReader(); err != nil {
+				closeErr <- err
+				return
+			}
+		}
+	}()
+	for i := 0; i < 100; i++ {
+		if conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)) != nil {
+			break
+		}
+	}
+	select {
+	case err := <-closeErr:
+		require.True(t, websocket.IsCloseError(err, websocket.ClosePolicyViolation), "got %v", err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "ping flood not closed")
+	}
+}
