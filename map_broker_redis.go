@@ -393,8 +393,27 @@ func (e *RedisMapBroker) cleanupRegistrationKeyForChannel(s *RedisShard, ch stri
 	if !s.isCluster {
 		return e.conf.Prefix + ":cleanup:channels"
 	}
-	idx := consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
-	return e.conf.Prefix + ":cleanup:channels:{" + e.pubSubPartitionHashTag(idx) + "}"
+	return e.cleanupPartitionKey(consistentIndex(ch, e.conf.NumShardedPubSubPartitions))
+}
+
+// cleanupPartitionKey is the cleanup registration key of a partition in Redis
+// Cluster. It has the hash tag of the partition's channel keys, so the cleanup
+// script touches keys of one slot only.
+func (e *RedisMapBroker) cleanupPartitionKey(partitionIdx int) string {
+	return e.conf.Prefix + ":cleanup:channels:{" + e.pubSubPartitionHashTag(partitionIdx) + "}"
+}
+
+// cleanupRegistrationKeys returns all cleanup registration keys of a shard: the
+// keys cleanupRegistrationKeyForChannel registers channels under.
+func (e *RedisMapBroker) cleanupRegistrationKeys(s *RedisShard) []string {
+	if !s.isCluster {
+		return []string{e.conf.Prefix + ":cleanup:channels"}
+	}
+	keys := make([]string, 0, e.conf.NumShardedPubSubPartitions)
+	for i := 0; i < e.conf.NumShardedPubSubPartitions; i++ {
+		keys = append(keys, e.cleanupPartitionKey(i))
+	}
+	return keys
 }
 
 func (e *RedisMapBroker) resultCacheKey(s *RedisShard, ch string, idempotencyKey string) string {
@@ -2454,16 +2473,7 @@ func (e *RedisMapBroker) updateCleanupLag(ctx context.Context) {
 
 	for _, wrapper := range e.shards {
 		shard := wrapper.shard
-		var cleanupKeys []string
-		if e.useShardedPubSub(shard) {
-			cleanupKeys = make([]string, 0, e.conf.NumShardedPubSubPartitions)
-			for i := 0; i < e.conf.NumShardedPubSubPartitions; i++ {
-				cleanupKeys = append(cleanupKeys, e.conf.Prefix+":cleanup:channels:{"+strconv.Itoa(i)+"}")
-			}
-		} else {
-			cleanupKeys = []string{e.conf.Prefix + ":cleanup:channels"}
-		}
-		for _, cleanupKey := range cleanupKeys {
+		for _, cleanupKey := range e.cleanupRegistrationKeys(shard) {
 			cmd := shard.client.B().Arbitrary("ZRANGE").Keys(cleanupKey).Args("0", "0", "WITHSCORES").Build()
 			if arr, err := shard.client.Do(ctx, cmd).AsStrSlice(); err == nil && len(arr) >= 2 {
 				if oldestScore, parseErr := strconv.ParseFloat(arr[1], 64); parseErr == nil {
@@ -2526,15 +2536,7 @@ func (e *RedisMapBroker) runCleanupCycle(ctx context.Context) {
 
 // cleanupShard processes all partitions within a shard in parallel.
 func (e *RedisMapBroker) cleanupShard(ctx context.Context, shard *RedisShard, now int64) {
-	var cleanupKeys []string
-	if e.useShardedPubSub(shard) {
-		cleanupKeys = make([]string, 0, e.conf.NumShardedPubSubPartitions)
-		for i := 0; i < e.conf.NumShardedPubSubPartitions; i++ {
-			cleanupKeys = append(cleanupKeys, e.conf.Prefix+":cleanup:channels:{"+strconv.Itoa(i)+"}")
-		}
-	} else {
-		cleanupKeys = []string{e.conf.Prefix + ":cleanup:channels"}
-	}
+	cleanupKeys := e.cleanupRegistrationKeys(shard)
 
 	var wg sync.WaitGroup
 	for _, cleanupKey := range cleanupKeys {
@@ -2631,6 +2633,17 @@ func (e *RedisMapBroker) getChannelsForCleanup(ctx context.Context, client rueid
 // CleanupBatchSize keys per CleanupInterval. Other channels in the same partition
 // remain unaffected since partition-level fan-out runs independent goroutines.
 func (e *RedisMapBroker) cleanupChannel(ctx context.Context, shard *RedisShard, ch string, cleanupKey string, now int64) error {
+	if cleanupKey != e.cleanupRegistrationKeyForChannel(shard, ch) {
+		// Registered under another partition layout (a different number of
+		// partitions or tag scheme with the same prefix): the channel's keys
+		// under that layout have other hash tags, this broker can't address
+		// them, and in Redis Cluster a script with its keys and this
+		// registration key would span slots. Drop the registration, otherwise
+		// it stays due and is read again on every pass.
+		cmd := shard.client.B().Zrem().Key(cleanupKey).Member(ch).Build()
+		return shard.client.Do(ctx, cmd).Error()
+	}
+
 	// Get channel options for this channel.
 	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
 	if err != nil {
