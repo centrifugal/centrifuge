@@ -82,11 +82,12 @@ type Node struct {
 
 	surveyHandler  SurveyHandler
 	surveyRegistry map[uint64]chan survey
+	surveyMu       sync.RWMutex
+	surveyID       uint64
+
 	// lineages are the Redis lineages of this node's brokers, by shard (see
 	// redis_lineage.go), for the lineage survey.
 	lineages sync.Map
-	surveyMu       sync.RWMutex
-	surveyID       uint64
 
 	notificationHandler NotificationHandler
 	nodeInfoSendHandler NodeInfoSendHandler
