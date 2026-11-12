@@ -1255,6 +1255,15 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 		l.obsMu.Unlock()
 	} else {
 		l.tokens[slot] = newToken
+		// The server's other slots most likely carry the same token: start
+		// with it rather than opening the gate again on the first call to
+		// each of them (up to 16384 in Redis Cluster). A slot with another
+		// token (migrated in, adopted) answers LINEAGE with its token once.
+		for _, s := range slots {
+			if l.tokens[s] == "" {
+				l.tokens[s] = newToken
+			}
+		}
 	}
 	l.rememberLocked(newToken)
 	if l.shard.isCluster {
