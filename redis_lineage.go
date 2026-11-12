@@ -883,6 +883,25 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 			}
 		}
 		token := current
+		if !intact && !force && l.shard.isCluster {
+			// A slot whose token has no marker here may have been migrated in
+			// from another server (MIGRATE moves its keys without loss) while
+			// this server's own lineage is intact. Then only that slot is
+			// adopted, under this server's token with its own as the ancestor,
+			// instead of rotating - and resetting - every slot of the server.
+			own, ok, err := l.intactServerToken(ctx, c, slots, slot)
+			if err != nil {
+				return err
+			}
+			if ok {
+				adoptedValue, err = l.adoptSlot(ctx, c, tokenKey, currentValue, own)
+				if err != nil {
+					return err
+				}
+				token = own
+				intact = true
+			}
+		}
 		if !intact {
 			// A new lineage (or the cache was flushed, or a different server):
 			// rotate the token of every slot this server serves, then load.
@@ -1194,9 +1213,14 @@ func (l *redisLineage) probeCluster(ctx context.Context) {
 		l.tokensMu.RUnlock()
 		if changed >= 0 {
 			// The slot is served by another node than when the gate opened: a
-			// failover or a migration. Rotate there.
-			_ = l.open(ctx, lineageTokenKeyForSlot(changed), true, "")
-			continue
+			// failover (the promoted replica has no scripts, its gate opens on
+			// NOSCRIPT) or a migration (adopted by the gate). Nothing to force;
+			// a demoted primary is flushed as a replica.
+			l.tokensMu.Lock()
+			for _, sl := range n.slots {
+				delete(l.owners, sl)
+			}
+			l.tokensMu.Unlock()
 		}
 		if !used {
 			continue
@@ -1366,4 +1390,70 @@ func (l *redisLineage) keepSlots(ctx context.Context, c rueidis.DedicatedClient,
 		}
 	}
 	return n
+}
+
+// intactServerToken looks, on the gate's connection, for a token of another
+// slot this server serves whose marker the server holds: the server's own
+// lineage is then intact. It returns that token.
+func (l *redisLineage) intactServerToken(ctx context.Context, c rueidis.DedicatedClient, slots []int, except int) (string, bool, error) {
+	keys := make([]string, 0, 8)
+	for _, s := range slots {
+		if s == except {
+			continue
+		}
+		keys = append(keys, lineageTokenKeyForSlot(s))
+		if len(keys) == cap(keys) {
+			break
+		}
+	}
+	if len(keys) == 0 {
+		return "", false, nil
+	}
+	raw, err := c.Do(ctx, c.B().Eval().Script(lineageSlotsSourceCluster).Numkeys(0).Arg(keys...).Build()).AsStrSlice()
+	if err != nil {
+		return "", false, err
+	}
+	seen := map[string]bool{}
+	for i := 0; i+1 < len(raw); i += 2 {
+		token, _ := parseTokenValue(raw[i])
+		if token == "" || seen[token] {
+			continue
+		}
+		seen[token] = true
+		sha, err := l.marker(ctx, c, token)
+		if err != nil {
+			return "", false, err
+		}
+		res, err := c.Do(ctx, c.B().ScriptExists().Sha1(sha).Build()).AsIntSlice()
+		if err != nil {
+			return "", false, err
+		}
+		if len(res) == 1 && res[0] == 1 {
+			return token, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// adoptSlot gives a slot migrated in the server's token, with the slot's token
+// as its ancestor (its metas are adopted) and its write counter, with a
+// compare-and-set like the rotation. It returns the slot's new value.
+func (l *redisLineage) adoptSlot(ctx context.Context, c rueidis.DedicatedClient, tokenKey, currentValue, own string) (string, error) {
+	raw, err := c.Do(ctx, c.B().Eval().Script(lineageSlotsSourceCluster).Numkeys(0).Arg(tokenKey).Build()).AsStrSlice()
+	if err != nil || len(raw) != 2 {
+		return "", fmt.Errorf("read slot: %v", err)
+	}
+	value := own
+	if prev, _ := parseTokenValue(currentValue); prev != "" && prev != own {
+		value = own + "|" + prev + "|" + raw[1]
+	}
+	other, err := c.Do(ctx, c.B().Eval().Script(lineageRotateSourceCluster).Numkeys(0).
+		Arg(tokenKey, currentValue, tokenKey, value).Build()).ToString()
+	if err != nil && !rueidis.IsRedisNil(err) {
+		return "", fmt.Errorf("adopt: %w", err)
+	}
+	if err == nil {
+		return other, nil // another node did it first
+	}
+	return value, nil
 }
