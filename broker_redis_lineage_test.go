@@ -133,7 +133,7 @@ func TestRedisLineage_DragonflyWithInfo(t *testing.T) {
 	ch := "lineage_df_" + randString(6)
 	sp := lineagePublish(t, b, ch, 2)
 	require.Equal(t, uint64(2), sp.Offset)
-	stamp, err := s.client.Do(context.Background(), s.client.B().Hget().Key(string(b.historyMetaKey(s, ch))).Field("i").Build()).ToString()
+	stamp, err := s.client.Do(context.Background(), s.client.B().Hget().Key(string(b.historyMetaKey(s, ch))).Field(lineageStampInfo).Build()).ToString()
 	require.NoError(t, err)
 	require.Equal(t, byte('r'), stamp[0], "stamped with master_replid")
 }

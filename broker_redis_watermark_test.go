@@ -483,5 +483,65 @@ func testWatermarkSlotMigration(t *testing.T, partitions int) {
 		}
 		ws.mu.Unlock()
 	}
-	t.Logf("CMPMIGRATE partitions=%d publishes=%d failed=%d nodes_detecting=%d of 2", partitions, ok, failed, lostNodes)
+	var checks, losses int64
+	for _, b := range brokers {
+		require.Eventually(t, func() bool {
+			ws := b.watermarks.shard(ch)
+			ws.mu.Lock()
+			defer ws.mu.Unlock()
+			return !ws.m[ch].verifying
+		}, 10*time.Second, 20*time.Millisecond)
+		checks += b.watermarks.checks.Load()
+		losses += b.watermarks.losses.Load()
+	}
+	t.Logf("CMPMIGRATE partitions=%d publishes=%d failed=%d suspects_checked=%d losses=%d nodes_lost=%d of 2", partitions, ok, failed, checks, losses, lostNodes)
+	require.Zero(t, losses, "a slot migration loses nothing")
+}
+
+// A late PUB/SUB message (an offset already received, its publication still in
+// the history: what a slot migration's reordering produces) is verified and
+// ignored - nothing resets, nobody resyncs.
+func TestRedisBroker_LateMessageNotALoss(t *testing.T) {
+	node, b, insufficient := newWatermarkTestNode(t)
+	ch := "watermark_late_" + randString(8)
+	client := newTestConnectedClientV2(t, node, "42")
+	rw := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{Channel: ch, Recover: true}, &protocol.Command{}, time.Now(), rw.rw))
+	var last StreamPosition
+	for i := 0; i < 3; i++ {
+		res, err := node.Publish(ch, []byte(`{}`), WithHistory(10, time.Minute))
+		require.NoError(t, err)
+		last = res.StreamPosition
+	}
+	require.Eventually(t, func() bool {
+		client.mu.RLock()
+		defer client.mu.RUnlock()
+		return client.channels[ch].streamPosition.Offset == 3
+	}, 5*time.Second, 10*time.Millisecond)
+
+	// Publication 2 arrives again, as published.
+	s := b.shards[0].shard
+	ctx := context.Background()
+	entries, err := s.client.Do(ctx, s.client.B().Xrange().Key(string(b.historyStreamKey(s, ch))).Start("2-0").End("2-0").Build()).AsXRange()
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	msg := "__p1:2:" + last.Epoch + "__" + entries[0].FieldValues["d"]
+	require.NoError(t, s.client.Do(ctx, s.client.B().Publish().Channel(string(b.messageChannelID(s, ch))).Message(msg).Build()).Error())
+
+	// Verified: no loss.
+	require.Eventually(t, func() bool { return b.watermarks.checks.Load() == 1 }, 5*time.Second, 10*time.Millisecond)
+	require.Zero(t, b.watermarks.losses.Load())
+	ws := b.watermarks.shard(ch)
+	ws.mu.Lock()
+	lost := ws.m[ch].lost
+	ws.mu.Unlock()
+	require.False(t, lost)
+	select {
+	case <-insufficient:
+		t.Fatal("a late message is not a loss")
+	default:
+	}
+	top, err := node.streamTop(ch, time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, last.Epoch, top.Epoch)
 }

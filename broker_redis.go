@@ -1724,13 +1724,12 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 			pub.Delta = false
 		}
 		if b.watermarks != nil {
-			var lost bool
-			epoch := sp.Epoch
-			sp.Epoch, lost = b.watermarks.observe(channel, epoch, sp.Offset, func() bool {
+			var check *watermarkCheck
+			sp.Epoch, check = b.watermarks.observe(channel, sp.Epoch, sp.Offset, pub.Time, func() bool {
 				return b.node.hub.NumSubscribers(channel) > 0
 			})
-			if lost {
-				go b.resetLostStream(channel, epoch, sp.Offset)
+			if check != nil {
+				go b.checkReusedOffset(check)
 			}
 		}
 		if len(pub.PrevData) > 0 {
@@ -2252,4 +2251,21 @@ func (b *RedisBroker) resetLostStream(ch string, epoch string, offset uint64) {
 		return
 	}
 	b.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused stream offsets, writes were lost: stream reset", map[string]any{"channel": ch, "epoch": epoch, "offset": offset, "reset": reset == 1}))
+}
+
+// checkReusedOffset verifies a suspect offset (see offsetWatermarks) and
+// reacts to a loss.
+func (b *RedisBroker) checkReusedOffset(c *watermarkCheck) {
+	s := b.getShard(c.ch).shard
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	lost, err := verifyReusedOffset(ctx, s.client, string(b.historyStreamKey(s, c.ch)), string(b.historyMetaKey(s, c.ch)), c)
+	if err != nil {
+		b.node.logger.log(newErrorLogEntry(err, "error verifying a reused stream offset", map[string]any{"channel": c.ch}))
+	}
+	b.watermarks.settle(c, lost)
+	if lost {
+		b.resetLostStream(c.ch, c.epoch, c.got)
+		b.node.resyncLocalSubscribers(c.ch)
+	}
 }

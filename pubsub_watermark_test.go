@@ -14,49 +14,58 @@ func TestOffsetWatermarks(t *testing.T) {
 	track := func() bool { return true }
 
 	for off := uint64(1); off <= 3; off++ {
-		e, lost := w.observe("ch", "E", off, track)
+		e, check := w.observe("ch", "E", off, int64(off*100), track)
 		require.Equal(t, "E", e)
-		require.False(t, lost)
+		require.Nil(t, check)
 	}
 
-	// The server gave offset 2 again: lost, once.
-	e, lost := w.observe("ch", "E", 2, track)
-	require.Equal(t, "E"+lostEpochSuffix, e)
-	require.True(t, lost)
+	// Offset 2 again: a suspect, checked against the publication at 3.
+	e, check := w.observe("ch", "E", 2, 999, track)
+	require.Equal(t, "E", e, "delivered as is until verified")
+	require.NotNil(t, check)
+	require.Equal(t, watermarkCheck{ch: "ch", epoch: "E", offset: 3, time: 300, got: 2}, *check)
+	// One check at a time.
+	_, again := w.observe("ch", "E", 2, 999, track)
+	require.Nil(t, again)
 
-	// Every later publication of the lost epoch is delivered as lost.
-	e, lost = w.observe("ch", "E", 4, track)
+	// A late message after all: nothing lost.
+	w.settle(check, false)
+	e, check = w.observe("ch", "E", 4, 400, track)
+	require.Equal(t, "E", e)
+	require.Nil(t, check)
+
+	// A confirmed loss: the epoch's later publications are delivered as lost.
+	_, check = w.observe("ch", "E", 4, 401, track)
+	require.NotNil(t, check)
+	w.settle(check, true)
+	e, check = w.observe("ch", "E", 5, 500, track)
 	require.Equal(t, "E"+lostEpochSuffix, e)
-	require.False(t, lost)
+	require.Nil(t, check)
 
 	// The new epoch after the reset is delivered as is.
-	e, lost = w.observe("ch", "E2", 1, track)
+	e, check = w.observe("ch", "E2", 1, 600, track)
 	require.Equal(t, "E2", e)
-	require.False(t, lost)
-
-	// The same offset twice is a reuse too.
-	_, lost = w.observe("ch", "E2", 1, track)
-	require.True(t, lost)
+	require.Nil(t, check)
 
 	// Publications without offsets aren't tracked.
-	e, lost = w.observe("other", "E", 0, track)
+	e, check = w.observe("other", "E", 0, 0, track)
 	require.Equal(t, "E", e)
-	require.False(t, lost)
+	require.Nil(t, check)
 }
 
 func TestOffsetWatermarks_UntrackedAndForget(t *testing.T) {
 	w := newOffsetWatermarks()
 	none := func() bool { return false }
-	_, _ = w.observe("ch", "E", 5, none)
-	_, lost := w.observe("ch", "E", 1, none)
-	require.False(t, lost, "no local subscribers: nothing tracked")
+	_, _ = w.observe("ch", "E", 5, 1, none)
+	_, check := w.observe("ch", "E", 1, 1, none)
+	require.Nil(t, check, "no local subscribers: nothing tracked")
 	require.Empty(t, w.shard("ch").m)
 
 	track := func() bool { return true }
-	_, _ = w.observe("ch", "E", 5, track)
+	_, _ = w.observe("ch", "E", 5, 1, track)
 	w.forget("ch")
-	_, lost = w.observe("ch", "E", 1, track)
-	require.False(t, lost, "forgotten on unsubscribe: starts again")
+	_, check = w.observe("ch", "E", 1, 1, track)
+	require.Nil(t, check, "forgotten on unsubscribe: starts again")
 }
 
 func BenchmarkOffsetWatermarks_Observe(b *testing.B) {
@@ -71,7 +80,7 @@ func BenchmarkOffsetWatermarks_Observe(b *testing.B) {
 		var off uint64
 		for pb.Next() {
 			off++
-			_, _ = w.observe(chs[off%1024], "epoch", off, track)
+			_, _ = w.observe(chs[off%1024], "epoch", off, int64(off), track)
 		}
 	})
 }
@@ -92,7 +101,7 @@ func TestOffsetWatermarks_Memory(t *testing.T) {
 	runtime.ReadMemStats(&before)
 	w := newOffsetWatermarks()
 	for i, ch := range chs {
-		w.observe(ch, epoch, uint64(i+1), func() bool { return true })
+		w.observe(ch, epoch, uint64(i+1), int64(i), func() bool { return true })
 	}
 	runtime.GC()
 	runtime.ReadMemStats(&after)

@@ -2949,19 +2949,20 @@ func (e *RedisMapBroker) handleRedisClientMessage(isCluster bool, eventHandler B
 	}
 
 	sp := StreamPosition{Offset: offset, Epoch: epoch}
-	var lost bool
-	sp.Epoch, lost = e.watermarks.observe(channel, epoch, offset, func() bool {
-		return e.node.hub.NumSubscribers(channel) > 0
-	})
-	if lost {
-		go e.resetLostStream(channel, epoch, offset)
-	}
 
 	// Unmarshal as Publication (unified format)
 	var protoPub protocol.Publication
 	err = protoPub.UnmarshalCF(protobuf)
 	if err != nil {
 		return fmt.Errorf("can not unmarshal value to Publication: %v", err)
+	}
+
+	var check *watermarkCheck
+	sp.Epoch, check = e.watermarks.observe(channel, epoch, offset, protoPub.Time, func() bool {
+		return e.node.hub.NumSubscribers(channel) > 0
+	})
+	if check != nil {
+		go e.checkReusedOffset(check)
 	}
 
 	if protoPub.Offset == 0 {
@@ -3481,4 +3482,21 @@ func (e *RedisMapBroker) resetLostStream(ch string, lostEpoch string, offset uin
 		return
 	}
 	e.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused map stream offsets, writes were lost: stream reset", map[string]any{"channel": ch, "epoch": lostEpoch, "offset": offset, "reset": reset == 1}))
+}
+
+// checkReusedOffset verifies a suspect offset (see offsetWatermarks) and
+// reacts to a loss.
+func (e *RedisMapBroker) checkReusedOffset(c *watermarkCheck) {
+	s := e.getShard(c.ch).shard
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	lost, err := verifyReusedOffset(ctx, s.client, e.streamKey(s, c.ch), e.metaKey(s, c.ch), c)
+	if err != nil {
+		e.node.logger.log(newErrorLogEntry(err, "error verifying a reused map stream offset", map[string]any{"channel": c.ch}))
+	}
+	e.watermarks.settle(c, lost)
+	if lost {
+		e.resetLostStream(c.ch, c.epoch, c.got)
+		e.node.resyncLocalSubscribers(c.ch)
+	}
 }

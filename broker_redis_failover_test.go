@@ -476,12 +476,16 @@ func TestRedisFailover_ClusterFailover(t *testing.T) {
 		hello, err := replica.c.Do(ctx, replica.c.B().Hello().Build()).AsMap()
 		return err == nil && parseHelloReply(helloFields(hello)).primary
 	}, 10*time.Second, 20*time.Millisecond)
-	var sp StreamPosition
-	require.Eventually(t, func() bool {
-		sp = publishEventually(t, br, ch)
-		return sp.Epoch != before.Epoch
-	}, 10*time.Second, 50*time.Millisecond, "the promoted replica starts a new lineage")
-	require.Equal(t, uint64(1), sp.Offset, "the first publication on the promoted replica starts the new epoch (old primary %s)", primaryAddr)
+	// A coordinated failover loses nothing: the promoted replica starts a new
+	// lineage (it holds none of our scripts), or - if it was the primary under
+	// the current token before and kept its scripts - continues it. Either way
+	// no offset is given out twice.
+	sp := publishEventually(t, br, ch)
+	if sp.Epoch == before.Epoch {
+		require.Equal(t, uint64(3), sp.Offset, "continued lineage: offsets continue (old primary %s)", primaryAddr)
+	} else {
+		require.Equal(t, uint64(1), sp.Offset, "new lineage: a new epoch (old primary %s)", primaryAddr)
+	}
 }
 
 func lineageRotations(b *RedisBroker) int {
