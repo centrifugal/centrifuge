@@ -190,6 +190,13 @@ func setupPairOpts(t *testing.T, p failoverPair, noLineage bool) (*RedisBroker, 
 
 func setupPairConf(t *testing.T, p failoverPair, noLineage, selective bool) (*RedisBroker, *tcpProxy, *adminRedis, *adminRedis) {
 	t.Helper()
+	return setupPairHook(t, p, noLineage, selective, nil)
+}
+
+// setupPairHook is setupPairConf with a hook on the shard before the broker
+// starts.
+func setupPairHook(t *testing.T, p failoverPair, noLineage, selective bool, hook func(*RedisShard)) (*RedisBroker, *tcpProxy, *adminRedis, *adminRedis) {
+	t.Helper()
 	a, b := newAdmin(t, p.a), newAdmin(t, p.b)
 	a.promote()
 	b.promote()
@@ -205,6 +212,9 @@ func setupPairConf(t *testing.T, p failoverPair, noLineage, selective bool) (*Re
 	s, err := NewRedisShard(node, testSingleRedisConfAddr(proxy.addr()))
 	require.NoError(t, err)
 	s.lineage.disabledForTest = noLineage
+	if hook != nil {
+		hook(s)
+	}
 	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: getUniquePrefix(), Shards: []*RedisShard{s}, ResyncOnlyLostSlots: selective})
 	require.NoError(t, err)
 	node.SetBroker(br)
@@ -612,6 +622,59 @@ func TestRedisFailover_SelectiveControlNobodyObserved(t *testing.T) {
 			sp := publishEventually(t, br, ch)
 			require.Equal(t, before.Epoch, sp.Epoch)
 			require.Equal(t, uint64(4), sp.Offset)
+		})
+	}
+}
+
+// The failback the script cache can't see: the old primary takes a full copy
+// of the new one (losing its last writes), keeps our scripts loaded, and is
+// promoted again - all behind the same address, with no call reaching it
+// meanwhile and no probe noticing. The twin of the write counter catches it:
+// the old primary's data came from another server.
+func TestRedisFailover_FailbackTwinDetects(t *testing.T) {
+	testFailbackTwin(t, false)
+}
+
+// Control: the same with the twin off - the old primary looks intact and
+// offset 4 is given out again under the old epoch.
+func TestRedisFailover_FailbackTwinControl(t *testing.T) {
+	testFailbackTwin(t, true)
+}
+
+func testFailbackTwin(t *testing.T, twinOff bool) {
+	prev := lineageProbeInterval
+	lineageProbeInterval = time.Hour // the probe must not help
+	t.Cleanup(func() { lineageProbeInterval = prev })
+	for _, p := range failoverPairs(t) {
+		t.Run(p.name, func(t *testing.T) {
+			br, _, a, b := setupPairHook(t, p, false, false, func(s *RedisShard) {
+				s.lineage.twinDisabledForTest = twinOff
+			})
+			ch := "failback_twin_" + randString(6)
+			for i := 0; i < 3; i++ {
+				publishEventually(t, br, ch)
+			}
+			waitSynced(t, a, b)
+
+			// b promoted: a's next write never reaches it.
+			b.promote()
+			lostA := publishEventually(t, br, ch)
+			require.Equal(t, uint64(4), lostA.Offset)
+
+			// a takes a full copy of b (it diverged), then is promoted back.
+			// The address never moved.
+			a.replicaOf(p.b)
+			waitSynced(t, b, a)
+			a.promote()
+			b.replicaOf(p.a)
+
+			sp := publishEventually(t, br, ch)
+			if twinOff {
+				require.Equal(t, lostA.Epoch, sp.Epoch, "control: the old primary looks intact")
+				require.Equal(t, uint64(4), sp.Offset, "control: offset 4 given out again")
+				return
+			}
+			require.NotEqual(t, lostA.Epoch, sp.Epoch, "a new epoch: offset 4 isn't reused")
 		})
 	}
 }

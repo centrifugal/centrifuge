@@ -87,7 +87,7 @@ func TestRedisKeySlot(t *testing.T) {
 
 func TestLineageScriptVariants(t *testing.T) {
 	ls := newLineageScript("x", "return lineage_token(KEYS[1])", false)
-	a, b := ls.gatedSource("tokA", false), ls.gatedSource("tokB", false)
+	a, b := ls.gatedSource("tokA", false, true), ls.gatedSource("tokB", false, true)
 	require.NotEqual(t, sha1Hex(a), sha1Hex(b), "gated scripts are specific to a token")
 	require.Contains(t, a, `"tokA"`)
 	require.Contains(t, a, lineageGateLoadArg)
