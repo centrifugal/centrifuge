@@ -132,8 +132,8 @@ func TestRedisLineage_TwinCopiedDataStartsNewEpoch(t *testing.T) {
 	}
 }
 
-// An evicted lineage key (token and counters gone together) is not caught by
-// the twin: the server's scripts and marker show its lineage is intact.
+// Counters gone (both fields together) are a fresh start, not a lineage
+// break. The whole lineage key gone is TestRedisLineage_TokenKeyLost.
 func TestRedisLineage_TwinEvictedKeepsEpoch(t *testing.T) {
 	for _, tt := range gateTests() {
 		t.Run(tt.Name, func(t *testing.T) {
@@ -141,7 +141,7 @@ func TestRedisLineage_TwinEvictedKeepsEpoch(t *testing.T) {
 			s := b.shards[0].shard
 			ch := "twin_evicted_" + randString(6)
 			before := lineagePublish(t, b, ch, 2)
-			require.NoError(t, s.client.Do(context.Background(), s.client.B().Del().Key(twinKey(b, ch)).Build()).Error())
+			require.NoError(t, s.client.Do(context.Background(), s.client.B().Hdel().Key(twinKey(b, ch)).Field("c", "l").Build()).Error())
 			after := lineagePublish(t, b, ch, 1)
 			require.Equal(t, before.Epoch, after.Epoch)
 			require.Equal(t, uint64(3), after.Offset)
