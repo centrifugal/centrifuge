@@ -514,7 +514,7 @@ func (l *redisLineage) exec(ctx context.Context, s *lineageScript, keys, args []
 	for attempt := 0; attempt < 5; attempt++ {
 		token := l.token(slot)
 		if token == "" {
-			if err := l.open(ctx, keys[0], false); err != nil {
+			if err := l.open(ctx, keys[0], false, token); err != nil {
 				return rueidis.NewErrorResult(err)
 			}
 			continue
@@ -527,7 +527,7 @@ func (l *redisLineage) exec(ctx context.Context, s *lineageScript, keys, args []
 		resp := l.shard.client.Do(ctx, cmd)
 		err = resp.Error()
 		if isNoScript(err) {
-			if err := l.open(ctx, keys[0], false); err != nil {
+			if err := l.open(ctx, keys[0], false, token); err != nil {
 				return rueidis.NewErrorResult(err)
 			}
 			continue
@@ -588,10 +588,15 @@ func (l *redisLineage) marker(ctx context.Context, c rueidis.CoreClient, token s
 
 // open opens the gate of the server serving routeKey, all on one connection.
 // With force, the token is rotated even if the server holds the marker of its
-// token (a node saw a different server behind its connection).
-func (l *redisLineage) open(ctx context.Context, routeKey string, force bool) error {
+// token (a node saw a different server behind its connection). seen is the
+// token the caller found missing or unusable: when another caller has replaced
+// it meanwhile, the gate is open already and nothing is done.
+func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, seen string) error {
 	l.openMu.Lock()
 	defer l.openMu.Unlock()
+	if !force && l.token(l.slotIndex(routeKey)) != seen {
+		return nil
+	}
 
 	l.scriptsMu.Lock()
 	scripts := append([]*lineageScript(nil), l.scripts...)
@@ -872,14 +877,14 @@ func (l *redisLineage) probeSingle(ctx context.Context) {
 	if prev != "" && identity != "" && identity != prev {
 		// A different server behind the same address: its data may come from a
 		// lineage our token doesn't describe.
-		_ = l.open(ctx, lineageTokenKeyBase, true)
+		_ = l.open(ctx, lineageTokenKeyBase, true, "")
 		return
 	}
 	if token == "" {
 		return
 	}
 	if !l.holdsMarker(ctx, c, token) {
-		_ = l.open(ctx, lineageTokenKeyBase, false)
+		_ = l.open(ctx, lineageTokenKeyBase, false, token)
 	}
 	l.flushReplicas(ctx)
 }
@@ -921,7 +926,7 @@ func (l *redisLineage) probeCluster(ctx context.Context) {
 		if changed >= 0 {
 			// The slot is served by another node than when the gate opened: a
 			// failover or a migration. Rotate there.
-			_ = l.open(ctx, lineageTokenKeyForSlot(changed), true)
+			_ = l.open(ctx, lineageTokenKeyForSlot(changed), true, "")
 			continue
 		}
 		if !used {
@@ -933,7 +938,7 @@ func (l *redisLineage) probeCluster(ctx context.Context) {
 			continue
 		}
 		if !l.holdsMarkerKey(ctx, c, current, key) {
-			_ = l.open(ctx, key, false)
+			_ = l.open(ctx, key, false, l.token(n.slots[0]))
 		}
 	}
 }

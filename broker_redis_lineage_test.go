@@ -389,7 +389,7 @@ func TestRedisLineage_GateRefusesReplica(t *testing.T) {
 	if kind.primary || !kind.gateCapable {
 		t.Skip("the replica is not a gate-capable server")
 	}
-	err = s.lineage.open(context.Background(), lineageTokenKeyBase, false)
+	err = s.lineage.open(context.Background(), lineageTokenKeyBase, false, "")
 	require.ErrorIs(t, err, errLineageGate)
 	require.Contains(t, err.Error(), "not a primary")
 }
