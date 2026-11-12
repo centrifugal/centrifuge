@@ -228,8 +228,10 @@ func TestRedisLineage_AdoptsUnstampedMeta(t *testing.T) {
 	}
 }
 
-// A lost token key (eviction, a manual delete) can't let a stale meta pass: the
-// new token differs from every stamp.
+// A lost token key (eviction, a manual delete) can't let a stale meta pass.
+// Outside Redis Cluster nothing else vouches for the server: a new token, a new
+// epoch. In Redis Cluster other slots of the server still hold its token and
+// marker, so its lineage is intact: the slot is adopted and keeps its epoch.
 func TestRedisLineage_TokenKeyLost(t *testing.T) {
 	for _, tt := range lineageRedisTests {
 		if !tt.Gate {
@@ -243,8 +245,13 @@ func TestRedisLineage_TokenKeyLost(t *testing.T) {
 			tokenKey := s.lineage.tokenKey(string(b.historyMetaKey(s, ch)))
 			require.NoError(t, s.client.Do(context.Background(), s.client.B().Del().Key(tokenKey).Build()).Error())
 			after := lineagePublish(t, b, ch, 1)
-			require.NotEqual(t, before.Epoch, after.Epoch)
-			require.Equal(t, uint64(1), after.Offset)
+			if tt.UseCluster {
+				require.Equal(t, before.Epoch, after.Epoch, "the server's lineage is intact")
+				require.Equal(t, uint64(3), after.Offset)
+			} else {
+				require.NotEqual(t, before.Epoch, after.Epoch)
+				require.Equal(t, uint64(1), after.Offset)
+			}
 		})
 	}
 }
@@ -439,4 +446,45 @@ func TestRedisLineage_ProbeRotatesOnNewServer(t *testing.T) {
 	after := lineagePublish(t, b, ch, 1)
 	require.NotEqual(t, before.Epoch, after.Epoch)
 	require.Equal(t, uint64(1), after.Offset)
+}
+
+// A slot migrated in from another server carries that server's token (its
+// token key moves with it). The gate adopts it under this server's token,
+// keeping its streams, instead of resetting every slot of the server.
+func TestRedisLineage_MigratedSlotAdopted(t *testing.T) {
+	for _, tt := range lineageRedisTests {
+		if !tt.Gate || !tt.UseCluster {
+			continue
+		}
+		t.Run(tt.Name, func(t *testing.T) {
+			b := newLineageTestBroker(t, tt, false)
+			s := b.shards[0].shard
+			ctx := context.Background()
+			ch := "lineage_migrated_" + randString(6)
+			other := "lineage_migrated_other_" + randString(6)
+			before := lineagePublish(t, b, ch, 2)
+			otherBefore := lineagePublish(t, b, other, 1)
+
+			// Emulate the migration: the slot's token key and the meta carry a
+			// foreign token.
+			metaKey := string(b.historyMetaKey(s, ch))
+			tokenKey := s.lineage.tokenKey(metaKey)
+			require.NoError(t, s.client.Do(ctx, s.client.B().Set().Key(tokenKey).Value("gforeign").Build()).Error())
+			require.NoError(t, s.client.Do(ctx, s.client.B().Hset().Key(metaKey).FieldValue().FieldValue("i", "gforeign").Build()).Error())
+
+			after := lineagePublish(t, b, ch, 1)
+			require.Equal(t, before.Epoch, after.Epoch, "a migrated slot keeps its streams")
+			require.Equal(t, uint64(3), after.Offset)
+			value, err := s.client.Do(ctx, s.client.B().Get().Key(tokenKey).Build()).ToString()
+			require.NoError(t, err)
+			tok, anc := parseTokenValue(value)
+			require.NotEqual(t, "gforeign", tok)
+			require.Equal(t, "gforeign", anc.token, "the foreign token is the ancestor")
+
+			otherAfter := lineagePublish(t, b, other, 1)
+			if redisKeySlot(string(b.historyMetaKey(s, other))) != redisKeySlot(metaKey) {
+				require.Equal(t, otherBefore.Epoch, otherAfter.Epoch, "other slots of the server are untouched")
+			}
+		})
+	}
 }
