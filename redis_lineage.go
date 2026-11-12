@@ -185,18 +185,31 @@ end
 // lineageRotateSource sets every token key in ARGV[2..] to ARGV[1]. It declares
 // no keys so that it runs over the gate's connection in Redis Cluster; the
 // server refuses a key it doesn't serve.
+// The rotation is a compare-and-set: ARGV[1] is the token key of the gate's
+// slot and ARGV[2] the value the gate read there. If another node rotated in
+// between (it also found this server's marker missing), nothing is set and the
+// value is returned: the gate adopts that rotation instead of making a second
+// one, which would reset metas written under the first.
 const lineageRotateSourceCluster = `#!lua flags=allow-cross-slot-keys
-for i = 1, #ARGV, 2 do
+local current = redis.call("get", ARGV[1]) or ""
+if current ~= ARGV[2] then
+    return current
+end
+for i = 3, #ARGV, 2 do
     redis.call("set", ARGV[i], ARGV[i + 1])
 end
-return #ARGV / 2
+return false
 `
 
 const lineageRotateSource = `
-for i = 1, #ARGV, 2 do
+local current = redis.call("get", ARGV[1]) or ""
+if current ~= ARGV[2] then
+    return current
+end
+for i = 3, #ARGV, 2 do
     redis.call("set", ARGV[i], ARGV[i + 1])
 end
-return #ARGV / 2
+return false
 `
 
 // lineageSlotsSource returns the token key's value and the write counter of
@@ -822,6 +835,7 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 	tokenKey := l.tokenKey(routeKey)
 	var (
 		rotated       bool
+		adoptedValue  string
 		kept          int
 		keptAncestors = map[int]lineageObs{}
 		newToken      string
@@ -888,7 +902,8 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 			if l.selective {
 				kept = l.keepSlots(ctx, c, slots, keys, token, values, keptAncestors)
 			}
-			args := make([]string, 0, 2*len(slots))
+			args := make([]string, 0, 2*len(slots)+2)
+			args = append(args, tokenKey, currentValue)
 			for i := range keys {
 				args = append(args, keys[i], values[i])
 			}
@@ -896,10 +911,19 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 			if l.shard.isCluster {
 				src = lineageRotateSourceCluster
 			}
-			if err := c.Do(ctx, c.B().Eval().Script(src).Numkeys(0).Arg(args...).Build()).Error(); err != nil {
+			other, err := c.Do(ctx, c.B().Eval().Script(src).Numkeys(0).Arg(args...).Build()).ToString()
+			if err != nil && !rueidis.IsRedisNil(err) {
 				return fmt.Errorf("rotate: %w", err)
 			}
-			rotated = true
+			if err == nil {
+				// Another node rotated first, for this same lineage break.
+				token, _ = parseTokenValue(other)
+				adoptedValue = other
+				clear(keptAncestors)
+				kept = 0
+			} else {
+				rotated = true
+			}
 		}
 		for _, s := range scripts {
 			if err := c.Do(ctx, c.B().ScriptLoad().Script(s.gatedSource(token, l.selective)).Build()).Error(); err != nil {
@@ -916,6 +940,11 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 		return fmt.Errorf("%w: %v", errLineageGate, err)
 	}
 
+	if adoptedValue != "" {
+		// The other node's rotation: this slot's token (and its ancestor, if
+		// that node kept the slot).
+		l.setToken(slot, adoptedValue)
+	}
 	l.tokensMu.Lock()
 	if rotated {
 		for _, s := range slots {
