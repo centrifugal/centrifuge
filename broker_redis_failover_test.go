@@ -490,3 +490,68 @@ func lineageRotations(b *RedisBroker) int {
 	defer st.mu.Unlock()
 	return st.rotations
 }
+
+// A fast failback the script cache can't see: the old primary takes a full
+// copy of the new one (losing its last write), keeps our scripts and gets the
+// primary role back, behind the same address, before any call or probe
+// reached the new one. A subscriber that saw the lost offset catches it at the
+// next publication: the server's lineage rotates. Without a subscriber of that
+// channel it goes unseen - the documented gap (UseInfoCommandForLineage closes
+// it).
+func TestRedisFailover_FastFailbackCaughtByReusedOffset(t *testing.T) {
+	testFastFailback(t, true)
+}
+
+func TestRedisFailover_FastFailbackUnwatchedGap(t *testing.T) {
+	testFastFailback(t, false)
+}
+
+func testFastFailback(t *testing.T, watched bool) {
+	prev := lineageProbeInterval
+	lineageProbeInterval = time.Hour // nothing reaches the new primary
+	t.Cleanup(func() { lineageProbeInterval = prev })
+	for _, p := range failoverPairs(t) {
+		t.Run(p.name, func(t *testing.T) {
+			br, _, a, b := setupPairHook(t, p, false, nil)
+			ch := "fast_failback_" + randString(6)
+			if watched {
+				client := newTestConnectedClientV2(t, br.node, "42")
+				_, _, err := br.node.hub.addSub(ch, subInfo{client: client})
+				require.NoError(t, err)
+				require.NoError(t, br.Subscribe(ch))
+			}
+			for i := 0; i < 3; i++ {
+				publishEventually(t, br, ch)
+			}
+			waitSynced(t, a, b)
+
+			b.promote()
+			lostA := publishEventually(t, br, ch)
+			require.Equal(t, uint64(4), lostA.Offset)
+			if watched {
+				require.Eventually(t, func() bool {
+					ws := br.watermarks.shard(ch)
+					ws.mu.Lock()
+					defer ws.mu.Unlock()
+					return ws.m[ch].offset == 4
+				}, 5*time.Second, 10*time.Millisecond, "the subscriber saw offset 4")
+			}
+
+			a.replicaOf(p.b)
+			waitSynced(t, b, a)
+			a.promote()
+			b.replicaOf(p.a)
+
+			sp := publishEventually(t, br, ch) // offset 4 again
+			if !watched {
+				require.Equal(t, lostA.Epoch, sp.Epoch, "the gap: nothing saw the loss")
+				require.Equal(t, uint64(4), sp.Offset)
+				return
+			}
+			require.Eventually(t, func() bool {
+				top, err := br.node.streamTop(ch, time.Hour)
+				return err == nil && top.Epoch != lostA.Epoch
+			}, 10*time.Second, 20*time.Millisecond, "the reused offset rotates the server's lineage")
+		})
+	}
+}
