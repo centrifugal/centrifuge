@@ -996,7 +996,7 @@ func clientInfoField(info, name string) string {
 // parseMyselfSlots returns the node ID and the slots of the "myself" line of
 // CLUSTER NODES.
 func parseMyselfSlots(nodes string) (string, []int, error) {
-	for _, n := range parseClusterNodes(nodes) {
+	for _, n := range lineageParseClusterNodes(nodes) {
 		if !n.myself {
 			continue
 		}
@@ -1018,7 +1018,7 @@ type clusterNodeLine struct {
 	err     error
 }
 
-func parseClusterNodes(nodes string) []clusterNodeLine {
+func lineageParseClusterNodes(nodes string) []clusterNodeLine {
 	var out []clusterNodeLine
 	for _, line := range strings.Split(nodes, "\n") {
 		fields := strings.Fields(line)
@@ -1135,7 +1135,7 @@ func (l *redisLineage) probeCluster(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	lines := parseClusterNodes(nodes)
+	lines := lineageParseClusterNodes(nodes)
 	clients := c.Nodes()
 	for _, n := range lines {
 		if n.err != nil || n.failed {

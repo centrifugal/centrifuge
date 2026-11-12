@@ -419,7 +419,7 @@ func TestRedisFailover_ClusterFailover(t *testing.T) {
 				replicaOf[f[3]] = true
 			}
 		}
-		for _, n := range parseClusterNodes(nodes) {
+		for _, n := range lineageParseClusterNodes(nodes) {
 			if n.primary && len(n.slots) > 0 && !replicaOf[n.id] {
 				return false
 			}
@@ -444,7 +444,7 @@ func TestRedisFailover_ClusterFailover(t *testing.T) {
 			return false
 		}
 		var primaryID string
-		for _, n := range parseClusterNodes(nodes) {
+		for _, n := range lineageParseClusterNodes(nodes) {
 			for _, sl := range n.slots {
 				if sl == slot {
 					primaryID, primaryAddr = n.id, n.addr

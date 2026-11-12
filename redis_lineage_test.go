@@ -59,7 +59,7 @@ func TestParseMyselfSlots(t *testing.T) {
 	_, _, err = parseMyselfSlots("67ed2db8 127.0.0.1:7001@17001 myself,master - 0 0 1 connected 9-3\n")
 	require.Error(t, err)
 
-	lines := parseClusterNodes(nodes)
+	lines := lineageParseClusterNodes(nodes)
 	require.Len(t, lines, 2)
 	require.Equal(t, "127.0.0.1:7002", lines[0].addr)
 	require.True(t, lines[0].primary)
