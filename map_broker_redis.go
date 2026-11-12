@@ -288,6 +288,7 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 		closeCh:           make(chan struct{}),
 	}
 	for _, sw := range e.shards {
+		sw.shard.ensureLineage()
 		for _, ls := range []*lineageScript{e.addScript, e.readOrderedScript, e.readUnorderedScript, e.readStreamScript, e.readMetaScript, e.batchRemoveScript} {
 			sw.shard.lineage.register(ls, conf.LoadSHA1, conf.ResyncOnlyLostSlots)
 		}

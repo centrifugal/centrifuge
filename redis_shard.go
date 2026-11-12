@@ -53,6 +53,16 @@ type RedisShard struct {
 	conns *redisConnSet
 }
 
+// ensureLineage gives a shard not made by NewRedisShard its lineage state.
+func (s *RedisShard) ensureLineage() {
+	if s.lineage == nil {
+		s.lineage = newRedisLineage(s)
+	}
+	if s.conns == nil {
+		s.conns = &redisConnSet{conns: map[*trackedConn]struct{}{}}
+	}
+}
+
 // redisConnSet tracks the open connections of a shard's client.
 type redisConnSet struct {
 	mu       sync.Mutex

@@ -355,6 +355,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		closeCh:                 make(chan struct{}),
 	}
 	for _, sw := range b.shards {
+		sw.shard.ensureLineage()
 		if !config.UseLists {
 			sw.shard.lineage.register(b.historyStreamScript, config.LoadSHA1, config.ResyncOnlyLostSlots)
 			sw.shard.lineage.register(b.addHistoryStreamScript, config.LoadSHA1, config.ResyncOnlyLostSlots)
