@@ -4,11 +4,15 @@ package centrifuge
 
 import (
 	"context"
+	"net"
+	"os"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/centrifugal/protocol"
+	"github.com/redis/rueidis"
 	"github.com/stretchr/testify/require"
 )
 
@@ -319,4 +323,165 @@ func TestRedisBroker_WatermarkNoFalsePositives(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A Redis Cluster slot moving between primaries under load: the slot's
+// PUB/SUB moves to another connection, the case where publications of the old
+// and the new owner could arrive out of order. Moves the slot of a channel
+// away and back while two nodes publish. Changes the cluster's topology, so
+// opt-in: CENTRIFUGE_REDIS_MIGRATE_TEST=1 (ports 7001-7003).
+func TestRedisBroker_WatermarkSlotMigration(t *testing.T) {
+	if os.Getenv("CENTRIFUGE_REDIS_MIGRATE_TEST") == "" {
+		t.Skip("set CENTRIFUGE_REDIS_MIGRATE_TEST=1")
+	}
+	for _, partitions := range []int{0, 9} {
+		t.Run("partitions_"+strconv.Itoa(partitions), func(t *testing.T) {
+			testWatermarkSlotMigration(t, partitions)
+		})
+	}
+}
+
+func testWatermarkSlotMigration(t *testing.T, partitions int) {
+	ctx := context.Background()
+	addrs := []string{"127.0.0.1:7001", "127.0.0.1:7002", "127.0.0.1:7003"}
+	direct := map[string]rueidis.Client{}
+	ids := map[string]string{}
+	for _, a := range addrs {
+		c, err := rueidis.NewClient(rueidis.ClientOption{InitAddress: []string{a}, ForceSingleClient: true})
+		require.NoError(t, err)
+		t.Cleanup(c.Close)
+		direct[a] = c
+		id, err := c.Do(ctx, c.B().ClusterMyid().Build()).ToString()
+		require.NoError(t, err)
+		ids[a] = id
+	}
+
+	prefix := getUniquePrefix()
+	var nodes []*Node
+	var brokers []*RedisBroker
+	for i := 0; i < 2; i++ {
+		node, err := New(Config{LogLevel: LogLevelError, LogHandler: func(LogEntry) {}})
+		require.NoError(t, err)
+		s, err := NewRedisShard(node, RedisShardConfig{ClusterAddresses: addrs, IOTimeout: 10 * time.Second})
+		require.NoError(t, err)
+		b, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}, NumShardedPubSubPartitions: partitions})
+		require.NoError(t, err)
+		node.SetBroker(b)
+		require.NoError(t, node.Run())
+		t.Cleanup(func() {
+			_ = node.Shutdown(context.Background())
+			stopRedisBroker(b)
+		})
+		nodes = append(nodes, node)
+		brokers = append(brokers, b)
+	}
+	ch := "wm_migrate_" + randString(8)
+	s0 := brokers[0].shards[0].shard
+	slot := int64(redisKeySlot(string(brokers[0].historyMetaKey(s0, ch))))
+
+	owner := func() string {
+		raw, err := direct[addrs[0]].Do(ctx, direct[addrs[0]].B().ClusterSlots().Build()).ToArray()
+		require.NoError(t, err)
+		for _, r := range raw {
+			e, _ := r.ToArray()
+			from, _ := e[0].AsInt64()
+			to, _ := e[1].AsInt64()
+			if slot >= from && slot <= to {
+				m, _ := e[2].ToArray()
+				port, _ := m[1].AsInt64()
+				return "127.0.0.1:" + strconv.FormatInt(port, 10)
+			}
+		}
+		t.Fatal("no owner")
+		return ""
+	}
+	migrate := func(from, to string) {
+		src, dst := direct[from], direct[to]
+		require.NoError(t, dst.Do(ctx, dst.B().ClusterSetslot().Slot(slot).Importing().NodeId(ids[from]).Build()).Error())
+		require.NoError(t, src.Do(ctx, src.B().ClusterSetslot().Slot(slot).Migrating().NodeId(ids[to]).Build()).Error())
+		host, portStr, _ := net.SplitHostPort(to)
+		port, _ := strconv.ParseInt(portStr, 10, 64)
+		for {
+			keys, err := src.Do(ctx, src.B().ClusterGetkeysinslot().Slot(slot).Count(100).Build()).AsStrSlice()
+			require.NoError(t, err)
+			if len(keys) == 0 {
+				break
+			}
+			require.NoError(t, src.Do(ctx, src.B().Migrate().Host(host).Port(port).Key("").DestinationDb(0).Timeout(5000).Keys(keys...).Build()).Error())
+		}
+		for _, a := range []string{to, from} {
+			require.NoError(t, direct[a].Do(ctx, direct[a].B().ClusterSetslot().Slot(slot).Node().NodeId(ids[to]).Build()).Error())
+		}
+		for _, a := range addrs {
+			if a != to && a != from {
+				require.NoError(t, direct[a].Do(ctx, direct[a].B().ClusterSetslot().Slot(slot).Node().NodeId(ids[to]).Build()).Error())
+			}
+		}
+	}
+
+	for i, node := range nodes {
+		client := newTestConnectedClientV2(t, node, "42")
+		_, _, err := node.hub.addSub(ch, subInfo{client: client})
+		require.NoError(t, err)
+		require.NoError(t, brokers[i].Subscribe(ch))
+	}
+
+	stop := make(chan struct{})
+	done := make(chan [2]int, 8)
+	var published atomic.Int64
+	// moreLoad waits until another 200 publications went through.
+	moreLoad := func() {
+		target := published.Load() + 200
+		require.Eventually(t, func() bool { return published.Load() >= target }, 30*time.Second, 5*time.Millisecond)
+	}
+	for _, node := range nodes {
+		for p := 0; p < 4; p++ {
+			go func(node *Node) {
+				var ok, failed int
+				for {
+					select {
+					case <-stop:
+						done <- [2]int{ok, failed}
+						return
+					default:
+					}
+					if _, err := node.Publish(ch, []byte(`{}`), WithHistory(100, time.Minute)); err != nil {
+						failed++
+					} else {
+						ok++
+						published.Add(1)
+					}
+				}
+			}(node)
+		}
+	}
+	home := owner()
+	away := addrs[0]
+	if away == home {
+		away = addrs[1]
+	}
+	for round := 0; round < 3; round++ {
+		moreLoad()
+		migrate(home, away)
+		moreLoad()
+		migrate(away, home)
+	}
+	moreLoad()
+	close(stop)
+	var ok, failed int
+	for i := 0; i < 8; i++ {
+		r := <-done
+		ok += r[0]
+		failed += r[1]
+	}
+	var lostNodes int
+	for _, b := range brokers {
+		ws := b.watermarks.shard(ch)
+		ws.mu.Lock()
+		if ws.m[ch].lost {
+			lostNodes++
+		}
+		ws.mu.Unlock()
+	}
+	t.Logf("CMPMIGRATE partitions=%d publishes=%d failed=%d nodes_detecting=%d of 2", partitions, ok, failed, lostNodes)
 }
