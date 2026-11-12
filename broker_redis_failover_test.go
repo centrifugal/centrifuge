@@ -127,7 +127,7 @@ type adminRedis struct {
 }
 
 func newAdmin(t *testing.T, addr string) *adminRedis {
-	c, err := rueidis.NewClient(rueidis.ClientOption{InitAddress: []string{addr}, DisableCache: true})
+	c, err := rueidis.NewClient(rueidis.ClientOption{InitAddress: []string{addr}, DisableCache: true, ForceSingleClient: true})
 	require.NoError(t, err)
 	t.Cleanup(c.Close)
 	return &adminRedis{t: t, addr: addr, c: c}
@@ -358,4 +358,84 @@ func TestRedisFailover_WithoutLineageReusesOffsets(t *testing.T) {
 			require.Equal(t, uint64(4), sp.Offset, "and offset 4 is handed out again")
 		})
 	}
+}
+
+// Redis Cluster with replicas (CENTRIFUGE_REDIS_CLUSTER_REPLICAS_ADDRS, the
+// addresses of a cluster where every primary has a replica): a replica takes
+// over a slot's primary with CLUSTER FAILOVER. The probe sees a new owner of the
+// slot and rotates there, and flushes the demoted primary, which keeps our
+// scripts.
+func TestRedisFailover_ClusterFailover(t *testing.T) {
+	v := os.Getenv("CENTRIFUGE_REDIS_CLUSTER_REPLICAS_ADDRS")
+	if v == "" {
+		t.Skip("CENTRIFUGE_REDIS_CLUSTER_REPLICAS_ADDRS not set")
+	}
+	prev := lineageProbeInterval
+	lineageProbeInterval = 100 * time.Millisecond
+	t.Cleanup(func() { lineageProbeInterval = prev })
+
+	node := testNode(t)
+	s, err := NewRedisShard(node, RedisShardConfig{ClusterAddresses: strings.Split(v, ","), IOTimeout: 5 * time.Second})
+	require.NoError(t, err)
+	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: getUniquePrefix(), Shards: []*RedisShard{s}})
+	require.NoError(t, err)
+	node.SetBroker(br)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()); stopRedisBroker(br) })
+
+	ch := "cluster_failover_" + randString(6)
+	before := publishEventually(t, br, ch)
+	before = publishEventually(t, br, ch)
+	require.Equal(t, uint64(2), before.Offset)
+
+	// The primary and the replica of the channel's slot.
+	slot := int(redisKeySlot(string(br.historyMetaKey(s, ch))))
+	ctx := context.Background()
+	nodes, err := s.client.Do(ctx, s.client.B().ClusterNodes().Build()).ToString()
+	require.NoError(t, err)
+	var primaryID, primaryAddr, replicaAddr string
+	lines := parseClusterNodes(nodes)
+	for _, n := range lines {
+		for _, sl := range n.slots {
+			if sl == slot {
+				primaryID, primaryAddr = n.id, n.addr
+			}
+		}
+	}
+	for _, line := range strings.Split(nodes, "\n") {
+		f := strings.Fields(line)
+		if len(f) > 3 && strings.Contains(f[2], "slave") && f[3] == primaryID {
+			replicaAddr = strings.SplitN(f[1], "@", 2)[0]
+		}
+	}
+	require.NotEmpty(t, replicaAddr, "the slot's primary needs a replica")
+
+	replica := newAdmin(t, replicaAddr)
+	require.Eventually(t, replica.linkUp, 10*time.Second, 20*time.Millisecond)
+	require.NoError(t, replica.do("CLUSTER", "FAILOVER").Error())
+	t.Cleanup(func() {
+		// Give the slot back to its first primary.
+		old := newAdmin(t, primaryAddr)
+		_ = old.do("CLUSTER", "FAILOVER").Error()
+	})
+
+	// CLUSTER FAILOVER returns before the failover: wait for the replica to
+	// become the slot's primary.
+	require.Eventually(t, func() bool {
+		hello, err := replica.c.Do(ctx, replica.c.B().Hello().Build()).AsMap()
+		return err == nil && parseHelloReply(helloFields(hello)).primary
+	}, 10*time.Second, 20*time.Millisecond)
+	var sp StreamPosition
+	require.Eventually(t, func() bool {
+		sp = publishEventually(t, br, ch)
+		return sp.Epoch != before.Epoch
+	}, 10*time.Second, 50*time.Millisecond, "the promoted replica starts a new lineage")
+	require.Equal(t, uint64(1), sp.Offset, "the first publication on the promoted replica starts the new epoch")
+
+	// The demoted primary held our scripts: the probe flushes them.
+	old := newAdmin(t, primaryAddr)
+	require.Eventually(t, func() bool {
+		res, err := old.do("SCRIPT", "EXISTS", sha1Hex(lineageMarkerSource(s.lineage.knownTokens()[0]))).AsIntSlice()
+		return err == nil && len(res) == 1 && res[0] == 0
+	}, 10*time.Second, 50*time.Millisecond)
 }
