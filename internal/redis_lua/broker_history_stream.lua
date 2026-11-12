@@ -10,16 +10,17 @@ local new_epoch_if_empty = ARGV[6]
 local token_key = KEYS[3]
 
 -- See add_history in broker_history_add_stream_fn.lua for the lineage token.
-local token = lineage_token(token_key)
-local stream_meta = redis.call("hmget", meta_key, "e", "s", "i")
+local token, ancestor = lineage_token(token_key)
+local stream_meta = redis.call("hmget", meta_key, "e", "s", "i", "w")
 local current_epoch, top_offset = stream_meta[1], stream_meta[2]
 
 if token ~= "" and current_epoch ~= false and stream_meta[3] ~= token then
-    if stream_meta[3] == false then
+    if stream_meta[3] == false or stream_meta[3] == ancestor then
         redis.call("hset", meta_key, "i", token)
     else
         redis.call("del", meta_key, stream_key)
         current_epoch = false
+        stream_meta[4] = false
     end
 end
 
@@ -67,4 +68,4 @@ if include_publications ~= "0" then
     end
 end
 
-return { top_offset, current_epoch, pubs }
+return { top_offset, current_epoch .. lineage_obs(stream_meta[4]), pubs }

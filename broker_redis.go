@@ -263,6 +263,17 @@ type RedisBrokerConfig struct {
 	// Without it the broker uses the script cache of Redis 7+ and Valkey, which
 	// needs no extra permissions (no detection on Redis 6 and Dragonfly).
 	UseInfoCommandForLineage bool
+	// ResyncOnlyLostSlots makes a failover or a restart that started a new
+	// lineage of a Redis server's data reset only the slots (the whole server
+	// outside Redis Cluster) where a write some node observed is missing,
+	// instead of every stream and map on the server. Every meta write then bumps
+	// a per-slot counter, which replies and PUB/SUB payloads carry, and the node
+	// opening the gate polls every node for the newest write it observed; if any
+	// node doesn't answer, everything resets as without this option. Only with
+	// the script-cache gate (not with UseInfoCommandForLineage). Every node must
+	// run a version that knows the option before it's turned on: older nodes
+	// can't read the payloads.
+	ResyncOnlyLostSlots bool
 }
 
 // NewRedisBroker initializes Redis Broker.
@@ -345,8 +356,8 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	}
 	for _, sw := range b.shards {
 		if !config.UseLists {
-			sw.shard.lineage.register(b.historyStreamScript, config.LoadSHA1)
-			sw.shard.lineage.register(b.addHistoryStreamScript, config.LoadSHA1)
+			sw.shard.lineage.register(b.historyStreamScript, config.LoadSHA1, config.ResyncOnlyLostSlots)
+			sw.shard.lineage.register(b.addHistoryStreamScript, config.LoadSHA1, config.ResyncOnlyLostSlots)
 		}
 		sw.shard.lineage.setLogger(n)
 	}
@@ -1005,6 +1016,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 	if err != nil {
 		return PublishResult{}, errors.New("wrong Redis reply epoch")
 	}
+	epoch = s.shard.lineage.takeObservation(string(historyMetaKey), epoch)
 	result := PublishResult{StreamPosition: StreamPosition{Offset: uint64(offset), Epoch: epoch}}
 	if len(replies) >= 3 {
 		fromCacheStr, err := replies[2].ToString()
@@ -1686,6 +1698,12 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 	if channel == "" {
 		return fmt.Errorf("unsupported channel: %s", chID)
 	}
+	if strings.IndexByte(sp.Epoch, ';') >= 0 {
+		// A write's observation (ResyncOnlyLostSlots): recorded before the
+		// publication reaches anyone.
+		shard := b.getShard(channel).shard
+		sp.Epoch = shard.lineage.takeObservation(string(b.historyMetaKey(shard, channel)), sp.Epoch)
+	}
 	if typeOfPush == pubPushType {
 		var pub protocol.Publication
 		err := pub.UnmarshalCF(pushData)
@@ -1806,6 +1824,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOption
 	if err != nil {
 		return nil, StreamPosition{}, errors.New("wrong Redis reply epoch")
 	}
+	epoch = s.lineage.takeObservation(string(historyMetaKey), epoch)
 
 	if includePubs == "1" && len(replies) == 3 {
 		values, err := replies[2].ToArray()

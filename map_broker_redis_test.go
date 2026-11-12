@@ -240,7 +240,7 @@ func (f redisMapBrokerFactory) makeCustom(tb testing.TB, n *Node, h BrokerEventH
 		// the cluster doesn't support it.
 		skipIfNoShardedPubSub(tb, shard, "centrifuge-test-skip-probe-"+randString(4))
 	}
-	brokerConf := RedisMapBrokerConfig{Shards: []*RedisShard{shard}}
+	brokerConf := RedisMapBrokerConfig{Shards: []*RedisShard{shard}, ResyncOnlyLostSlots: testResyncOnlyLostSlots()}
 	if f.variant.UseCluster {
 		brokerConf.NumShardedPubSubPartitions = 1
 	}

@@ -73,9 +73,9 @@ local current_epoch
 local top_offset = 0
 
 if not streamless then
-    local token = lineage_token(token_key)
+    local token, ancestor = lineage_token(token_key)
     local dropped
-    current_epoch, dropped = lineage_map_meta(meta_key, stream_key, token)
+    current_epoch, dropped = lineage_map_meta(meta_key, stream_key, token, ancestor)
     if not current_epoch then
         current_epoch = new_epoch_if_empty
         lineage_map_create(meta_key, state_meta_key, current_epoch, token, dropped)
@@ -85,6 +85,11 @@ else
 end
 
 local removed_count = 0
+-- One write counter bump covers every removal of this call (see lineage_obs).
+local write_obs = ""
+if not streamless then
+    write_obs = lineage_map_count(meta_key, token_key)
+end
 
 for i = 0, num_entries - 1 do
     local base = 10 + i * 3
@@ -115,7 +120,7 @@ for i = 0, num_entries - 1 do
 
         -- Publish removal event
         if channel ~= '' and publish_command ~= '' then
-            local pub_payload = top_offset .. ":" .. current_epoch .. ":" .. removal_payload
+            local pub_payload = top_offset .. ":" .. current_epoch .. write_obs .. ":" .. removal_payload
             redis.call(publish_command, channel, pub_payload)
         end
 
@@ -140,4 +145,4 @@ if not streamless then
     final_offset = redis.call("hget", meta_key, "s") or 0
 end
 
-return { removed_count, tostring(final_offset), current_epoch }
+return { removed_count, tostring(final_offset), current_epoch .. write_obs }

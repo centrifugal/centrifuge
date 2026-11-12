@@ -28,14 +28,16 @@ local state_ttl = tonumber(ARGV[5])
 local streamless = ARGV[6] == "1"
 
 local epoch = ""
+-- epoch_out is the epoch replied, with its observation suffix (see lineage_obs).
+local epoch_out = ""
 local offset = "0"
 
 if not streamless then
     -- Update meta TTL and get current offset
     if meta_key ~= '' then
-        local token = lineage_token(token_key)
+        local token, ancestor = lineage_token(token_key)
         local dropped
-        epoch, dropped = lineage_map_meta(meta_key, stream_key, token)
+        epoch, dropped = lineage_map_meta(meta_key, stream_key, token, ancestor)
         if not epoch then
             epoch = now_str
             lineage_map_create(meta_key, state_meta_key, epoch, token, dropped)
@@ -49,6 +51,7 @@ if not streamless then
         if meta_ttl > 0 then
             redis.call("pexpire", meta_key, meta_ttl)
         end
+        epoch_out = epoch .. lineage_map_obs(meta_key)
     end
 
     -- Validate state epoch against stream epoch
@@ -56,13 +59,13 @@ if not streamless then
         local state_meta_exists = redis.call("exists", state_meta_key)
         if state_meta_exists == 0 then
             -- No state metadata = state is invalid/evicted
-            return {offset, epoch, "0", {}}
+            return {offset, epoch_out, "0", {}}
         end
 
         local state_epoch = redis.call("hget", state_meta_key, "epoch")
         if state_epoch ~= epoch then
             -- Epoch mismatch = state is stale (from old epoch)
-            return {offset, epoch, "0", {}}
+            return {offset, epoch_out, "0", {}}
         end
     end
 end
@@ -86,8 +89,8 @@ end
 -- Return offset, epoch and raw HSCAN/HGETALL result (no table building)
 if limit > 0 then
     local result = redis.call("hscan", hash_key, cursor, "COUNT", limit)
-    return {offset, epoch, result[1], result[2]}  -- offset, epoch, cursor, key-value array
+    return {offset, epoch_out, result[1], result[2]}  -- offset, epoch, cursor, key-value array
 else
     local data = redis.call("hgetall", hash_key)
-    return {offset, epoch, "0", data}  -- offset, epoch, cursor="0", key-value array
+    return {offset, epoch_out, "0", data}  -- offset, epoch, cursor="0", key-value array
 end

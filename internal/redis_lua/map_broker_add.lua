@@ -182,11 +182,13 @@ end
 -- ==== Step 1: Ensure epoch exists and increment offset (only if append log enabled) ====
 local current_epoch = "0"
 local top_offset = 0
+-- The observation suffix of this write's epoch (see lineage_obs).
+local write_obs = ""
 
 if meta_key ~= '' then
-    local token = lineage_token(token_key)
+    local token, ancestor = lineage_token(token_key)
     local dropped
-    current_epoch, dropped = lineage_map_meta(meta_key, stream_key, token)
+    current_epoch, dropped = lineage_map_meta(meta_key, stream_key, token, ancestor)
     if not current_epoch then
         current_epoch = new_epoch_if_empty
         lineage_map_create(meta_key, state_meta_key, current_epoch, token, dropped)
@@ -354,6 +356,7 @@ if meta_key ~= '' then
 
     -- ==== Step 3: Increment append log offset (only if not suppressed) ====
     top_offset = redis.call("hincrby", meta_key, "s", 1)
+    write_obs = lineage_map_count(meta_key, token_key)
 
     -- Set meta TTL if needed
     if meta_expire ~= '0' then
@@ -517,10 +520,10 @@ if channel ~= '' and publish_command ~= '' then
     if prev_key_value then
         -- Key-based delta: prev_key_value is raw state value ("offset:epoch:protobuf").
         -- Go parses it on the receiving side.
-        payload = "d:" .. top_offset .. ":" .. current_epoch .. ":" .. #prev_key_value .. ":" .. prev_key_value .. ":" .. #message_payload .. ":" .. message_payload
+        payload = "d:" .. top_offset .. ":" .. current_epoch .. write_obs .. ":" .. #prev_key_value .. ":" .. prev_key_value .. ":" .. #message_payload .. ":" .. message_payload
     else
         -- Non-delta format: offset:epoch:protobuf
-        payload = top_offset .. ":" .. current_epoch .. ":" .. message_payload
+        payload = top_offset .. ":" .. current_epoch .. write_obs .. ":" .. message_payload
     end
     redis.call(publish_command, channel, payload)
 end
@@ -532,4 +535,4 @@ if result_key_expire ~= '' and result_key ~= '' then
 end
 
 -- ==== Step 9: Return top_offset and epoch ====
-return { top_offset, current_epoch, "" }
+return { top_offset, current_epoch .. write_obs, "" }

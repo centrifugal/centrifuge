@@ -40,14 +40,16 @@ local streamless = ARGV[7] == "1"
 local asc = ARGV[8] == "1"
 
 local epoch = ""
+-- epoch_out is the epoch replied, with its observation suffix (see lineage_obs).
+local epoch_out = ""
 local stream_offset = "0"
 
 if not streamless then
     -- Update meta epoch + TTL and get current stream offset
     if meta_key ~= '' then
-        local token = lineage_token(token_key)
+        local token, ancestor = lineage_token(token_key)
         local dropped
-        epoch, dropped = lineage_map_meta(meta_key, stream_key, token)
+        epoch, dropped = lineage_map_meta(meta_key, stream_key, token, ancestor)
         if not epoch then
             epoch = now_str
             lineage_map_create(meta_key, state_meta_key, epoch, token, dropped)
@@ -61,18 +63,19 @@ if not streamless then
         if meta_ttl > 0 then
             redis.call("pexpire", meta_key, meta_ttl)
         end
+        epoch_out = epoch .. lineage_map_obs(meta_key)
     end
 
     -- Validate state epoch against stream epoch
     if state_meta_key ~= '' then
         local state_meta_exists = redis.call("exists", state_meta_key)
         if state_meta_exists == 0 then
-            return {stream_offset, epoch, {}, {}, "", ""}
+            return {stream_offset, epoch_out, {}, {}, "", ""}
         end
 
         local state_epoch = redis.call("hget", state_meta_key, "epoch")
         if state_epoch ~= epoch then
-            return {stream_offset, epoch, {}, {}, "", ""}
+            return {stream_offset, epoch_out, {}, {}, "", ""}
         end
     end
 end
@@ -189,7 +192,7 @@ local has_more = false
 local key_count = #keys_to_fetch
 
 if key_count == 0 then
-    return {stream_offset, epoch, {}, {}, "", ""}
+    return {stream_offset, epoch_out, {}, {}, "", ""}
 end
 
 if limit > 0 and key_count > limit then
@@ -216,4 +219,4 @@ if has_more then
     next_cursor_key = keys_to_fetch[key_count]
 end
 
-return {stream_offset, epoch, keys_to_fetch, values, next_cursor_score, next_cursor_key}
+return {stream_offset, epoch_out, keys_to_fetch, values, next_cursor_score, next_cursor_key}

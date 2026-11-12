@@ -13,7 +13,7 @@
 local stream_key = KEYS[1]
 local meta_key = KEYS[2]
 local state_meta_key = KEYS[3]
-local token = lineage_token(KEYS[4])
+local token, ancestor = lineage_token(KEYS[4])
 local include_publications = ARGV[1]
 local since_offset = ARGV[2]
 local limit = ARGV[3]
@@ -22,7 +22,7 @@ local meta_expire = ARGV[5]
 local new_epoch_if_empty = ARGV[6]
 
 -- Get or create meta
-local current_epoch, dropped = lineage_map_meta(meta_key, stream_key, token)
+local current_epoch, dropped = lineage_map_meta(meta_key, stream_key, token, ancestor)
 local top_offset = redis.call("hget", meta_key, "s")
 
 if current_epoch == false then
@@ -69,4 +69,4 @@ if include_publications ~= "0" then
     end
 end
 
-return { top_offset, current_epoch, pubs }
+return { top_offset, current_epoch .. lineage_map_obs(meta_key), pubs }

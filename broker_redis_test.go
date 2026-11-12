@@ -73,9 +73,10 @@ func NewTestRedisBroker(tb testing.TB, n *Node, prefix string, useStreams bool, 
 	require.NoError(tb, err)
 	require.Equal(tb, s.Mode(), RedisShardModeStandalone)
 	e, err := NewRedisBroker(n, RedisBrokerConfig{
-		Prefix:   prefix,
-		UseLists: !useStreams,
-		Shards:   []*RedisShard{s},
+		Prefix:              prefix,
+		UseLists:            !useStreams,
+		Shards:              []*RedisShard{s},
+		ResyncOnlyLostSlots: testResyncOnlyLostSlots(),
 	})
 	require.NoError(tb, err)
 	n.SetBroker(e)
@@ -109,9 +110,10 @@ func NewTestRedisBrokerCluster(tb testing.TB, n *Node, prefix string, useStreams
 	require.NoError(tb, err)
 	require.Equal(tb, s.Mode(), RedisShardModeCluster)
 	brokerConfig := RedisBrokerConfig{
-		Prefix:   prefix,
-		UseLists: !useStreams,
-		Shards:   []*RedisShard{s},
+		Prefix:              prefix,
+		UseLists:            !useStreams,
+		Shards:              []*RedisShard{s},
+		ResyncOnlyLostSlots: testResyncOnlyLostSlots(),
 	}
 
 	numClusterShardsStr := os.Getenv("CENTRIFUGE_REDIS_CLUSTER_BENCHMARKS_NUM_SHARDS")
@@ -3328,4 +3330,10 @@ func TestRedisClusterChannelWithBraceInside(t *testing.T) {
 	presence, err := pm.Presence(ch)
 	require.NoError(t, err)
 	require.Len(t, presence, 1)
+}
+
+// testResyncOnlyLostSlots runs the Redis tests with ResyncOnlyLostSlots when
+// CENTRIFUGE_TEST_RESYNC_ONLY_LOST_SLOTS is set.
+func testResyncOnlyLostSlots() bool {
+	return os.Getenv("CENTRIFUGE_TEST_RESYNC_ONLY_LOST_SLOTS") != ""
 }

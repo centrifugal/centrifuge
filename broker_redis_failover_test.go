@@ -185,6 +185,11 @@ func setupPair(t *testing.T, p failoverPair) (*RedisBroker, *tcpProxy, *adminRed
 
 func setupPairOpts(t *testing.T, p failoverPair, noLineage bool) (*RedisBroker, *tcpProxy, *adminRedis, *adminRedis) {
 	t.Helper()
+	return setupPairConf(t, p, noLineage, false)
+}
+
+func setupPairConf(t *testing.T, p failoverPair, noLineage, selective bool) (*RedisBroker, *tcpProxy, *adminRedis, *adminRedis) {
+	t.Helper()
 	a, b := newAdmin(t, p.a), newAdmin(t, p.b)
 	a.promote()
 	b.promote()
@@ -200,7 +205,7 @@ func setupPairOpts(t *testing.T, p failoverPair, noLineage bool) (*RedisBroker, 
 	s, err := NewRedisShard(node, testSingleRedisConfAddr(proxy.addr()))
 	require.NoError(t, err)
 	s.lineage.disabledForTest = noLineage
-	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: getUniquePrefix(), Shards: []*RedisShard{s}})
+	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: getUniquePrefix(), Shards: []*RedisShard{s}, ResyncOnlyLostSlots: selective})
 	require.NoError(t, err)
 	node.SetBroker(br)
 	require.NoError(t, node.Run())
@@ -211,6 +216,23 @@ func setupPairOpts(t *testing.T, p failoverPair, noLineage bool) (*RedisBroker, 
 		b.promote()
 	})
 	return br, proxy, a, b
+}
+
+// addPairNode starts one more node on the same proxy and prefix.
+func addPairNode(t *testing.T, proxy *tcpProxy, prefix string, selective bool) (*Node, *RedisBroker) {
+	t.Helper()
+	node := testNode(t)
+	s, err := NewRedisShard(node, testSingleRedisConfAddr(proxy.addr()))
+	require.NoError(t, err)
+	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}, ResyncOnlyLostSlots: selective})
+	require.NoError(t, err)
+	node.SetBroker(br)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+		stopRedisBroker(br)
+	})
+	return node, br
 }
 
 func testSingleRedisConfAddr(addr string) RedisShardConfig {
@@ -383,41 +405,65 @@ func TestRedisFailover_ClusterFailover(t *testing.T) {
 	require.NoError(t, node.Run())
 	t.Cleanup(func() { _ = node.Shutdown(context.Background()); stopRedisBroker(br) })
 
+	// A previous run's failback may still be in progress: wait for a cluster
+	// where every primary serving slots has a replica.
+	require.Eventually(t, func() bool {
+		nodes, err := s.client.Do(context.Background(), s.client.B().ClusterNodes().Build()).ToString()
+		if err != nil {
+			return false
+		}
+		replicaOf := map[string]bool{}
+		for _, line := range strings.Split(nodes, "\n") {
+			f := strings.Fields(line)
+			if len(f) > 3 && strings.Contains(f[2], "slave") && !strings.Contains(f[2], "fail") {
+				replicaOf[f[3]] = true
+			}
+		}
+		for _, n := range parseClusterNodes(nodes) {
+			if n.primary && len(n.slots) > 0 && !replicaOf[n.id] {
+				return false
+			}
+		}
+		return true
+	}, 30*time.Second, 100*time.Millisecond)
+
 	ch := "cluster_failover_" + randString(6)
 	before := publishEventually(t, br, ch)
 	before = publishEventually(t, br, ch)
 	require.Equal(t, uint64(2), before.Offset)
 
-	// The primary and the replica of the channel's slot.
+	// The primary and a synced replica of the channel's slot (a previous run
+	// may have moved the slot).
 	slot := int(redisKeySlot(string(br.historyMetaKey(s, ch))))
 	ctx := context.Background()
-	nodes, err := s.client.Do(ctx, s.client.B().ClusterNodes().Build()).ToString()
-	require.NoError(t, err)
-	var primaryID, primaryAddr, replicaAddr string
-	lines := parseClusterNodes(nodes)
-	for _, n := range lines {
-		for _, sl := range n.slots {
-			if sl == slot {
-				primaryID, primaryAddr = n.id, n.addr
+	var primaryAddr string
+	var replica *adminRedis
+	require.Eventually(t, func() bool {
+		nodes, err := s.client.Do(ctx, s.client.B().ClusterNodes().Build()).ToString()
+		if err != nil {
+			return false
+		}
+		var primaryID string
+		for _, n := range parseClusterNodes(nodes) {
+			for _, sl := range n.slots {
+				if sl == slot {
+					primaryID, primaryAddr = n.id, n.addr
+				}
 			}
 		}
-	}
-	for _, line := range strings.Split(nodes, "\n") {
-		f := strings.Fields(line)
-		if len(f) > 3 && strings.Contains(f[2], "slave") && f[3] == primaryID {
-			replicaAddr = strings.SplitN(f[1], "@", 2)[0]
+		for _, line := range strings.Split(nodes, "\n") {
+			f := strings.Fields(line)
+			if len(f) > 3 && strings.Contains(f[2], "slave") && !strings.Contains(f[2], "fail") && f[3] == primaryID {
+				r := newAdmin(t, strings.SplitN(f[1], "@", 2)[0])
+				if r.linkUp() {
+					replica = r
+					return true
+				}
+			}
 		}
-	}
-	require.NotEmpty(t, replicaAddr, "the slot's primary needs a replica")
-
-	replica := newAdmin(t, replicaAddr)
-	require.Eventually(t, replica.linkUp, 10*time.Second, 20*time.Millisecond)
+		return false
+	}, 30*time.Second, 100*time.Millisecond, "the slot's primary needs a synced replica")
 	require.NoError(t, replica.do("CLUSTER", "FAILOVER").Error())
-	t.Cleanup(func() {
-		// Give the slot back to its first primary.
-		old := newAdmin(t, primaryAddr)
-		_ = old.do("CLUSTER", "FAILOVER").Error()
-	})
 
 	// CLUSTER FAILOVER returns before the failover: wait for the replica to
 	// become the slot's primary.
@@ -438,4 +484,134 @@ func TestRedisFailover_ClusterFailover(t *testing.T) {
 		res, err := old.do("SCRIPT", "EXISTS", sha1Hex(lineageMarkerSource(s.lineage.knownTokens()[0]))).AsIntSlice()
 		return err == nil && len(res) == 1 && res[0] == 0
 	}, 10*time.Second, 50*time.Millisecond)
+}
+
+func lineageStatsOf(b *RedisBroker) (rotations, kept, reset int) {
+	st := &b.shards[0].shard.lineage.stats
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.rotations, st.keptSlots, st.resetSlots
+}
+
+// ResyncOnlyLostSlots: a failover that lost nothing anyone observed keeps the
+// streams (the epoch survives, offsets continue).
+func TestRedisFailover_SelectiveLosslessKeepsEpoch(t *testing.T) {
+	for _, p := range failoverPairs(t) {
+		t.Run(p.name, func(t *testing.T) {
+			br, proxy, a, b := setupPairConf(t, p, false, true)
+			ch := "selective_keep_" + randString(6)
+			var before StreamPosition
+			for i := 0; i < 3; i++ {
+				before = publishEventually(t, br, ch)
+			}
+			waitSynced(t, a, b)
+
+			b.promote()
+			proxy.move(p.b, true)
+			a.replicaOf(p.b)
+
+			sp := publishEventually(t, br, ch)
+			require.Equal(t, before.Epoch, sp.Epoch, "nothing observed was lost: the stream is kept")
+			require.Equal(t, uint64(4), sp.Offset)
+			_, kept, _ := lineageStatsOf(br)
+			require.Equal(t, 1, kept)
+		})
+	}
+}
+
+// ResyncOnlyLostSlots: a failover that lost an acknowledged write resets.
+func TestRedisFailover_SelectiveLossyResets(t *testing.T) {
+	for _, p := range failoverPairs(t) {
+		t.Run(p.name, func(t *testing.T) {
+			br, proxy, a, b := setupPairConf(t, p, false, true)
+			ch := "selective_lossy_" + randString(6)
+			for i := 0; i < 3; i++ {
+				publishEventually(t, br, ch)
+			}
+			waitSynced(t, a, b)
+			b.promote()
+			lost := publishEventually(t, br, ch)
+
+			proxy.move(p.b, true)
+			a.replicaOf(p.b)
+
+			sp := publishEventually(t, br, ch)
+			require.NotEqual(t, lost.Epoch, sp.Epoch)
+			require.Equal(t, uint64(1), sp.Offset)
+		})
+	}
+}
+
+// ResyncOnlyLostSlots: a lost write only another node observed (over PUB/SUB;
+// the publisher's own record of it is gone, as when its reply is cut) still
+// resets: the survey finds it.
+func TestRedisFailover_SelectiveObservedByAnotherNode(t *testing.T) {
+	for _, p := range failoverPairs(t) {
+		t.Run(p.name, func(t *testing.T) {
+			br, proxy, a, b := setupPairConf(t, p, false, true)
+			nodeB, brB := addPairNode(t, proxy, br.config.Prefix, true)
+			ch := "selective_observed_" + randString(6)
+			require.NoError(t, brB.Subscribe(ch))
+			require.Eventually(t, func() bool {
+				return br.node.nodes.size() == 2 && nodeB.nodes.size() == 2
+			}, 15*time.Second, 50*time.Millisecond, "both nodes must know each other for the survey")
+
+			for i := 0; i < 3; i++ {
+				publishEventually(t, br, ch)
+			}
+			waitSynced(t, a, b)
+			b.promote()
+			lost := publishEventually(t, br, ch)
+
+			// Node B observed the lost write over PUB/SUB.
+			lb := brB.shards[0].shard.lineage
+			require.Eventually(t, func() bool {
+				lb.obsMu.Lock()
+				defer lb.obsMu.Unlock()
+				return lb.obs[0].count >= 4
+			}, 5*time.Second, 10*time.Millisecond)
+			// The publisher forgets it, as if its reply had been cut.
+			la := br.shards[0].shard.lineage
+			la.obsMu.Lock()
+			la.obs[0] = lineageObs{}
+			la.obsMu.Unlock()
+
+			proxy.move(p.b, true)
+			a.replicaOf(p.b)
+
+			sp := publishEventually(t, br, ch)
+			require.NotEqual(t, lost.Epoch, sp.Epoch, "node B saw offset 4 of the old epoch: it must not be handed out again")
+			require.Equal(t, uint64(1), sp.Offset)
+		})
+	}
+}
+
+// The control of the test above: when no node observed the lost write, the
+// survey finds nothing missing and the stream is kept - a write nobody saw is
+// as if it never happened (its publisher got no reply).
+func TestRedisFailover_SelectiveControlNobodyObserved(t *testing.T) {
+	for _, p := range failoverPairs(t) {
+		t.Run(p.name, func(t *testing.T) {
+			br, proxy, a, b := setupPairConf(t, p, false, true)
+			ch := "selective_control_" + randString(6)
+			var before StreamPosition
+			for i := 0; i < 3; i++ {
+				before = publishEventually(t, br, ch)
+			}
+			waitSynced(t, a, b)
+			b.promote()
+			publishEventually(t, br, ch)
+			la := br.shards[0].shard.lineage
+			la.obsMu.Lock()
+			la.obs[0] = lineageObs{token: la.obs[0].token, count: 3}
+			la.obsMu.Unlock()
+
+			proxy.move(p.b, true)
+			a.replicaOf(p.b)
+
+			sp := publishEventually(t, br, ch)
+			require.Equal(t, before.Epoch, sp.Epoch)
+			require.Equal(t, uint64(4), sp.Offset)
+		})
+	}
 }

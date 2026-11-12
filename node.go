@@ -82,6 +82,9 @@ type Node struct {
 
 	surveyHandler  SurveyHandler
 	surveyRegistry map[uint64]chan survey
+	// lineages are the Redis lineages of this node's brokers, by shard (see
+	// redis_lineage.go), for the lineage survey.
+	lineages sync.Map
 	surveyMu       sync.RWMutex
 	surveyID       uint64
 
@@ -570,6 +573,13 @@ func (n *Node) handleNotification(fromNodeID string, req *controlpb.Notification
 }
 
 func (n *Node) handleSurveyRequest(fromNodeID string, req *controlpb.SurveyRequest) error {
+	if req.Op == lineageSurveyOp {
+		reply := n.handleLineageSurvey(req.Data)
+		return n.publishControl(&controlpb.Command{
+			Uid:            n.uid,
+			SurveyResponse: &controlpb.SurveyResponse{Id: req.Id, Code: reply.Code, Data: reply.Data},
+		}, fromNodeID)
+	}
 	if n.surveyHandler == nil && n.emulationSurveyHandler == nil {
 		return nil
 	}
@@ -644,7 +654,7 @@ const defaultSurveyTimeout = 10 * time.Second
 // method to handle received surveys.
 // Survey ops starting with `centrifuge_` are reserved by Centrifuge library.
 func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID string) (map[string]SurveyResult, error) {
-	if n.surveyHandler == nil && op != emulationOp {
+	if n.surveyHandler == nil && op != emulationOp && op != lineageSurveyOp {
 		return nil, errSurveyHandlerNotRegistered
 	}
 
@@ -675,7 +685,9 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID stri
 		Op:   op,
 		Data: data,
 	}
-	surveyChan := make(chan survey, numNodes)
+	// One more than the nodes known: the local reply is sent before the reader
+	// starts, and a node not registered yet knows no node at all.
+	surveyChan := make(chan survey, numNodes+1)
 	n.surveyRegistry[surveyRequest.Id] = surveyChan
 	n.surveyMu.Unlock()
 
@@ -702,6 +714,9 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID stri
 					Result: SurveyResult(reply),
 				}
 			})
+		} else if op == lineageSurveyOp {
+			reply := n.handleLineageSurvey(data)
+			surveyChan <- survey{UID: n.uid, Result: SurveyResult(reply)}
 		} else {
 			n.surveyHandler(SurveyEvent{Op: op, Data: data}, func(reply SurveyReply) {
 				surveyChan <- survey{

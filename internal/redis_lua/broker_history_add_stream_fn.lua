@@ -32,11 +32,11 @@ local function add_history(
         end
     end
 
-    local token = lineage_token(token_key)
+    local token, ancestor = lineage_token(token_key)
     local meta_now = redis.call("hmget", meta_key, "e", "i")
     local current_epoch = meta_now[1]
     if token ~= "" and current_epoch ~= false and meta_now[2] ~= token then
-        if meta_now[2] == false then
+        if meta_now[2] == false or meta_now[2] == ancestor then
             redis.call("hset", meta_key, "i", token)
         else
             redis.call("del", meta_key, stream_key)
@@ -71,6 +71,11 @@ local function add_history(
     end
 
     local top_offset = redis.call("hincrby", meta_key, "s", 1)
+    local count = lineage_count(token_key)
+    if count then
+        redis.call("hset", meta_key, "w", count)
+    end
+    local obs = lineage_obs(count)
 
     if meta_expire ~= '0' then
         redis.call("expire", meta_key, meta_expire)
@@ -112,10 +117,10 @@ local function add_history(
             "d1:" ..
             top_offset ..
             ":" ..
-            current_epoch ..
+            current_epoch .. obs ..
             ":" .. #prev_message_payload .. ":" .. prev_message_payload .. ":" .. #message_payload .. ":" .. message_payload
         else
-            payload = "__" .. "p1:" .. top_offset .. ":" .. current_epoch .. "__" .. message_payload
+            payload = "__" .. "p1:" .. top_offset .. ":" .. current_epoch .. obs .. "__" .. message_payload
         end
         redis.call(publish_command, channel, payload)
     end
@@ -129,5 +134,5 @@ local function add_history(
         redis.call("expire", result_key, result_key_expire)
     end
 
-    return { top_offset, current_epoch, "0", "0" }
+    return { top_offset, current_epoch .. obs, "0", "0" }
 end
