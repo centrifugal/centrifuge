@@ -137,6 +137,8 @@ type RedisBroker struct {
 	historyStreamScript     *lineageScript
 	addHistoryListScript    *rueidis.Lua
 	addHistoryStreamScript  *lineageScript
+	resetLostStreamScript   *rueidis.Lua
+	watermarks              *offsetWatermarks
 	shardChannel            string
 	messagePrefix           string
 	controlChannel          string
@@ -342,6 +344,10 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		addHistoryStreamScript:  newLineageScript("add_history_stream", addHistoryStreamSource, config.LoadSHA1),
 		addHistoryListScript:    rueidis.NewLuaScript(addHistoryListSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
 		closeCh:                 make(chan struct{}),
+	}
+	if !config.UseLists {
+		b.watermarks = newOffsetWatermarks()
+		b.resetLostStreamScript = rueidis.NewLuaScript(resetLostStreamSource, rueidis.WithLoadSHA1(config.LoadSHA1))
 	}
 	for _, sw := range b.shards {
 		sw.shard.ensureLineage()
@@ -1297,6 +1303,9 @@ func (b *RedisBroker) Unsubscribe(channels ...string) error {
 	if len(channels) == 0 {
 		return nil
 	}
+	if b.watermarks != nil {
+		b.watermarks.forget(channels...)
+	}
 	if len(channels) == 1 {
 		return b.unsubscribe(b.getShard(channels[0]), channels[0])
 	}
@@ -1713,6 +1722,16 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 			// before passing further.
 			delta = true
 			pub.Delta = false
+		}
+		if b.watermarks != nil {
+			var lost bool
+			epoch := sp.Epoch
+			sp.Epoch, lost = b.watermarks.observe(channel, epoch, sp.Offset, func() bool {
+				return b.node.hub.NumSubscribers(channel) > 0
+			})
+			if lost {
+				go b.resetLostStream(channel, epoch, sp.Offset)
+			}
 		}
 		if len(pub.PrevData) > 0 {
 			// PrevData from map broker fan-out: carry previous data for delta computation.
@@ -2195,4 +2214,42 @@ func pubsubEpoch(e string) string {
 		return e[:i]
 	}
 	return e
+}
+
+// resetLostStreamSource deletes a stream and its meta if the meta still has
+// the lost epoch (ARGV[1]): the next access starts a new epoch.
+const resetLostStreamSource = `
+if redis.call("hget", KEYS[1], "e") ~= ARGV[1] then
+    return 0
+end
+redis.call("del", KEYS[1], KEYS[2])
+return 1
+`
+
+// resetLostStream reacts to a server that gave out offsets of the epoch again
+// (see offsetWatermarks): it lost writes. With the gate, the server's lineage
+// rotates - every stream and map on it starts a new epoch, so clients holding
+// positions in other channels, offline ones too, can't recover across the loss
+// either. Otherwise (no lineage to rotate) the stream alone is reset.
+func (b *RedisBroker) resetLostStream(ch string, epoch string, offset uint64) {
+	s := b.getShard(ch).shard
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if s.lineage.gateMode() {
+		err := s.lineage.rotateIfToken(ctx, string(b.historyMetaKey(s, ch)))
+		if err != nil {
+			b.node.logger.log(newErrorLogEntry(err, "error rotating the lineage of a server that reused offsets", map[string]any{"channel": ch, "epoch": epoch}))
+			return
+		}
+		b.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused stream offsets, writes were lost: every stream and map on the server starts a new epoch", map[string]any{"channel": ch, "epoch": epoch, "offset": offset}))
+		return
+	}
+	reset, err := b.resetLostStreamScript.Exec(ctx, s.client,
+		[]string{string(b.historyMetaKey(s, ch)), string(b.historyStreamKey(s, ch))},
+		[]string{epoch}).AsInt64()
+	if err != nil {
+		b.node.logger.log(newErrorLogEntry(err, "error resetting a stream with reused offsets", map[string]any{"channel": ch, "epoch": epoch}))
+		return
+	}
+	b.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused stream offsets, writes were lost: stream reset", map[string]any{"channel": ch, "epoch": epoch, "offset": offset, "reset": reset == 1}))
 }
