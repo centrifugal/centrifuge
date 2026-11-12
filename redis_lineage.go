@@ -473,6 +473,10 @@ type redisLineage struct {
 	twinProbed bool
 	twin       atomic.Bool
 
+	// countingSince is when this node started counting writes (UnixNano, 0:
+	// not counting), see counting.
+	countingSince atomic.Int64
+
 	probeOnce sync.Once
 	stats     lineageStats
 
@@ -674,6 +678,30 @@ func (l *redisLineage) twinOn() bool {
 	return l.twin.Load()
 }
 
+// counting tells whether writes are counted and observed (ResyncOnlyLostSlots).
+// Only once every node strips observations from epochs: before, during a
+// rolling upgrade, nothing is counted and a lineage break resets every slot.
+func (l *redisLineage) counting() bool {
+	on := l.selective && l.node != nil && l.node.nodes.haveAll(nodeCapLineageObs)
+	if on {
+		if l.countingSince.Load() == 0 {
+			l.countingSince.CompareAndSwap(0, time.Now().UnixNano())
+		}
+	} else if l.countingSince.Load() != 0 {
+		l.countingSince.Store(0)
+	}
+	return on
+}
+
+// countingFor is how long writes have been counted without a break.
+func (l *redisLineage) countingFor() time.Duration {
+	since := l.countingSince.Load()
+	if since == 0 {
+		return 0
+	}
+	return time.Since(time.Unix(0, since))
+}
+
 // probeTwin checks once that scripts can write without replication
 // (redis.set_repl): a managed service could take it away. Without it the twin
 // counter is off, and every node finds the same, since it's a property of the
@@ -840,8 +868,8 @@ func (l *redisLineage) exec(ctx context.Context, s *lineageScript, keys, args []
 			}
 			continue
 		}
-		twin := l.twinOn()
-		sha, err := l.sha(ctx, l.shard.client, &s.shas, token+"|"+strconv.FormatBool(l.selective)+"|"+strconv.FormatBool(twin), s.gatedSource(token, l.selective, twin))
+		twin, counting := l.twinOn(), l.counting()
+		sha, err := l.sha(ctx, l.shard.client, &s.shas, token+"|"+strconv.FormatBool(counting)+"|"+strconv.FormatBool(twin), s.gatedSource(token, counting, twin))
 		if err != nil {
 			return rueidis.NewErrorResult(err)
 		}
@@ -1043,7 +1071,7 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 			for i := range values {
 				values[i] = token
 			}
-			if l.selective {
+			if l.counting() {
 				kept = l.keepSlots(ctx, c, slots, keys, token, values, keptAncestors)
 			}
 			args := make([]string, 0, 2*len(slots)+3)
@@ -1070,7 +1098,7 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 			}
 		}
 		for _, s := range scripts {
-			if err := c.Do(ctx, c.B().ScriptLoad().Script(s.gatedSource(token, l.selective, l.twinOn())).Build()).Error(); err != nil {
+			if err := c.Do(ctx, c.B().ScriptLoad().Script(s.gatedSource(token, l.counting(), l.twinOn())).Build()).Error(); err != nil {
 				return fmt.Errorf("load %s: %w", s.name, err)
 			}
 		}
@@ -1504,7 +1532,7 @@ func (l *redisLineage) keepSlots(ctx context.Context, c rueidis.DedicatedClient,
 	}
 	tokens, counts, complete, err := l.surveyObserved(ctx, slots)
 	if err != nil || !complete {
-		l.log(LogLevelInfo, "redis lineage: not every node answered the lineage survey, resetting every slot", map[string]any{"error": fmt.Sprint(err)})
+		l.log(LogLevelInfo, "redis lineage: the lineage survey cannot vouch for every slot (a node did not answer, restarted or left recently, or was not counting writes long enough), resetting every slot", map[string]any{"error": fmt.Sprint(err)})
 		return 0
 	}
 	n := 0

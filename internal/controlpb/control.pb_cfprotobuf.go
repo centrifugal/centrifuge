@@ -506,6 +506,9 @@ func (m *Node) SizeCF() (n int) {
 	if m.NumSubs != 0 {
 		n += 1 + cfprotobuf.SizeOfInt(m.NumSubs)
 	}
+	if m.Caps != 0 {
+		n += 1 + cfprotobuf.SizeOfInt(m.Caps)
+	}
 	n += len(m.unknownFields)
 	return n
 }
@@ -539,6 +542,11 @@ func (m *Node) MarshalToSizedBufferCF(b []byte) (int, error) {
 	if m.unknownFields != nil {
 		i -= len(m.unknownFields)
 		copy(b[i:], m.unknownFields)
+	}
+	if m.Caps != 0 {
+		i = cfprotobuf.PutInt(b, i, m.Caps)
+		i--
+		b[i] = 0x58
 	}
 	if m.NumSubs != 0 {
 		i = cfprotobuf.PutInt(b, i, m.NumSubs)
@@ -767,6 +775,18 @@ func (m *Node) unmarshalCF(b []byte, depth int) error {
 					return cfprotobuf.Error(next)
 				}
 				m.NumSubs = cfprotobuf.Int[uint32](v)
+				i = next
+				continue
+			}
+		case 11: // Caps
+			if tag&7 == 0 {
+				var v uint64
+				if i < len(b) && b[i] < 0x80 {
+					v, next = uint64(b[i]), i+1
+				} else if v, next = cfprotobuf.Varint(b, i); next < 0 {
+					return cfprotobuf.Error(next)
+				}
+				m.Caps = cfprotobuf.Int[uint32](v)
 				i = next
 				continue
 			}

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/controlpb"
 	"github.com/redis/rueidis"
 	"github.com/stretchr/testify/require"
 )
@@ -225,6 +226,14 @@ func setupPairHook(t *testing.T, p failoverPair, noLineage, selective bool, hook
 		a.promote()
 		b.promote()
 	})
+	if selective {
+		// Tests start nodes just now: no witness window, and writes counted
+		// once the node knows every node strips observations.
+		prevWindow := lineageWitnessWindow
+		lineageWitnessWindow = 0
+		t.Cleanup(func() { lineageWitnessWindow = prevWindow })
+		require.Eventually(t, s.lineage.counting, 10*time.Second, 10*time.Millisecond)
+	}
 	return br, proxy, a, b
 }
 
@@ -675,6 +684,50 @@ func testFailbackTwin(t *testing.T, twinOff bool) {
 				return
 			}
 			require.NotEqual(t, lostA.Epoch, sp.Epoch, "a new epoch: offset 4 isn't reused")
+		})
+	}
+}
+
+// ResyncOnlyLostSlots: a node that left shortly before the failover may have
+// observed the lost writes: every slot is reset, even if the survey finds
+// nothing missing.
+func TestRedisFailover_SelectiveRecentDepartureResets(t *testing.T) {
+	testSelectiveWitness(t, func(br *RedisBroker) {
+		lineageWitnessWindow = time.Minute
+		br.node.nodes.add(&controlpb.Node{Uid: "gone", Caps: nodeCaps})
+		br.node.nodes.remove("gone")
+	})
+}
+
+// ResyncOnlyLostSlots: nodes running (or counting) for less than the witness
+// window may have forgotten observations: every slot is reset.
+func TestRedisFailover_SelectiveYoungWitnessResets(t *testing.T) {
+	testSelectiveWitness(t, func(br *RedisBroker) {
+		lineageWitnessWindow = time.Hour
+	})
+}
+
+func testSelectiveWitness(t *testing.T, prepare func(br *RedisBroker)) {
+	for _, p := range failoverPairs(t) {
+		t.Run(p.name, func(t *testing.T) {
+			br, proxy, a, b := setupPairConf(t, p, false, true)
+			ch := "selective_witness_" + randString(6)
+			var before StreamPosition
+			for i := 0; i < 3; i++ {
+				before = publishEventually(t, br, ch)
+			}
+			waitSynced(t, a, b)
+			prepare(br)
+
+			// Lossless failover: kept with every witness in place, reset here.
+			b.promote()
+			proxy.move(p.b, true)
+			a.replicaOf(p.b)
+
+			sp := publishEventually(t, br, ch)
+			require.NotEqual(t, before.Epoch, sp.Epoch)
+			_, kept, _ := lineageStatsOf(br)
+			require.Zero(t, kept)
 		})
 	}
 }

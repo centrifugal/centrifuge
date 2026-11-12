@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/controlpb"
@@ -1073,6 +1074,7 @@ func (n *Node) pubNode(nodeID string) error {
 		NumSubs:     uint32(n.hub.NumSubscriptions()),
 		Uptime:      uint32(time.Now().Unix() - n.startedAt),
 		Data:        data,
+		Caps:        nodeCaps,
 	}
 
 	n.metricsMu.Lock()
@@ -1978,7 +1980,21 @@ type nodeRegistry struct {
 	nodes map[string]*controlpb.Node
 	// updates track time we last received ping from node. Used to clean up nodes map.
 	updates map[string]int64
+	// allCaps are the caps every known node has (see nodeCaps).
+	allCaps atomic.Uint32
+	// departed is when a node last left (UnixNano, 0: never).
+	departed atomic.Int64
 }
+
+// Node caps (controlpb.Node.Caps), a bit set of what other nodes may rely on.
+const (
+	// nodeCapLineageObs: the node strips the write observations of
+	// ResyncOnlyLostSlots from epochs (see redisLineage.observe).
+	nodeCapLineageObs uint32 = 1 << iota
+)
+
+// nodeCaps are the caps of this node.
+const nodeCaps = nodeCapLineageObs
 
 func newNodeRegistry(currentUID string) *nodeRegistry {
 	return &nodeRegistry{
@@ -2031,6 +2047,7 @@ func (r *nodeRegistry) add(info *controlpb.Node) bool {
 				Uptime:      info.Uptime,
 				Data:        info.Data,
 				NumSubs:     info.NumSubs,
+				Caps:        info.Caps,
 				Metrics:     node.Metrics,
 			}
 		}
@@ -2039,14 +2056,46 @@ func (r *nodeRegistry) add(info *controlpb.Node) bool {
 		isNewNode = true
 	}
 	r.updates[info.Uid] = time.Now().Unix()
+	r.updateCapsLocked()
 	r.mu.Unlock()
 	return isNewNode
 }
 
+// updateCapsLocked recomputes the caps every known node has.
+func (r *nodeRegistry) updateCapsLocked() {
+	if len(r.nodes) == 0 {
+		r.allCaps.Store(0)
+		return
+	}
+	all := ^uint32(0)
+	for _, nd := range r.nodes {
+		all &= nd.Caps
+	}
+	r.allCaps.Store(all)
+}
+
+// haveAll tells whether every known node has the cap.
+func (r *nodeRegistry) haveAll(cap uint32) bool {
+	return r.allCaps.Load()&cap == cap
+}
+
+// lastDeparture is when a node last left the registry (zero: never).
+func (r *nodeRegistry) lastDeparture() time.Time {
+	ns := r.departed.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
+}
+
 func (r *nodeRegistry) remove(uid string) {
 	r.mu.Lock()
+	if _, ok := r.nodes[uid]; ok && uid != r.currentUID {
+		r.departed.Store(time.Now().UnixNano())
+	}
 	delete(r.nodes, uid)
 	delete(r.updates, uid)
+	r.updateCapsLocked()
 	r.mu.Unlock()
 }
 
@@ -2067,8 +2116,10 @@ func (r *nodeRegistry) clean(delay time.Duration) {
 			// Too many seconds since this node have been last seen - remove it from map.
 			delete(r.nodes, uid)
 			delete(r.updates, uid)
+			r.departed.Store(time.Now().UnixNano())
 		}
 	}
+	r.updateCapsLocked()
 	r.mu.Unlock()
 }
 

@@ -181,17 +181,19 @@ func (*Shutdown) Descriptor() ([]byte, []int) {
 }
 
 type Node struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Uid           string                 `protobuf:"bytes,1,opt,name=uid,proto3" json:"uid,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Version       string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
-	NumClients    uint32                 `protobuf:"varint,4,opt,name=num_clients,json=numClients,proto3" json:"num_clients,omitempty"`
-	NumUsers      uint32                 `protobuf:"varint,5,opt,name=num_users,json=numUsers,proto3" json:"num_users,omitempty"`
-	NumChannels   uint32                 `protobuf:"varint,6,opt,name=num_channels,json=numChannels,proto3" json:"num_channels,omitempty"`
-	Uptime        uint32                 `protobuf:"varint,7,opt,name=uptime,proto3" json:"uptime,omitempty"`
-	Metrics       *Metrics               `protobuf:"bytes,8,opt,name=metrics,proto3" json:"metrics,omitempty"`
-	Data          []byte                 `protobuf:"bytes,9,opt,name=data,proto3" json:"data,omitempty"`
-	NumSubs       uint32                 `protobuf:"varint,10,opt,name=num_subs,json=numSubs,proto3" json:"num_subs,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Uid         string                 `protobuf:"bytes,1,opt,name=uid,proto3" json:"uid,omitempty"`
+	Name        string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Version     string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	NumClients  uint32                 `protobuf:"varint,4,opt,name=num_clients,json=numClients,proto3" json:"num_clients,omitempty"`
+	NumUsers    uint32                 `protobuf:"varint,5,opt,name=num_users,json=numUsers,proto3" json:"num_users,omitempty"`
+	NumChannels uint32                 `protobuf:"varint,6,opt,name=num_channels,json=numChannels,proto3" json:"num_channels,omitempty"`
+	Uptime      uint32                 `protobuf:"varint,7,opt,name=uptime,proto3" json:"uptime,omitempty"`
+	Metrics     *Metrics               `protobuf:"bytes,8,opt,name=metrics,proto3" json:"metrics,omitempty"`
+	Data        []byte                 `protobuf:"bytes,9,opt,name=data,proto3" json:"data,omitempty"`
+	NumSubs     uint32                 `protobuf:"varint,10,opt,name=num_subs,json=numSubs,proto3" json:"num_subs,omitempty"`
+	// caps: features of the node that others may rely on, a bit set.
+	Caps          uint32 `protobuf:"varint,11,opt,name=caps,proto3" json:"caps,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -292,6 +294,13 @@ func (x *Node) GetData() []byte {
 func (x *Node) GetNumSubs() uint32 {
 	if x != nil {
 		return x.NumSubs
+	}
+	return 0
+}
+
+func (x *Node) GetCaps() uint32 {
+	if x != nil {
+		return x.Caps
 	}
 	return 0
 }
@@ -1159,7 +1168,7 @@ const file_control_proto_rawDesc = "" +
 	"\fnotification\x18\v \x01(\v2\x17.controlpb.NotificationR\fnotification\x12,\n" +
 	"\arefresh\x18\f \x01(\v2\x12.controlpb.RefreshR\arefresh\"\n" +
 	"\n" +
-	"\bShutdown\"\x9c\x02\n" +
+	"\bShutdown\"\xb0\x02\n" +
 	"\x04Node\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\tR\x03uid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
@@ -1172,7 +1181,8 @@ const file_control_proto_rawDesc = "" +
 	"\ametrics\x18\b \x01(\v2\x12.controlpb.MetricsR\ametrics\x12\x12\n" +
 	"\x04data\x18\t \x01(\fR\x04data\x12\x19\n" +
 	"\bnum_subs\x18\n" +
-	" \x01(\rR\anumSubs\"\x94\x01\n" +
+	" \x01(\rR\anumSubs\x12\x12\n" +
+	"\x04caps\x18\v \x01(\rR\x04caps\"\x94\x01\n" +
 	"\aMetrics\x12\x1a\n" +
 	"\binterval\x18\x01 \x01(\x01R\binterval\x123\n" +
 	"\x05items\x18\x02 \x03(\v2\x1d.controlpb.Metrics.ItemsEntryR\x05items\x1a8\n" +

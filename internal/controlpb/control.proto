@@ -36,6 +36,8 @@ message Node {
     Metrics metrics = 8;
     bytes data = 9;
     uint32 num_subs = 10;
+    // caps: features of the node that others may rely on, a bit set.
+    uint32 caps = 11;
 }
 
 message Metrics {
