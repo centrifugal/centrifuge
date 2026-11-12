@@ -271,7 +271,7 @@ func TestRedisLineage_SameLineageKeepsEpoch(t *testing.T) {
 
 			s1 := b1.shards[0].shard
 			tokenKey := s1.lineage.tokenKey(string(b1.historyMetaKey(s1, ch)))
-			token, err := s1.client.Do(context.Background(), s1.client.B().Get().Key(tokenKey).Build()).ToString()
+			token, err := s1.client.Do(context.Background(), s1.client.B().Hget().Key(tokenKey).Field("t").Build()).ToString()
 			require.NoError(t, err)
 			for _, c := range lineagePrimaries(t, s1) {
 				require.NoError(t, c.Do(context.Background(), c.B().ScriptFlush().Build()).Error())
@@ -469,13 +469,13 @@ func TestRedisLineage_MigratedSlotAdopted(t *testing.T) {
 			// foreign token.
 			metaKey := string(b.historyMetaKey(s, ch))
 			tokenKey := s.lineage.tokenKey(metaKey)
-			require.NoError(t, s.client.Do(ctx, s.client.B().Set().Key(tokenKey).Value("gforeign").Build()).Error())
+			require.NoError(t, s.client.Do(ctx, s.client.B().Hset().Key(tokenKey).FieldValue().FieldValue("t", "gforeign").Build()).Error())
 			require.NoError(t, s.client.Do(ctx, s.client.B().Hset().Key(metaKey).FieldValue().FieldValue("i", "gforeign").Build()).Error())
 
 			after := lineagePublish(t, b, ch, 1)
 			require.Equal(t, before.Epoch, after.Epoch, "a migrated slot keeps its streams")
 			require.Equal(t, uint64(3), after.Offset)
-			value, err := s.client.Do(ctx, s.client.B().Get().Key(tokenKey).Build()).ToString()
+			value, err := s.client.Do(ctx, s.client.B().Hget().Key(tokenKey).Field("t").Build()).ToString()
 			require.NoError(t, err)
 			tok, anc := parseTokenValue(value)
 			require.NotEqual(t, "gforeign", tok)

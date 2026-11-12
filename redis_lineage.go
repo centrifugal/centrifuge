@@ -79,9 +79,12 @@ func (m lineageMode) String() string {
 // lineageGateLoadArg as the only argument makes a gated script return at once.
 const lineageGateLoadArg = "__centrifuge_lineage_load__"
 
-// lineageTokenKeyBase is the name of the token key, the same for every prefix:
-// a lineage is a property of the server's data.
-const lineageTokenKeyBase = "centrifuge.lineage"
+// lineageTokenKeyBase is the name of the lineage key (one per slot in Redis
+// Cluster), the same for every prefix: a lineage is a property of the server's
+// data. It is a hash: "t" the token value (see lineagePreludeGate), "c" the
+// write counter, "l" its local twin. One key for all three, so a gated script
+// reads them with one lookup, and an eviction removes them together.
+const lineageTokenKeyBase = "centrifuge.lineage.state"
 
 // lineageErrPrefix starts the error a gated script returns when the token key
 // doesn't hold the token the script was made for: "LINEAGE <token>", with "-"
@@ -104,9 +107,9 @@ const lineageTwinErrPrefix = "LINEAGE_COPY "
 // ";count;token" to it (lineage_obs), so that every node knows the newest write
 // it has observed: see redisLineage.observe.
 //
-// With twin, every write also bumps a local twin of that counter: the counter
-// hash <token key>.n has field "c", replicated, and field "l", written with
-// REPL_NONE, so never sent to replicas or the AOF. A server that executed every
+// With twin, every write also bumps a local twin of that counter: field "c" of
+// the lineage key is replicated, field "l" is written with REPL_NONE, so never
+// sent to replicas or the AOF. A server that executed every
 // write in its data itself has c == l. A server whose data came from another
 // server - a promoted replica, an old primary that took a full copy of the new
 // one (a failback the script cache can't see), a restart from the AOF - has l
@@ -127,7 +130,8 @@ local LINEAGE_TOKEN = "` + token + `"
 local LINEAGE_COUNT = ` + countLua + `
 local LINEAGE_TWIN = ` + twinLua + `
 local function lineage_token(key)
-    local value = redis.call("get", key)
+    local m = redis.call("hmget", key, "t", "c", "l")
+    local value = m[1]
     local token, ancestor = value, nil
     if value then
         local bar = string.find(value, "|", 1, true)
@@ -145,11 +149,8 @@ local function lineage_token(key)
     if token ~= LINEAGE_TOKEN then
         error({err = "` + lineageErrPrefix + `" .. (value or "-")})
     end
-    if LINEAGE_TWIN then
-        local t = redis.call("hmget", key .. ".n", "c", "l")
-        if t[1] and t[1] ~= t[2] then
-            error({err = "` + lineageTwinErrPrefix + `" .. t[1] .. " " .. (t[2] or "-")})
-        end
+    if LINEAGE_TWIN and m[2] and m[2] ~= m[3] then
+        error({err = "` + lineageTwinErrPrefix + `" .. m[2] .. " " .. (m[3] or "-")})
     end
     return token, ancestor
 end
@@ -157,10 +158,10 @@ local function lineage_count(key)
     if not LINEAGE_COUNT and not LINEAGE_TWIN then
         return false
     end
-    local count = redis.call("hincrby", key .. ".n", "c", 1)
+    local count = redis.call("hincrby", key, "c", 1)
     if LINEAGE_TWIN then
         redis.set_repl(redis.REPL_NONE)
-        redis.call("hincrby", key .. ".n", "l", 1)
+        redis.call("hincrby", key, "l", 1)
         redis.set_repl(redis.REPL_ALL)
     end
     if not LINEAGE_COUNT then
@@ -229,17 +230,17 @@ end
 // of each slot's write counter is set to the counter - from now on the server's
 // own writes count (see lineagePreludeGate) - and the pairs start at ARGV[4].
 const lineageRotateSourceCluster = `#!lua flags=allow-cross-slot-keys
-local current = redis.call("get", ARGV[1]) or ""
+local current = redis.call("hget", ARGV[1], "t") or ""
 if current ~= ARGV[2] then
     return current
 end
 for i = 4, #ARGV, 2 do
-    redis.call("set", ARGV[i], ARGV[i + 1])
+    redis.call("hset", ARGV[i], "t", ARGV[i + 1])
     if ARGV[3] == "1" then
-        local c = redis.call("hget", ARGV[i] .. ".n", "c")
+        local c = redis.call("hget", ARGV[i], "c")
         if c then
             redis.set_repl(redis.REPL_NONE)
-            redis.call("hset", ARGV[i] .. ".n", "l", c)
+            redis.call("hset", ARGV[i], "l", c)
             redis.set_repl(redis.REPL_ALL)
         end
     end
@@ -248,17 +249,17 @@ return false
 `
 
 const lineageRotateSource = `
-local current = redis.call("get", ARGV[1]) or ""
+local current = redis.call("hget", ARGV[1], "t") or ""
 if current ~= ARGV[2] then
     return current
 end
 for i = 4, #ARGV, 2 do
-    redis.call("set", ARGV[i], ARGV[i + 1])
+    redis.call("hset", ARGV[i], "t", ARGV[i + 1])
     if ARGV[3] == "1" then
-        local c = redis.call("hget", ARGV[i] .. ".n", "c")
+        local c = redis.call("hget", ARGV[i], "c")
         if c then
             redis.set_repl(redis.REPL_NONE)
-            redis.call("hset", ARGV[i] .. ".n", "l", c)
+            redis.call("hset", ARGV[i], "l", c)
             redis.set_repl(redis.REPL_ALL)
         end
     end
@@ -271,8 +272,9 @@ return false
 const lineageSlotsSourceCluster = `#!lua flags=allow-cross-slot-keys
 local out = {}
 for i = 1, #ARGV do
-    out[#out + 1] = redis.call("get", ARGV[i]) or ""
-    out[#out + 1] = redis.call("hget", ARGV[i] .. ".n", "c") or "0"
+    local m = redis.call("hmget", ARGV[i], "t", "c")
+    out[#out + 1] = m[1] or ""
+    out[#out + 1] = m[2] or "0"
 end
 return out
 `
@@ -280,8 +282,9 @@ return out
 const lineageSlotsSource = `
 local out = {}
 for i = 1, #ARGV do
-    out[#out + 1] = redis.call("get", ARGV[i]) or ""
-    out[#out + 1] = redis.call("hget", ARGV[i] .. ".n", "c") or "0"
+    local m = redis.call("hmget", ARGV[i], "t", "c")
+    out[#out + 1] = m[1] or ""
+    out[#out + 1] = m[2] or "0"
 end
 return out
 `
@@ -702,14 +705,24 @@ func (l *redisLineage) countingFor() time.Duration {
 	return time.Since(time.Unix(0, since))
 }
 
-// probeTwin checks once that scripts can write without replication
-// (redis.set_repl): a managed service could take it away. Without it the twin
-// counter is off, and every node finds the same, since it's a property of the
-// server.
+// probeTwin decides once whether the twin counter is used. Only on a shard
+// with one address: behind it the servers can change unseen, and a failback to
+// an old primary holding our scripts is caught only by the twin. With Sentinel
+// and Redis Cluster the node follows the actual primary and reaches the new
+// one long before a failback can happen, and the probe flushes demoted servers
+// it sees, so the script cache suffices and writes skip the twin's cost.
+// It also checks that scripts can write without replication (redis.set_repl):
+// a managed service could take it away. Every node decides the same, since it
+// depends on the configuration and the server.
 func (l *redisLineage) probeTwin(ctx context.Context) {
 	l.twinMu.Lock()
 	defer l.twinMu.Unlock()
 	if l.twinProbed {
+		return
+	}
+	if l.shard.isCluster || l.shard.isSentinel {
+		l.twinProbed = true
+		l.twin.Store(false)
 		return
 	}
 	probe := rueidis.NewLuaScript(`redis.set_repl(redis.REPL_NONE); redis.set_repl(redis.REPL_ALL); return 1`,
@@ -985,10 +998,14 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 	err := l.shard.client.Dedicated(func(c rueidis.DedicatedClient) error {
 		// The first command is keyed: it binds the connection to the server
 		// serving routeKey.
-		currentValue, err := c.Do(ctx, c.B().Get().Key(tokenKey).Build()).ToString()
-		if err != nil && !rueidis.IsRedisNil(err) {
+		state, err := c.Do(ctx, c.B().Hmget().Key(tokenKey).Field("t", "c", "l").Build()).ToArray()
+		if err != nil {
 			return err
 		}
+		if len(state) != 3 {
+			return fmt.Errorf("lineage key: %d fields", len(state))
+		}
+		currentValue, _ := state[0].ToString()
 		current, _ := parseTokenValue(currentValue)
 		hello, err := c.Do(ctx, c.B().Hello().Build()).AsMap()
 		if err != nil {
@@ -1012,15 +1029,9 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 		// the marker, as an old primary does after a failback.
 		copied := false
 		if l.twinOn() {
-			t, err := c.Do(ctx, c.B().Hmget().Key(tokenKey+".n").Field("c", "l").Build()).ToArray()
-			if err != nil {
-				return fmt.Errorf("twin: %w", err)
-			}
-			if len(t) == 2 {
-				cv, cerr := t[0].ToString()
-				lv, _ := t[1].ToString()
-				copied = cerr == nil && cv != lv
-			}
+			cv, cerr := state[1].ToString()
+			lv, _ := state[2].ToString()
+			copied = cerr == nil && cv != lv
 		}
 		intact := false
 		if current != "" && !force && !copied {
@@ -1380,7 +1391,7 @@ func (l *redisLineage) probeCluster(ctx context.Context) {
 			continue
 		}
 		key := lineageTokenKeyForSlot(n.slots[0])
-		current, err := c.Do(ctx, c.B().Get().Key(key).Build()).ToString()
+		current, err := c.Do(ctx, c.B().Hget().Key(key).Field("t").Build()).ToString()
 		if err != nil || current == "" {
 			continue
 		}

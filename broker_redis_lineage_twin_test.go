@@ -42,10 +42,11 @@ func newTwinTestBroker(t *testing.T, tt lineageRedisTest, twinOff bool) *RedisBr
 	return b
 }
 
-// twinKey is the write counter hash of a channel's slot.
+// twinKey is the lineage key of a channel's slot, holding the write counter
+// and its twin.
 func twinKey(b *RedisBroker, ch string) string {
 	s := b.shards[0].shard
-	return s.lineage.tokenKey(string(b.historyMetaKey(s, ch))) + ".n"
+	return s.lineage.tokenKey(string(b.historyMetaKey(s, ch)))
 }
 
 func twinFields(t *testing.T, b *RedisBroker, ch string) (string, string) {
@@ -58,14 +59,29 @@ func twinFields(t *testing.T, b *RedisBroker, ch string) (string, string) {
 	return c, l
 }
 
+// gateTests are the setups with the twin: one address (not Redis Cluster).
 func gateTests() []lineageRedisTest {
 	var out []lineageRedisTest
 	for _, tt := range lineageRedisTests {
-		if tt.Gate {
+		if tt.Gate && !tt.UseCluster {
 			out = append(out, tt)
 		}
 	}
 	return out
+}
+
+// Redis Cluster (and Sentinel) don't use the twin: writes skip its cost.
+func TestRedisLineage_TwinOffInCluster(t *testing.T) {
+	for _, tt := range lineageRedisTests {
+		if !tt.Gate || !tt.UseCluster {
+			continue
+		}
+		t.Run(tt.Name, func(t *testing.T) {
+			b := newTwinTestBroker(t, tt, false)
+			lineagePublish(t, b, "twin_cluster_"+randString(6), 1)
+			require.False(t, b.shards[0].shard.lineage.twinOn())
+		})
+	}
 }
 
 // Every write bumps the counter and its local twin together.
@@ -116,7 +132,8 @@ func TestRedisLineage_TwinCopiedDataStartsNewEpoch(t *testing.T) {
 	}
 }
 
-// An evicted counter (both fields gone) is a fresh start, not a lineage break.
+// An evicted lineage key (token and counters gone together) is not caught by
+// the twin: the server's scripts and marker show its lineage is intact.
 func TestRedisLineage_TwinEvictedKeepsEpoch(t *testing.T) {
 	for _, tt := range gateTests() {
 		t.Run(tt.Name, func(t *testing.T) {
