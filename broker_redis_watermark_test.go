@@ -222,3 +222,101 @@ func TestRedisBroker_ReusedOffsetsControl(t *testing.T) {
 	require.NoError(t, err, "recovery from the old position passes: the loss is silent")
 	require.Len(t, res.Publications, 1)
 }
+
+// No false positives: many concurrent publishers on two nodes, both
+// subscribed, standalone and Redis Cluster with and without sharded PUB/SUB.
+// Without a loss no offset may ever look reused.
+func TestRedisBroker_WatermarkNoFalsePositives(t *testing.T) {
+	cases := []struct {
+		name       string
+		cluster    bool
+		partitions int
+	}{
+		{"standalone", false, 0},
+		{"cluster", true, 0},
+		{"cluster_sharded", true, 9},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prefix := getUniquePrefix()
+			var nodes []*Node
+			var brokers []*RedisBroker
+			for i := 0; i < 2; i++ {
+				node, err := New(Config{LogLevel: LogLevelError, LogHandler: func(LogEntry) {}})
+				require.NoError(t, err)
+				var conf RedisShardConfig
+				if tc.cluster {
+					conf = RedisShardConfig{ClusterAddresses: []string{"127.0.0.1:7001", "127.0.0.1:7002", "127.0.0.1:7003"}, IOTimeout: 10 * time.Second}
+				} else {
+					conf = testSingleRedisConf(6379)
+				}
+				s, err := NewRedisShard(node, conf)
+				require.NoError(t, err)
+				b, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}, NumShardedPubSubPartitions: tc.partitions})
+				require.NoError(t, err)
+				node.SetBroker(b)
+				require.NoError(t, node.Run())
+				t.Cleanup(func() {
+					_ = node.Shutdown(context.Background())
+					stopRedisBroker(b)
+				})
+				nodes = append(nodes, node)
+				brokers = append(brokers, b)
+			}
+			const numChannels = 50
+			const perPublisher = 100
+			chs := make([]string, numChannels)
+			for i := range chs {
+				chs[i] = "wm_fp_" + randString(6) + "_" + strconv.Itoa(i)
+			}
+			for i, node := range nodes {
+				client := newTestConnectedClientV2(t, node, "42")
+				for _, ch := range chs {
+					_, _, err := node.hub.addSub(ch, subInfo{client: client})
+					require.NoError(t, err)
+				}
+				require.NoError(t, brokers[i].Subscribe(chs...))
+			}
+			errCh := make(chan error, len(nodes)*4)
+			for _, node := range nodes {
+				for p := 0; p < 4; p++ {
+					go func(node *Node, p int) {
+						for j := 0; j < perPublisher; j++ {
+							ch := chs[(p*perPublisher+j)%numChannels]
+							if _, err := node.Publish(ch, []byte(`{}`), WithHistory(10, time.Minute)); err != nil {
+								errCh <- err
+								return
+							}
+						}
+						errCh <- nil
+					}(node, p)
+				}
+			}
+			for i := 0; i < len(nodes)*4; i++ {
+				require.NoError(t, <-errCh)
+			}
+			total := uint64(len(nodes) * 4 * perPublisher / numChannels)
+			for _, b := range brokers {
+				require.Eventually(t, func() bool {
+					for _, ch := range chs {
+						ws := b.watermarks.shard(ch)
+						ws.mu.Lock()
+						wm := ws.m[ch]
+						ws.mu.Unlock()
+						if wm.offset != total {
+							return false
+						}
+					}
+					return true
+				}, 10*time.Second, 20*time.Millisecond, "every node saw every publication")
+				for _, ch := range chs {
+					ws := b.watermarks.shard(ch)
+					ws.mu.Lock()
+					lost := ws.m[ch].lost
+					ws.mu.Unlock()
+					require.False(t, lost, "false positive on %s", ch)
+				}
+			}
+		})
+	}
+}
