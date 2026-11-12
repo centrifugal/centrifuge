@@ -134,9 +134,9 @@ type RedisBroker struct {
 	partitionTags           []string
 	publishIdempotentScript *rueidis.Lua
 	historyListScript       *rueidis.Lua
-	historyStreamScript     *rueidis.Lua
+	historyStreamScript     *lineageScript
 	addHistoryListScript    *rueidis.Lua
-	addHistoryStreamScript  *rueidis.Lua
+	addHistoryStreamScript  *lineageScript
 	shardChannel            string
 	messagePrefix           string
 	controlChannel          string
@@ -255,6 +255,14 @@ type RedisBrokerConfig struct {
 	// LoadSHA1 enables loading SHA1 from Redis via SCRIPT LOAD instead of calculating
 	// it on the client side. This is useful for FIPS compliance.
 	LoadSHA1 bool
+
+	// UseInfoCommandForLineage makes meta scripts read the server's replication
+	// ID with INFO to see that a failover or a restart may have lost writes to
+	// a stream: exact on every server, including Redis 6 and Dragonfly, at the
+	// cost of INFO in every meta script. INFO needs the @dangerous ACL category.
+	// Without it the broker uses the script cache of Redis 7+ and Valkey, which
+	// needs no extra permissions (no detection on Redis 6 and Dragonfly).
+	UseInfoCommandForLineage bool
 }
 
 // NewRedisBroker initializes Redis Broker.
@@ -329,11 +337,18 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		partitionTags:           partitionTags,
 		sharding:                len(config.Shards) > 1,
 		publishIdempotentScript: rueidis.NewLuaScript(publishIdempotentSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
-		historyStreamScript:     rueidis.NewLuaScript(historyStreamSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
+		historyStreamScript:     newLineageScript("history_stream", historyStreamSource, config.LoadSHA1),
 		historyListScript:       rueidis.NewLuaScript(historyListSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
-		addHistoryStreamScript:  rueidis.NewLuaScript(addHistoryStreamSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
+		addHistoryStreamScript:  newLineageScript("add_history_stream", addHistoryStreamSource, config.LoadSHA1),
 		addHistoryListScript:    rueidis.NewLuaScript(addHistoryListSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
 		closeCh:                 make(chan struct{}),
+	}
+	for _, sw := range b.shards {
+		if !config.UseLists {
+			sw.shard.lineage.register(b.historyStreamScript, config.LoadSHA1)
+			sw.shard.lineage.register(b.addHistoryStreamScript, config.LoadSHA1)
+		}
+		sw.shard.lineage.setLogger(n)
 	}
 	b.shardChannel = config.Prefix + redisPubSubShardChannelSuffix
 	b.messagePrefix = config.Prefix + redisClientChannelPrefix
@@ -917,6 +932,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		// The idempotent script replies with what its publish replied, and
 		// with SkipPubSub there is nothing to publish to - a nil reply, which
 		// is not a failure: the result was remembered.
+		s.shard.noteError(resp.Error())
 		if err := resp.Error(); err != nil && !rueidis.IsRedisNil(err) {
 			return PublishResult{}, err
 		}
@@ -934,15 +950,12 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 
 	var streamKey channelID
 	var size int
-	var script *rueidis.Lua
 	if b.config.UseLists {
 		streamKey = b.historyListKey(s.shard, ch)
 		size = opts.HistorySize - 1
-		script = b.addHistoryListScript
 	} else {
 		streamKey = b.historyStreamKey(s.shard, ch)
 		size = opts.HistorySize
-		script = b.addHistoryStreamScript
 	}
 
 	var useDelta string
@@ -956,24 +969,28 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 	}
 	versionEpoch := opts.VersionEpoch
 
-	replies, err := script.Exec(
-		context.Background(),
-		s.shard.client,
-		[]string{string(streamKey), string(historyMetaKey), string(resultKey)},
-		[]string{
-			convert.BytesToString(byteMessage),
-			strconv.Itoa(size),
-			strconv.Itoa(int(opts.HistoryTTL.Seconds())),
-			publishChannelStr,
-			strconv.Itoa(historyMetaTTLSeconds),
-			epoch.Generate(),
-			publishCommand,
-			resultExpire,
-			useDelta,
-			version,
-			versionEpoch,
-		},
-	).ToArray()
+	addArgs := []string{
+		convert.BytesToString(byteMessage),
+		strconv.Itoa(size),
+		strconv.Itoa(int(opts.HistoryTTL.Seconds())),
+		publishChannelStr,
+		strconv.Itoa(historyMetaTTLSeconds),
+		epoch.Generate(),
+		publishCommand,
+		resultExpire,
+		useDelta,
+		version,
+		versionEpoch,
+	}
+	var replies []rueidis.RedisMessage
+	if b.config.UseLists {
+		replies, err = b.addHistoryListScript.Exec(context.Background(), s.shard.client,
+			[]string{string(streamKey), string(historyMetaKey), string(resultKey)}, addArgs).ToArray()
+	} else {
+		replies, err = b.execLineageScript(context.Background(), s.shard, b.addHistoryStreamScript,
+			[]string{string(streamKey), string(historyMetaKey), string(resultKey), s.shard.lineage.tokenKey(string(historyMetaKey))},
+			addArgs).ToArray()
+	}
 	if err != nil {
 		return PublishResult{}, err
 	}
@@ -1767,7 +1784,9 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOption
 
 	historyMetaTTLSeconds := int(historyMetaTTL.Seconds())
 
-	replies, err := b.historyStreamScript.Exec(context.Background(), s.client, []string{string(historyKey), string(historyMetaKey)}, []string{includePubs, strconv.FormatUint(offset, 10), strconv.Itoa(limit), reverse, strconv.Itoa(historyMetaTTLSeconds), epoch.Generate()}).ToArray()
+	replies, err := b.execLineageScript(context.Background(), s, b.historyStreamScript,
+		[]string{string(historyKey), string(historyMetaKey), s.lineage.tokenKey(string(historyMetaKey))},
+		[]string{includePubs, strconv.FormatUint(offset, 10), strconv.Itoa(limit), reverse, strconv.Itoa(historyMetaTTLSeconds), epoch.Generate()}).ToArray()
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}
@@ -2142,4 +2161,24 @@ func parseDeltaPush(input string) (deltaPublicationPush, error) {
 		PayloadLength:     payloadLength,
 		Payload:           payload,
 	}, nil
+}
+
+// execLineageScript runs a meta script in the lineage mode of the shard: gated
+// with EVALSHA on Redis 7+ and Valkey, otherwise as a plain script.
+func (b *RedisBroker) execLineageScript(ctx context.Context, s *RedisShard, ls *lineageScript, keys, args []string) rueidis.RedisResult {
+	mode, err := s.lineage.mode(ctx, b.config.UseInfoCommandForLineage)
+	if err != nil {
+		return rueidis.NewErrorResult(err)
+	}
+	if mode == lineageGate {
+		return s.lineage.exec(ctx, ls, keys, args)
+	}
+	var resp rueidis.RedisResult
+	if mode == lineageInfo {
+		resp = ls.info.Exec(ctx, s.client, keys, args)
+	} else {
+		resp = ls.none.Exec(ctx, s.client, keys, args)
+	}
+	s.noteError(resp.Error())
+	return resp
 }

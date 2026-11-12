@@ -192,6 +192,7 @@ func (m *RedisPresenceManager) addPresence(s *RedisShard, ch string, uid string,
 		return err
 	}
 	resp := m.addPresenceScript.Exec(context.Background(), s.client, keys, args)
+	s.noteError(resp.Error())
 	if rueidis.IsRedisNil(resp.Error()) {
 		return nil
 	}
@@ -225,6 +226,7 @@ func (m *RedisPresenceManager) removePresence(s *RedisShard, ch string, clientID
 		return err
 	}
 	resp := m.remPresenceScript.Exec(context.Background(), s.client, keys, args)
+	s.noteError(resp.Error())
 	if rueidis.IsRedisNil(resp.Error()) {
 		return nil
 	}

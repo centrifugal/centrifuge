@@ -21,6 +21,7 @@ Publishing format (via PUBLISH/SPUBLISH):
 -- KEYS[6] = state expire zset key (optional, empty '' to disable)
 -- KEYS[7] = state meta key (optional, empty '' to disable)
 -- KEYS[8] = cleanup registration zset key (optional, empty '' to disable) - for scheduling cleanup
+-- KEYS[9] = lineage token key
 
 -- ==== ARGV ====
 -- ARGV[1]  = message_key (Key for state field - Client ID for presence, state key for keyed state)
@@ -60,6 +61,7 @@ local state_order_key = KEYS[5]
 local state_expire_key = KEYS[6]
 local state_meta_key = KEYS[7]
 local cleanup_registration_key = KEYS[8]
+local token_key = KEYS[9]
 
 -- Local variables from ARGV
 local message_key = ARGV[1]
@@ -182,10 +184,12 @@ local current_epoch = "0"
 local top_offset = 0
 
 if meta_key ~= '' then
-    current_epoch = redis.call("hget", meta_key, "e")
+    local token = lineage_token(token_key)
+    local dropped
+    current_epoch, dropped = lineage_map_meta(meta_key, stream_key, token)
     if not current_epoch then
         current_epoch = new_epoch_if_empty
-        redis.call("hset", meta_key, "e", current_epoch)
+        lineage_map_create(meta_key, state_meta_key, current_epoch, token, dropped)
     end
 
     -- ==== Step 2: Epoch change check for state (moved here for version check correctness) ====

@@ -19,6 +19,7 @@ Returns: { removed_count, final_offset_string, epoch }
 -- KEYS[5] = cleanup registration zset key (for scheduling)
 -- KEYS[6] = state order zset key (always passed, ZREM is no-op if key doesn't exist)
 -- KEYS[7] = state meta key (for per-key version cleanup)
+-- KEYS[8] = lineage token key
 
 -- ==== ARGV ====
 -- ARGV[1]  = num_entries (number of entries to process)
@@ -39,6 +40,7 @@ local meta_key = KEYS[4]
 local cleanup_registration_key = KEYS[5]
 local state_order_key = KEYS[6]
 local state_meta_key = KEYS[7]
+local token_key = KEYS[8]
 
 local num_entries = tonumber(ARGV[1])
 local channel = ARGV[2]
@@ -71,10 +73,12 @@ local current_epoch
 local top_offset = 0
 
 if not streamless then
-    current_epoch = redis.call("hget", meta_key, "e")
+    local token = lineage_token(token_key)
+    local dropped
+    current_epoch, dropped = lineage_map_meta(meta_key, stream_key, token)
     if not current_epoch then
         current_epoch = new_epoch_if_empty
-        redis.call("hset", meta_key, "e", current_epoch)
+        lineage_map_create(meta_key, state_meta_key, current_epoch, token, dropped)
     end
 else
     current_epoch = new_epoch_if_empty

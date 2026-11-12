@@ -106,14 +106,14 @@ type RedisMapBroker struct {
 	// after construction (shared with the package-level precomputed table).
 	partitionTags []string
 
-	addScript           *rueidis.Lua
-	readOrderedScript   *rueidis.Lua
-	readUnorderedScript *rueidis.Lua
-	readStreamScript    *rueidis.Lua
-	readMetaScript      *rueidis.Lua
+	addScript           *lineageScript
+	readOrderedScript   *lineageScript
+	readUnorderedScript *lineageScript
+	readStreamScript    *lineageScript
+	readMetaScript      *lineageScript
 	presenceStatsScript *rueidis.Lua
 	findExpiredScript   *rueidis.Lua
-	batchRemoveScript   *rueidis.Lua
+	batchRemoveScript   *lineageScript
 
 	closeCh       chan struct{}
 	closeOnce     sync.Once
@@ -135,6 +135,13 @@ type RedisMapBrokerConfig struct {
 	// LoadSHA1 enables loading SHA1 from Redis via SCRIPT LOAD instead of calculating
 	// it on the client side. This is useful for FIPS compliance.
 	LoadSHA1 bool
+	// UseInfoCommandForLineage makes meta scripts read the server's replication
+	// ID with INFO to see that a failover or a restart may have lost writes to
+	// a map: exact on every server, including Redis 6 and Dragonfly, at the cost
+	// of INFO in every meta script. INFO needs the @dangerous ACL category.
+	// Without it the broker uses the script cache of Redis 7+ and Valkey, which
+	// needs no extra permissions (no detection on Redis 6 and Dragonfly).
+	UseInfoCommandForLineage bool
 	// IdempotentResultTTL is a time-to-live for idempotent result.
 	IdempotentResultTTL time.Duration
 	// SubscribeOnReplica allows subscribing on replica Redis nodes.
@@ -249,30 +256,15 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 	}
 
 	e := &RedisMapBroker{
-		node:          n,
-		conf:          conf,
-		shards:        shardWrappers,
-		partitionTags: partitionTags,
-		addScript: rueidis.NewLuaScript(
-			brokerStatePublishScriptSource,
-			rueidis.WithLoadSHA1(conf.LoadSHA1),
-		),
-		readOrderedScript: rueidis.NewLuaScript(
-			brokerStateReadOrderedScriptSource,
-			rueidis.WithLoadSHA1(conf.LoadSHA1),
-		),
-		readUnorderedScript: rueidis.NewLuaScript(
-			brokerStateReadUnorderedScriptSource,
-			rueidis.WithLoadSHA1(conf.LoadSHA1),
-		),
-		readStreamScript: rueidis.NewLuaScript(
-			brokerStateReadStreamScriptSource,
-			rueidis.WithLoadSHA1(conf.LoadSHA1),
-		),
-		readMetaScript: rueidis.NewLuaScript(
-			brokerStateReadMetaScriptSource,
-			rueidis.WithLoadSHA1(conf.LoadSHA1),
-		),
+		node:                n,
+		conf:                conf,
+		shards:              shardWrappers,
+		partitionTags:       partitionTags,
+		addScript:           newLineageScript("map_add", lineageMapHelpers+brokerStatePublishScriptSource, conf.LoadSHA1),
+		readOrderedScript:   newLineageScript("map_read_ordered", lineageMapHelpers+brokerStateReadOrderedScriptSource, conf.LoadSHA1),
+		readUnorderedScript: newLineageScript("map_read_unordered", lineageMapHelpers+brokerStateReadUnorderedScriptSource, conf.LoadSHA1),
+		readStreamScript:    newLineageScript("map_read_stream", lineageMapHelpers+brokerStateReadStreamScriptSource, conf.LoadSHA1),
+		readMetaScript:      newLineageScript("map_read_meta", lineageMapHelpers+brokerStateReadMetaScriptSource, conf.LoadSHA1),
 		presenceStatsScript: rueidis.NewLuaScript(
 			brokerStateStatsScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
@@ -281,11 +273,14 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 			brokerStateFindExpiredScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
 		),
-		batchRemoveScript: rueidis.NewLuaScript(
-			brokerStateBatchRemoveScriptSource,
-			rueidis.WithLoadSHA1(conf.LoadSHA1),
-		),
-		closeCh: make(chan struct{}),
+		batchRemoveScript: newLineageScript("map_batch_remove", lineageMapHelpers+brokerStateBatchRemoveScriptSource, conf.LoadSHA1),
+		closeCh:           make(chan struct{}),
+	}
+	for _, sw := range e.shards {
+		for _, ls := range []*lineageScript{e.addScript, e.readOrderedScript, e.readUnorderedScript, e.readStreamScript, e.readMetaScript, e.batchRemoveScript} {
+			sw.shard.lineage.register(ls, conf.LoadSHA1)
+		}
+		sw.shard.lineage.setLogger(n)
 	}
 	e.shardChannel = conf.Prefix + redisPubSubShardChannelSuffix
 	e.messagePrefix = conf.Prefix + redisClientChannelPrefix
@@ -731,10 +726,10 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		versionEpochField = "ve:" + key
 	}
 
-	replies, err := e.addScript.Exec(ctx, shardClient,
+	replies, err := e.execLineage(ctx, s.shard, e.addScript,
 		[]string{
 			streamKey, metaKey, resultKey, stateHashKey, stateOrderKey, stateExpireKey,
-			stateMetaKey, cleanupRegKey,
+			stateMetaKey, cleanupRegKey, s.shard.lineage.tokenKey(e.metaKey(s.shard, ch)),
 		},
 		[]string{
 			key,                                // message_key
@@ -775,7 +770,6 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 // Remove removes a key from keyed state state.
 func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapUpdateResult, error) {
 	s := e.getShard(ch)
-	shardClient := s.shard.client
 
 	// Resolve channel options once for this operation.
 	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
@@ -900,7 +894,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 		versionEpochField = "ve:" + key
 	}
 
-	replies, err := e.addScript.Exec(ctx, shardClient,
+	replies, err := e.execLineage(ctx, s.shard, e.addScript,
 		[]string{
 			streamKey, metaKey, resultKey,
 			stateHashKey,
@@ -908,6 +902,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 			stateExpireKey,
 			stateMetaKey,
 			cleanupRegKey,
+			s.shard.lineage.tokenKey(e.metaKey(s.shard, ch)),
 		},
 		[]string{
 			key,                             // message_key
@@ -1097,7 +1092,6 @@ func (e *RedisMapBroker) readSingleKeyWithOpts(ctx context.Context, ch string, o
 
 func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts MapReadStateOptions, chOpts MapChannelOptions) (MapStateResult, error) {
 	s := e.getShard(ch)
-	shardClient := s.shard.client
 
 	stateTTL := "0"
 	if chOpts.MetaTTL > 0 {
@@ -1122,12 +1116,14 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 		luaLimit = 0
 	}
 
-	replies, err := e.readUnorderedScript.Exec(ctx, shardClient,
+	replies, err := e.execLineage(ctx, s.shard, e.readUnorderedScript,
 		[]string{
 			e.stateHashKey(s.shard, ch),
 			e.stateExpireKey(s.shard, ch),
 			e.metaKey(s.shard, ch),
 			e.stateMetaKey(s.shard, ch),
+			s.shard.lineage.tokenKey(e.metaKey(s.shard, ch)),
+			e.streamKey(s.shard, ch),
 		},
 		[]string{
 			cursor,
@@ -1347,7 +1343,6 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 // Cursor format: "score\x00key" to ensure no entries are skipped during concurrent modifications.
 func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts MapReadStateOptions, chOpts MapChannelOptions) (MapStateResult, error) {
 	s := e.getShard(ch)
-	shardClient := s.shard.client
 
 	stateTTL := "0"
 	if chOpts.MetaTTL > 0 {
@@ -1377,13 +1372,15 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 		ascFlag = "1"
 	}
 
-	replies, err := e.readOrderedScript.Exec(ctx, shardClient,
+	replies, err := e.execLineage(ctx, s.shard, e.readOrderedScript,
 		[]string{
 			e.stateHashKey(s.shard, ch),
 			e.stateOrderKey(s.shard, ch),
 			e.stateExpireKey(s.shard, ch),
 			e.metaKey(s.shard, ch),
 			e.stateMetaKey(s.shard, ch),
+			s.shard.lineage.tokenKey(e.metaKey(s.shard, ch)),
+			e.streamKey(s.shard, ch),
 		},
 		[]string{
 			strconv.Itoa(luaLimit), // ARGV[1] = limit
@@ -1982,8 +1979,8 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 		includePubsStr = "1"
 	}
 
-	replies, err := e.readStreamScript.Exec(ctx, s.shard.client,
-		[]string{e.streamKey(s.shard, ch), e.metaKey(s.shard, ch)},
+	replies, err := e.execLineage(ctx, s.shard, e.readStreamScript,
+		[]string{e.streamKey(s.shard, ch), e.metaKey(s.shard, ch), e.stateMetaKey(s.shard, ch), s.shard.lineage.tokenKey(e.metaKey(s.shard, ch))},
 		[]string{
 			includePubsStr,
 			offset,
@@ -2137,8 +2134,8 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 	}
 
 	// 2. Call 1: Get metadata using new simpler Lua script
-	metaReplies, err := e.readMetaScript.Exec(ctx, s.shard.client,
-		[]string{e.metaKey(s.shard, ch)},
+	metaReplies, err := e.execLineage(ctx, s.shard, e.readMetaScript,
+		[]string{e.metaKey(s.shard, ch), e.streamKey(s.shard, ch), e.stateMetaKey(s.shard, ch), s.shard.lineage.tokenKey(e.metaKey(s.shard, ch))},
 		[]string{metaExpire, e.node.ID()},
 	).ToArray()
 	if err != nil {
@@ -2800,15 +2797,16 @@ func (e *RedisMapBroker) batchRemoveExpired(ctx context.Context, shard *RedisSha
 		argv = append(argv, r.key, convert.BytesToString(r.payload), r.expireScore)
 	}
 
-	result, err := e.batchRemoveScript.Exec(ctx, shard.client,
+	result, err := e.execLineage(ctx, shard, e.batchRemoveScript,
 		[]string{
-			e.stateHashKey(shard, ch),   // KEYS[1]
-			e.stateExpireKey(shard, ch), // KEYS[2]
-			e.streamKey(shard, ch),      // KEYS[3]
-			e.metaKey(shard, ch),        // KEYS[4]
-			cleanupKey,                  // KEYS[5]
-			e.stateOrderKey(shard, ch),  // KEYS[6]
-			e.stateMetaKey(shard, ch),   // KEYS[7]
+			e.stateHashKey(shard, ch),                    // KEYS[1]
+			e.stateExpireKey(shard, ch),                  // KEYS[2]
+			e.streamKey(shard, ch),                       // KEYS[3]
+			e.metaKey(shard, ch),                         // KEYS[4]
+			cleanupKey,                                   // KEYS[5]
+			e.stateOrderKey(shard, ch),                   // KEYS[6]
+			e.stateMetaKey(shard, ch),                    // KEYS[7]
+			shard.lineage.tokenKey(e.metaKey(shard, ch)), // KEYS[8]
 		},
 		argv,
 	).ToArray()
@@ -3391,4 +3389,24 @@ func parseAddScriptResult(replies []rueidis.RedisMessage) (MapUpdateResult, erro
 		}
 	}
 	return result, nil
+}
+
+// execLineage runs a map meta script in the lineage mode of the shard (see
+// RedisBroker.execLineageScript).
+func (e *RedisMapBroker) execLineage(ctx context.Context, s *RedisShard, ls *lineageScript, keys, args []string) rueidis.RedisResult {
+	mode, err := s.lineage.mode(ctx, e.conf.UseInfoCommandForLineage)
+	if err != nil {
+		return rueidis.NewErrorResult(err)
+	}
+	if mode == lineageGate {
+		return s.lineage.exec(ctx, ls, keys, args)
+	}
+	var resp rueidis.RedisResult
+	if mode == lineageInfo {
+		resp = ls.info.Exec(ctx, s.client, keys, args)
+	} else {
+		resp = ls.none.Exec(ctx, s.client, keys, args)
+	}
+	s.noteError(resp.Error())
+	return resp
 }

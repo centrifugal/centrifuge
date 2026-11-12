@@ -3,6 +3,8 @@
 -- KEYS[2] = state expire zset key (optional, empty '' to disable expiration cleanup)
 -- KEYS[3] = meta key
 -- KEYS[4] = state meta key
+-- KEYS[5] = lineage token key
+-- KEYS[6] = stream key (dropped with a meta of another lineage)
 -- ARGV[1] = cursor (use "0" to start, returned cursor for next page)
 -- ARGV[2] = limit (0 = return all via HGETALL, >0 = use HSCAN)
 -- ARGV[3] = now (current timestamp)
@@ -14,6 +16,8 @@ local hash_key = KEYS[1]
 local expire_key = KEYS[2]
 local meta_key = KEYS[3]
 local state_meta_key = KEYS[4]
+local token_key = KEYS[5]
+local stream_key = KEYS[6]
 
 local cursor = ARGV[1]
 local limit = tonumber(ARGV[2])
@@ -29,10 +33,12 @@ local offset = "0"
 if not streamless then
     -- Update meta TTL and get current offset
     if meta_key ~= '' then
-        epoch = redis.call("hget", meta_key, "e")
+        local token = lineage_token(token_key)
+        local dropped
+        epoch, dropped = lineage_map_meta(meta_key, stream_key, token)
         if not epoch then
             epoch = now_str
-            redis.call("hset", meta_key, "e", epoch)
+            lineage_map_create(meta_key, state_meta_key, epoch, token, dropped)
         end
 
         offset = redis.call("hget", meta_key, "s")

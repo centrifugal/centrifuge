@@ -11,11 +11,18 @@
 -- it and a failure in between leaves a result claiming something nobody
 -- received; remember it later and a retry carrying the same idempotency key
 -- cannot tell it already happened, and writes it a second time.
+--
+-- lineage_token(token_key), defined by the prelude the Go side prepends, is the
+-- lineage token of this server's data ("" when lineage detection is off). A
+-- meta written under another token may be missing writes the server lost (a
+-- failover to a replica that missed them, a restart from disk): it is dropped
+-- with its stream, so the publication starts a new epoch. A meta without a
+-- token (written before lineage detection) is adopted.
 local function add_history(
     stream_key, meta_key, result_key,
     message_payload, stream_size, stream_ttl, channel, meta_expire,
     new_epoch_if_empty, publish_command, result_key_expire, use_delta,
-    version, version_epoch
+    version, version_epoch, token_key
 )
     if result_key_expire ~= '' then
         local cached_result = redis.call("hmget", result_key, "e", "s")
@@ -25,10 +32,24 @@ local function add_history(
         end
     end
 
-    local current_epoch = redis.call("hget", meta_key, "e")
+    local token = lineage_token(token_key)
+    local meta_now = redis.call("hmget", meta_key, "e", "i")
+    local current_epoch = meta_now[1]
+    if token ~= "" and current_epoch ~= false and meta_now[2] ~= token then
+        if meta_now[2] == false then
+            redis.call("hset", meta_key, "i", token)
+        else
+            redis.call("del", meta_key, stream_key)
+            current_epoch = false
+        end
+    end
     if current_epoch == false then
         current_epoch = new_epoch_if_empty
-        redis.call("hset", meta_key, "e", current_epoch)
+        if token ~= "" then
+            redis.call("hset", meta_key, "e", current_epoch, "i", token)
+        else
+            redis.call("hset", meta_key, "e", current_epoch)
+        end
     end
 
     if version ~= "0" then
