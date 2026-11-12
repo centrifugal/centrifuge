@@ -480,6 +480,14 @@ type redisLineage struct {
 	// not counting), see counting.
 	countingSince atomic.Int64
 
+	// counterRank is the LineageWriteCounter of the brokers on the shard (see
+	// register); counterSet once one registered.
+	counterRank int
+	counterSet  bool
+	// replicaScriptsWarned: the warning that the server copies scripts to
+	// replicas was logged.
+	replicaScriptsWarned atomic.Bool
+
 	probeOnce sync.Once
 	stats     lineageStats
 
@@ -592,9 +600,15 @@ func (l *redisLineage) observed(slots []int, tokens []string) []uint64 {
 
 // register adds a gated script loaded whenever the gate opens. loadSHA1 is the
 // broker's FIPS setting.
-func (l *redisLineage) register(s *lineageScript, loadSHA1, selective bool) {
+func (l *redisLineage) register(s *lineageScript, loadSHA1, selective bool, counter LineageWriteCounter) {
 	l.scriptsMu.Lock()
 	defer l.scriptsMu.Unlock()
+	// Brokers on one shard share its lineage: "on" wins, "off" only if every
+	// broker says so.
+	if r := counter.rank(); !l.counterSet || r > l.counterRank {
+		l.counterRank = r
+	}
+	l.counterSet = true
 	if loadSHA1 {
 		l.loadSHA1 = true
 	}
@@ -720,7 +734,10 @@ func (l *redisLineage) probeTwin(ctx context.Context) {
 	if l.twinProbed {
 		return
 	}
-	if l.shard.isCluster || l.shard.isSentinel {
+	l.scriptsMu.Lock()
+	rank := l.counterRank
+	l.scriptsMu.Unlock()
+	if rank == lineageCounterOffRank || (rank == lineageCounterAutoRank && (l.shard.isCluster || l.shard.isSentinel)) {
 		l.twinProbed = true
 		l.twin.Store(false)
 		return
@@ -737,6 +754,99 @@ func (l *redisLineage) probeTwin(ctx context.Context) {
 	l.twinProbed = true
 	l.twin.Store(err == nil && !l.twinDisabledForTest)
 }
+
+// LineageWriteCounter is the mode of the local twin of the lineage write
+// counter: see RedisBrokerConfig.LineageWriteCounter.
+type LineageWriteCounter string
+
+const (
+	// LineageWriteCounterAuto: on shards with one address only (also "").
+	LineageWriteCounterAuto LineageWriteCounter = "auto"
+	// LineageWriteCounterOn: on every shard.
+	LineageWriteCounterOn LineageWriteCounter = "on"
+	// LineageWriteCounterOff: on no shard.
+	LineageWriteCounterOff LineageWriteCounter = "off"
+)
+
+const (
+	lineageCounterOffRank = iota
+	lineageCounterAutoRank
+	lineageCounterOnRank
+)
+
+func (c LineageWriteCounter) rank() int {
+	switch c {
+	case LineageWriteCounterOn:
+		return lineageCounterOnRank
+	case LineageWriteCounterOff:
+		return lineageCounterOffRank
+	default:
+		return lineageCounterAutoRank
+	}
+}
+
+func (c LineageWriteCounter) validate() error {
+	switch c {
+	case "", LineageWriteCounterAuto, LineageWriteCounterOn, LineageWriteCounterOff:
+		return nil
+	}
+	return fmt.Errorf("unknown LineageWriteCounter %q: use auto, on or off", string(c))
+}
+
+// checkReplicaScripts runs some seconds after the gate loaded the scripts of
+// a new token on a primary: a replica holding that token's marker got it by
+// copying - the server copies scripts to replicas, and a promoted replica
+// would look like the old primary. A replica holding older tokens' scripts is
+// normal (a demoted primary). Without the write counter's twin a failover may
+// then go unnoticed: say so loudly.
+func (l *redisLineage) checkReplicaScripts(token string) {
+	if l.twinOn() || l.replicaScriptsWarned.Load() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var replicas []rueidis.Client
+	if l.shard.isCluster {
+		nodes, err := l.shard.client.Do(ctx, l.shard.client.B().ClusterNodes().Build()).ToString()
+		if err != nil {
+			return
+		}
+		clients := l.shard.client.Nodes()
+		for _, n := range lineageParseClusterNodes(nodes) {
+			if n.err == nil && !n.failed && !n.primary {
+				if nc, ok := clients[n.addr]; ok {
+					replicas = append(replicas, nc)
+				}
+			}
+		}
+	} else if l.shard.replicaClient != nil {
+		replicas = append(replicas, l.shard.replicaClient)
+	}
+	for _, c := range replicas {
+		sha, err := l.marker(ctx, c, token)
+		if err != nil {
+			return
+		}
+		holds := false
+		_ = c.Dedicated(func(dc rueidis.DedicatedClient) error {
+			hello, err := dc.Do(ctx, dc.B().Hello().Build()).AsMap()
+			if err != nil || parseHelloReply(helloFields(hello)).primary {
+				return err
+			}
+			res, err := dc.Do(ctx, dc.B().ScriptExists().Sha1(sha).Build()).AsIntSlice()
+			holds = err == nil && len(res) == 1 && res[0] == 1
+			return err
+		})
+		if holds && l.replicaScriptsWarned.CompareAndSwap(false, true) {
+			l.log(LogLevelError, "redis lineage: a replica holds scripts loaded only on its primary - this server copies scripts to replicas, so a failover may go unnoticed; set LineageWriteCounter to on", nil)
+			return
+		}
+	}
+}
+
+// replicaScriptsCheckDelay is how long after loading a new token's scripts
+// replicas are checked for them (see checkReplicaScripts).
+var replicaScriptsCheckDelay = 3 * time.Second
 
 // mode returns the lineage mode for a broker on this shard.
 func (l *redisLineage) mode(ctx context.Context, useInfo bool) (lineageMode, error) {
@@ -1157,6 +1267,7 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 	l.tokensMu.Unlock()
 
 	if rotated {
+		time.AfterFunc(replicaScriptsCheckDelay, func() { l.checkReplicaScripts(newToken) })
 		l.stats.mu.Lock()
 		l.stats.rotations++
 		l.stats.keptSlots += kept

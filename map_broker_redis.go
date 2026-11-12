@@ -149,10 +149,21 @@ type RedisMapBrokerConfig struct {
 	// a per-slot counter, which replies and PUB/SUB payloads carry, and the node
 	// opening the gate polls every node for the newest write it observed; if any
 	// node doesn't answer, everything resets as without this option. Only with
-	// the script-cache gate (not with UseInfoCommandForLineage). Every node must
-	// run a version that knows the option before it's turned on: older nodes
-	// can't read the payloads.
+	// the script-cache gate (not with UseInfoCommandForLineage). Writes are
+	// counted only while every node runs a version that reads the payloads, so
+	// the option may be on during a rolling upgrade (until then everything
+	// resets).
 	ResyncOnlyLostSlots bool
+	// LineageWriteCounter controls the local twin of the lineage write counter:
+	// every write also counts on the server itself, without replication, so a
+	// server whose data was copied from another server is caught even when it
+	// holds our scripts (an old primary that took a full copy of the new one,
+	// behind one address). LineageWriteCounterAuto (the default) uses it on
+	// shards with one address, where servers can change unseen, and not with
+	// Sentinel and Redis Cluster, where the script cache suffices.
+	// LineageWriteCounterOn uses it everywhere; LineageWriteCounterOff nowhere.
+	// It adds some Redis CPU to every write.
+	LineageWriteCounter LineageWriteCounter
 	// IdempotentResultTTL is a time-to-live for idempotent result.
 	IdempotentResultTTL time.Duration
 	// SubscribeOnReplica allows subscribing on replica Redis nodes.
@@ -209,6 +220,9 @@ type RedisMapBrokerConfig struct {
 func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, error) {
 	if len(conf.Shards) == 0 {
 		return nil, errors.New("state broker: no shards provided")
+	}
+	if err := conf.LineageWriteCounter.validate(); err != nil {
+		return nil, fmt.Errorf("state broker: %w", err)
 	}
 
 	if conf.SubscribeOnReplica {
@@ -290,7 +304,7 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 	for _, sw := range e.shards {
 		sw.shard.ensureLineage()
 		for _, ls := range []*lineageScript{e.addScript, e.readOrderedScript, e.readUnorderedScript, e.readStreamScript, e.readMetaScript, e.batchRemoveScript} {
-			sw.shard.lineage.register(ls, conf.LoadSHA1, conf.ResyncOnlyLostSlots)
+			sw.shard.lineage.register(ls, conf.LoadSHA1, conf.ResyncOnlyLostSlots, conf.LineageWriteCounter)
 		}
 		sw.shard.lineage.setLogger(n)
 	}

@@ -270,16 +270,30 @@ type RedisBrokerConfig struct {
 	// a per-slot counter, which replies and PUB/SUB payloads carry, and the node
 	// opening the gate polls every node for the newest write it observed; if any
 	// node doesn't answer, everything resets as without this option. Only with
-	// the script-cache gate (not with UseInfoCommandForLineage). Every node must
-	// run a version that knows the option before it's turned on: older nodes
-	// can't read the payloads.
+	// the script-cache gate (not with UseInfoCommandForLineage). Writes are
+	// counted only while every node runs a version that reads the payloads, so
+	// the option may be on during a rolling upgrade (until then everything
+	// resets).
 	ResyncOnlyLostSlots bool
+	// LineageWriteCounter controls the local twin of the lineage write counter:
+	// every write also counts on the server itself, without replication, so a
+	// server whose data was copied from another server is caught even when it
+	// holds our scripts (an old primary that took a full copy of the new one,
+	// behind one address). LineageWriteCounterAuto (the default) uses it on
+	// shards with one address, where servers can change unseen, and not with
+	// Sentinel and Redis Cluster, where the script cache suffices.
+	// LineageWriteCounterOn uses it everywhere; LineageWriteCounterOff nowhere.
+	// It adds some Redis CPU to every write.
+	LineageWriteCounter LineageWriteCounter
 }
 
 // NewRedisBroker initializes Redis Broker.
 func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	if len(config.Shards) == 0 {
 		return nil, errors.New("broker: no Redis shards provided in configuration")
+	}
+	if err := config.LineageWriteCounter.validate(); err != nil {
+		return nil, fmt.Errorf("broker: %w", err)
 	}
 
 	if config.SubscribeOnReplica {
@@ -357,8 +371,8 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	for _, sw := range b.shards {
 		sw.shard.ensureLineage()
 		if !config.UseLists {
-			sw.shard.lineage.register(b.historyStreamScript, config.LoadSHA1, config.ResyncOnlyLostSlots)
-			sw.shard.lineage.register(b.addHistoryStreamScript, config.LoadSHA1, config.ResyncOnlyLostSlots)
+			sw.shard.lineage.register(b.historyStreamScript, config.LoadSHA1, config.ResyncOnlyLostSlots, config.LineageWriteCounter)
+			sw.shard.lineage.register(b.addHistoryStreamScript, config.LoadSHA1, config.ResyncOnlyLostSlots, config.LineageWriteCounter)
 		}
 		sw.shard.lineage.setLogger(n)
 	}

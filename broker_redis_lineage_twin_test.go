@@ -5,7 +5,9 @@ package centrifuge
 import (
 	"context"
 	"net"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +18,11 @@ import (
 // newTwinTestBroker is newLineageTestBroker with the twin of the write
 // counter switchable.
 func newTwinTestBroker(t *testing.T, tt lineageRedisTest, twinOff bool) *RedisBroker {
+	t.Helper()
+	return newTwinTestBrokerCounter(t, tt, twinOff, "")
+}
+
+func newTwinTestBrokerCounter(t *testing.T, tt lineageRedisTest, twinOff bool, counter LineageWriteCounter) *RedisBroker {
 	t.Helper()
 	node := testNode(t)
 	var conf RedisShardConfig
@@ -31,7 +38,7 @@ func newTwinTestBroker(t *testing.T, tt lineageRedisTest, twinOff bool) *RedisBr
 	s, err := NewRedisShard(node, conf)
 	require.NoError(t, err)
 	s.lineage.twinDisabledForTest = twinOff
-	b, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: getUniquePrefix(), Shards: []*RedisShard{s}})
+	b, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: getUniquePrefix(), Shards: []*RedisShard{s}, LineageWriteCounter: counter})
 	require.NoError(t, err)
 	node.SetBroker(b)
 	require.NoError(t, node.Run())
@@ -191,4 +198,88 @@ func TestRedisLineage_TwinControl(t *testing.T) {
 	require.NoError(t, s.client.Do(context.Background(), s.client.B().Hset().Key(twinKey(b, ch)).FieldValue().FieldValue("c", "7").FieldValue("l", "1").Build()).Error())
 	after := lineagePublish(t, b, ch, 1)
 	require.Equal(t, before.Epoch, after.Epoch)
+}
+
+// LineageWriteCounter: auto uses the twin with one address only, on
+// everywhere, off nowhere.
+func TestRedisLineage_WriteCounterOption(t *testing.T) {
+	for _, tt := range lineageRedisTests {
+		if !tt.Gate {
+			continue
+		}
+		for _, mode := range []LineageWriteCounter{"", LineageWriteCounterAuto, LineageWriteCounterOn, LineageWriteCounterOff} {
+			t.Run(tt.Name+"_"+string(mode), func(t *testing.T) {
+				b := newTwinTestBrokerCounter(t, tt, false, mode)
+				lineagePublish(t, b, "twin_opt_"+randString(6), 1)
+				want := mode == LineageWriteCounterOn || (mode != LineageWriteCounterOff && !tt.UseCluster)
+				require.Equal(t, want, b.shards[0].shard.lineage.twinOn())
+			})
+		}
+	}
+}
+
+func TestRedisLineage_WriteCounterOptionInvalid(t *testing.T) {
+	node := testNode(t)
+	s, err := NewRedisShard(node, testSingleRedisConf(6379))
+	require.NoError(t, err)
+	_, err = NewRedisBroker(node, RedisBrokerConfig{Shards: []*RedisShard{s}, LineageWriteCounter: "yes"})
+	require.Error(t, err)
+	_, err = NewRedisMapBroker(node, RedisMapBrokerConfig{Shards: []*RedisShard{s}, LineageWriteCounter: "yes"})
+	require.Error(t, err)
+}
+
+// A replica holding the scripts of a token just created on its primary got
+// them by copying: a loud warning, since a failover may go unnoticed without
+// the twin. Needs Redis Cluster with replicas
+// (CENTRIFUGE_REDIS_CLUSTER_REPLICAS_ADDRS); the copying is emulated by
+// loading the marker on the replicas.
+func TestRedisLineage_ReplicaHoldingNewScriptsWarns(t *testing.T) {
+	v := os.Getenv("CENTRIFUGE_REDIS_CLUSTER_REPLICAS_ADDRS")
+	if v == "" {
+		t.Skip("CENTRIFUGE_REDIS_CLUSTER_REPLICAS_ADDRS not set")
+	}
+	var mu sync.Mutex
+	var warned bool
+	node, err := New(Config{LogLevel: LogLevelError, LogHandler: func(e LogEntry) {
+		if strings.Contains(e.Message, "copies scripts to replicas") {
+			mu.Lock()
+			warned = true
+			mu.Unlock()
+		}
+	}})
+	require.NoError(t, err)
+	s, err := NewRedisShard(node, RedisShardConfig{ClusterAddresses: strings.Split(v, ","), IOTimeout: 5 * time.Second})
+	require.NoError(t, err)
+	b, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: getUniquePrefix(), Shards: []*RedisShard{s}})
+	require.NoError(t, err)
+	node.SetBroker(b)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()); stopRedisBroker(b) })
+
+	ch := "replica_scripts_" + randString(6)
+	lineagePublish(t, b, ch, 1)
+	token := s.lineage.token(s.lineage.slotIndex(string(b.historyMetaKey(s, ch))))
+	require.NotEmpty(t, token)
+
+	// A demoted primary holding older tokens' scripts is normal: no warning.
+	ctx := context.Background()
+	s.lineage.checkReplicaScripts("gnot-loaded-anywhere")
+	mu.Lock()
+	require.False(t, warned)
+	mu.Unlock()
+
+	nodes, err := s.client.Do(ctx, s.client.B().ClusterNodes().Build()).ToString()
+	require.NoError(t, err)
+	clients := s.client.Nodes()
+	for _, n := range lineageParseClusterNodes(nodes) {
+		if n.err == nil && !n.primary {
+			if c, ok := clients[n.addr]; ok {
+				require.NoError(t, c.Do(ctx, c.B().ScriptLoad().Script(lineageMarkerSource(token)).Build()).Error())
+			}
+		}
+	}
+	s.lineage.checkReplicaScripts(token)
+	mu.Lock()
+	defer mu.Unlock()
+	require.True(t, warned)
 }
