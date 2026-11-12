@@ -33,11 +33,11 @@ local function add_history(
     end
 
     local token, ancestor = lineage_token(token_key)
-    local meta_now = redis.call("hmget", meta_key, "e", "i")
+    local meta_now = redis.call("hmget", meta_key, "e", LINEAGE_FIELD)
     local current_epoch = meta_now[1]
     if token ~= "" and current_epoch ~= false and meta_now[2] ~= token then
         if meta_now[2] == false or meta_now[2] == ancestor then
-            redis.call("hset", meta_key, "i", token)
+            redis.call("hset", meta_key, LINEAGE_FIELD, token)
         else
             redis.call("del", meta_key, stream_key)
             current_epoch = false
@@ -46,7 +46,7 @@ local function add_history(
     if current_epoch == false then
         current_epoch = new_epoch_if_empty
         if token ~= "" then
-            redis.call("hset", meta_key, "e", current_epoch, "i", token)
+            redis.call("hset", meta_key, "e", current_epoch, LINEAGE_FIELD, token)
         else
             redis.call("hset", meta_key, "e", current_epoch)
         end

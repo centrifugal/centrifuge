@@ -28,30 +28,36 @@ import (
 // token of the data it was written in, and a meta script that finds a meta
 // written under another token starts a new epoch.
 //
-// The token is a normal key (one per Redis server outside Redis Cluster, one
-// per hash slot in Redis Cluster). It changes when a server's data may have lost
-// writes, found by the script-cache gate. A server's script cache is never
-// persisted, and on Redis 7+ and Valkey it never reaches replicas, so a
-// restarted or promoted replica has none of our scripts. Meta scripts run only
-// with EVALSHA, and the scripts and the gate's marker script are specific to a
-// token: a node runs the scripts of the token it knows, and a script whose token
-// isn't the server's fails with a LINEAGE error. A NOSCRIPT reply opens the
-// gate, on one connection to the server: if the server is a primary and holds
-// the marker of its current token, its lineage is intact and the scripts are
-// loaded; otherwise the token of every slot the server serves is rotated first.
+// The token lives in the lineage key (one per Redis server outside Redis
+// Cluster, one per hash slot in Redis Cluster), with the tokens it replaced. It
+// changes when a server's data may have lost writes:
 //
-// A demoted primary keeps its script cache, through a resync too. Promoted again
-// while its data still holds the old token, it would run its old scripts on data
-// that may miss writes. Every Redis server's lineage is therefore also probed
-// periodically: a demoted server the node can see that holds our scripts has
-// its script cache flushed, and a server behind a connection that changed is
-// rotated (see redisLineage.probe).
+//   - The script cache. It is never persisted, and on Redis 7+ and Valkey it
+//     never reaches replicas, so a restarted or promoted replica has none of
+//     our scripts. Meta scripts run only with EVALSHA, and they and the gate's
+//     marker script are specific to a token: a node runs the scripts of the
+//     token it knows, and a script whose token isn't the server's fails with a
+//     LINEAGE error. NOSCRIPT opens the gate, on one connection to the server:
+//     if the server is a primary and holds the marker of its token, its lineage
+//     is intact and the scripts load; otherwise the token of every slot the
+//     server serves rotates first.
+//   - Tokens left behind. A node never goes back to a token it saw replaced: a
+//     server presenting one is a copy that missed a rotation (a demoted primary
+//     that took a full copy of the new one, promoted back with our scripts
+//     still loaded). The lineage key lists the tokens its token replaced, so
+//     every node reading it learns them, and nodes pass the replaced tokens
+//     they know to each other with their node info, for a restarted node.
+//   - The idle probe: a node that made no call to a server for a second calls
+//     it, so a server promoted while no traffic reached it opens its gate (and
+//     rotates) before a failback could hide it.
+//   - Reused offsets: a subscriber seeing an offset a server already gave out
+//     (see offsetWatermarks) rotates the server's lineage.
 //
 // Redis 6 and Dragonfly send scripts to replicas, so the gate can't be used
-// there: no detection, as before. With UseInfoCommandForLineage the scripts
-// read master_replid with INFO on every server instead of using the gate: exact
-// (it changes on every restart and promotion), at the cost of INFO in every
-// meta script and the @dangerous ACL category.
+// there: no lineage, only the reused-offset check per channel. With
+// UseInfoCommandForLineage the scripts read master_replid with INFO on every
+// server instead: exact (it changes on every restart and promotion), at the
+// cost of INFO in every meta script and the @dangerous ACL category.
 
 type lineageMode int
 
@@ -81,99 +87,57 @@ const lineageGateLoadArg = "__centrifuge_lineage_load__"
 
 // lineageTokenKeyBase is the name of the lineage key (one per slot in Redis
 // Cluster), the same for every prefix: a lineage is a property of the server's
-// data. It is a hash: "t" the token value (see lineagePreludeGate), "c" the
-// write counter, "l" its local twin. One key for all three, so a gated script
-// reads them with one lookup, and an eviction removes them together.
+// data. It is a hash: "t" the token value ("token", or "token|ancestor" for a
+// slot migrated in, whose metas stamped with the ancestor are adopted), "p" the
+// tokens the token replaced, newest first, separated by spaces.
 const lineageTokenKeyBase = "centrifuge.lineage.state"
 
-// lineageErrPrefix starts the error a gated script returns when the token key
-// doesn't hold the token the script was made for: "LINEAGE <token>", with "-"
-// for no token.
+// lineagePredecessors is how many replaced tokens a lineage key keeps.
+const lineagePredecessors = 8
+
+// lineageErrPrefix starts the error a gated script returns when the lineage key
+// doesn't hold the token the script was made for: "LINEAGE t=<value>
+// p=<replaced tokens, comma-separated>". Parts are key=value, separated by
+// spaces; parts with other keys are ignored, so a later version can add some.
 const lineageErrPrefix = "LINEAGE "
 
-// lineageTwinErrPrefix starts the error a gated script returns when the
-// server's write counter and its local twin differ: its data came from another
-// server (see lineagePreludeGate). "LINEAGE_COPY <c> <l>".
-const lineageTwinErrPrefix = "LINEAGE_COPY "
+// The meta field holding a meta's lineage stamp, one per mode: each mode checks
+// only its own and adopts a meta without it, so switching modes (or nodes in
+// different modes during a rollout) resets nothing.
+const (
+	lineageStampGate = "i"
+	lineageStampInfo = "j"
+)
 
-// lineagePreludeGate is the prelude of a gated script made for token. The token
-// key holds "token" or, after a lineage break the gate proved lost nothing
-// observed (ResyncOnlyLostSlots), "token|ancestor|count": metas stamped with the
-// ancestor are adopted, not reset. lineage_token returns the token and the
-// ancestor.
-//
-// With count (ResyncOnlyLostSlots), every write bumps a per-slot write counter
-// (lineage_count) and every reply and PUB/SUB payload reporting an epoch adds
-// ";count;token" to it (lineage_obs), so that every node knows the newest write
-// it has observed: see redisLineage.observe.
-//
-// With twin, every write also bumps a local twin of that counter: field "c" of
-// the lineage key is replicated, field "l" is written with REPL_NONE, so never
-// sent to replicas or the AOF. A server that executed every
-// write in its data itself has c == l. A server whose data came from another
-// server - a promoted replica, an old primary that took a full copy of the new
-// one (a failback the script cache can't see), a restart from the AOF - has l
-// behind c or missing: every gated script then refuses with LINEAGE_COPY and
-// the gate rotates. Both fields live in one key, so an eviction removes both:
-// a fresh start, not a false lineage break.
-func lineagePreludeGate(token string, count, twin bool) string {
-	countLua := "false"
-	if count {
-		countLua = "true"
-	}
-	twinLua := "false"
-	if twin {
-		twinLua = "true"
-	}
+// lineagePreludeGate is the prelude of a gated script made for token.
+// lineage_token returns the token and the ancestor (see lineageTokenKeyBase).
+// lineage_count and lineage_obs are hooks of write observations, unused here.
+func lineagePreludeGate(token string) string {
 	return `
 local LINEAGE_TOKEN = "` + token + `"
-local LINEAGE_COUNT = ` + countLua + `
-local LINEAGE_TWIN = ` + twinLua + `
+local LINEAGE_FIELD = "` + lineageStampGate + `"
+local LINEAGE_COUNT = false
 local function lineage_token(key)
-    local m = redis.call("hmget", key, "t", "c", "l")
+    local m = redis.call("hmget", key, "t", "p")
     local value = m[1]
     local token, ancestor = value, nil
     if value then
         local bar = string.find(value, "|", 1, true)
         if bar then
             token = string.sub(value, 1, bar - 1)
-            local rest = string.sub(value, bar + 1)
-            local bar2 = string.find(rest, "|", 1, true)
-            if bar2 then
-                ancestor = string.sub(rest, 1, bar2 - 1)
-            else
-                ancestor = rest
-            end
+            ancestor = string.sub(value, bar + 1)
         end
     end
     if token ~= LINEAGE_TOKEN then
-        error({err = "` + lineageErrPrefix + `" .. (value or "-")})
-    end
-    if LINEAGE_TWIN and m[2] and m[2] ~= m[3] then
-        error({err = "` + lineageTwinErrPrefix + `" .. m[2] .. " " .. (m[3] or "-")})
+        error({err = "` + lineageErrPrefix + `t=" .. (value or "") .. " p=" .. string.gsub(m[2] or "", " ", ",")})
     end
     return token, ancestor
 end
 local function lineage_count(key)
-    if not LINEAGE_COUNT and not LINEAGE_TWIN then
-        return false
-    end
-    local count = redis.call("hincrby", key, "c", 1)
-    if LINEAGE_TWIN then
-        redis.set_repl(redis.REPL_NONE)
-        redis.call("hincrby", key, "l", 1)
-        redis.set_repl(redis.REPL_ALL)
-    end
-    if not LINEAGE_COUNT then
-        return false
-    end
-    return count
+    return false
 end
 local function lineage_obs(count)
-    if not LINEAGE_COUNT or not count then
-        return ""
-    end
-    return ";" .. count .. ";" .. LINEAGE_TOKEN
+    return ""
 end
 if #ARGV == 1 and ARGV[1] == "` + lineageGateLoadArg + `" then
     return 0
@@ -187,6 +151,7 @@ func lineageMarkerSource(token string) string {
 
 // lineagePreludeInfo defines lineage_token(key) from master_replid.
 const lineagePreludeInfo = `
+local LINEAGE_FIELD = "` + lineageStampInfo + `"
 local LINEAGE_COUNT = false
 local function lineage_token(key)
     local info = redis.call("info", "replication")
@@ -207,6 +172,7 @@ end
 // lineagePreludeNone defines lineage_token(key) as no token: nothing is
 // stamped or compared.
 const lineagePreludeNone = `
+local LINEAGE_FIELD = "` + lineageStampGate + `"
 local LINEAGE_COUNT = false
 local function lineage_token(key)
     return "", nil
@@ -219,72 +185,56 @@ local function lineage_obs(count)
 end
 `
 
-// lineageRotateSource sets every token key in ARGV[2..] to ARGV[1]. It declares
-// no keys so that it runs over the gate's connection in Redis Cluster; the
-// server refuses a key it doesn't serve.
-// The rotation is a compare-and-set: ARGV[1] is the token key of the gate's
+// lineageRotateBody sets the lineage keys in ARGV[3], ARGV[5], ... to the
+// values ARGV[4], ARGV[6], ...; each key's replaced token joins its list of
+// replaced tokens. It declares no keys so that it runs over the gate's
+// connection in Redis Cluster; the server refuses a key it doesn't serve.
+// The rotation is a compare-and-set: ARGV[1] is the lineage key of the gate's
 // slot and ARGV[2] the value the gate read there. If another node rotated in
-// between (it also found this server's marker missing), nothing is set and the
-// value is returned: the gate adopts that rotation instead of making a second
-// one, which would reset metas written under the first. ARGV[3] "1": the twin
-// of each slot's write counter is set to the counter - from now on the server's
-// own writes count (see lineagePreludeGate) - and the pairs start at ARGV[4].
-const lineageRotateSourceCluster = `#!lua flags=allow-cross-slot-keys
+// between, nothing is set and the value is returned: the gate adopts that
+// rotation instead of making a second one, which would reset metas written
+// under the first.
+const lineageRotateBody = `
 local current = redis.call("hget", ARGV[1], "t") or ""
 if current ~= ARGV[2] then
     return current
 end
-for i = 4, #ARGV, 2 do
-    redis.call("hset", ARGV[i], "t", ARGV[i + 1])
-    if ARGV[3] == "1" then
-        local c = redis.call("hget", ARGV[i], "c")
-        if c then
-            redis.set_repl(redis.REPL_NONE)
-            redis.call("hset", ARGV[i], "l", c)
-            redis.set_repl(redis.REPL_ALL)
+for i = 3, #ARGV, 2 do
+    local m = redis.call("hmget", ARGV[i], "t", "p")
+    local preds = m[2] or ""
+    if m[1] then
+        local old = m[1]
+        local bar = string.find(old, "|", 1, true)
+        if bar then
+            old = string.sub(old, 1, bar - 1)
+        end
+        if old ~= "" and old ~= ARGV[i + 1] then
+            local list = {old}
+            for t in string.gmatch(preds, "%S+") do
+                if #list >= ` + "8" + ` then
+                    break
+                end
+                if t ~= old then
+                    list[#list + 1] = t
+                end
+            end
+            preds = table.concat(list, " ")
         end
     end
+    redis.call("hset", ARGV[i], "t", ARGV[i + 1], "p", preds)
 end
 return false
 `
 
-const lineageRotateSource = `
-local current = redis.call("hget", ARGV[1], "t") or ""
-if current ~= ARGV[2] then
-    return current
-end
-for i = 4, #ARGV, 2 do
-    redis.call("hset", ARGV[i], "t", ARGV[i + 1])
-    if ARGV[3] == "1" then
-        local c = redis.call("hget", ARGV[i], "c")
-        if c then
-            redis.set_repl(redis.REPL_NONE)
-            redis.call("hset", ARGV[i], "l", c)
-            redis.set_repl(redis.REPL_ALL)
-        end
-    end
-end
-return false
-`
+const lineageRotateSourceCluster = "#!lua flags=allow-cross-slot-keys" + lineageRotateBody
+const lineageRotateSource = lineageRotateBody
 
-// lineageSlotsSource returns the token key's value and the write counter of
-// every token key in ARGV.
+// lineageSlotsSourceCluster returns the token value of every lineage key in
+// ARGV.
 const lineageSlotsSourceCluster = `#!lua flags=allow-cross-slot-keys
 local out = {}
 for i = 1, #ARGV do
-    local m = redis.call("hmget", ARGV[i], "t", "c")
-    out[#out + 1] = m[1] or ""
-    out[#out + 1] = m[2] or "0"
-end
-return out
-`
-
-const lineageSlotsSource = `
-local out = {}
-for i = 1, #ARGV do
-    local m = redis.call("hmget", ARGV[i], "t", "c")
-    out[#out + 1] = m[1] or ""
-    out[#out + 1] = m[2] or "0"
+    out[#out + 1] = redis.call("hget", ARGV[i], "t") or ""
 end
 return out
 `
@@ -292,6 +242,12 @@ return out
 // lineageSha1Source returns the SHA-1 of a script source, for FIPS mode where
 // it can't be computed here and SCRIPT LOAD would load the script.
 const lineageSha1Source = `return redis.sha1hex(ARGV[1])`
+
+// lineagePingBody is the probe's call: the gated prelude alone.
+const lineagePingBody = `
+lineage_token(KEYS[1])
+return 1
+`
 
 // lineageMapHelpers are the lineage helpers of the map broker scripts.
 //
@@ -307,12 +263,12 @@ local function lineage_map_meta(meta_key, stream_key, token, ancestor)
     if token == "" then
         return redis.call("hget", meta_key, "e"), false
     end
-    local m = redis.call("hmget", meta_key, "e", "i")
+    local m = redis.call("hmget", meta_key, "e", LINEAGE_FIELD)
     if m[1] == false or m[2] == token then
         return m[1], false
     end
     if m[2] == false or m[2] == ancestor then
-        redis.call("hset", meta_key, "i", token)
+        redis.call("hset", meta_key, LINEAGE_FIELD, token)
         return m[1], false
     end
     redis.call("del", meta_key)
@@ -322,26 +278,18 @@ local function lineage_map_meta(meta_key, stream_key, token, ancestor)
     return false, m[1]
 end
 
--- lineage_map_obs returns the observation suffix of a map meta's epoch.
+-- lineage_map_obs and lineage_map_count are hooks of write observations.
 local function lineage_map_obs(meta_key)
-    if not LINEAGE_COUNT then
-        return ""
-    end
-    return lineage_obs(redis.call("hget", meta_key, "w"))
+    return ""
 end
 
--- lineage_map_count bumps the write counter of a map write.
 local function lineage_map_count(meta_key, token_key)
-    local count = lineage_count(token_key)
-    if count then
-        redis.call("hset", meta_key, "w", count)
-    end
-    return lineage_obs(count)
+    return ""
 end
 
 local function lineage_map_create(meta_key, state_meta_key, epoch, token, dropped)
     if token ~= "" then
-        redis.call("hset", meta_key, "e", epoch, "i", token)
+        redis.call("hset", meta_key, "e", epoch, LINEAGE_FIELD, token)
     else
         redis.call("hset", meta_key, "e", epoch)
     end
@@ -374,8 +322,8 @@ func newLineageScript(name, body string, loadSHA1 bool) *lineageScript {
 	}
 }
 
-func (s *lineageScript) gatedSource(token string, count, twin bool) string {
-	return lineagePreludeGate(token, count, twin) + s.body
+func (s *lineageScript) gatedSource(token string) string {
+	return lineagePreludeGate(token) + s.body
 }
 
 func sha1Hex(src string) string {
@@ -438,55 +386,29 @@ type redisLineage struct {
 	infoProbed  bool
 	infoAllowed bool
 
+	modeMu sync.Mutex
+	gate   bool // the shard runs in gate mode (some broker asked for it)
+
 	openMu sync.Mutex
 
 	scriptsMu sync.Mutex
 	scripts   []*lineageScript // gated scripts, loaded whenever the gate opens
 	loadSHA1  bool
-	// selective: ResyncOnlyLostSlots - writes are counted, observations
-	// tracked, and a lineage break resets only the slots where an observed
-	// write is missing.
-	selective bool
 	node      *Node
-
-	obsMu sync.Mutex
-	// obs is the newest observed write per slot: its token and its count.
-	obs map[int]lineageObs
-	// adopted are slots kept through a lineage break: their ancestor token and
-	// the count at the break. A later observation of the ancestor beyond it is
-	// a write on the old server (a split brain): the slot is rotated.
-	adopted map[int]lineageObs
+	ping      *lineageScript
 
 	// tokens are the tokens this node runs the scripts of: one outside Redis
 	// Cluster, one per slot in Redis Cluster.
 	tokensMu sync.RWMutex
 	tokens   map[int]string
-	// known are the tokens this node has used, newest last: the markers a
-	// demoted server may still hold.
-	known []string
-	// identity of the server the gate last opened on: CLIENT INFO laddr outside
-	// Redis Cluster; in Redis Cluster the owner node ID of each slot.
-	identity string
-	owners   map[int]string
 
-	// twin: the local twin of the write counter is in use (see
-	// lineagePreludeGate); checked once, in gate mode, that scripts can use
-	// redis.set_repl.
-	twinMu     sync.Mutex
-	twinProbed bool
-	twin       atomic.Bool
+	// left are the tokens this node saw replaced (shared with the node's other
+	// shards: tokens are unique).
+	left *lineageLeftTokens
 
-	// countingSince is when this node started counting writes (UnixNano, 0:
-	// not counting), see counting.
-	countingSince atomic.Int64
-
-	// counterRank is the LineageWriteCounter of the brokers on the shard (see
-	// register); counterSet once one registered.
-	counterRank int
-	counterSet  bool
-	// replicaScriptsWarned: the warning that the server copies scripts to
-	// replicas was logged.
-	replicaScriptsWarned atomic.Bool
+	// lastCall is when this node last called the shard (UnixNano), for the
+	// idle probe.
+	lastCall atomic.Int64
 
 	probeOnce sync.Once
 	stats     lineageStats
@@ -495,125 +417,36 @@ type redisLineage struct {
 
 	// disabledForTest turns detection off (tests showing the behavior without it).
 	disabledForTest bool
-	// twinDisabledForTest turns the twin counter off (tests showing what the
-	// script cache alone detects).
-	twinDisabledForTest bool
+	// noProbeForTest turns the idle probe off.
+	noProbeForTest bool
 }
 
 type lineageStats struct {
-	mu         sync.Mutex
-	rotations  int
-	flushes    int
-	keptSlots  int
-	resetSlots int
+	mu        sync.Mutex
+	rotations int
+	// stale: rotations of a server presenting a token this node saw replaced.
+	stale int
+	// reused: rotations after a subscriber saw a reused offset.
+	reused int
 }
 
 func newRedisLineage(shard *RedisShard) *redisLineage {
-	return &redisLineage{
-		shard:   shard,
-		tokens:  make(map[int]string),
-		owners:  make(map[int]string),
-		obs:     make(map[int]lineageObs),
-		adopted: make(map[int]lineageObs),
+	l := &redisLineage{
+		shard:  shard,
+		tokens: make(map[int]string),
+		left:   newLineageLeftTokens(),
 	}
-}
-
-type lineageObs struct {
-	token string
-	count uint64
-}
-
-// splitObservation strips the observation suffix ";count;token" a counting
-// script adds to an epoch.
-func splitObservation(epoch string) (string, uint64, string, bool) {
-	semi := strings.IndexByte(epoch, ';')
-	if semi < 0 {
-		return epoch, 0, "", false
-	}
-	rest := epoch[semi+1:]
-	semi2 := strings.IndexByte(rest, ';')
-	if semi2 < 0 {
-		return epoch[:semi], 0, "", false
-	}
-	count, err := strconv.ParseUint(rest[:semi2], 10, 64)
-	if err != nil {
-		return epoch[:semi], 0, "", false
-	}
-	return epoch[:semi], count, rest[semi2+1:], true
-}
-
-// takeObservation records the observation an epoch from a reply or a PUB/SUB
-// payload carries, for the slot of key, and returns the epoch without it. It
-// must run before what was observed reaches anyone.
-func (l *redisLineage) takeObservation(key, epoch string) string {
-	plain, count, token, ok := splitObservation(epoch)
-	if !ok {
-		return plain
-	}
-	l.observe(l.slotIndex(key), token, count)
-	return plain
-}
-
-func (l *redisLineage) observe(slot int, token string, count uint64) {
-	l.obsMu.Lock()
-	o := l.obs[slot]
-	if o.token != token {
-		// Another lineage: the newest observation stands for the slot. Counts of
-		// different tokens don't compare (a lossy failover moves the counter
-		// back); an old token seen late only makes the next survey reset.
-		l.obs[slot] = lineageObs{token: token, count: count}
-	} else if count > o.count {
-		l.obs[slot] = lineageObs{token: token, count: count}
-	}
-	a := l.adopted[slot]
-	splitBrain := a.token != "" && a.token == token && count > a.count
-	if splitBrain {
-		delete(l.adopted, slot)
-	}
-	l.obsMu.Unlock()
-	if splitBrain {
-		l.log(LogLevelWarn, "redis lineage: a write on a server of the ancestor lineage after the break (split brain), resetting the slot", map[string]any{"slot": slot})
-		key := lineageTokenKeyBase
-		if l.shard.isCluster {
-			key = lineageTokenKeyForSlot(slot)
-		}
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			_ = l.open(ctx, key, true, "")
-		}()
-	}
-}
-
-// observed returns the newest observed count of token per slot.
-func (l *redisLineage) observed(slots []int, tokens []string) []uint64 {
-	l.obsMu.Lock()
-	defer l.obsMu.Unlock()
-	out := make([]uint64, len(slots))
-	for i, s := range slots {
-		if o := l.obs[s]; o.token == tokens[i] {
-			out[i] = o.count
-		}
-	}
-	return out
+	l.ping = newLineageScript("lineage_ping", lineagePingBody, false)
+	return l
 }
 
 // register adds a gated script loaded whenever the gate opens. loadSHA1 is the
 // broker's FIPS setting.
-func (l *redisLineage) register(s *lineageScript, loadSHA1, selective bool, counter LineageWriteCounter) {
+func (l *redisLineage) register(s *lineageScript, loadSHA1 bool) {
 	l.scriptsMu.Lock()
 	defer l.scriptsMu.Unlock()
-	// Brokers on one shard share its lineage: "on" wins, "off" only if every
-	// broker says so.
-	if r := counter.rank(); !l.counterSet || r > l.counterRank {
-		l.counterRank = r
-	}
-	l.counterSet = true
 	if loadSHA1 {
 		l.loadSHA1 = true
-	}
-	if selective {
-		l.selective = true
 	}
 	for _, existing := range l.scripts {
 		if existing == s {
@@ -623,7 +456,8 @@ func (l *redisLineage) register(s *lineageScript, loadSHA1, selective bool, coun
 	l.scripts = append(l.scripts, s)
 }
 
-// setLogger logs lineage events with the node's logger (the first node wins).
+// setLogger logs lineage events with the node's logger (the first node wins)
+// and shares the node's replaced tokens.
 func (l *redisLineage) setLogger(n *Node) {
 	l.scriptsMu.Lock()
 	defer l.scriptsMu.Unlock()
@@ -631,6 +465,7 @@ func (l *redisLineage) setLogger(n *Node) {
 		return
 	}
 	l.node = n
+	l.left = n.lineageLeft
 	n.registerLineage(l)
 	l.logFn = func(level LogLevel, msg string, fields map[string]any) {
 		if n.logEnabled(level) {
@@ -646,6 +481,12 @@ func (l *redisLineage) log(level LogLevel, msg string, fields map[string]any) {
 	if fn != nil {
 		fn(level, msg, fields)
 	}
+}
+
+func (l *redisLineage) leftTokens() *lineageLeftTokens {
+	l.scriptsMu.Lock()
+	defer l.scriptsMu.Unlock()
+	return l.left
 }
 
 // serverKind asks the server with HELLO once.
@@ -691,163 +532,6 @@ func (l *redisLineage) probeInfo(ctx context.Context) bool {
 	return l.infoAllowed
 }
 
-func (l *redisLineage) twinOn() bool {
-	return l.twin.Load()
-}
-
-// counting tells whether writes are counted and observed (ResyncOnlyLostSlots).
-// Only once every node strips observations from epochs: before, during a
-// rolling upgrade, nothing is counted and a lineage break resets every slot.
-func (l *redisLineage) counting() bool {
-	on := l.selective && l.node != nil && l.node.nodes.haveAll(nodeCapLineageObs)
-	if on {
-		if l.countingSince.Load() == 0 {
-			l.countingSince.CompareAndSwap(0, time.Now().UnixNano())
-		}
-	} else if l.countingSince.Load() != 0 {
-		l.countingSince.Store(0)
-	}
-	return on
-}
-
-// countingFor is how long writes have been counted without a break.
-func (l *redisLineage) countingFor() time.Duration {
-	since := l.countingSince.Load()
-	if since == 0 {
-		return 0
-	}
-	return time.Since(time.Unix(0, since))
-}
-
-// probeTwin decides once whether the twin counter is used. Only on a shard
-// with one address: behind it the servers can change unseen, and a failback to
-// an old primary holding our scripts is caught only by the twin. With Sentinel
-// and Redis Cluster the node follows the actual primary and reaches the new
-// one long before a failback can happen, and the probe flushes demoted servers
-// it sees, so the script cache suffices and writes skip the twin's cost.
-// It also checks that scripts can write without replication (redis.set_repl):
-// a managed service could take it away. Every node decides the same, since it
-// depends on the configuration and the server.
-func (l *redisLineage) probeTwin(ctx context.Context) {
-	l.twinMu.Lock()
-	defer l.twinMu.Unlock()
-	if l.twinProbed {
-		return
-	}
-	l.scriptsMu.Lock()
-	rank := l.counterRank
-	l.scriptsMu.Unlock()
-	if rank == lineageCounterOffRank || (rank == lineageCounterAutoRank && (l.shard.isCluster || l.shard.isSentinel)) {
-		l.twinProbed = true
-		l.twin.Store(false)
-		return
-	}
-	probe := rueidis.NewLuaScript(`redis.set_repl(redis.REPL_NONE); redis.set_repl(redis.REPL_ALL); return 1`,
-		rueidis.WithLoadSHA1(l.loadSHA1))
-	err := probe.Exec(ctx, l.shard.client, []string{l.anyTokenKey()}, nil).Error()
-	if err != nil {
-		if _, ok := rueidis.IsRedisErr(err); !ok {
-			return // a connection error: probe again with the next broker
-		}
-		l.log(LogLevelWarn, "redis lineage: scripts can't use redis.set_repl, a failback to a server that took a full copy of another can't be detected", map[string]any{"error": err.Error()})
-	}
-	l.twinProbed = true
-	l.twin.Store(err == nil && !l.twinDisabledForTest)
-}
-
-// LineageWriteCounter is the mode of the local twin of the lineage write
-// counter: see RedisBrokerConfig.LineageWriteCounter.
-type LineageWriteCounter string
-
-const (
-	// LineageWriteCounterAuto: on shards with one address only (also "").
-	LineageWriteCounterAuto LineageWriteCounter = "auto"
-	// LineageWriteCounterOn: on every shard.
-	LineageWriteCounterOn LineageWriteCounter = "on"
-	// LineageWriteCounterOff: on no shard.
-	LineageWriteCounterOff LineageWriteCounter = "off"
-)
-
-const (
-	lineageCounterOffRank = iota
-	lineageCounterAutoRank
-	lineageCounterOnRank
-)
-
-func (c LineageWriteCounter) rank() int {
-	switch c {
-	case LineageWriteCounterOn:
-		return lineageCounterOnRank
-	case LineageWriteCounterOff:
-		return lineageCounterOffRank
-	default:
-		return lineageCounterAutoRank
-	}
-}
-
-func (c LineageWriteCounter) validate() error {
-	switch c {
-	case "", LineageWriteCounterAuto, LineageWriteCounterOn, LineageWriteCounterOff:
-		return nil
-	}
-	return fmt.Errorf("unknown LineageWriteCounter %q: use auto, on or off", string(c))
-}
-
-// checkReplicaScripts runs some seconds after the gate loaded the scripts of
-// a new token on a primary: a replica holding that token's marker got it by
-// copying - the server copies scripts to replicas, and a promoted replica
-// would look like the old primary. A replica holding older tokens' scripts is
-// normal (a demoted primary). Without the write counter's twin a failover may
-// then go unnoticed: say so loudly.
-func (l *redisLineage) checkReplicaScripts(token string) {
-	if l.twinOn() || l.replicaScriptsWarned.Load() {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	var replicas []rueidis.Client
-	if l.shard.isCluster {
-		nodes, err := l.shard.client.Do(ctx, l.shard.client.B().ClusterNodes().Build()).ToString()
-		if err != nil {
-			return
-		}
-		clients := l.shard.client.Nodes()
-		for _, n := range lineageParseClusterNodes(nodes) {
-			if n.err == nil && !n.failed && !n.primary {
-				if nc, ok := clients[n.addr]; ok {
-					replicas = append(replicas, nc)
-				}
-			}
-		}
-	} else if l.shard.replicaClient != nil {
-		replicas = append(replicas, l.shard.replicaClient)
-	}
-	for _, c := range replicas {
-		sha, err := l.marker(ctx, c, token)
-		if err != nil {
-			return
-		}
-		holds := false
-		_ = c.Dedicated(func(dc rueidis.DedicatedClient) error {
-			hello, err := dc.Do(ctx, dc.B().Hello().Build()).AsMap()
-			if err != nil || parseHelloReply(helloFields(hello)).primary {
-				return err
-			}
-			res, err := dc.Do(ctx, dc.B().ScriptExists().Sha1(sha).Build()).AsIntSlice()
-			holds = err == nil && len(res) == 1 && res[0] == 1
-			return err
-		})
-		if holds && l.replicaScriptsWarned.CompareAndSwap(false, true) {
-			l.log(LogLevelError, "redis lineage: a replica holds scripts loaded only on its primary - this server copies scripts to replicas, so a failover may go unnoticed; set LineageWriteCounter to on", nil)
-			return
-		}
-	}
-}
-
-// replicaScriptsCheckDelay is how long after loading a new token's scripts
-// replicas are checked for them (see checkReplicaScripts).
-var replicaScriptsCheckDelay = 3 * time.Second
-
 // mode returns the lineage mode for a broker on this shard.
 func (l *redisLineage) mode(ctx context.Context, useInfo bool) (lineageMode, error) {
 	if l.disabledForTest {
@@ -861,11 +545,19 @@ func (l *redisLineage) mode(ctx context.Context, useInfo bool) (lineageMode, err
 		return lineageNone, err
 	}
 	if kind.gateCapable {
-		l.probeTwin(ctx)
+		l.modeMu.Lock()
+		l.gate = true
+		l.modeMu.Unlock()
 		l.startProbe()
 		return lineageGate, nil
 	}
 	return lineageNone, nil
+}
+
+func (l *redisLineage) gateMode() bool {
+	l.modeMu.Lock()
+	defer l.modeMu.Unlock()
+	return l.gate
 }
 
 func (l *redisLineage) slotIndex(key string) int {
@@ -875,7 +567,7 @@ func (l *redisLineage) slotIndex(key string) int {
 	return int(redisKeySlot(key))
 }
 
-// tokenKey returns the token key in the slot of key.
+// tokenKey returns the lineage key in the slot of key.
 func (l *redisLineage) tokenKey(key string) string {
 	if !l.shard.isCluster {
 		return lineageTokenKeyBase
@@ -896,58 +588,14 @@ func (l *redisLineage) token(slot int) string {
 	return l.tokens[slot]
 }
 
-// parseTokenValue splits a token key's value "token" or
-// "token|ancestor|count".
-func parseTokenValue(value string) (token string, ancestor lineageObs) {
+// parseTokenValue splits a lineage key's token value "token" or
+// "token|ancestor".
+func parseTokenValue(value string) (token, ancestor string) {
 	bar := strings.IndexByte(value, '|')
 	if bar < 0 {
-		return value, lineageObs{}
+		return value, ""
 	}
-	token = value[:bar]
-	rest := value[bar+1:]
-	bar2 := strings.IndexByte(rest, '|')
-	if bar2 < 0 {
-		return token, lineageObs{token: rest}
-	}
-	count, _ := strconv.ParseUint(rest[bar2+1:], 10, 64)
-	return token, lineageObs{token: rest[:bar2], count: count}
-}
-
-// setToken sets the token of a slot from a token key's value.
-func (l *redisLineage) setToken(slot int, value string) {
-	token, ancestor := parseTokenValue(value)
-	l.tokensMu.Lock()
-	l.tokens[slot] = token
-	l.rememberLocked(token)
-	l.tokensMu.Unlock()
-	if ancestor.token != "" {
-		l.obsMu.Lock()
-		if l.adopted[slot].token == "" {
-			l.adopted[slot] = ancestor
-		}
-		l.obsMu.Unlock()
-	}
-}
-
-func (l *redisLineage) rememberLocked(token string) {
-	if token == "" {
-		return
-	}
-	for _, t := range l.known {
-		if t == token {
-			return
-		}
-	}
-	l.known = append(l.known, token)
-	if len(l.known) > 16 {
-		l.known = l.known[len(l.known)-16:]
-	}
-}
-
-func (l *redisLineage) knownTokens() []string {
-	l.tokensMu.RLock()
-	defer l.tokensMu.RUnlock()
-	return append([]string(nil), l.known...)
+	return value[:bar], value[bar+1:]
 }
 
 // errLineageGate is returned when the gate could not be opened.
@@ -980,19 +628,23 @@ func (l *redisLineage) sha(ctx context.Context, c rueidis.CoreClient, cacheKey *
 var lineageMarkerShas sync.Map
 
 // exec runs a gated script with EVALSHA, opening the gate on NOSCRIPT and
-// following the server's token on a LINEAGE error.
+// following the server's token on a LINEAGE error - unless it is a token this
+// node saw replaced: then the server is a stale copy and the gate rotates.
 func (l *redisLineage) exec(ctx context.Context, s *lineageScript, keys, args []string) rueidis.RedisResult {
+	l.lastCall.Store(time.Now().UnixNano())
+	if l.node != nil {
+		l.node.awaitLineagePeers(ctx)
+	}
 	slot := l.slotIndex(keys[0])
 	for attempt := 0; attempt < 5; attempt++ {
 		token := l.token(slot)
 		if token == "" {
-			if err := l.open(ctx, keys[0], false, token); err != nil {
+			if err := l.open(ctx, keys[0], false, token, ""); err != nil {
 				return rueidis.NewErrorResult(err)
 			}
 			continue
 		}
-		twin, counting := l.twinOn(), l.counting()
-		sha, err := l.sha(ctx, l.shard.client, &s.shas, token+"|"+strconv.FormatBool(counting)+"|"+strconv.FormatBool(twin), s.gatedSource(token, counting, twin))
+		sha, err := l.sha(ctx, l.shard.client, &s.shas, token, s.gatedSource(token))
 		if err != nil {
 			return rueidis.NewErrorResult(err)
 		}
@@ -1000,27 +652,36 @@ func (l *redisLineage) exec(ctx context.Context, s *lineageScript, keys, args []
 		resp := l.shard.client.Do(ctx, cmd)
 		err = resp.Error()
 		if isNoScript(err) {
-			if err := l.open(ctx, keys[0], false, token); err != nil {
+			if err := l.open(ctx, keys[0], false, token, ""); err != nil {
 				return rueidis.NewErrorResult(err)
 			}
 			continue
 		}
-		if t, ok := lineageErrToken(err); ok {
+		if value, preds, ok := lineageErrToken(err); ok {
+			left := l.leftTokens()
+			left.add(preds...)
+			if t, _ := parseTokenValue(value); t != "" && left.has(t) {
+				// A token this node saw replaced: a stale copy.
+				if err := l.open(ctx, keys[0], true, token, value); err != nil {
+					return rueidis.NewErrorResult(err)
+				}
+				continue
+			}
 			// The server's token isn't ours: run the scripts of its token.
-			l.setToken(slot, t)
-			continue
-		}
-		if isLineageCopy(err) {
-			// The server's data came from another server: the gate rotates.
-			if err := l.open(ctx, keys[0], false, token); err != nil {
-				return rueidis.NewErrorResult(err)
-			}
+			l.setToken(slot, value)
 			continue
 		}
 		l.shard.noteError(err)
 		return resp
 	}
 	return rueidis.NewErrorResult(fmt.Errorf("%w: script %s: no stable lineage token", errLineageGate, s.name))
+}
+
+func (l *redisLineage) setToken(slot int, value string) {
+	token, _ := parseTokenValue(value)
+	l.tokensMu.Lock()
+	l.tokens[slot] = token
+	l.tokensMu.Unlock()
 }
 
 func isNoScript(err error) bool {
@@ -1039,36 +700,44 @@ func isReadOnly(err error) bool {
 	return ok && strings.HasPrefix(re.Error(), "READONLY")
 }
 
-// isLineageCopy tells a LINEAGE_COPY error (see lineageTwinErrPrefix).
-func isLineageCopy(err error) bool {
+// lineageErrToken parses a LINEAGE error: the server's token value ("" for
+// none) and the tokens it replaced. Unknown parts are skipped (see
+// lineageErrPrefix).
+func lineageErrToken(err error) (string, []string, bool) {
 	if err == nil {
-		return false
-	}
-	re, ok := rueidis.IsRedisErr(err)
-	return ok && strings.HasPrefix(re.Error(), lineageTwinErrPrefix)
-}
-
-// lineageErrToken parses a LINEAGE error: the server's token ("" for none).
-func lineageErrToken(err error) (string, bool) {
-	if err == nil {
-		return "", false
+		return "", nil, false
 	}
 	re, ok := rueidis.IsRedisErr(err)
 	if !ok {
-		return "", false
+		return "", nil, false
 	}
-	msg := re.Error()
+	return parseLineageErr(re.Error())
+}
+
+// parseLineageErr parses the message of a LINEAGE error.
+func parseLineageErr(msg string) (string, []string, bool) {
 	if !strings.HasPrefix(msg, lineageErrPrefix) {
-		return "", false
+		return "", nil, false
 	}
-	rest := msg[len(lineageErrPrefix):]
-	if sp := strings.IndexByte(rest, ' '); sp >= 0 {
-		rest = rest[:sp]
+	var value string
+	var preds []string
+	for _, part := range strings.Fields(msg[len(lineageErrPrefix):]) {
+		k, v, ok := strings.Cut(part, "=")
+		if !ok {
+			continue // a script location Redis appends, for example
+		}
+		switch k {
+		case "t":
+			value = v
+		case "p":
+			for _, t := range strings.Split(v, ",") {
+				if t != "" {
+					preds = append(preds, t)
+				}
+			}
+		}
 	}
-	if rest == "-" {
-		rest = ""
-	}
-	return rest, true
+	return value, preds, true
 }
 
 func (l *redisLineage) marker(ctx context.Context, c rueidis.CoreClient, token string) (string, error) {
@@ -1076,46 +745,47 @@ func (l *redisLineage) marker(ctx context.Context, c rueidis.CoreClient, token s
 }
 
 // open opens the gate of the server serving routeKey, all on one connection.
-// With force, the token is rotated even if the server holds the marker of its
-// token (a node saw a different server behind its connection). seen is the
-// token the caller found missing or unusable: when another caller has replaced
-// it meanwhile, the gate is open already and nothing is done.
-func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, seen string) error {
+// seen is the token the caller found missing or unusable: when another caller
+// has replaced it meanwhile, the gate is open already and nothing is done. With
+// force, the token rotates even if the server holds its marker (a stale copy,
+// a reused offset), but only if the server's token value is still expect (""
+// for any): a compare-and-set, so nodes noticing the same break rotate once.
+func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, seen, expect string) error {
 	l.openMu.Lock()
 	defer l.openMu.Unlock()
-	if !force && l.token(l.slotIndex(routeKey)) != seen {
+	slot := l.slotIndex(routeKey)
+	if !force && l.token(slot) != seen {
 		return nil
 	}
 
 	l.scriptsMu.Lock()
 	scripts := append([]*lineageScript(nil), l.scripts...)
+	scripts = append(scripts, l.ping)
 	l.scriptsMu.Unlock()
+	left := l.leftTokens()
 
-	slot := l.slotIndex(routeKey)
 	tokenKey := l.tokenKey(routeKey)
 	var (
-		rotated       bool
-		adoptedValue  string
-		kept          int
-		keptAncestors = map[int]lineageObs{}
-		newToken      string
-		slots         []int
-		identity      string
-		owner         string
-		prevToken     = l.token(slot)
-		copiedSeen    bool
+		rotated      bool
+		staleSeen    bool
+		adoptedValue string
+		newToken     string
+		slots        []int
+		prevToken    = l.token(slot)
 	)
 	err := l.shard.client.Dedicated(func(c rueidis.DedicatedClient) error {
 		// The first command is keyed: it binds the connection to the server
 		// serving routeKey.
-		state, err := c.Do(ctx, c.B().Hmget().Key(tokenKey).Field("t", "c", "l").Build()).ToArray()
+		state, err := c.Do(ctx, c.B().Hmget().Key(tokenKey).Field("t", "p").Build()).ToArray()
 		if err != nil {
 			return err
 		}
-		if len(state) != 3 {
+		if len(state) != 2 {
 			return fmt.Errorf("lineage key: %d fields", len(state))
 		}
 		currentValue, _ := state[0].ToString()
+		predsValue, _ := state[1].ToString()
+		left.add(strings.Fields(predsValue)...)
 		current, _ := parseTokenValue(currentValue)
 		hello, err := c.Do(ctx, c.B().Hello().Build()).AsMap()
 		if err != nil {
@@ -1130,21 +800,17 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 			// replica (centrifugo#1320).
 			return errors.New("server is not a primary")
 		}
-		slots, identity, owner, err = l.serverSlots(ctx, c, routeKey)
+		slots, err = l.serverSlots(ctx, c, routeKey)
 		if err != nil {
 			return err
 		}
-		// copied: the server's data came from another server (the twin of the
-		// write counter differs, see lineagePreludeGate) - even if it holds
-		// the marker, as an old primary does after a failback.
-		copied := false
-		if l.twinOn() {
-			cv, cerr := state[1].ToString()
-			lv, _ := state[2].ToString()
-			copied = cerr == nil && cv != lv
+		if force && expect != "" && currentValue != expect {
+			// Another node rotated already: follow it.
+			force = false
 		}
+		stale := current != "" && left.has(current)
 		intact := false
-		if current != "" && !force && !copied {
+		if current != "" && !force && !stale {
 			msha, err := l.marker(ctx, c, current)
 			if err != nil {
 				return err
@@ -1157,13 +823,13 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 			}
 		}
 		token := current
-		if !intact && !force && !copied && l.shard.isCluster {
+		if !intact && !force && !stale && l.shard.isCluster {
 			// A slot whose token has no marker here may have been migrated in
 			// from another server (MIGRATE moves its keys without loss) while
 			// this server's own lineage is intact. Then only that slot is
 			// adopted, under this server's token with its own as the ancestor,
 			// instead of rotating - and resetting - every slot of the server.
-			own, ok, err := l.intactServerToken(ctx, c, slots, slot)
+			own, ok, err := l.intactServerToken(ctx, c, slots, slot, left)
 			if err != nil {
 				return err
 			}
@@ -1177,28 +843,17 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 			}
 		}
 		if !intact {
-			// A new lineage (or the cache was flushed, or a different server):
-			// rotate the token of every slot this server serves, then load.
+			// A new lineage (a restart, a promotion, a stale copy, a flushed
+			// cache): rotate the token of every slot this server serves.
 			token = "g" + strconv.FormatInt(time.Now().UnixNano(), 36) + strconv.FormatUint(lineageRand(), 36)
-			keys := make([]string, len(slots))
-			for i, s := range slots {
+			args := make([]string, 0, 2*len(slots)+2)
+			args = append(args, tokenKey, currentValue)
+			for _, s := range slots {
+				key := lineageTokenKeyBase
 				if l.shard.isCluster {
-					keys[i] = lineageTokenKeyForSlot(s)
-				} else {
-					keys[i] = lineageTokenKeyBase
+					key = lineageTokenKeyForSlot(s)
 				}
-			}
-			values := make([]string, len(slots))
-			for i := range values {
-				values[i] = token
-			}
-			if l.counting() {
-				kept = l.keepSlots(ctx, c, slots, keys, token, values, keptAncestors)
-			}
-			args := make([]string, 0, 2*len(slots)+3)
-			args = append(args, tokenKey, currentValue, boolToStr(l.twinOn()))
-			for i := range keys {
-				args = append(args, keys[i], values[i])
+				args = append(args, key, token)
 			}
 			src := lineageRotateSource
 			if l.shard.isCluster {
@@ -1212,14 +867,16 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 				// Another node rotated first, for this same lineage break.
 				token, _ = parseTokenValue(other)
 				adoptedValue = other
-				clear(keptAncestors)
-				kept = 0
 			} else {
 				rotated = true
+				staleSeen = stale
+				if current != "" {
+					left.add(current)
+				}
 			}
 		}
 		for _, s := range scripts {
-			if err := c.Do(ctx, c.B().ScriptLoad().Script(s.gatedSource(token, l.counting(), l.twinOn())).Build()).Error(); err != nil {
+			if err := c.Do(ctx, c.B().ScriptLoad().Script(s.gatedSource(token)).Build()).Error(); err != nil {
 				return fmt.Errorf("load %s: %w", s.name, err)
 			}
 		}
@@ -1227,118 +884,115 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 			return fmt.Errorf("load marker: %w", err)
 		}
 		newToken = token
-		copiedSeen = copied
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("%w: %v", errLineageGate, err)
 	}
 
-	if adoptedValue != "" {
-		// The other node's rotation: this slot's token (and its ancestor, if
-		// that node kept the slot).
-		l.setToken(slot, adoptedValue)
-	}
 	l.tokensMu.Lock()
-	if rotated {
-		for _, s := range slots {
-			l.tokens[s] = newToken
-		}
-		l.obsMu.Lock()
-		for _, s := range slots {
-			if a, ok := keptAncestors[s]; ok {
-				l.adopted[s] = a
-			} else {
-				delete(l.adopted, s)
-			}
-		}
-		l.obsMu.Unlock()
+	if adoptedValue != "" {
+		t, _ := parseTokenValue(adoptedValue)
+		l.tokens[slot] = t
 	} else {
 		l.tokens[slot] = newToken
-		// The server's other slots most likely carry the same token: start
-		// with it rather than opening the gate again on the first call to
-		// each of them (up to 16384 in Redis Cluster). A slot with another
-		// token (migrated in, adopted) answers LINEAGE with its token once.
-		for _, s := range slots {
-			if l.tokens[s] == "" {
-				l.tokens[s] = newToken
-			}
-		}
 	}
-	l.rememberLocked(newToken)
-	if l.shard.isCluster {
-		for _, s := range slots {
-			l.owners[s] = owner
+	// The server's other slots most likely carry the same token: start with it
+	// rather than opening the gate again on the first call to each of them (up
+	// to 16384 in Redis Cluster). A slot with another token (migrated in)
+	// answers LINEAGE with its token once.
+	for _, s := range slots {
+		if rotated || l.tokens[s] == "" {
+			l.tokens[s] = newToken
 		}
-	} else {
-		l.identity = identity
 	}
 	l.tokensMu.Unlock()
 
 	if rotated {
-		time.AfterFunc(replicaScriptsCheckDelay, func() { l.checkReplicaScripts(newToken) })
 		l.stats.mu.Lock()
 		l.stats.rotations++
-		l.stats.keptSlots += kept
-		l.stats.resetSlots += len(slots) - kept
+		if staleSeen {
+			l.stats.stale++
+		}
 		l.stats.mu.Unlock()
-		l.log(LogLevelInfo, "redis lineage: new lineage token (a restart, a failover or SCRIPT FLUSH may have lost writes), streams and maps on the server start new epochs", map[string]any{
-			"forced": force, "copied": copiedSeen, "previous_token": prevToken, "kept_slots": kept, "reset_slots": len(slots) - kept,
+		l.log(LogLevelInfo, "redis lineage: new lineage token (a restart, a failover or a stale copy may have lost writes), streams and maps on the server start new epochs", map[string]any{
+			"previous_token": prevToken, "stale_copy": staleSeen, "forced": force, "slots": len(slots),
 		})
 	}
 	return nil
 }
 
-// serverSlots returns the slots of the connected server (one slot outside
-// Redis Cluster) and its identity: its CLIENT INFO laddr outside Redis Cluster,
-// its node ID in Redis Cluster.
-func (l *redisLineage) serverSlots(ctx context.Context, c rueidis.DedicatedClient, routeKey string) ([]int, string, string, error) {
-	if !l.shard.isCluster {
-		info, err := c.Do(ctx, c.B().ClientInfo().Build()).ToString()
-		if err != nil {
-			return nil, "", "", fmt.Errorf("CLIENT INFO: %w", err)
+// rotateIfToken rotates the lineage of the server serving routeKey if the
+// node's token for that slot is still the server's: a subscriber saw the
+// server give out an offset again (see offsetWatermarks), so it lost writes.
+// Nodes noticing the same reuse rotate once (a compare-and-set on the token).
+func (l *redisLineage) rotateIfToken(ctx context.Context, routeKey string) error {
+	token := l.token(l.slotIndex(routeKey))
+	if token == "" {
+		return nil
+	}
+	l.stats.mu.Lock()
+	l.stats.reused++
+	l.stats.mu.Unlock()
+	return l.open(ctx, routeKey, true, token, token)
+}
+
+// reconcile rotates the servers whose current token this node now knows was
+// replaced (learned from another node's info after it started using it).
+func (l *redisLineage) reconcile(ctx context.Context) {
+	left := l.leftTokens()
+	l.tokensMu.RLock()
+	stale := map[string]int{}
+	for slot, t := range l.tokens {
+		if left.has(t) {
+			stale[t] = slot
 		}
-		return []int{0}, clientInfoField(info, "laddr"), "", nil
+	}
+	l.tokensMu.RUnlock()
+	for t, slot := range stale {
+		key := lineageTokenKeyBase
+		if l.shard.isCluster {
+			key = lineageTokenKeyForSlot(slot)
+		}
+		_ = l.open(ctx, key, true, t, t)
+	}
+}
+
+// serverSlots returns the slots of the connected server (one slot outside
+// Redis Cluster).
+func (l *redisLineage) serverSlots(ctx context.Context, c rueidis.DedicatedClient, routeKey string) ([]int, error) {
+	if !l.shard.isCluster {
+		return []int{0}, nil
 	}
 	nodes, err := c.Do(ctx, c.B().ClusterNodes().Build()).ToString()
 	if err != nil {
-		return nil, "", "", fmt.Errorf("CLUSTER NODES: %w", err)
+		return nil, fmt.Errorf("CLUSTER NODES: %w", err)
 	}
-	id, slots, err := parseMyselfSlots(nodes)
+	slots, err := parseMyselfSlots(nodes)
 	if err != nil {
-		return nil, "", "", err
+		return nil, err
 	}
 	want := int(redisKeySlot(routeKey))
 	for _, s := range slots {
 		if s == want {
-			return slots, "", id, nil
+			return slots, nil
 		}
 	}
-	return nil, "", "", fmt.Errorf("server does not serve slot %d", want)
+	return nil, fmt.Errorf("server does not serve slot %d", want)
 }
 
-func clientInfoField(info, name string) string {
-	for _, f := range strings.Fields(info) {
-		if strings.HasPrefix(f, name+"=") {
-			return f[len(name)+1:]
-		}
-	}
-	return ""
-}
-
-// parseMyselfSlots returns the node ID and the slots of the "myself" line of
-// CLUSTER NODES.
-func parseMyselfSlots(nodes string) (string, []int, error) {
+// parseMyselfSlots returns the slots of the "myself" line of CLUSTER NODES.
+func parseMyselfSlots(nodes string) ([]int, error) {
 	for _, n := range lineageParseClusterNodes(nodes) {
 		if !n.myself {
 			continue
 		}
 		if !n.primary {
-			return "", nil, errors.New("connected node is not a primary")
+			return nil, errors.New("connected node is not a primary")
 		}
-		return n.id, n.slots, n.err
+		return n.slots, n.err
 	}
-	return "", nil, errors.New("no myself line in CLUSTER NODES")
+	return nil, errors.New("no myself line in CLUSTER NODES")
 }
 
 type clusterNodeLine struct {
@@ -1389,10 +1043,18 @@ func lineageParseClusterNodes(nodes string) []clusterNodeLine {
 	return out
 }
 
-// lineageProbeInterval is how often a node probes the lineage of its servers.
+// lineageProbeInterval: a node that made no call to a shard for this long
+// calls each of its primaries.
 var lineageProbeInterval = time.Second
 
+// lineageProbeSlotsRefresh is how often the probe refreshes which slots the
+// primaries of a Redis Cluster serve.
+var lineageProbeSlotsRefresh = 30 * time.Second
+
 func (l *redisLineage) startProbe() {
+	if l.noProbeForTest {
+		return
+	}
 	l.probeOnce.Do(func() {
 		go l.runProbe()
 	})
@@ -1401,207 +1063,64 @@ func (l *redisLineage) startProbe() {
 func (l *redisLineage) runProbe() {
 	t := time.NewTicker(lineageProbeInterval)
 	defer t.Stop()
+	var keys []string
+	var keysAt time.Time
 	for {
 		select {
 		case <-l.shard.closeCh:
 			return
 		case <-t.C:
+			if time.Since(time.Unix(0, l.lastCall.Load())) < lineageProbeInterval {
+				continue // the node calls the shard anyway
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			l.probe(ctx)
+			if !l.shard.isCluster {
+				keys = []string{lineageTokenKeyBase}
+			} else if keys == nil || time.Since(keysAt) > lineageProbeSlotsRefresh {
+				if k, err := l.primaryKeys(ctx); err == nil {
+					keys, keysAt = k, time.Now()
+				}
+			}
+			for _, key := range keys {
+				_ = l.exec(ctx, l.ping, []string{key}, nil).Error()
+			}
 			cancel()
 		}
 	}
 }
 
-// probe opens the gate of a primary that started a new lineage before any
-// traffic needs it, rotates the token of a server that changed behind this
-// node's connection, and flushes the script cache of a demoted server holding
-// our scripts (it keeps them through a resync, and promoted again would run
-// them on data that may miss writes).
-func (l *redisLineage) probe(ctx context.Context) {
-	if l.shard.isCluster {
-		l.probeCluster(ctx)
-		return
-	}
-	l.probeSingle(ctx)
-}
-
-func (l *redisLineage) probeSingle(ctx context.Context) {
+// primaryKeys returns a lineage key served by each primary of a Redis Cluster.
+func (l *redisLineage) primaryKeys(ctx context.Context) ([]string, error) {
 	c := l.shard.client
-	hello, err := c.Do(ctx, c.B().Hello().Build()).AsMap()
+	slots, err := c.Do(ctx, c.B().ClusterSlots().Build()).ToArray()
 	if err != nil {
-		return
+		return nil, err
 	}
-	kind := parseHelloReply(helloFields(hello))
-	if !kind.primary {
-		// Our connection reaches a demoted server (centrifugo#1320): flush it.
-		l.flushIfHolding(ctx, c)
-		return
-	}
-	info, err := c.Do(ctx, c.B().ClientInfo().Build()).ToString()
-	if err != nil {
-		return
-	}
-	identity := clientInfoField(info, "laddr")
-	l.tokensMu.RLock()
-	prev := l.identity
-	token := l.tokens[0]
-	l.tokensMu.RUnlock()
-	if prev != "" && identity != "" && identity != prev {
-		// A different server behind the same address: its data may come from a
-		// lineage our token doesn't describe.
-		_ = l.open(ctx, lineageTokenKeyBase, true, "")
-		return
-	}
-	if token == "" {
-		return
-	}
-	if !l.holdsMarker(ctx, c, token) {
-		_ = l.open(ctx, lineageTokenKeyBase, false, token)
-	}
-	l.flushReplicas(ctx)
-}
-
-func (l *redisLineage) probeCluster(ctx context.Context) {
-	c := l.shard.client
-	nodes, err := c.Do(ctx, c.B().ClusterNodes().Build()).ToString()
-	if err != nil {
-		return
-	}
-	lines := lineageParseClusterNodes(nodes)
-	clients := c.Nodes()
-	for _, n := range lines {
-		if n.err != nil || n.failed {
+	keys := make([]string, 0, len(slots))
+	seen := map[string]bool{}
+	for _, r := range slots {
+		e, err := r.ToArray()
+		if err != nil || len(e) < 3 {
 			continue
 		}
-		if !n.primary {
-			if nc, ok := clients[n.addr]; ok {
-				l.flushIfHolding(ctx, nc)
-			}
-			continue
-		}
-		if len(n.slots) == 0 {
-			continue
-		}
-		l.tokensMu.RLock()
-		changed := -1
-		used := false
-		for _, s := range n.slots {
-			if l.tokens[s] != "" {
-				used = true
-			}
-			if l.owners[s] != "" && l.owners[s] != n.id {
-				changed = s
-				break
-			}
-		}
-		l.tokensMu.RUnlock()
-		if changed >= 0 {
-			// The slot is served by another node than when the gate opened: a
-			// failover (the promoted replica has no scripts, its gate opens on
-			// NOSCRIPT) or a migration (adopted by the gate). Nothing to force;
-			// a demoted primary is flushed as a replica.
-			l.tokensMu.Lock()
-			for _, sl := range n.slots {
-				delete(l.owners, sl)
-			}
-			l.tokensMu.Unlock()
-		}
-		if !used {
-			continue
-		}
-		key := lineageTokenKeyForSlot(n.slots[0])
-		current, err := c.Do(ctx, c.B().Hget().Key(key).Field("t").Build()).ToString()
-		if err != nil || current == "" {
-			continue
-		}
-		if !l.holdsMarkerKey(ctx, c, current, key) {
-			_ = l.open(ctx, key, false, l.token(n.slots[0]))
-		}
-	}
-}
-
-// flushReplicas flushes demoted servers reachable outside Redis Cluster
-// (the replica client of Sentinel setups).
-func (l *redisLineage) flushReplicas(ctx context.Context) {
-	if l.shard.replicaClient != nil {
-		l.flushIfHolding(ctx, l.shard.replicaClient)
-	}
-}
-
-func (l *redisLineage) holdsMarker(ctx context.Context, c rueidis.Client, token string) bool {
-	return l.holdsMarkerKey(ctx, c, token, l.anyTokenKey())
-}
-
-func (l *redisLineage) holdsMarkerKey(ctx context.Context, c rueidis.Client, token, key string) bool {
-	sha, err := l.marker(ctx, c, token)
-	if err != nil {
-		return true // unknown: don't open the gate from the probe
-	}
-	res, err := c.Do(ctx, c.B().ScriptExists().Sha1(sha).Build().SetSlot(key)).AsIntSlice()
-	if err != nil || len(res) != 1 {
-		return true
-	}
-	return res[0] == 1
-}
-
-// flushIfHolding flushes the script cache of a server that is not a primary and
-// holds the marker of a token this node used.
-func (l *redisLineage) flushIfHolding(ctx context.Context, c rueidis.Client) {
-	tokens := l.knownTokens()
-	if len(tokens) == 0 {
-		return
-	}
-	shas := make([]string, 0, len(tokens))
-	for _, t := range tokens {
-		sha, err := l.marker(ctx, c, t)
+		from, err := e[0].AsInt64()
 		if err != nil {
-			return
+			continue
 		}
-		shas = append(shas, sha)
+		m, err := e[2].ToArray()
+		if err != nil || len(m) < 2 {
+			continue
+		}
+		host, _ := m[0].ToString()
+		port, _ := m[1].AsInt64()
+		addr := host + ":" + strconv.FormatInt(port, 10)
+		if seen[addr] {
+			continue
+		}
+		seen[addr] = true
+		keys = append(keys, lineageTokenKeyForSlot(int(from)))
 	}
-	err := c.Dedicated(func(dc rueidis.DedicatedClient) error {
-		hello, err := dc.Do(ctx, dc.B().Hello().Build()).AsMap()
-		if err != nil {
-			return err
-		}
-		if parseHelloReply(helloFields(hello)).primary {
-			return nil
-		}
-		res, err := dc.Do(ctx, dc.B().ScriptExists().Sha1(shas...).Build()).AsIntSlice()
-		if err != nil {
-			return err
-		}
-		holds := false
-		for _, v := range res {
-			if v == 1 {
-				holds = true
-			}
-		}
-		if !holds {
-			return nil
-		}
-		if err := dc.Do(ctx, dc.B().ScriptFlush().Build()).Error(); err != nil {
-			return err
-		}
-		l.stats.mu.Lock()
-		l.stats.flushes++
-		l.stats.mu.Unlock()
-		l.log(LogLevelInfo, "redis lineage: flushed the script cache of a demoted server", nil)
-		return nil
-	})
-	if err != nil {
-		l.log(LogLevelDebug, "redis lineage: probing a replica", map[string]any{"error": err.Error()})
-	}
-}
-
-// onReadOnly handles a READONLY reply to a meta script: the server behind the
-// connection was demoted.
-func (l *redisLineage) onReadOnly(ctx context.Context) {
-	if l.shard.isCluster {
-		return
-	}
-	l.flushIfHolding(ctx, l.shard.client)
+	return keys, nil
 }
 
 var (
@@ -1609,7 +1128,7 @@ var (
 	lineageSlotTags     [16384]string
 )
 
-// lineageTokenKeyForSlot returns the token key living in a hash slot.
+// lineageTokenKeyForSlot returns the lineage key living in a hash slot.
 func lineageTokenKeyForSlot(slot int) string {
 	lineageSlotTagsOnce.Do(func() {
 		found := 0
@@ -1641,46 +1160,11 @@ func lineageRand() uint64 {
 	return binary.LittleEndian.Uint64(b[:])
 }
 
-// keepSlots decides, for ResyncOnlyLostSlots, which slots keep their metas
-// through a rotation: those where no node observed a write the server misses.
-// A kept slot's token key gets "token|ancestor|count", so its metas stamped with
-// the ancestor are adopted. Any doubt (a read error, a node that doesn't answer)
-// keeps nothing.
-func (l *redisLineage) keepSlots(ctx context.Context, c rueidis.DedicatedClient, slots []int, keys []string, token string, values []string, kept map[int]lineageObs) int {
-	src := lineageSlotsSource
-	if l.shard.isCluster {
-		src = lineageSlotsSourceCluster
-	}
-	raw, err := c.Do(ctx, c.B().Eval().Script(src).Numkeys(0).Arg(keys...).Build()).AsStrSlice()
-	if err != nil || len(raw) != 2*len(slots) {
-		return 0
-	}
-	states := make([]lineageSlotState, len(slots))
-	for i := range slots {
-		tok, anc := parseTokenValue(raw[2*i])
-		count, _ := strconv.ParseUint(raw[2*i+1], 10, 64)
-		states[i] = lineageSlotState{token: tok, ancestor: anc, count: count}
-	}
-	tokens, counts, complete, err := l.surveyObserved(ctx, slots)
-	if err != nil || !complete {
-		l.log(LogLevelInfo, "redis lineage: the lineage survey cannot vouch for every slot (a node did not answer, restarted or left recently, or was not counting writes long enough), resetting every slot", map[string]any{"error": fmt.Sprint(err)})
-		return 0
-	}
-	n := 0
-	for i, s := range slots {
-		if slotKept(states[i], tokens, counts, i) {
-			values[i] = token + "|" + states[i].token + "|" + strconv.FormatUint(states[i].count, 10)
-			kept[s] = lineageObs{token: states[i].token, count: states[i].count}
-			n++
-		}
-	}
-	return n
-}
-
 // intactServerToken looks, on the gate's connection, for a token of another
-// slot this server serves whose marker the server holds: the server's own
-// lineage is then intact. It returns that token.
-func (l *redisLineage) intactServerToken(ctx context.Context, c rueidis.DedicatedClient, slots []int, except int) (string, bool, error) {
+// slot this server serves whose marker the server holds (and which this node
+// didn't see replaced): the server's own lineage is then intact. It returns
+// that token.
+func (l *redisLineage) intactServerToken(ctx context.Context, c rueidis.DedicatedClient, slots []int, except int, left *lineageLeftTokens) (string, bool, error) {
 	keys := make([]string, 0, 8)
 	for _, s := range slots {
 		if s == except {
@@ -1699,9 +1183,9 @@ func (l *redisLineage) intactServerToken(ctx context.Context, c rueidis.Dedicate
 		return "", false, err
 	}
 	seen := map[string]bool{}
-	for i := 0; i+1 < len(raw); i += 2 {
-		token, _ := parseTokenValue(raw[i])
-		if token == "" || seen[token] {
+	for _, v := range raw {
+		token, _ := parseTokenValue(v)
+		if token == "" || seen[token] || left.has(token) {
 			continue
 		}
 		seen[token] = true
@@ -1721,19 +1205,15 @@ func (l *redisLineage) intactServerToken(ctx context.Context, c rueidis.Dedicate
 }
 
 // adoptSlot gives a slot migrated in the server's token, with the slot's token
-// as its ancestor (its metas are adopted) and its write counter, with a
-// compare-and-set like the rotation. It returns the slot's new value.
+// as its ancestor (its metas are adopted), with a compare-and-set like the
+// rotation. It returns the slot's new value.
 func (l *redisLineage) adoptSlot(ctx context.Context, c rueidis.DedicatedClient, tokenKey, currentValue, own string) (string, error) {
-	raw, err := c.Do(ctx, c.B().Eval().Script(lineageSlotsSourceCluster).Numkeys(0).Arg(tokenKey).Build()).AsStrSlice()
-	if err != nil || len(raw) != 2 {
-		return "", fmt.Errorf("read slot: %v", err)
-	}
 	value := own
 	if prev, _ := parseTokenValue(currentValue); prev != "" && prev != own {
-		value = own + "|" + prev + "|" + raw[1]
+		value = own + "|" + prev
 	}
-	other, err := c.Do(ctx, c.B().Eval().Script(lineageRotateSourceCluster).Numkeys(0).
-		Arg(tokenKey, currentValue, boolToStr(l.twinOn()), tokenKey, value).Build()).ToString()
+	other, err := c.Do(ctx, c.B().Eval().Script(lineageAdoptSource).Numkeys(0).
+		Arg(tokenKey, currentValue, value).Build()).ToString()
 	if err != nil && !rueidis.IsRedisNil(err) {
 		return "", fmt.Errorf("adopt: %w", err)
 	}
@@ -1741,4 +1221,72 @@ func (l *redisLineage) adoptSlot(ctx context.Context, c rueidis.DedicatedClient,
 		return other, nil // another node did it first
 	}
 	return value, nil
+}
+
+// lineageAdoptSource sets a migrated slot's token value (ARGV[3]) if it is
+// still ARGV[2]; its replaced tokens stay - its ancestor wasn't replaced.
+const lineageAdoptSource = `#!lua flags=allow-cross-slot-keys
+local current = redis.call("hget", ARGV[1], "t") or ""
+if current ~= ARGV[2] then
+    return current
+end
+redis.call("hset", ARGV[1], "t", ARGV[3])
+return false
+`
+
+// lineageLeftTokens are tokens a node saw replaced, the newest kept (bounded).
+type lineageLeftTokens struct {
+	mu    sync.RWMutex
+	set   map[string]struct{}
+	order []string
+}
+
+// lineageLeftMax bounds the replaced tokens a node keeps.
+const lineageLeftMax = 4096
+
+func newLineageLeftTokens() *lineageLeftTokens {
+	return &lineageLeftTokens{set: make(map[string]struct{})}
+}
+
+// add records tokens; it returns whether any was new.
+func (t *lineageLeftTokens) add(tokens ...string) bool {
+	if len(tokens) == 0 {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	added := false
+	for _, tok := range tokens {
+		if tok == "" {
+			continue
+		}
+		if _, ok := t.set[tok]; ok {
+			continue
+		}
+		t.set[tok] = struct{}{}
+		t.order = append(t.order, tok)
+		added = true
+	}
+	for len(t.order) > lineageLeftMax {
+		delete(t.set, t.order[0])
+		t.order = t.order[1:]
+	}
+	return added
+}
+
+func (t *lineageLeftTokens) has(tok string) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	_, ok := t.set[tok]
+	return ok
+}
+
+// recent returns up to n of the newest tokens.
+func (t *lineageLeftTokens) recent(n int) []string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if len(t.order) <= n {
+		return append([]string(nil), t.order...)
+	}
+	return append([]string(nil), t.order[len(t.order)-n:]...)
 }

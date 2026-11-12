@@ -142,28 +142,6 @@ type RedisMapBrokerConfig struct {
 	// Without it the broker uses the script cache of Redis 7+ and Valkey, which
 	// needs no extra permissions (no detection on Redis 6 and Dragonfly).
 	UseInfoCommandForLineage bool
-	// ResyncOnlyLostSlots makes a failover or a restart that started a new
-	// lineage of a Redis server's data reset only the slots (the whole server
-	// outside Redis Cluster) where a write some node observed is missing,
-	// instead of every stream and map on the server. Every meta write then bumps
-	// a per-slot counter, which replies and PUB/SUB payloads carry, and the node
-	// opening the gate polls every node for the newest write it observed; if any
-	// node doesn't answer, everything resets as without this option. Only with
-	// the script-cache gate (not with UseInfoCommandForLineage). Writes are
-	// counted only while every node runs a version that reads the payloads, so
-	// the option may be on during a rolling upgrade (until then everything
-	// resets).
-	ResyncOnlyLostSlots bool
-	// LineageWriteCounter controls the local twin of the lineage write counter:
-	// every write also counts on the server itself, without replication, so a
-	// server whose data was copied from another server is caught even when it
-	// holds our scripts (an old primary that took a full copy of the new one,
-	// behind one address). LineageWriteCounterAuto (the default) uses it on
-	// shards with one address, where servers can change unseen, and not with
-	// Sentinel and Redis Cluster, where the script cache suffices.
-	// LineageWriteCounterOn uses it everywhere; LineageWriteCounterOff nowhere.
-	// It adds some Redis CPU to every write.
-	LineageWriteCounter LineageWriteCounter
 	// IdempotentResultTTL is a time-to-live for idempotent result.
 	IdempotentResultTTL time.Duration
 	// SubscribeOnReplica allows subscribing on replica Redis nodes.
@@ -220,9 +198,6 @@ type RedisMapBrokerConfig struct {
 func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, error) {
 	if len(conf.Shards) == 0 {
 		return nil, errors.New("state broker: no shards provided")
-	}
-	if err := conf.LineageWriteCounter.validate(); err != nil {
-		return nil, fmt.Errorf("state broker: %w", err)
 	}
 
 	if conf.SubscribeOnReplica {
@@ -304,7 +279,7 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 	for _, sw := range e.shards {
 		sw.shard.ensureLineage()
 		for _, ls := range []*lineageScript{e.addScript, e.readOrderedScript, e.readUnorderedScript, e.readStreamScript, e.readMetaScript, e.batchRemoveScript} {
-			sw.shard.lineage.register(ls, conf.LoadSHA1, conf.ResyncOnlyLostSlots, conf.LineageWriteCounter)
+			sw.shard.lineage.register(ls, conf.LoadSHA1)
 		}
 		sw.shard.lineage.setLogger(n)
 	}
@@ -365,7 +340,7 @@ func parseStateValue(val []byte) (uint64, string, []byte, error) {
 	}
 
 	// Extract epoch
-	epoch := convert.BytesToString(remaining[:secondColon])
+	epoch := pubsubEpoch(convert.BytesToString(remaining[:secondColon]))
 
 	// Everything after second colon is payload
 	payload := remaining[secondColon+1:]
@@ -1087,14 +1062,6 @@ func (e *RedisMapBroker) readSingleKeyWithOpts(ctx context.Context, ch string, o
 		offsetVal, _ := metaArr[0].AsUint64()
 		epochVal, _ := metaArr[1].ToString()
 		streamPos = StreamPosition{Offset: offsetVal, Epoch: epochVal}
-		if len(metaArr) >= 4 {
-			// A plain read: it observes the meta's last write too.
-			if count, err := metaArr[2].AsUint64(); err == nil {
-				if stamp, err := metaArr[3].ToString(); err == nil && stamp != "" {
-					s.shard.lineage.observe(s.shard.lineage.slotIndex(metaKey), stamp, count)
-				}
-			}
-		}
 	}
 
 	// Validate epoch if client provided state revision
@@ -1182,7 +1149,6 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 		return MapStateResult{}, err
 	}
 	streamEpoch, _ := replies[1].ToString()
-	streamEpoch = s.shard.lineage.takeObservation(e.metaKey(s.shard, ch), streamEpoch)
 	nextCursor, _ := replies[2].ToString()
 	if nextCursor == "0" {
 		nextCursor = "" // Convert Redis HSCAN "0" (complete) to empty string
@@ -1442,7 +1408,6 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 		return MapStateResult{}, err
 	}
 	streamEpoch, _ := replies[1].ToString()
-	streamEpoch = s.shard.lineage.takeObservation(e.metaKey(s.shard, ch), streamEpoch)
 	keysArr, _ := replies[2].ToArray()
 	valuesArr, _ := replies[3].ToArray()
 	nextCursorScore, _ := replies[4].ToString()
@@ -2045,7 +2010,6 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 	if err != nil {
 		return MapStreamResult{}, fmt.Errorf("could not parse epoch: %w", err)
 	}
-	epoch = s.shard.lineage.takeObservation(e.metaKey(s.shard, ch), epoch)
 
 	// Validate epoch if provided in Since filter.
 	if opts.Filter.Since != nil && opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != epoch {
@@ -2194,7 +2158,6 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 	if err != nil {
 		return MapStreamResult{}, fmt.Errorf("could not parse epoch: %w", err)
 	}
-	epoch = s.shard.lineage.takeObservation(e.metaKey(s.shard, ch), epoch)
 
 	// Validate epoch if provided in Since filter.
 	if opts.Filter.Since != nil && opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != epoch {
@@ -2853,11 +2816,6 @@ func (e *RedisMapBroker) batchRemoveExpired(ctx context.Context, shard *RedisSha
 	if err != nil {
 		return err
 	}
-	if len(result) > 2 {
-		if epochObs, parseErr := result[2].ToString(); parseErr == nil {
-			shard.lineage.takeObservation(e.metaKey(shard, ch), epochObs)
-		}
-	}
 	if len(result) > 0 {
 		if removedCount, parseErr := result[0].AsInt64(); parseErr == nil && removedCount > 0 {
 			if e.node.metrics != nil {
@@ -2984,10 +2942,6 @@ func (e *RedisMapBroker) handleRedisClientMessage(isCluster bool, eventHandler B
 	channel := e.extractChannel(chID)
 	if channel == "" {
 		return fmt.Errorf("unsupported channel: %s", chID)
-	}
-	if strings.IndexByte(epoch, ';') >= 0 {
-		shard := e.getShard(channel).shard
-		epoch = shard.lineage.takeObservation(e.metaKey(shard, channel), epoch)
 	}
 
 	sp := StreamPosition{Offset: offset, Epoch: epoch}
@@ -3314,7 +3268,7 @@ func parseMessage(data []byte) (uint64, string, []byte, bool, []byte, error) {
 	}
 
 	// Extract epoch
-	epoch := convert.BytesToString(remaining[:secondColon])
+	epoch := pubsubEpoch(convert.BytesToString(remaining[:secondColon]))
 
 	// Everything after second colon is protobuf bytes
 	protobuf := remaining[secondColon+1:]
@@ -3340,7 +3294,7 @@ func parseDeltaMessage(data []byte) (uint64, string, []byte, bool, []byte, error
 	if secondColon == -1 {
 		return 0, "", nil, false, nil, fmt.Errorf("delta: missing epoch separator")
 	}
-	epoch := convert.BytesToString(remaining[:secondColon])
+	epoch := pubsubEpoch(convert.BytesToString(remaining[:secondColon]))
 
 	// Parse prev_len
 	remaining = remaining[secondColon+1:]
@@ -3465,6 +3419,5 @@ func (e *RedisMapBroker) observeUpdate(s *RedisShard, ch string, res MapUpdateRe
 	if err != nil {
 		return res, err
 	}
-	res.Position.Epoch = s.lineage.takeObservation(e.metaKey(s, ch), res.Position.Epoch)
 	return res, nil
 }

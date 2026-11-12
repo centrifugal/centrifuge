@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/controlpb"
@@ -86,9 +85,17 @@ type Node struct {
 	surveyMu       sync.RWMutex
 	surveyID       uint64
 
-	// lineages are the Redis lineages of this node's brokers, by shard (see
-	// redis_lineage.go), for the lineage survey.
+	// lineages are the Redis lineages of this node's brokers (see
+	// redis_lineage.go).
 	lineages sync.Map
+	// lineageLeft are the lineage tokens this node saw replaced, shared by its
+	// lineages and passed to other nodes with the node info.
+	lineageLeft *lineageLeftTokens
+	// lineagePeers is closed once this node heard from another node (or found
+	// none in time): a restarted node learns the replaced tokens of the others
+	// before trusting a lineage.
+	lineagePeers     chan struct{}
+	lineagePeersOnce sync.Once
 
 	notificationHandler NotificationHandler
 	nodeInfoSendHandler NodeInfoSendHandler
@@ -206,6 +213,8 @@ func New(c Config) (*Node, error) {
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
 		nowTimeGetter:  nowtime.Get,
 		surveyRegistry: make(map[uint64]chan survey),
+		lineageLeft:    newLineageLeftTokens(),
+		lineagePeers:   make(chan struct{}),
 		mediums:        mediums,
 		mediumLocks:    mediumLocks,
 		timerScheduler: c.ClientTimerScheduler,
@@ -575,13 +584,6 @@ func (n *Node) handleNotification(fromNodeID string, req *controlpb.Notification
 }
 
 func (n *Node) handleSurveyRequest(fromNodeID string, req *controlpb.SurveyRequest) error {
-	if req.Op == lineageSurveyOp {
-		reply := n.handleLineageSurvey(req.Data)
-		return n.publishControl(&controlpb.Command{
-			Uid:            n.uid,
-			SurveyResponse: &controlpb.SurveyResponse{Id: req.Id, Code: reply.Code, Data: reply.Data},
-		}, fromNodeID)
-	}
 	if n.surveyHandler == nil && n.emulationSurveyHandler == nil {
 		return nil
 	}
@@ -656,7 +658,7 @@ const defaultSurveyTimeout = 10 * time.Second
 // method to handle received surveys.
 // Survey ops starting with `centrifuge_` are reserved by Centrifuge library.
 func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID string) (map[string]SurveyResult, error) {
-	if n.surveyHandler == nil && op != emulationOp && op != lineageSurveyOp {
+	if n.surveyHandler == nil && op != emulationOp {
 		return nil, errSurveyHandlerNotRegistered
 	}
 
@@ -716,9 +718,6 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID stri
 					Result: SurveyResult(reply),
 				}
 			})
-		} else if op == lineageSurveyOp {
-			reply := n.handleLineageSurvey(data)
-			surveyChan <- survey{UID: n.uid, Result: SurveyResult(reply)}
 		} else {
 			n.surveyHandler(SurveyEvent{Op: op, Data: data}, func(reply SurveyReply) {
 				surveyChan <- survey{
@@ -1074,7 +1073,7 @@ func (n *Node) pubNode(nodeID string) error {
 		NumSubs:     uint32(n.hub.NumSubscriptions()),
 		Uptime:      uint32(time.Now().Unix() - n.startedAt),
 		Data:        data,
-		Caps:        nodeCaps,
+		LineageLeft: n.lineageLeft.recent(lineageLeftExchanged),
 	}
 
 	n.metricsMu.Lock()
@@ -1426,6 +1425,10 @@ func (n *Node) unsubscribeFromBrokerWhenEmpty(ch string, wasMap bool) {
 
 // nodeCmd handles node control command i.e. updates information about known nodes.
 func (n *Node) nodeCmd(node *controlpb.Node) error {
+	if node.Uid != n.uid {
+		n.learnLineageLeft(node.LineageLeft)
+		n.lineagePeersOnce.Do(func() { close(n.lineagePeers) })
+	}
 	isNewNode := n.nodes.add(node)
 	if isNewNode && node.Uid != n.uid {
 		// New Node in cluster
@@ -1980,21 +1983,7 @@ type nodeRegistry struct {
 	nodes map[string]*controlpb.Node
 	// updates track time we last received ping from node. Used to clean up nodes map.
 	updates map[string]int64
-	// allCaps are the caps every known node has (see nodeCaps).
-	allCaps atomic.Uint32
-	// departed is when a node last left (UnixNano, 0: never).
-	departed atomic.Int64
 }
-
-// Node caps (controlpb.Node.Caps), a bit set of what other nodes may rely on.
-const (
-	// nodeCapLineageObs: the node strips the write observations of
-	// ResyncOnlyLostSlots from epochs (see redisLineage.observe).
-	nodeCapLineageObs uint32 = 1 << iota
-)
-
-// nodeCaps are the caps of this node.
-const nodeCaps = nodeCapLineageObs
 
 func newNodeRegistry(currentUID string) *nodeRegistry {
 	return &nodeRegistry{
@@ -2047,7 +2036,7 @@ func (r *nodeRegistry) add(info *controlpb.Node) bool {
 				Uptime:      info.Uptime,
 				Data:        info.Data,
 				NumSubs:     info.NumSubs,
-				Caps:        info.Caps,
+				LineageLeft: info.LineageLeft,
 				Metrics:     node.Metrics,
 			}
 		}
@@ -2056,46 +2045,14 @@ func (r *nodeRegistry) add(info *controlpb.Node) bool {
 		isNewNode = true
 	}
 	r.updates[info.Uid] = time.Now().Unix()
-	r.updateCapsLocked()
 	r.mu.Unlock()
 	return isNewNode
 }
 
-// updateCapsLocked recomputes the caps every known node has.
-func (r *nodeRegistry) updateCapsLocked() {
-	if len(r.nodes) == 0 {
-		r.allCaps.Store(0)
-		return
-	}
-	all := ^uint32(0)
-	for _, nd := range r.nodes {
-		all &= nd.Caps
-	}
-	r.allCaps.Store(all)
-}
-
-// haveAll tells whether every known node has the cap.
-func (r *nodeRegistry) haveAll(cap uint32) bool {
-	return r.allCaps.Load()&cap == cap
-}
-
-// lastDeparture is when a node last left the registry (zero: never).
-func (r *nodeRegistry) lastDeparture() time.Time {
-	ns := r.departed.Load()
-	if ns == 0 {
-		return time.Time{}
-	}
-	return time.Unix(0, ns)
-}
-
 func (r *nodeRegistry) remove(uid string) {
 	r.mu.Lock()
-	if _, ok := r.nodes[uid]; ok && uid != r.currentUID {
-		r.departed.Store(time.Now().UnixNano())
-	}
 	delete(r.nodes, uid)
 	delete(r.updates, uid)
-	r.updateCapsLocked()
 	r.mu.Unlock()
 }
 
@@ -2116,10 +2073,8 @@ func (r *nodeRegistry) clean(delay time.Duration) {
 			// Too many seconds since this node have been last seen - remove it from map.
 			delete(r.nodes, uid)
 			delete(r.updates, uid)
-			r.departed.Store(time.Now().UnixNano())
 		}
 	}
-	r.updateCapsLocked()
 	r.mu.Unlock()
 }
 
@@ -2491,4 +2446,56 @@ func (n *Node) MapClear(ctx context.Context, ch string, opts MapClearOptions) er
 	}
 	n.metrics.incActionCount("map_clear", ch)
 	return mapBroker.Clear(ctx, ch, opts)
+}
+
+// lineageLeftExchanged is how many of its newest replaced lineage tokens a node
+// sends with its node info.
+const lineageLeftExchanged = 64
+
+// lineagePeersWait bounds how long a node starting its first lineage call
+// waits to hear from another node (others answer a new node at once).
+var lineagePeersWait = 300 * time.Millisecond
+
+func (n *Node) registerLineage(l *redisLineage) {
+	n.lineages.Store(l, struct{}{})
+}
+
+// awaitLineagePeers waits, once, until this node heard from another node or
+// lineagePeersWait passed since it started.
+func (n *Node) awaitLineagePeers(ctx context.Context) {
+	select {
+	case <-n.lineagePeers:
+		return
+	default:
+	}
+	wait := lineagePeersWait - time.Since(time.Unix(n.startedAt, 0))
+	if wait <= 0 {
+		n.lineagePeersOnce.Do(func() { close(n.lineagePeers) })
+		return
+	}
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case <-n.lineagePeers:
+	case <-t.C:
+		n.lineagePeersOnce.Do(func() { close(n.lineagePeers) })
+	case <-ctx.Done():
+	}
+}
+
+// learnLineageLeft records lineage tokens another node saw replaced. A lineage
+// whose current token is among them rotates: its server is a stale copy.
+func (n *Node) learnLineageLeft(tokens []string) {
+	if !n.lineageLeft.add(tokens...) {
+		return
+	}
+	n.lineages.Range(func(k, _ any) bool {
+		l := k.(*redisLineage)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			l.reconcile(ctx)
+		}()
+		return true
+	})
 }

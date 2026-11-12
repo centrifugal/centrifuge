@@ -396,56 +396,9 @@ func TestRedisLineage_GateRefusesReplica(t *testing.T) {
 	if kind.primary || !kind.gateCapable {
 		t.Skip("the replica is not a gate-capable server")
 	}
-	err = s.lineage.open(context.Background(), lineageTokenKeyBase, false, "")
+	err = s.lineage.open(context.Background(), lineageTokenKeyBase, false, "", "")
 	require.ErrorIs(t, err, errLineageGate)
 	require.Contains(t, err.Error(), "not a primary")
-}
-
-// The probe flushes a demoted server holding our scripts. Emulated: our marker
-// loaded on a replica.
-func TestRedisLineage_ProbeFlushesDemotedServer(t *testing.T) {
-	_, rPort := sentinelSetupPorts(t)
-	node := testNode(t)
-	s, err := NewRedisShard(node, testSingleRedisConf(rPort))
-	require.NoError(t, err)
-	defer s.Close()
-	hello, err := s.client.Do(context.Background(), s.client.B().Hello().Build()).AsMap()
-	require.NoError(t, err)
-	kind := parseHelloReply(helloFields(hello))
-	if kind.primary || !kind.gateCapable {
-		t.Skip("the replica is not a gate-capable server")
-	}
-	ctx := context.Background()
-	token := "gtest" + randString(6)
-	require.NoError(t, s.client.Do(ctx, s.client.B().ScriptLoad().Script(lineageMarkerSource(token)).Build()).Error())
-	s.lineage.setToken(0, token)
-
-	s.lineage.probe(ctx)
-
-	sha := sha1Hex(lineageMarkerSource(token))
-	res, err := s.client.Do(ctx, s.client.B().ScriptExists().Sha1(sha).Build()).AsIntSlice()
-	require.NoError(t, err)
-	require.Equal(t, []int64{0}, res, "the probe must flush a demoted server holding our scripts")
-	require.Equal(t, 1, s.lineage.stats.flushes)
-}
-
-// A different server behind the shard's connection (a failover behind one
-// address) makes the probe rotate even though the server holds our marker.
-func TestRedisLineage_ProbeRotatesOnNewServer(t *testing.T) {
-	tt := lineageRedisTest{"rd_single", false, 6379, true}
-	b := newLineageTestBroker(t, tt, false)
-	s := b.shards[0].shard
-	ch := "lineage_identity_" + randString(6)
-	before := lineagePublish(t, b, ch, 2)
-
-	s.lineage.tokensMu.Lock()
-	s.lineage.identity = "10.255.255.1:6379" // the server the gate opened on before
-	s.lineage.tokensMu.Unlock()
-	s.lineage.probe(context.Background())
-
-	after := lineagePublish(t, b, ch, 1)
-	require.NotEqual(t, before.Epoch, after.Epoch)
-	require.Equal(t, uint64(1), after.Offset)
 }
 
 // A slot migrated in from another server carries that server's token (its
@@ -479,7 +432,7 @@ func TestRedisLineage_MigratedSlotAdopted(t *testing.T) {
 			require.NoError(t, err)
 			tok, anc := parseTokenValue(value)
 			require.NotEqual(t, "gforeign", tok)
-			require.Equal(t, "gforeign", anc.token, "the foreign token is the ancestor")
+			require.Equal(t, "gforeign", anc, "the foreign token is the ancestor")
 
 			otherAfter := lineagePublish(t, b, other, 1)
 			if redisKeySlot(string(b.historyMetaKey(s, other))) != redisKeySlot(metaKey) {

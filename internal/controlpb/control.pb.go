@@ -192,8 +192,8 @@ type Node struct {
 	Metrics     *Metrics               `protobuf:"bytes,8,opt,name=metrics,proto3" json:"metrics,omitempty"`
 	Data        []byte                 `protobuf:"bytes,9,opt,name=data,proto3" json:"data,omitempty"`
 	NumSubs     uint32                 `protobuf:"varint,10,opt,name=num_subs,json=numSubs,proto3" json:"num_subs,omitempty"`
-	// caps: features of the node that others may rely on, a bit set.
-	Caps          uint32 `protobuf:"varint,11,opt,name=caps,proto3" json:"caps,omitempty"`
+	// lineage_left: Redis lineage tokens the node saw replaced (the newest).
+	LineageLeft   []string `protobuf:"bytes,11,rep,name=lineage_left,json=lineageLeft,proto3" json:"lineage_left,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -298,11 +298,11 @@ func (x *Node) GetNumSubs() uint32 {
 	return 0
 }
 
-func (x *Node) GetCaps() uint32 {
+func (x *Node) GetLineageLeft() []string {
 	if x != nil {
-		return x.Caps
+		return x.LineageLeft
 	}
-	return 0
+	return nil
 }
 
 type Metrics struct {
@@ -1168,7 +1168,7 @@ const file_control_proto_rawDesc = "" +
 	"\fnotification\x18\v \x01(\v2\x17.controlpb.NotificationR\fnotification\x12,\n" +
 	"\arefresh\x18\f \x01(\v2\x12.controlpb.RefreshR\arefresh\"\n" +
 	"\n" +
-	"\bShutdown\"\xb0\x02\n" +
+	"\bShutdown\"\xbf\x02\n" +
 	"\x04Node\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\tR\x03uid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
@@ -1181,8 +1181,8 @@ const file_control_proto_rawDesc = "" +
 	"\ametrics\x18\b \x01(\v2\x12.controlpb.MetricsR\ametrics\x12\x12\n" +
 	"\x04data\x18\t \x01(\fR\x04data\x12\x19\n" +
 	"\bnum_subs\x18\n" +
-	" \x01(\rR\anumSubs\x12\x12\n" +
-	"\x04caps\x18\v \x01(\rR\x04caps\"\x94\x01\n" +
+	" \x01(\rR\anumSubs\x12!\n" +
+	"\flineage_left\x18\v \x03(\tR\vlineageLeft\"\x94\x01\n" +
 	"\aMetrics\x12\x1a\n" +
 	"\binterval\x18\x01 \x01(\x01R\binterval\x123\n" +
 	"\x05items\x18\x02 \x03(\v2\x1d.controlpb.Metrics.ItemsEntryR\x05items\x1a8\n" +

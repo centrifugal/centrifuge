@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/controlpb"
 	"github.com/redis/rueidis"
 	"github.com/stretchr/testify/require"
 )
@@ -186,17 +185,12 @@ func setupPair(t *testing.T, p failoverPair) (*RedisBroker, *tcpProxy, *adminRed
 
 func setupPairOpts(t *testing.T, p failoverPair, noLineage bool) (*RedisBroker, *tcpProxy, *adminRedis, *adminRedis) {
 	t.Helper()
-	return setupPairConf(t, p, noLineage, false)
-}
-
-func setupPairConf(t *testing.T, p failoverPair, noLineage, selective bool) (*RedisBroker, *tcpProxy, *adminRedis, *adminRedis) {
-	t.Helper()
-	return setupPairHook(t, p, noLineage, selective, nil)
+	return setupPairHook(t, p, noLineage, nil)
 }
 
 // setupPairHook is setupPairConf with a hook on the shard before the broker
 // starts.
-func setupPairHook(t *testing.T, p failoverPair, noLineage, selective bool, hook func(*RedisShard)) (*RedisBroker, *tcpProxy, *adminRedis, *adminRedis) {
+func setupPairHook(t *testing.T, p failoverPair, noLineage bool, hook func(*RedisShard)) (*RedisBroker, *tcpProxy, *adminRedis, *adminRedis) {
 	t.Helper()
 	a, b := newAdmin(t, p.a), newAdmin(t, p.b)
 	a.promote()
@@ -216,7 +210,7 @@ func setupPairHook(t *testing.T, p failoverPair, noLineage, selective bool, hook
 	if hook != nil {
 		hook(s)
 	}
-	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: getUniquePrefix(), Shards: []*RedisShard{s}, ResyncOnlyLostSlots: selective})
+	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: getUniquePrefix(), Shards: []*RedisShard{s}})
 	require.NoError(t, err)
 	node.SetBroker(br)
 	require.NoError(t, node.Run())
@@ -226,24 +220,16 @@ func setupPairHook(t *testing.T, p failoverPair, noLineage, selective bool, hook
 		a.promote()
 		b.promote()
 	})
-	if selective {
-		// Tests start nodes just now: no witness window, and writes counted
-		// once the node knows every node strips observations.
-		prevWindow := lineageWitnessWindow
-		lineageWitnessWindow = 0
-		t.Cleanup(func() { lineageWitnessWindow = prevWindow })
-		require.Eventually(t, s.lineage.counting, 10*time.Second, 10*time.Millisecond)
-	}
 	return br, proxy, a, b
 }
 
 // addPairNode starts one more node on the same proxy and prefix.
-func addPairNode(t *testing.T, proxy *tcpProxy, prefix string, selective bool) (*Node, *RedisBroker) {
+func addPairNode(t *testing.T, proxy *tcpProxy, prefix string) (*Node, *RedisBroker) {
 	t.Helper()
 	node := testNode(t)
 	s, err := NewRedisShard(node, testSingleRedisConfAddr(proxy.addr()))
 	require.NoError(t, err)
-	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}, ResyncOnlyLostSlots: selective})
+	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}})
 	require.NoError(t, err)
 	node.SetBroker(br)
 	require.NoError(t, node.Run())
@@ -455,7 +441,7 @@ func TestRedisFailover_ClusterFailover(t *testing.T) {
 	// may have moved the slot).
 	slot := int(redisKeySlot(string(br.historyMetaKey(s, ch))))
 	ctx := context.Background()
-	var primaryAddr string
+	var primaryAddr string // for failure messages
 	var replica *adminRedis
 	require.Eventually(t, func() bool {
 		nodes, err := s.client.Do(ctx, s.client.B().ClusterNodes().Build()).ToString()
@@ -495,239 +481,12 @@ func TestRedisFailover_ClusterFailover(t *testing.T) {
 		sp = publishEventually(t, br, ch)
 		return sp.Epoch != before.Epoch
 	}, 10*time.Second, 50*time.Millisecond, "the promoted replica starts a new lineage")
-	require.Equal(t, uint64(1), sp.Offset, "the first publication on the promoted replica starts the new epoch")
-
-	// The demoted primary held our scripts: the probe flushes them.
-	old := newAdmin(t, primaryAddr)
-	require.Eventually(t, func() bool {
-		res, err := old.do("SCRIPT", "EXISTS", sha1Hex(lineageMarkerSource(s.lineage.knownTokens()[0]))).AsIntSlice()
-		return err == nil && len(res) == 1 && res[0] == 0
-	}, 10*time.Second, 50*time.Millisecond)
+	require.Equal(t, uint64(1), sp.Offset, "the first publication on the promoted replica starts the new epoch (old primary %s)", primaryAddr)
 }
 
-func lineageStatsOf(b *RedisBroker) (rotations, kept, reset int) {
+func lineageRotations(b *RedisBroker) int {
 	st := &b.shards[0].shard.lineage.stats
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	return st.rotations, st.keptSlots, st.resetSlots
-}
-
-// ResyncOnlyLostSlots: a failover that lost nothing anyone observed keeps the
-// streams (the epoch survives, offsets continue).
-func TestRedisFailover_SelectiveLosslessKeepsEpoch(t *testing.T) {
-	for _, p := range failoverPairs(t) {
-		t.Run(p.name, func(t *testing.T) {
-			br, proxy, a, b := setupPairConf(t, p, false, true)
-			ch := "selective_keep_" + randString(6)
-			var before StreamPosition
-			for i := 0; i < 3; i++ {
-				before = publishEventually(t, br, ch)
-			}
-			waitSynced(t, a, b)
-
-			b.promote()
-			proxy.move(p.b, true)
-			a.replicaOf(p.b)
-
-			sp := publishEventually(t, br, ch)
-			require.Equal(t, before.Epoch, sp.Epoch, "nothing observed was lost: the stream is kept")
-			require.Equal(t, uint64(4), sp.Offset)
-			_, kept, _ := lineageStatsOf(br)
-			require.Equal(t, 1, kept)
-		})
-	}
-}
-
-// ResyncOnlyLostSlots: a failover that lost an acknowledged write resets.
-func TestRedisFailover_SelectiveLossyResets(t *testing.T) {
-	for _, p := range failoverPairs(t) {
-		t.Run(p.name, func(t *testing.T) {
-			br, proxy, a, b := setupPairConf(t, p, false, true)
-			ch := "selective_lossy_" + randString(6)
-			for i := 0; i < 3; i++ {
-				publishEventually(t, br, ch)
-			}
-			waitSynced(t, a, b)
-			b.promote()
-			lost := publishEventually(t, br, ch)
-
-			proxy.move(p.b, true)
-			a.replicaOf(p.b)
-
-			sp := publishEventually(t, br, ch)
-			require.NotEqual(t, lost.Epoch, sp.Epoch)
-			require.Equal(t, uint64(1), sp.Offset)
-		})
-	}
-}
-
-// ResyncOnlyLostSlots: a lost write only another node observed (over PUB/SUB;
-// the publisher's own record of it is gone, as when its reply is cut) still
-// resets: the survey finds it.
-func TestRedisFailover_SelectiveObservedByAnotherNode(t *testing.T) {
-	for _, p := range failoverPairs(t) {
-		t.Run(p.name, func(t *testing.T) {
-			br, proxy, a, b := setupPairConf(t, p, false, true)
-			nodeB, brB := addPairNode(t, proxy, br.config.Prefix, true)
-			ch := "selective_observed_" + randString(6)
-			require.NoError(t, brB.Subscribe(ch))
-			require.Eventually(t, func() bool {
-				return br.node.nodes.size() == 2 && nodeB.nodes.size() == 2
-			}, 15*time.Second, 50*time.Millisecond, "both nodes must know each other for the survey")
-
-			for i := 0; i < 3; i++ {
-				publishEventually(t, br, ch)
-			}
-			waitSynced(t, a, b)
-			b.promote()
-			lost := publishEventually(t, br, ch)
-
-			// Node B observed the lost write over PUB/SUB.
-			lb := brB.shards[0].shard.lineage
-			require.Eventually(t, func() bool {
-				lb.obsMu.Lock()
-				defer lb.obsMu.Unlock()
-				return lb.obs[0].count >= 4
-			}, 5*time.Second, 10*time.Millisecond)
-			// The publisher forgets it, as if its reply had been cut.
-			la := br.shards[0].shard.lineage
-			la.obsMu.Lock()
-			la.obs[0] = lineageObs{}
-			la.obsMu.Unlock()
-
-			proxy.move(p.b, true)
-			a.replicaOf(p.b)
-
-			sp := publishEventually(t, br, ch)
-			require.NotEqual(t, lost.Epoch, sp.Epoch, "node B saw offset 4 of the old epoch: it must not be handed out again")
-			require.Equal(t, uint64(1), sp.Offset)
-		})
-	}
-}
-
-// The control of the test above: when no node observed the lost write, the
-// survey finds nothing missing and the stream is kept - a write nobody saw is
-// as if it never happened (its publisher got no reply).
-func TestRedisFailover_SelectiveControlNobodyObserved(t *testing.T) {
-	for _, p := range failoverPairs(t) {
-		t.Run(p.name, func(t *testing.T) {
-			br, proxy, a, b := setupPairConf(t, p, false, true)
-			ch := "selective_control_" + randString(6)
-			var before StreamPosition
-			for i := 0; i < 3; i++ {
-				before = publishEventually(t, br, ch)
-			}
-			waitSynced(t, a, b)
-			b.promote()
-			publishEventually(t, br, ch)
-			la := br.shards[0].shard.lineage
-			la.obsMu.Lock()
-			la.obs[0] = lineageObs{token: la.obs[0].token, count: 3}
-			la.obsMu.Unlock()
-
-			proxy.move(p.b, true)
-			a.replicaOf(p.b)
-
-			sp := publishEventually(t, br, ch)
-			require.Equal(t, before.Epoch, sp.Epoch)
-			require.Equal(t, uint64(4), sp.Offset)
-		})
-	}
-}
-
-// The failback the script cache can't see: the old primary takes a full copy
-// of the new one (losing its last writes), keeps our scripts loaded, and is
-// promoted again - all behind the same address, with no call reaching it
-// meanwhile and no probe noticing. The twin of the write counter catches it:
-// the old primary's data came from another server.
-func TestRedisFailover_FailbackTwinDetects(t *testing.T) {
-	testFailbackTwin(t, false)
-}
-
-// Control: the same with the twin off - the old primary looks intact and
-// offset 4 is given out again under the old epoch.
-func TestRedisFailover_FailbackTwinControl(t *testing.T) {
-	testFailbackTwin(t, true)
-}
-
-func testFailbackTwin(t *testing.T, twinOff bool) {
-	prev := lineageProbeInterval
-	lineageProbeInterval = time.Hour // the probe must not help
-	t.Cleanup(func() { lineageProbeInterval = prev })
-	for _, p := range failoverPairs(t) {
-		t.Run(p.name, func(t *testing.T) {
-			br, _, a, b := setupPairHook(t, p, false, false, func(s *RedisShard) {
-				s.lineage.twinDisabledForTest = twinOff
-			})
-			ch := "failback_twin_" + randString(6)
-			for i := 0; i < 3; i++ {
-				publishEventually(t, br, ch)
-			}
-			waitSynced(t, a, b)
-
-			// b promoted: a's next write never reaches it.
-			b.promote()
-			lostA := publishEventually(t, br, ch)
-			require.Equal(t, uint64(4), lostA.Offset)
-
-			// a takes a full copy of b (it diverged), then is promoted back.
-			// The address never moved.
-			a.replicaOf(p.b)
-			waitSynced(t, b, a)
-			a.promote()
-			b.replicaOf(p.a)
-
-			sp := publishEventually(t, br, ch)
-			if twinOff {
-				require.Equal(t, lostA.Epoch, sp.Epoch, "control: the old primary looks intact")
-				require.Equal(t, uint64(4), sp.Offset, "control: offset 4 given out again")
-				return
-			}
-			require.NotEqual(t, lostA.Epoch, sp.Epoch, "a new epoch: offset 4 isn't reused")
-		})
-	}
-}
-
-// ResyncOnlyLostSlots: a node that left shortly before the failover may have
-// observed the lost writes: every slot is reset, even if the survey finds
-// nothing missing.
-func TestRedisFailover_SelectiveRecentDepartureResets(t *testing.T) {
-	testSelectiveWitness(t, func(br *RedisBroker) {
-		lineageWitnessWindow = time.Minute
-		br.node.nodes.add(&controlpb.Node{Uid: "gone", Caps: nodeCaps})
-		br.node.nodes.remove("gone")
-	})
-}
-
-// ResyncOnlyLostSlots: nodes running (or counting) for less than the witness
-// window may have forgotten observations: every slot is reset.
-func TestRedisFailover_SelectiveYoungWitnessResets(t *testing.T) {
-	testSelectiveWitness(t, func(br *RedisBroker) {
-		lineageWitnessWindow = time.Hour
-	})
-}
-
-func testSelectiveWitness(t *testing.T, prepare func(br *RedisBroker)) {
-	for _, p := range failoverPairs(t) {
-		t.Run(p.name, func(t *testing.T) {
-			br, proxy, a, b := setupPairConf(t, p, false, true)
-			ch := "selective_witness_" + randString(6)
-			var before StreamPosition
-			for i := 0; i < 3; i++ {
-				before = publishEventually(t, br, ch)
-			}
-			waitSynced(t, a, b)
-			prepare(br)
-
-			// Lossless failover: kept with every witness in place, reset here.
-			b.promote()
-			proxy.move(p.b, true)
-			a.replicaOf(p.b)
-
-			sp := publishEventually(t, br, ch)
-			require.NotEqual(t, before.Epoch, sp.Epoch)
-			_, kept, _ := lineageStatsOf(br)
-			require.Zero(t, kept)
-		})
-	}
+	return st.rotations
 }

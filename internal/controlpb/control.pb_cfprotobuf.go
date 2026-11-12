@@ -506,8 +506,8 @@ func (m *Node) SizeCF() (n int) {
 	if m.NumSubs != 0 {
 		n += 1 + cfprotobuf.SizeOfInt(m.NumSubs)
 	}
-	if m.Caps != 0 {
-		n += 1 + cfprotobuf.SizeOfInt(m.Caps)
+	for _, e := range m.LineageLeft {
+		n += 1 + len(e) + cfprotobuf.SizeOfLen(len(e))
 	}
 	n += len(m.unknownFields)
 	return n
@@ -543,10 +543,12 @@ func (m *Node) MarshalToSizedBufferCF(b []byte) (int, error) {
 		i -= len(m.unknownFields)
 		copy(b[i:], m.unknownFields)
 	}
-	if m.Caps != 0 {
-		i = cfprotobuf.PutInt(b, i, m.Caps)
+	for n := len(m.LineageLeft) - 1; n >= 0; n-- {
+		i -= len(m.LineageLeft[n])
+		copy(b[i:], m.LineageLeft[n])
+		i = cfprotobuf.PutLen(b, i, len(m.LineageLeft[n]))
 		i--
-		b[i] = 0x58
+		b[i] = 0x5a
 	}
 	if m.NumSubs != 0 {
 		i = cfprotobuf.PutInt(b, i, m.NumSubs)
@@ -778,16 +780,23 @@ func (m *Node) unmarshalCF(b []byte, depth int) error {
 				i = next
 				continue
 			}
-		case 11: // Caps
-			if tag&7 == 0 {
-				var v uint64
-				if i < len(b) && b[i] < 0x80 {
-					v, next = uint64(b[i]), i+1
-				} else if v, next = cfprotobuf.Varint(b, i); next < 0 {
-					return cfprotobuf.Error(next)
+		case 11: // LineageLeft
+			if tag&7 == 2 {
+				var e string
+				from := i + 1
+				var to int
+				if i < len(b) && b[i] < 0x80 && int(b[i]) <= len(b)-from {
+					to = from + int(b[i])
+				} else if from, to = cfprotobuf.Length(b, i); from < 0 {
+					return cfprotobuf.Error(from)
 				}
-				m.Caps = cfprotobuf.Int[uint32](v)
-				i = next
+				s := b[from:to]
+				if !cfprotobuf.ShortASCII(s) && !cfprotobuf.ValidString(s) {
+					return cfprotobuf.ErrInvalidUTF8
+				}
+				e = string(s)
+				i = to
+				m.LineageLeft = append(m.LineageLeft, e)
 				continue
 			}
 		}

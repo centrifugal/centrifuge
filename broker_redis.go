@@ -123,11 +123,11 @@ type brokerPubSubRunner interface {
 // By default, Redis >= 5 required (due to the fact RedisBroker uses STREAM data
 // structure to keep publication history for a channel).
 type RedisBroker struct {
-	controlRound            uint64
-	node                    *Node
-	sharding                bool
-	config                  RedisBrokerConfig
-	shards                  []*shardWrapper
+	controlRound uint64
+	node         *Node
+	sharding     bool
+	config       RedisBrokerConfig
+	shards       []*shardWrapper
 	// partitionTags is non-nil when UsePrecomputedPartitionTags is enabled;
 	// indexed by partition index, returns the hash tag string. Read-only
 	// after construction (shared with the package-level precomputed table).
@@ -263,37 +263,12 @@ type RedisBrokerConfig struct {
 	// Without it the broker uses the script cache of Redis 7+ and Valkey, which
 	// needs no extra permissions (no detection on Redis 6 and Dragonfly).
 	UseInfoCommandForLineage bool
-	// ResyncOnlyLostSlots makes a failover or a restart that started a new
-	// lineage of a Redis server's data reset only the slots (the whole server
-	// outside Redis Cluster) where a write some node observed is missing,
-	// instead of every stream and map on the server. Every meta write then bumps
-	// a per-slot counter, which replies and PUB/SUB payloads carry, and the node
-	// opening the gate polls every node for the newest write it observed; if any
-	// node doesn't answer, everything resets as without this option. Only with
-	// the script-cache gate (not with UseInfoCommandForLineage). Writes are
-	// counted only while every node runs a version that reads the payloads, so
-	// the option may be on during a rolling upgrade (until then everything
-	// resets).
-	ResyncOnlyLostSlots bool
-	// LineageWriteCounter controls the local twin of the lineage write counter:
-	// every write also counts on the server itself, without replication, so a
-	// server whose data was copied from another server is caught even when it
-	// holds our scripts (an old primary that took a full copy of the new one,
-	// behind one address). LineageWriteCounterAuto (the default) uses it on
-	// shards with one address, where servers can change unseen, and not with
-	// Sentinel and Redis Cluster, where the script cache suffices.
-	// LineageWriteCounterOn uses it everywhere; LineageWriteCounterOff nowhere.
-	// It adds some Redis CPU to every write.
-	LineageWriteCounter LineageWriteCounter
 }
 
 // NewRedisBroker initializes Redis Broker.
 func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	if len(config.Shards) == 0 {
 		return nil, errors.New("broker: no Redis shards provided in configuration")
-	}
-	if err := config.LineageWriteCounter.validate(); err != nil {
-		return nil, fmt.Errorf("broker: %w", err)
 	}
 
 	if config.SubscribeOnReplica {
@@ -371,8 +346,8 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	for _, sw := range b.shards {
 		sw.shard.ensureLineage()
 		if !config.UseLists {
-			sw.shard.lineage.register(b.historyStreamScript, config.LoadSHA1, config.ResyncOnlyLostSlots, config.LineageWriteCounter)
-			sw.shard.lineage.register(b.addHistoryStreamScript, config.LoadSHA1, config.ResyncOnlyLostSlots, config.LineageWriteCounter)
+			sw.shard.lineage.register(b.historyStreamScript, config.LoadSHA1)
+			sw.shard.lineage.register(b.addHistoryStreamScript, config.LoadSHA1)
 		}
 		sw.shard.lineage.setLogger(n)
 	}
@@ -1020,7 +995,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 	if err != nil {
 		return PublishResult{}, err
 	}
-	if len(replies) != 2 && len(replies) != 3 && len(replies) != 4 {
+	if len(replies) < 2 {
 		return PublishResult{}, errors.New("wrong Redis reply")
 	}
 	offset, err := replies[0].AsInt64()
@@ -1031,7 +1006,6 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 	if err != nil {
 		return PublishResult{}, errors.New("wrong Redis reply epoch")
 	}
-	epoch = s.shard.lineage.takeObservation(string(historyMetaKey), epoch)
 	result := PublishResult{StreamPosition: StreamPosition{Offset: uint64(offset), Epoch: epoch}}
 	if len(replies) >= 3 {
 		fromCacheStr, err := replies[2].ToString()
@@ -1713,12 +1687,6 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 	if channel == "" {
 		return fmt.Errorf("unsupported channel: %s", chID)
 	}
-	if strings.IndexByte(sp.Epoch, ';') >= 0 {
-		// A write's observation (ResyncOnlyLostSlots): recorded before the
-		// publication reaches anyone.
-		shard := b.getShard(channel).shard
-		sp.Epoch = shard.lineage.takeObservation(string(b.historyMetaKey(shard, channel)), sp.Epoch)
-	}
 	if typeOfPush == pubPushType {
 		var pub protocol.Publication
 		err := pub.UnmarshalCF(pushData)
@@ -1737,7 +1705,7 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 			sp.Offset = pub.Offset
 		}
 		if pub.Epoch != "" {
-			sp.Epoch = pub.Epoch
+			sp.Epoch = pubsubEpoch(pub.Epoch)
 			pub.Epoch = "" // Clear — epoch travels in StreamPosition, not in Publication to clients.
 		}
 		if pub.Delta {
@@ -1839,9 +1807,8 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOption
 	if err != nil {
 		return nil, StreamPosition{}, errors.New("wrong Redis reply epoch")
 	}
-	epoch = s.lineage.takeObservation(string(historyMetaKey), epoch)
 
-	if includePubs == "1" && len(replies) == 3 {
+	if includePubs == "1" && len(replies) >= 3 {
 		values, err := replies[2].ToArray()
 		if err != nil {
 			return nil, StreamPosition{}, err
@@ -2086,7 +2053,7 @@ func extractPushData(data []byte) ([]byte, pushType, StreamPosition, bool, []byt
 		}
 		var err error
 		offset, err = strconv.ParseUint(stringHeader[:epochDelimiterPos], 10, 64)
-		epoch = stringHeader[epochDelimiterPos+1:]
+		epoch = pubsubEpoch(stringHeader[epochDelimiterPos+1:])
 		return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, err == nil
 	case 'd':
 		// d1:offset:epoch:prev_payload_length:prev_payload:payload_length:payload
@@ -2138,7 +2105,7 @@ func parseDeltaPush(input string) (deltaPublicationPush, error) {
 	if idx == -1 {
 		return deltaPublicationPush{}, fmt.Errorf("invalid format, missing epoch")
 	}
-	epoch := input[:idx]
+	epoch := pubsubEpoch(input[:idx])
 	input = input[idx+1:]
 
 	// prev_payload_length:prev_payload:payload_length:payload
@@ -2215,4 +2182,17 @@ func (b *RedisBroker) execLineageScript(ctx context.Context, s *RedisShard, ls *
 	}
 	s.noteError(resp.Error())
 	return resp
+}
+
+// pubsubEpochExt starts an extension of an epoch in a PUB/SUB message: data a
+// later version may add (epochs never contain it). A node ignores what it
+// doesn't know, so such data needs no coordinated rollout.
+const pubsubEpochExt = ';'
+
+// pubsubEpoch returns the epoch of a PUB/SUB message without extensions.
+func pubsubEpoch(e string) string {
+	if i := strings.IndexByte(e, pubsubEpochExt); i >= 0 {
+		return e[:i]
+	}
+	return e
 }

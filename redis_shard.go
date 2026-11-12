@@ -125,11 +125,6 @@ func (s *RedisShard) noteError(err error) {
 	if err == nil || s.isCluster || !isReadOnly(err) {
 		return
 	}
-	if s.lineage != nil {
-		// The demoted server keeps its script cache: flush it while we still
-		// reach it.
-		s.lineage.onReadOnly(context.Background())
-	}
 	if s.conns.dropAll() && s.lineage != nil {
 		s.lineage.log(LogLevelWarn, "redis: READONLY reply, the server was demoted; reconnecting", map[string]any{"address": s.string()})
 	}

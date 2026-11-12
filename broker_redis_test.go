@@ -76,8 +76,6 @@ func NewTestRedisBroker(tb testing.TB, n *Node, prefix string, useStreams bool, 
 		Prefix:              prefix,
 		UseLists:            !useStreams,
 		Shards:              []*RedisShard{s},
-		ResyncOnlyLostSlots: testResyncOnlyLostSlots(),
-		LineageWriteCounter: testLineageWriteCounter(),
 	})
 	require.NoError(tb, err)
 	n.SetBroker(e)
@@ -114,8 +112,6 @@ func NewTestRedisBrokerCluster(tb testing.TB, n *Node, prefix string, useStreams
 		Prefix:              prefix,
 		UseLists:            !useStreams,
 		Shards:              []*RedisShard{s},
-		ResyncOnlyLostSlots: testResyncOnlyLostSlots(),
-		LineageWriteCounter: testLineageWriteCounter(),
 	}
 
 	numClusterShardsStr := os.Getenv("CENTRIFUGE_REDIS_CLUSTER_BENCHMARKS_NUM_SHARDS")
@@ -3334,14 +3330,3 @@ func TestRedisClusterChannelWithBraceInside(t *testing.T) {
 	require.Len(t, presence, 1)
 }
 
-// testResyncOnlyLostSlots runs the Redis tests with ResyncOnlyLostSlots when
-// CENTRIFUGE_TEST_RESYNC_ONLY_LOST_SLOTS is set.
-func testResyncOnlyLostSlots() bool {
-	return os.Getenv("CENTRIFUGE_TEST_RESYNC_ONLY_LOST_SLOTS") != ""
-}
-
-// testLineageWriteCounter lets suites and benchmarks run with another
-// LineageWriteCounter (CENTRIFUGE_TEST_LINEAGE_WRITE_COUNTER=on|off).
-func testLineageWriteCounter() LineageWriteCounter {
-	return LineageWriteCounter(os.Getenv("CENTRIFUGE_TEST_LINEAGE_WRITE_COUNTER"))
-}

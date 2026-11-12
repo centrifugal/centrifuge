@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/centrifugal/centrifuge/internal/redispartition"
@@ -45,18 +46,17 @@ func TestParseHelloReply(t *testing.T) {
 func TestParseMyselfSlots(t *testing.T) {
 	nodes := "07c37dfeb235213a872192d90877d0cd55635b91 127.0.0.1:7002@17002 master - 0 1426238317239 2 connected 5461-10922\n" +
 		"67ed2db8d677e59ec4a4cefb06858cf2a1a89fa1 127.0.0.1:7001@17001 myself,master - 0 0 1 connected 0-5 7 [8->-07c37dfeb235213a872192d90877d0cd55635b91]\n"
-	id, slots, err := parseMyselfSlots(nodes)
+	slots, err := parseMyselfSlots(nodes)
 	require.NoError(t, err)
-	require.Equal(t, "67ed2db8d677e59ec4a4cefb06858cf2a1a89fa1", id)
 	require.Equal(t, []int{0, 1, 2, 3, 4, 5, 7}, slots)
 
-	_, _, err = parseMyselfSlots("67ed2db8 127.0.0.1:7001@17001 myself,slave 07c37dfe 0 0 1 connected\n")
+	_, err = parseMyselfSlots("67ed2db8 127.0.0.1:7001@17001 myself,slave 07c37dfe 0 0 1 connected\n")
 	require.Error(t, err, "a replica serves no slots of its own")
 
-	_, _, err = parseMyselfSlots("67ed2db8 127.0.0.1:7001@17001 master - 0 0 1 connected 0-16383\n")
+	_, err = parseMyselfSlots("67ed2db8 127.0.0.1:7001@17001 master - 0 0 1 connected 0-16383\n")
 	require.Error(t, err, "no myself line")
 
-	_, _, err = parseMyselfSlots("67ed2db8 127.0.0.1:7001@17001 myself,master - 0 0 1 connected 9-3\n")
+	_, err = parseMyselfSlots("67ed2db8 127.0.0.1:7001@17001 myself,master - 0 0 1 connected 9-3\n")
 	require.Error(t, err)
 
 	lines := lineageParseClusterNodes(nodes)
@@ -87,79 +87,71 @@ func TestRedisKeySlot(t *testing.T) {
 
 func TestLineageScriptVariants(t *testing.T) {
 	ls := newLineageScript("x", "return lineage_token(KEYS[1])", false)
-	a, b := ls.gatedSource("tokA", false, true), ls.gatedSource("tokB", false, true)
+	a, b := ls.gatedSource("tokA"), ls.gatedSource("tokB")
 	require.NotEqual(t, sha1Hex(a), sha1Hex(b), "gated scripts are specific to a token")
 	require.Contains(t, a, `"tokA"`)
 	require.Contains(t, a, lineageGateLoadArg)
+	require.Contains(t, a, `LINEAGE_FIELD = "i"`)
+	require.Contains(t, lineagePreludeInfo, `LINEAGE_FIELD = "j"`, "each mode stamps its own field")
 	require.NotEqual(t, lineageMarkerSource("tokA"), lineageMarkerSource("tokB"))
 }
 
 func TestLineageErrToken(t *testing.T) {
-	tok, ok := lineageErrToken(&rueidis.RedisError{})
+	_, _, ok := lineageErrToken(&rueidis.RedisError{})
 	require.False(t, ok)
-	require.Empty(t, tok)
-}
 
-func TestClientInfoField(t *testing.T) {
-	info := "id=7 addr=127.0.0.1:52418 laddr=10.0.0.5:6379 fd=8 name= age=0"
-	require.Equal(t, "10.0.0.5:6379", clientInfoField(info, "laddr"))
-	require.Equal(t, "", clientInfoField(info, "nope"))
-}
-
-func TestSplitObservation(t *testing.T) {
-	e, c, tok, ok := splitObservation("Xk3pQz9a;42;gabc")
+	parse := parseLineageErr
+	v, preds, ok := parse("LINEAGE t=gnew p=gold,golder script: abc, on @user_script:12.")
 	require.True(t, ok)
-	require.Equal(t, "Xk3pQz9a", e)
-	require.Equal(t, uint64(42), c)
-	require.Equal(t, "gabc", tok)
+	require.Equal(t, "gnew", v)
+	require.Equal(t, []string{"gold", "golder"}, preds)
 
-	e, _, _, ok = splitObservation("Xk3pQz9a")
-	require.False(t, ok)
-	require.Equal(t, "Xk3pQz9a", e)
+	v, preds, ok = parse("LINEAGE t= p=")
+	require.True(t, ok)
+	require.Empty(t, v)
+	require.Empty(t, preds)
 
-	e, _, _, ok = splitObservation("Xk3pQz9a;bad;gabc")
-	require.False(t, ok)
-	require.Equal(t, "Xk3pQz9a", e, "a malformed suffix is still stripped")
+	// Parts a later version adds are skipped.
+	v, preds, ok = parse("LINEAGE x=1 t=gnew|ganc p=gold y=z")
+	require.True(t, ok)
+	require.Equal(t, "gnew|ganc", v)
+	require.Equal(t, []string{"gold"}, preds)
 }
 
 func TestParseTokenValue(t *testing.T) {
 	tok, anc := parseTokenValue("gnew")
 	require.Equal(t, "gnew", tok)
-	require.Equal(t, lineageObs{}, anc)
-	tok, anc = parseTokenValue("gnew|gold|17")
+	require.Empty(t, anc)
+	tok, anc = parseTokenValue("gnew|gold")
 	require.Equal(t, "gnew", tok)
-	require.Equal(t, lineageObs{token: "gold", count: 17}, anc)
+	require.Equal(t, "gold", anc)
 }
 
-func TestSlotKept(t *testing.T) {
-	st := lineageSlotState{token: "gT", count: 10, ancestor: lineageObs{token: "gA", count: 4}}
-	one := func(tok string, c uint64) ([][]string, [][]uint64) {
-		return [][]string{{tok}}, [][]uint64{{c}}
+func TestLineageLeftTokens(t *testing.T) {
+	l := newLineageLeftTokens()
+	require.False(t, l.add())
+	require.True(t, l.add("a", "b", ""))
+	require.False(t, l.add("a"), "known already")
+	require.True(t, l.has("a"))
+	require.False(t, l.has(""))
+	require.Equal(t, []string{"b"}, l.recent(1))
+	for i := 0; i < lineageLeftMax+10; i++ {
+		l.add("t" + strconv.Itoa(i))
 	}
-	tokens, counts := one("", 0)
-	require.True(t, slotKept(st, tokens, counts, 0), "nothing observed")
-	tokens, counts = one("gT", 10)
-	require.True(t, slotKept(st, tokens, counts, 0))
-	tokens, counts = one("gT", 11)
-	require.False(t, slotKept(st, tokens, counts, 0), "an observed write the server misses")
-	tokens, counts = one("gA", 4)
-	require.True(t, slotKept(st, tokens, counts, 0), "an ancestor write before the previous break")
-	tokens, counts = one("gA", 5)
-	require.False(t, slotKept(st, tokens, counts, 0), "an ancestor write after the previous break")
-	tokens, counts = one("gX", 1)
-	require.False(t, slotKept(st, tokens, counts, 0), "a write of a lineage the server doesn't descend from")
-	require.False(t, slotKept(lineageSlotState{}, [][]string{{""}}, [][]uint64{{0}}, 0), "no token key on the server")
-	// Every node counts.
-	require.False(t, slotKept(st, [][]string{{"gT"}, {"gT"}}, [][]uint64{{3}, {12}}, 0))
+	require.False(t, l.has("a"), "the oldest are dropped")
+	require.True(t, l.has("t"+strconv.Itoa(lineageLeftMax+9)))
+	require.Len(t, l.recent(lineageLeftExchanged), lineageLeftExchanged)
 }
 
-func TestLineageObserve(t *testing.T) {
-	l := newRedisLineage(&RedisShard{closeCh: make(chan struct{})})
-	l.observe(0, "gT", 5)
-	l.observe(0, "gT", 3)
-	require.Equal(t, []uint64{5}, l.observed([]int{0}, []string{"gT"}))
-	require.Equal(t, []uint64{0}, l.observed([]int{0}, []string{"gOther"}))
-	// A newer token replaces the older one's observation.
-	l.observe(0, "gU", 1)
-	require.Equal(t, []uint64{1}, l.observed([]int{0}, []string{"gU"}))
+func TestPubsubEpochExtension(t *testing.T) {
+	require.Equal(t, "Abc", pubsubEpoch("Abc"))
+	require.Equal(t, "Abc", pubsubEpoch("Abc;anything=a later version adds"))
+	_, _, sp, _, _, ok := extractPushData([]byte("__p1:7:Abc;x=1__payload"))
+	require.True(t, ok)
+	require.Equal(t, StreamPosition{Offset: 7, Epoch: "Abc"}, sp)
+	off, epoch, payload, _, _, err := parseMessage([]byte("7:Abc;x=1:payload"))
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), off)
+	require.Equal(t, "Abc", epoch)
+	require.Equal(t, "payload", string(payload))
 }
