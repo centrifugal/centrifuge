@@ -3,7 +3,7 @@ package centrifuge
 import (
 	"context"
 	crand "crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // Names Lua scripts for EVALSHA, as Redis does. Not security-sensitive.
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -98,8 +98,9 @@ const lineageGateLoadArg = "__centrifuge_lineage_load__"
 // tokens the token replaced, newest first, separated by spaces.
 const lineageKeySuffix = ".lineage.state"
 
-// lineagePredecessors is how many replaced tokens a lineage key keeps.
-const lineagePredecessors = 8
+// lineagePredecessors is how many replaced tokens a lineage key keeps (a
+// number in Lua source).
+const lineagePredecessors = "8"
 
 // lineageErrPrefix starts the error a gated script returns when the lineage key
 // doesn't hold the token the script was made for: "LINEAGE t=<value>
@@ -217,7 +218,7 @@ for i = 3, #ARGV, 2 do
         if old ~= "" and old ~= ARGV[i + 1] then
             local list = {old}
             for t in string.gmatch(preds, "%S+") do
-                if #list >= ` + "8" + ` then
+                if #list >= ` + lineagePredecessors + ` then
                     break
                 end
                 if t ~= old then
@@ -355,7 +356,7 @@ func (s *lineageScript) gatedSource(token string) string {
 }
 
 func sha1Hex(src string) string {
-	sum := sha1.Sum([]byte(src))
+	sum := sha1.Sum([]byte(src)) //nolint:gosec // Names Lua scripts for EVALSHA, as Redis does. Not security-sensitive.
 	return hex.EncodeToString(sum[:])
 }
 

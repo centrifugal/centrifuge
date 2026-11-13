@@ -224,23 +224,6 @@ func setupPairHook(t *testing.T, p failoverPair, noLineage bool, hook func(*Redi
 	return br, proxy, a, b
 }
 
-// addPairNode starts one more node on the same proxy and prefix.
-func addPairNode(t *testing.T, proxy *tcpProxy, prefix string) (*Node, *RedisBroker) {
-	t.Helper()
-	node := testNode(t)
-	s, err := NewRedisShard(node, testSingleRedisConfAddr(proxy.addr()))
-	require.NoError(t, err)
-	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}})
-	require.NoError(t, err)
-	node.SetBroker(br)
-	require.NoError(t, node.Run())
-	t.Cleanup(func() {
-		_ = node.Shutdown(context.Background())
-		stopRedisBroker(br)
-	})
-	return node, br
-}
-
 func testSingleRedisConfAddr(addr string) RedisShardConfig {
 	conf := testSingleRedisConf(6379)
 	conf.Address = addr
@@ -434,8 +417,8 @@ func TestRedisFailover_ClusterFailover(t *testing.T) {
 	}, 30*time.Second, 100*time.Millisecond)
 
 	ch := "cluster_failover_" + randString(6)
+	publishEventually(t, br, ch)
 	before := publishEventually(t, br, ch)
-	before = publishEventually(t, br, ch)
 	require.Equal(t, uint64(2), before.Offset)
 
 	// The primary and a synced replica of the channel's slot (a previous run
