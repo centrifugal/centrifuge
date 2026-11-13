@@ -50,8 +50,8 @@ func newLineageTestBrokerPrefix(t *testing.T, tt lineageRedisTest, allowInfo boo
 	s, err := NewRedisShard(node, conf)
 	require.NoError(t, err)
 	b, err := NewRedisBroker(node, RedisBrokerConfig{
-		Prefix:           prefix,
-		Shards:           []*RedisShard{s},
+		Prefix:                   prefix,
+		Shards:                   []*RedisShard{s},
 		UseInfoCommandForLineage: allowInfo,
 	})
 	require.NoError(t, err)

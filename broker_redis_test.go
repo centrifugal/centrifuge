@@ -73,9 +73,9 @@ func NewTestRedisBroker(tb testing.TB, n *Node, prefix string, useStreams bool, 
 	require.NoError(tb, err)
 	require.Equal(tb, s.Mode(), RedisShardModeStandalone)
 	e, err := NewRedisBroker(n, RedisBrokerConfig{
-		Prefix:              prefix,
-		UseLists:            !useStreams,
-		Shards:              []*RedisShard{s},
+		Prefix:   prefix,
+		UseLists: !useStreams,
+		Shards:   []*RedisShard{s},
 	})
 	require.NoError(tb, err)
 	n.SetBroker(e)
@@ -109,9 +109,9 @@ func NewTestRedisBrokerCluster(tb testing.TB, n *Node, prefix string, useStreams
 	require.NoError(tb, err)
 	require.Equal(tb, s.Mode(), RedisShardModeCluster)
 	brokerConfig := RedisBrokerConfig{
-		Prefix:              prefix,
-		UseLists:            !useStreams,
-		Shards:              []*RedisShard{s},
+		Prefix:   prefix,
+		UseLists: !useStreams,
+		Shards:   []*RedisShard{s},
 	}
 
 	numClusterShardsStr := os.Getenv("CENTRIFUGE_REDIS_CLUSTER_BENCHMARKS_NUM_SHARDS")
@@ -3329,4 +3329,3 @@ func TestRedisClusterChannelWithBraceInside(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, presence, 1)
 }
-
