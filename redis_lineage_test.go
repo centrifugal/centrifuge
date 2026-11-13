@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"crypto/fips140"
 	"strconv"
 	"testing"
 
@@ -86,6 +87,9 @@ func TestRedisKeySlot(t *testing.T) {
 }
 
 func TestLineageScriptVariants(t *testing.T) {
+	if fips140.Enforced() {
+		t.Skip("compares SHA-1 digests")
+	}
 	ls := newLineageScript("x", "return lineage_token(KEYS[1])", false)
 	a, b := ls.gatedSource("tokA"), ls.gatedSource("tokB")
 	require.NotEqual(t, sha1Hex(a), sha1Hex(b), "gated scripts are specific to a token")

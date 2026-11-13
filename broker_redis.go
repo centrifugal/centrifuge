@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"bytes"
 	"context"
+	"crypto/fips140"
 	"errors"
 	"fmt"
 	"runtime"
@@ -255,7 +256,8 @@ type RedisBrokerConfig struct {
 	numPubSubProcessors int
 
 	// LoadSHA1 enables loading SHA1 from Redis via SCRIPT LOAD instead of calculating
-	// it on the client side. This is useful for FIPS compliance.
+	// it on the client side. This is useful for FIPS compliance. It is always on
+	// in FIPS-only mode (GODEBUG=fips140=only), where SHA-1 can't be computed here.
 	LoadSHA1 bool
 
 	// UseInfoCommandForLineage makes meta scripts read the server's replication
@@ -273,6 +275,10 @@ type RedisBrokerConfig struct {
 func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	if len(config.Shards) == 0 {
 		return nil, errors.New("broker: no Redis shards provided in configuration")
+	}
+	if fips140.Enforced() {
+		// SHA-1 can't be computed here in FIPS-only mode.
+		config.LoadSHA1 = true
 	}
 
 	if config.SubscribeOnReplica {
@@ -2204,9 +2210,9 @@ func (b *RedisBroker) execLineageScript(ctx context.Context, s *RedisShard, ls *
 	}
 	var resp rueidis.RedisResult
 	if mode == lineageInfo {
-		resp = ls.info.Exec(ctx, s.client, keys, args)
+		resp = ls.lua(lineageInfo).Exec(ctx, s.client, keys, args)
 	} else {
-		resp = ls.none.Exec(ctx, s.client, keys, args)
+		resp = ls.lua(lineageNone).Exec(ctx, s.client, keys, args)
 	}
 	s.noteError(resp.Error())
 	return resp

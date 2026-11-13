@@ -310,22 +310,44 @@ end
 // lineageScript is a meta script whose source depends on the lineage mode and,
 // with the gate, on the token.
 type lineageScript struct {
-	name     string
-	body     string
+	name string
+	body string
+	shas sync.Map // token -> SHA-1 of the gated source
+
+	mu       sync.Mutex
 	loadSHA1 bool
 	none     *rueidis.Lua
 	info     *rueidis.Lua
-	shas     sync.Map // token -> SHA-1 of the gated source
 }
 
 func newLineageScript(name, body string, loadSHA1 bool) *lineageScript {
-	return &lineageScript{
-		name:     name,
-		body:     body,
-		loadSHA1: loadSHA1,
-		none:     rueidis.NewLuaScript(lineagePreludeNone+body, rueidis.WithLoadSHA1(loadSHA1)),
-		info:     rueidis.NewLuaScript(lineagePreludeInfo+body, rueidis.WithLoadSHA1(loadSHA1)),
+	return &lineageScript{name: name, body: body, loadSHA1: loadSHA1}
+}
+
+// useLoadSHA1 makes the script get its digests from the server (FIPS mode).
+func (s *lineageScript) useLoadSHA1() {
+	s.mu.Lock()
+	s.loadSHA1 = true
+	s.mu.Unlock()
+}
+
+// lua returns the plain script of a mode without the gate (lineageInfo or
+// lineageNone). It is made on first use: rueidis computes the SHA-1 of a
+// script when it's made unless the digest comes from the server, and in
+// FIPS-only mode computing SHA-1 panics.
+func (s *lineageScript) lua(mode lineageMode) *rueidis.Lua {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if mode == lineageInfo {
+		if s.info == nil {
+			s.info = rueidis.NewLuaScript(lineagePreludeInfo+s.body, rueidis.WithLoadSHA1(s.loadSHA1))
+		}
+		return s.info
 	}
+	if s.none == nil {
+		s.none = rueidis.NewLuaScript(lineagePreludeNone+s.body, rueidis.WithLoadSHA1(s.loadSHA1))
+	}
+	return s.none
 }
 
 func (s *lineageScript) gatedSource(token string) string {
@@ -455,6 +477,7 @@ func (l *redisLineage) register(s *lineageScript, loadSHA1 bool) {
 	defer l.scriptsMu.Unlock()
 	if loadSHA1 {
 		l.loadSHA1 = true
+		s.useLoadSHA1()
 	}
 	for _, existing := range l.scripts {
 		if existing == s {
