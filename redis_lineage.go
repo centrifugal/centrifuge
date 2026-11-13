@@ -932,7 +932,9 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 // Nodes noticing the same reuse rotate once (a compare-and-set on the token).
 func (l *redisLineage) rotateIfToken(ctx context.Context, routeKey string) error {
 	token := l.token(l.slotIndex(routeKey))
-	if token == "" {
+	if token == "" || l.leftTokens().has(token) {
+		// Unknown, or already replaced: a rotation happened (many channels of a
+		// server report the same loss).
 		return nil
 	}
 	l.stats.mu.Lock()
