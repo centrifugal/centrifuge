@@ -145,6 +145,8 @@ type RedisMapBrokerConfig struct {
 	// INFO in every meta script. INFO needs the @dangerous ACL category. The ID
 	// also changes when nothing was lost - a primary gets its first replica, or
 	// has had none for repl-backlog-ttl - and maps then start new epochs too.
+	// In Redis Cluster, maps of a slot moved to another node start new epochs
+	// as well: their metas carry the source node's ID.
 	// Without it the broker uses the script cache of Redis 7+ and Valkey, which
 	// needs no extra permissions (no detection on Redis 6 and Dragonfly).
 	UseInfoCommandForLineage bool

@@ -876,6 +876,10 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 			// this server's own lineage is intact. Then only that slot is
 			// adopted, under this server's token with its own as the ancestor,
 			// instead of rotating - and resetting - every slot of the server.
+			// A server without an intact token of its own (no node used it
+			// yet, like a node just added to the cluster) can't tell a
+			// migration from a restart: the slot rotates and its streams start
+			// new epochs.
 			own, ok, err := l.intactServerToken(ctx, c, slots, slot, left)
 			if err != nil {
 				return err
