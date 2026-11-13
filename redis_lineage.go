@@ -85,12 +85,15 @@ func (m lineageMode) String() string {
 // lineageGateLoadArg as the only argument makes a gated script return at once.
 const lineageGateLoadArg = "__centrifuge_lineage_load__"
 
-// lineageTokenKeyBase is the name of the lineage key (one per slot in Redis
-// Cluster), the same for every prefix: a lineage is a property of the server's
-// data. It is a hash: "t" the token value ("token", or "token|ancestor" for a
-// slot migrated in, whose metas stamped with the ancestor are adopted), "p" the
+// lineageKeySuffix ends the name of the lineage key: "<prefix>.lineage.state" outside
+// Redis Cluster, "{<slot tag>}.<prefix>.lineage.state" in Redis Cluster (one per hash
+// slot, the tag first so a prefix can't move it). A lineage belongs to a key
+// prefix - a deployment, or a broker of one: deployments sharing a Redis server
+// detect lineage breaks independently and never adopt each other's metas.
+// It is a hash: "t" the token value ("token", or "token|ancestor" for a slot
+// migrated in, whose metas stamped with the ancestor are adopted), "p" the
 // tokens the token replaced, newest first, separated by spaces.
-const lineageTokenKeyBase = "centrifuge.lineage.state"
+const lineageKeySuffix = ".lineage.state"
 
 // lineagePredecessors is how many replaced tokens a lineage key keeps.
 const lineagePredecessors = 8
@@ -110,7 +113,7 @@ const (
 )
 
 // lineagePreludeGate is the prelude of a gated script made for token.
-// lineage_token returns the token and the ancestor (see lineageTokenKeyBase).
+// lineage_token returns the token and the ancestor (see lineageKeySuffix).
 // lineage_count and lineage_obs are hooks of write observations, unused here.
 func lineagePreludeGate(token string) string {
 	return `
@@ -376,7 +379,8 @@ func parseHelloReply(fields map[string]string) redisServerKind {
 // redisLineage is the lineage state of one RedisShard, shared by every broker
 // on it.
 type redisLineage struct {
-	shard *RedisShard
+	shard  *RedisShard
+	prefix string
 
 	kindMu   sync.Mutex
 	kindDone bool
@@ -430,9 +434,10 @@ type lineageStats struct {
 	reused int
 }
 
-func newRedisLineage(shard *RedisShard) *redisLineage {
+func newRedisLineage(shard *RedisShard, prefix string) *redisLineage {
 	l := &redisLineage{
 		shard:  shard,
+		prefix: prefix,
 		tokens: make(map[int]string),
 		left:   newLineageLeftTokens(),
 	}
@@ -569,17 +574,19 @@ func (l *redisLineage) slotIndex(key string) int {
 
 // tokenKey returns the lineage key in the slot of key.
 func (l *redisLineage) tokenKey(key string) string {
-	if !l.shard.isCluster {
-		return lineageTokenKeyBase
-	}
-	return lineageTokenKeyForSlot(int(redisKeySlot(key)))
+	return l.keyForSlot(l.slotIndex(key))
 }
 
 func (l *redisLineage) anyTokenKey() string {
+	return l.keyForSlot(0)
+}
+
+// keyForSlot returns the lineage key of a slot (slot 0 outside Redis Cluster).
+func (l *redisLineage) keyForSlot(slot int) string {
 	if !l.shard.isCluster {
-		return lineageTokenKeyBase
+		return l.prefix + lineageKeySuffix
 	}
-	return lineageTokenKeyForSlot(0)
+	return lineageKeyForSlot(l.prefix, slot)
 }
 
 func (l *redisLineage) token(slot int) string {
@@ -849,10 +856,7 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 			args := make([]string, 0, 2*len(slots)+2)
 			args = append(args, tokenKey, currentValue)
 			for _, s := range slots {
-				key := lineageTokenKeyBase
-				if l.shard.isCluster {
-					key = lineageTokenKeyForSlot(s)
-				}
+				key := l.keyForSlot(s)
 				args = append(args, key, token)
 			}
 			src := lineageRotateSource
@@ -950,10 +954,7 @@ func (l *redisLineage) reconcile(ctx context.Context) {
 	}
 	l.tokensMu.RUnlock()
 	for t, slot := range stale {
-		key := lineageTokenKeyBase
-		if l.shard.isCluster {
-			key = lineageTokenKeyForSlot(slot)
-		}
+		key := l.keyForSlot(slot)
 		_ = l.open(ctx, key, true, t, t)
 	}
 }
@@ -1075,7 +1076,7 @@ func (l *redisLineage) runProbe() {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if !l.shard.isCluster {
-				keys = []string{lineageTokenKeyBase}
+				keys = []string{l.keyForSlot(0)}
 			} else if keys == nil || time.Since(keysAt) > lineageProbeSlotsRefresh {
 				if k, err := l.primaryKeys(ctx); err == nil {
 					keys, keysAt = k, time.Now()
@@ -1118,7 +1119,7 @@ func (l *redisLineage) primaryKeys(ctx context.Context) ([]string, error) {
 			continue
 		}
 		seen[addr] = true
-		keys = append(keys, lineageTokenKeyForSlot(int(from)))
+		keys = append(keys, l.keyForSlot(int(from)))
 	}
 	return keys, nil
 }
@@ -1128,8 +1129,8 @@ var (
 	lineageSlotTags     [16384]string
 )
 
-// lineageTokenKeyForSlot returns the lineage key living in a hash slot.
-func lineageTokenKeyForSlot(slot int) string {
+// lineageKeyForSlot returns the lineage key of a prefix living in a hash slot.
+func lineageKeyForSlot(prefix string, slot int) string {
 	lineageSlotTagsOnce.Do(func() {
 		found := 0
 		for i := 0; found < 16384; i++ {
@@ -1141,7 +1142,7 @@ func lineageTokenKeyForSlot(slot int) string {
 			}
 		}
 	})
-	return lineageTokenKeyBase + ".{" + lineageSlotTags[slot] + "}"
+	return "{" + lineageSlotTags[slot] + "}." + prefix + lineageKeySuffix
 }
 
 // redisKeySlot returns the hash slot of a key, honouring hash tags.
@@ -1170,7 +1171,7 @@ func (l *redisLineage) intactServerToken(ctx context.Context, c rueidis.Dedicate
 		if s == except {
 			continue
 		}
-		keys = append(keys, lineageTokenKeyForSlot(s))
+		keys = append(keys, l.keyForSlot(s))
 		if len(keys) == cap(keys) {
 			break
 		}

@@ -47,17 +47,37 @@ type RedisShard struct {
 	isCluster     bool
 	isSentinel    bool
 	finalAddress  []string
-	// lineage detects a new lineage of the server's data, see redis_lineage.go.
-	lineage *redisLineage
+	// lineages detect new lineages of the server's data, one per key prefix
+	// (see redis_lineage.go).
+	lineagesMu sync.RWMutex
+	lineages   map[string]*redisLineage
 	// conns are the connections the client dialed.
 	conns *redisConnSet
 }
 
-// ensureLineage gives a shard not made by NewRedisShard its lineage state.
-func (s *RedisShard) ensureLineage() {
-	if s.lineage == nil {
-		s.lineage = newRedisLineage(s)
+// lineageFor returns the lineage of a key prefix on the shard.
+func (s *RedisShard) lineageFor(prefix string) *redisLineage {
+	s.lineagesMu.RLock()
+	l, ok := s.lineages[prefix]
+	s.lineagesMu.RUnlock()
+	if ok {
+		return l
 	}
+	s.lineagesMu.Lock()
+	defer s.lineagesMu.Unlock()
+	if l, ok := s.lineages[prefix]; ok {
+		return l
+	}
+	if s.lineages == nil {
+		s.lineages = map[string]*redisLineage{}
+	}
+	l = newRedisLineage(s, prefix)
+	s.lineages[prefix] = l
+	return l
+}
+
+// ensureLineage gives a shard not made by NewRedisShard what lineages need.
+func (s *RedisShard) ensureLineage() {
 	if s.conns == nil {
 		s.conns = &redisConnSet{conns: map[*trackedConn]struct{}{}}
 	}
@@ -125,8 +145,13 @@ func (s *RedisShard) noteError(err error) {
 	if err == nil || s.isCluster || !isReadOnly(err) {
 		return
 	}
-	if s.conns.dropAll() && s.lineage != nil {
-		s.lineage.log(LogLevelWarn, "redis: READONLY reply, the server was demoted; reconnecting", map[string]any{"address": s.string()})
+	if s.conns.dropAll() {
+		s.lineagesMu.RLock()
+		for _, l := range s.lineages {
+			l.log(LogLevelWarn, "redis: READONLY reply, the server was demoted; reconnecting", map[string]any{"address": s.string()})
+			break
+		}
+		s.lineagesMu.RUnlock()
 	}
 }
 
@@ -451,7 +476,6 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	}
 
 	shard.client = client
-	shard.lineage = newRedisLineage(shard)
 
 	if replicaClientEnabled {
 		if !isCluster && !isSentinel {

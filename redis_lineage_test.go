@@ -69,7 +69,7 @@ func TestParseMyselfSlots(t *testing.T) {
 func TestLineageTokenKeyForSlot(t *testing.T) {
 	seen := map[string]struct{}{}
 	for slot := 0; slot < 16384; slot++ {
-		key := lineageTokenKeyForSlot(slot)
+		key := lineageKeyForSlot("pre{fix}", slot)
 		require.Equal(t, uint16(slot), redisKeySlot(key), "token key must live in its slot")
 		_, dup := seen[key]
 		require.False(t, dup)
@@ -155,6 +155,6 @@ func TestPubsubEpochExtension(t *testing.T) {
 	require.Equal(t, uint64(7), off)
 	require.Equal(t, "Abc;x=1", epoch)
 	require.Equal(t, "payload", string(payload))
-	l := newRedisLineage(&RedisShard{closeCh: make(chan struct{})})
+	l := newRedisLineage(&RedisShard{closeCh: make(chan struct{})}, "p")
 	require.Equal(t, "Abc", l.epochExt("k", "Abc;x=1"))
 }

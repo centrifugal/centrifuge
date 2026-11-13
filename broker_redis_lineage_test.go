@@ -111,7 +111,7 @@ func TestRedisLineage_Mode(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 			b := newLineageTestBroker(t, tt, false)
 			s := b.shards[0].shard
-			mode, err := s.lineage.mode(context.Background(), b.config.UseInfoCommandForLineage)
+			mode, err := b.lin(s).mode(context.Background(), b.config.UseInfoCommandForLineage)
 			require.NoError(t, err)
 			if tt.Gate {
 				require.Equal(t, lineageGate, mode)
@@ -126,7 +126,7 @@ func TestRedisLineage_DragonflyWithInfo(t *testing.T) {
 	tt := lineageRedisTest{"df_single", false, 36379, false}
 	b := newLineageTestBroker(t, tt, true)
 	s := b.shards[0].shard
-	mode, err := s.lineage.mode(context.Background(), true)
+	mode, err := b.lin(s).mode(context.Background(), true)
 	require.NoError(t, err)
 	require.Equal(t, lineageInfo, mode)
 
@@ -242,7 +242,7 @@ func TestRedisLineage_TokenKeyLost(t *testing.T) {
 			s := b.shards[0].shard
 			ch := "lineage_token_" + randString(6)
 			before := lineagePublish(t, b, ch, 2)
-			tokenKey := s.lineage.tokenKey(string(b.historyMetaKey(s, ch)))
+			tokenKey := b.lin(s).tokenKey(string(b.historyMetaKey(s, ch)))
 			require.NoError(t, s.client.Do(context.Background(), s.client.B().Del().Key(tokenKey).Build()).Error())
 			after := lineagePublish(t, b, ch, 1)
 			if tt.UseCluster {
@@ -270,7 +270,7 @@ func TestRedisLineage_SameLineageKeepsEpoch(t *testing.T) {
 			before := lineagePublish(t, b1, ch, 2)
 
 			s1 := b1.shards[0].shard
-			tokenKey := s1.lineage.tokenKey(string(b1.historyMetaKey(s1, ch)))
+			tokenKey := b1.lin(s1).tokenKey(string(b1.historyMetaKey(s1, ch)))
 			token, err := s1.client.Do(context.Background(), s1.client.B().Hget().Key(tokenKey).Field("t").Build()).ToString()
 			require.NoError(t, err)
 			for _, c := range lineagePrimaries(t, s1) {
@@ -372,12 +372,12 @@ func TestRedisLineage_FollowsTokenOfAnotherNode(t *testing.T) {
 			require.Equal(t, uint64(1), after.Offset)
 
 			s1 := b1.shards[0].shard
-			before := s1.lineage.stats.rotations
+			before := b1.lin(s1).stats.rotations
 			// b1 still knows the old token: LINEAGE error, then the new token's scripts.
 			sp := lineagePublish(t, b1, ch, 1)
 			require.Equal(t, after.Epoch, sp.Epoch)
 			require.Equal(t, uint64(2), sp.Offset)
-			require.Equal(t, before, s1.lineage.stats.rotations, "following a token is not a rotation")
+			require.Equal(t, before, b1.lin(s1).stats.rotations, "following a token is not a rotation")
 		})
 	}
 }
@@ -396,7 +396,8 @@ func TestRedisLineage_GateRefusesReplica(t *testing.T) {
 	if kind.primary || !kind.gateCapable {
 		t.Skip("the replica is not a gate-capable server")
 	}
-	err = s.lineage.open(context.Background(), lineageTokenKeyBase, false, "", "")
+	l := s.lineageFor("lineage_test")
+	err = l.open(context.Background(), l.keyForSlot(0), false, "", "")
 	require.ErrorIs(t, err, errLineageGate)
 	require.Contains(t, err.Error(), "not a primary")
 }
@@ -421,7 +422,7 @@ func TestRedisLineage_MigratedSlotAdopted(t *testing.T) {
 			// Emulate the migration: the slot's token key and the meta carry a
 			// foreign token.
 			metaKey := string(b.historyMetaKey(s, ch))
-			tokenKey := s.lineage.tokenKey(metaKey)
+			tokenKey := b.lin(s).tokenKey(metaKey)
 			require.NoError(t, s.client.Do(ctx, s.client.B().Hset().Key(tokenKey).FieldValue().FieldValue("t", "gforeign").Build()).Error())
 			require.NoError(t, s.client.Do(ctx, s.client.B().Hset().Key(metaKey).FieldValue().FieldValue("i", "gforeign").Build()).Error())
 

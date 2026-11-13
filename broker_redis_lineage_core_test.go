@@ -17,7 +17,7 @@ var lineageSingle = lineageRedisTest{"rd_single", false, 6379, true}
 func lineageKeyValue(t *testing.T, b *RedisBroker, ch string) (string, []string) {
 	t.Helper()
 	s := b.shards[0].shard
-	key := s.lineage.tokenKey(string(b.historyMetaKey(s, ch)))
+	key := b.lin(s).tokenKey(string(b.historyMetaKey(s, ch)))
 	vals, err := s.client.Do(context.Background(), s.client.B().Hmget().Key(key).Field("t", "p").Build()).ToArray()
 	require.NoError(t, err)
 	v, _ := vals[0].ToString()
@@ -28,13 +28,13 @@ func lineageKeyValue(t *testing.T, b *RedisBroker, ch string) (string, []string)
 func setLineageKey(t *testing.T, b *RedisBroker, ch, value, preds string) {
 	t.Helper()
 	s := b.shards[0].shard
-	key := s.lineage.tokenKey(string(b.historyMetaKey(s, ch)))
+	key := b.lin(s).tokenKey(string(b.historyMetaKey(s, ch)))
 	require.NoError(t, s.client.Do(context.Background(), s.client.B().Hset().Key(key).FieldValue().
 		FieldValue("t", value).FieldValue("p", preds).Build()).Error())
 }
 
 func lineageStaleRotations(b *RedisBroker) int {
-	st := &b.shards[0].shard.lineage.stats
+	st := &b.lin(b.shards[0].shard).stats
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	return st.stale
@@ -51,7 +51,7 @@ func TestRedisLineage_RotationKeepsReplacedTokens(t *testing.T) {
 	second, preds := lineageKeyValue(t, b, ch)
 	require.NotEqual(t, first, second)
 	require.Equal(t, first, preds[0], "the replaced token, newest first")
-	require.True(t, b.shards[0].shard.lineage.leftTokens().has(first))
+	require.True(t, b.lin(b.shards[0].shard).leftTokens().has(first))
 }
 
 // A server presenting a token this node saw replaced is a copy that missed a
@@ -93,7 +93,7 @@ func TestRedisLineage_LearnsReplacedTokensFromKey(t *testing.T) {
 	// A new node, same prefix: it only ever saw the new token.
 	b2 := newLineageTestBrokerPrefix(t, lineageSingle, false, b1.config.Prefix)
 	before := lineagePublish(t, b2, ch, 1)
-	require.True(t, b2.shards[0].shard.lineage.leftTokens().has(old))
+	require.True(t, b2.lin(b2.shards[0].shard).leftTokens().has(old))
 
 	setLineageKey(t, b2, ch, old, "")
 	after := lineagePublish(t, b2, ch, 1)
@@ -136,14 +136,14 @@ func TestRedisLineage_IdleProbeOpensGate(t *testing.T) {
 // INFO (or nodes in both modes during a rollout) keeps every epoch.
 func TestRedisLineage_ModeSwitchKeepsEpochs(t *testing.T) {
 	gate := newLineageTestBroker(t, lineageSingle, false)
-	mode, err := gate.shards[0].shard.lineage.mode(context.Background(), false)
+	mode, err := gate.lin(gate.shards[0].shard).mode(context.Background(), false)
 	require.NoError(t, err)
 	require.Equal(t, lineageGate, mode)
 	ch := "lineage_modes_" + randString(6)
 	first := lineagePublish(t, gate, ch, 2)
 
 	info := newLineageTestBrokerPrefix(t, lineageSingle, true, gate.config.Prefix)
-	if m, _ := info.shards[0].shard.lineage.mode(context.Background(), true); m != lineageInfo {
+	if m, _ := info.lin(info.shards[0].shard).mode(context.Background(), true); m != lineageInfo {
 		t.Skip("scripts can't call INFO")
 	}
 	viaInfo := lineagePublish(t, info, ch, 1)
@@ -204,4 +204,29 @@ func TestRedisBroker_ReusedOffsetResetsServer(t *testing.T) {
 	}
 	_, err = node.recoverHistory(offline, offlinePos, time.Hour, 0)
 	require.ErrorIs(t, err, ErrorUnrecoverablePosition)
+}
+
+// Deployments sharing a Redis server (different prefixes) have their own
+// lineages: one's break (here a stale copy only it detects) resets only its
+// own streams.
+func TestRedisLineage_PrefixesIndependent(t *testing.T) {
+	a := newLineageTestBroker(t, lineageSingle, false)
+	b := newLineageTestBroker(t, lineageSingle, false)
+	ch := "lineage_prefixes_" + randString(6)
+	aBefore := lineagePublish(t, a, ch, 2)
+	bBefore := lineagePublish(t, b, ch, 2)
+	ka, _ := lineageKeyValue(t, a, ch)
+	kb, _ := lineageKeyValue(t, b, ch)
+	require.NotEqual(t, ka, kb, "a token per prefix")
+
+	// A's lineage breaks: its lineage key is gone (a SCRIPT FLUSH would hit
+	// every user of the server).
+	sA := a.shards[0].shard
+	require.NoError(t, sA.client.Do(context.Background(), sA.client.B().Del().Key(a.lin(sA).tokenKey(string(a.historyMetaKey(sA, ch)))).Build()).Error())
+	aAfter := lineagePublish(t, a, ch, 1)
+	require.NotEqual(t, aBefore.Epoch, aAfter.Epoch)
+
+	bAfter := lineagePublish(t, b, ch, 1)
+	require.Equal(t, bBefore.Epoch, bAfter.Epoch, "the other deployment keeps its streams")
+	require.Equal(t, uint64(3), bAfter.Offset)
 }

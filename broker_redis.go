@@ -351,11 +351,12 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	}
 	for _, sw := range b.shards {
 		sw.shard.ensureLineage()
+		l := b.lin(sw.shard)
 		if !config.UseLists {
-			sw.shard.lineage.register(b.historyStreamScript, config.LoadSHA1)
-			sw.shard.lineage.register(b.addHistoryStreamScript, config.LoadSHA1)
+			l.register(b.historyStreamScript, config.LoadSHA1)
+			l.register(b.addHistoryStreamScript, config.LoadSHA1)
 		}
-		sw.shard.lineage.setLogger(n)
+		l.setLogger(n)
 	}
 	b.shardChannel = config.Prefix + redisPubSubShardChannelSuffix
 	b.messagePrefix = config.Prefix + redisClientChannelPrefix
@@ -995,7 +996,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 			[]string{string(streamKey), string(historyMetaKey), string(resultKey)}, addArgs).ToArray()
 	} else {
 		replies, err = b.execLineageScript(context.Background(), s.shard, b.addHistoryStreamScript,
-			[]string{string(streamKey), string(historyMetaKey), string(resultKey), s.shard.lineage.tokenKey(string(historyMetaKey))},
+			[]string{string(streamKey), string(historyMetaKey), string(resultKey), b.lin(s.shard).tokenKey(string(historyMetaKey))},
 			addArgs).ToArray()
 	}
 	if err != nil {
@@ -1012,7 +1013,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 	if err != nil {
 		return PublishResult{}, errors.New("wrong Redis reply epoch")
 	}
-	epoch = s.shard.lineage.epochExt(string(historyMetaKey), epoch)
+	epoch = b.lin(s.shard).epochExt(string(historyMetaKey), epoch)
 	result := PublishResult{StreamPosition: StreamPosition{Offset: uint64(offset), Epoch: epoch}}
 	if len(replies) >= 3 {
 		fromCacheStr, err := replies[2].ToString()
@@ -1699,7 +1700,7 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 	}
 	if strings.IndexByte(sp.Epoch, pubsubEpochExt) >= 0 {
 		shard := b.getShard(channel).shard
-		sp.Epoch = shard.lineage.epochExt(string(b.historyMetaKey(shard, channel)), sp.Epoch)
+		sp.Epoch = b.lin(shard).epochExt(string(b.historyMetaKey(shard, channel)), sp.Epoch)
 	}
 	if typeOfPush == pubPushType {
 		var pub protocol.Publication
@@ -1809,7 +1810,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOption
 	historyMetaTTLSeconds := int(historyMetaTTL.Seconds())
 
 	replies, err := b.execLineageScript(context.Background(), s, b.historyStreamScript,
-		[]string{string(historyKey), string(historyMetaKey), s.lineage.tokenKey(string(historyMetaKey))},
+		[]string{string(historyKey), string(historyMetaKey), b.lin(s).tokenKey(string(historyMetaKey))},
 		[]string{includePubs, strconv.FormatUint(offset, 10), strconv.Itoa(limit), reverse, strconv.Itoa(historyMetaTTLSeconds), epoch.Generate()}).ToArray()
 	if err != nil {
 		return nil, StreamPosition{}, err
@@ -1830,7 +1831,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOption
 	if err != nil {
 		return nil, StreamPosition{}, errors.New("wrong Redis reply epoch")
 	}
-	epoch = s.lineage.epochExt(string(historyMetaKey), epoch)
+	epoch = b.lin(s).epochExt(string(historyMetaKey), epoch)
 
 	if includePubs == "1" && len(replies) >= 3 {
 		values, err := replies[2].ToArray()
@@ -1921,7 +1922,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 	if err != nil {
 		return nil, StreamPosition{}, errors.New("wrong Redis reply epoch")
 	}
-	epoch = s.lineage.epochExt(string(historyMetaKey), epoch)
+	epoch = b.lin(s).epochExt(string(historyMetaKey), epoch)
 
 	latestPosition := StreamPosition{Offset: uint64(offs), Epoch: epoch}
 
@@ -2192,12 +2193,12 @@ func parseDeltaPush(input string) (deltaPublicationPush, error) {
 // execLineageScript runs a meta script in the lineage mode of the shard: gated
 // with EVALSHA on Redis 7+ and Valkey, otherwise as a plain script.
 func (b *RedisBroker) execLineageScript(ctx context.Context, s *RedisShard, ls *lineageScript, keys, args []string) rueidis.RedisResult {
-	mode, err := s.lineage.mode(ctx, b.config.UseInfoCommandForLineage)
+	mode, err := b.lin(s).mode(ctx, b.config.UseInfoCommandForLineage)
 	if err != nil {
 		return rueidis.NewErrorResult(err)
 	}
 	if mode == lineageGate {
-		return s.lineage.exec(ctx, ls, keys, args)
+		return b.lin(s).exec(ctx, ls, keys, args)
 	}
 	var resp rueidis.RedisResult
 	if mode == lineageInfo {
@@ -2241,8 +2242,8 @@ func (b *RedisBroker) resetLostStream(ch string, epoch string, offset uint64) {
 	s := b.getShard(ch).shard
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if s.lineage.gateMode() {
-		err := s.lineage.rotateIfToken(ctx, string(b.historyMetaKey(s, ch)))
+	if b.lin(s).gateMode() {
+		err := b.lin(s).rotateIfToken(ctx, string(b.historyMetaKey(s, ch)))
 		if err != nil {
 			b.node.logger.log(newErrorLogEntry(err, "error rotating the lineage of a server that reused offsets", map[string]any{"channel": ch, "epoch": epoch}))
 			return
@@ -2275,4 +2276,9 @@ func (b *RedisBroker) checkReusedOffset(c *watermarkCheck) {
 		b.resetLostStream(c.ch, c.epoch, c.got)
 		b.node.resyncLocalSubscribers(c.ch)
 	}
+}
+
+// lin returns the broker's lineage on a shard (see redis_lineage.go).
+func (b *RedisBroker) lin(s *RedisShard) *redisLineage {
+	return s.lineageFor(b.config.Prefix)
 }

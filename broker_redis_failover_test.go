@@ -206,11 +206,12 @@ func setupPairHook(t *testing.T, p failoverPair, noLineage bool, hook func(*Redi
 	node := testNode(t)
 	s, err := NewRedisShard(node, testSingleRedisConfAddr(proxy.addr()))
 	require.NoError(t, err)
-	s.lineage.disabledForTest = noLineage
+	prefix := getUniquePrefix()
+	s.lineageFor(prefix).disabledForTest = noLineage
 	if hook != nil {
 		hook(s)
 	}
-	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: getUniquePrefix(), Shards: []*RedisShard{s}})
+	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}})
 	require.NoError(t, err)
 	node.SetBroker(br)
 	require.NoError(t, node.Run())
@@ -342,9 +343,9 @@ func TestRedisFailover_FailbackToDemotedServer(t *testing.T) {
 			waitSynced(t, b, a)
 			// Let the probe see b behind the address.
 			require.Eventually(t, func() bool {
-				br.shards[0].shard.lineage.stats.mu.Lock()
-				defer br.shards[0].shard.lineage.stats.mu.Unlock()
-				return br.shards[0].shard.lineage.stats.rotations >= 2
+				br.lin(br.shards[0].shard).stats.mu.Lock()
+				defer br.lin(br.shards[0].shard).stats.mu.Unlock()
+				return br.lin(br.shards[0].shard).stats.rotations >= 2
 			}, 10*time.Second, 20*time.Millisecond)
 			waitSynced(t, b, a)
 
@@ -489,7 +490,7 @@ func TestRedisFailover_ClusterFailover(t *testing.T) {
 }
 
 func lineageRotations(b *RedisBroker) int {
-	st := &b.shards[0].shard.lineage.stats
+	st := &b.lin(b.shards[0].shard).stats
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	return st.rotations
