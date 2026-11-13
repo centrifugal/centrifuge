@@ -338,7 +338,9 @@ func TestRedisLineage_ReplicaHasNoScripts(t *testing.T) {
 	require.NoError(t, err)
 	_, err = primary.Do(ctx, primary.B().Eval().Script(src+" -- eval").Numkeys(0).Build()).ToString()
 	require.NoError(t, err)
-	evalSha := sha1Hex(src + " -- eval")
+	// The server computes the digest: SHA-1 is unavailable here in FIPS-only mode.
+	evalSha, err := primary.Do(ctx, primary.B().Eval().Script(lineageSha1Source).Numkeys(0).Arg(src+" -- eval").Build()).ToString()
+	require.NoError(t, err)
 	// Replication is asynchronous: let it catch up with a write first.
 	probeKey := "lineage-probe-" + randString(8)
 	require.NoError(t, primary.Do(ctx, primary.B().Set().Key(probeKey).Value("1").Ex(time.Minute).Build()).Error())
