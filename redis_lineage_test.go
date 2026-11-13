@@ -96,6 +96,13 @@ func TestLineageScriptVariants(t *testing.T) {
 	require.NotEqual(t, lineageMarkerSource("tokA"), lineageMarkerSource("tokB"))
 }
 
+// The marker tells a server whose lineage is intact apart from a new one: a
+// new version must load the same marker, or every server it meets during a
+// rolling upgrade would look new and reset all its streams. Never change it.
+func TestLineageMarkerSourceIsStable(t *testing.T) {
+	require.Equal(t, `return "centrifuge-lineage-v1:tok"`, lineageMarkerSource("tok"))
+}
+
 func TestLineageErrToken(t *testing.T) {
 	_, _, ok := lineageErrToken(&rueidis.RedisError{})
 	require.False(t, ok)
