@@ -658,30 +658,42 @@ func (l *redisLineage) exec(ctx context.Context, s *lineageScript, keys, args []
 		cmd := l.shard.client.B().Evalsha().Sha1(sha).Numkeys(int64(len(keys))).Key(keys...).Arg(args...).Build()
 		resp := l.shard.client.Do(ctx, cmd)
 		err = resp.Error()
-		if isNoScript(err) {
-			if err := l.open(ctx, keys[0], false, token, ""); err != nil {
-				return rueidis.NewErrorResult(err)
-			}
-			continue
+		retry, gateErr := l.handleErr(ctx, keys[0], token, err)
+		if gateErr != nil {
+			return rueidis.NewErrorResult(gateErr)
 		}
-		if value, preds, ok := lineageErrToken(err); ok {
-			left := l.leftTokens()
-			left.add(preds...)
-			if t, _ := parseTokenValue(value); t != "" && left.has(t) {
-				// A token this node saw replaced: a stale copy.
-				if err := l.open(ctx, keys[0], true, token, value); err != nil {
-					return rueidis.NewErrorResult(err)
-				}
-				continue
-			}
-			// The server's token isn't ours: run the scripts of its token.
-			l.setToken(slot, value)
+		if retry {
 			continue
 		}
 		l.shard.noteError(err)
 		return resp
 	}
 	return rueidis.NewErrorResult(fmt.Errorf("%w: script %s: no stable lineage token", errLineageGate, s.name))
+}
+
+// handleErr handles the error of a gated script run with the scripts of token
+// on the slot of routeKey: NOSCRIPT opens the gate; a LINEAGE error follows
+// the server's token - unless it is a token this node saw replaced, then the
+// server is a stale copy and its lineage rotates. retry tells to send the call
+// again (with the scripts of the slot's token now). Callers sending gated
+// scripts themselves (batches) use it as exec does.
+func (l *redisLineage) handleErr(ctx context.Context, routeKey, token string, err error) (bool, error) {
+	if isNoScript(err) {
+		return true, l.open(ctx, routeKey, false, token, "")
+	}
+	value, preds, ok := lineageErrToken(err)
+	if !ok {
+		return false, nil
+	}
+	left := l.leftTokens()
+	left.add(preds...)
+	if t, _ := parseTokenValue(value); t != "" && left.has(t) {
+		// A token this node saw replaced: a stale copy.
+		return true, l.open(ctx, routeKey, true, token, value)
+	}
+	// The server's token isn't ours: run the scripts of its token.
+	l.setToken(l.slotIndex(routeKey), value)
+	return true, nil
 }
 
 func (l *redisLineage) setToken(slot int, value string) {
