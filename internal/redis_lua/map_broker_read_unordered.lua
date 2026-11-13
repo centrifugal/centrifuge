@@ -48,9 +48,7 @@ if not streamless then
             offset = "0"
         end
 
-        if meta_ttl > 0 then
-            redis.call("pexpire", meta_key, meta_ttl)
-        end
+        map_meta_expire(meta_key, meta_ttl, ARGV[7] or "0", ARGV[8] == "1", offset)
         epoch_out = epoch .. lineage_map_obs(meta_key) .. lineage_reset_ext(dropped)
     end
 

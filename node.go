@@ -165,6 +165,9 @@ func New(c Config) (*Node, error) {
 	if c.HistoryMetaTTL == 0 {
 		c.HistoryMetaTTL = 30 * 24 * time.Hour // 30 days by default.
 	}
+	if c.HistoryMetaTTLUnpublished > 0 && c.HistoryMetaTTLUnpublished < 3*c.ClientChannelPositionCheckDelay {
+		return nil, fmt.Errorf("HistoryMetaTTLUnpublished (%s) must be at least 3 × ClientChannelPositionCheckDelay (%s)", c.HistoryMetaTTLUnpublished, c.ClientChannelPositionCheckDelay)
+	}
 
 	uidObj, err := uuid.NewRandom()
 	if err != nil {

@@ -6,6 +6,10 @@ local limit = ARGV[3]
 local reverse = ARGV[4]
 local meta_expire = ARGV[5]
 local new_epoch_if_empty = ARGV[6]
+-- ARGV[7]: the TTL of a meta with no publications (seconds, "0": meta_expire).
+-- ARGV[8]: "1" extends a meta only when less than half its TTL is left.
+local empty_expire = tonumber(ARGV[7] or "0")
+local extend_below_half = ARGV[8] == "1"
 
 local token_key = KEYS[3]
 
@@ -41,7 +45,20 @@ if top_offset == false then
 end
 
 if meta_expire ~= '0' then
-    redis.call("expire", meta_key, meta_expire)
+    local target = tonumber(meta_expire)
+    if empty_expire > 0 and empty_expire < target and tonumber(top_offset) == 0 then
+        target = empty_expire
+    end
+    if extend_below_half then
+        -- A meta above the target is shortened (an empty meta from before
+        -- the short TTL); one with more than half the target left is kept.
+        local ttl = redis.call("ttl", meta_key)
+        if ttl < 0 or ttl > target or ttl * 2 < target then
+            redis.call("expire", meta_key, target)
+        end
+    else
+        redis.call("expire", meta_key, target)
+    end
 end
 
 local pubs = nil

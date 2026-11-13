@@ -315,6 +315,33 @@ local function lineage_map_count(meta_key, token_key)
     return ""
 end
 
+-- map_meta_expire sets the TTL of a map meta (milliseconds, 0: permanent).
+-- With empty_ttl set, a meta whose stream has no publications (top 0) gets
+-- the shorter of the two, and a permanent meta that got it while empty is
+-- made permanent again once it has publications. below_half: a meta with
+-- more than half its TTL left isn't extended, one above it is shortened.
+local function map_meta_expire(meta_key, meta_ttl, empty_ttl, below_half, top)
+    meta_ttl = tonumber(meta_ttl) or 0
+    empty_ttl = tonumber(empty_ttl) or 0
+    local target = meta_ttl
+    if empty_ttl > 0 and (tonumber(top) or 0) == 0 and (meta_ttl == 0 or empty_ttl < meta_ttl) then
+        target = empty_ttl
+    end
+    if target == 0 then
+        if empty_ttl > 0 and redis.call("pttl", meta_key) > 0 then
+            redis.call("persist", meta_key)
+        end
+        return
+    end
+    if below_half then
+        local ttl = redis.call("pttl", meta_key)
+        if ttl >= 0 and ttl <= target and ttl * 2 >= target then
+            return
+        end
+    end
+    redis.call("pexpire", meta_key, target)
+end
+
 local function lineage_map_create(meta_key, state_meta_key, epoch, token, dropped)
     if token ~= "" then
         redis.call("hset", meta_key, "e", epoch, LINEAGE_FIELD, token)

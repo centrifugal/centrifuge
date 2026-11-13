@@ -38,6 +38,10 @@ local meta_ttl = tonumber(ARGV[5])
 local state_ttl = tonumber(ARGV[6])
 local streamless = ARGV[7] == "1"
 local asc = ARGV[8] == "1"
+-- ARGV[9] = TTL of a meta without publications (milliseconds, 0: meta_ttl)
+-- ARGV[10] = "1": extend only below half the TTL
+local empty_ttl = ARGV[9] or "0"
+local below_half = ARGV[10] == "1"
 
 local epoch = ""
 -- epoch_out is the epoch replied, with its observation suffix (see lineage_obs).
@@ -60,9 +64,7 @@ if not streamless then
             stream_offset = "0"
         end
 
-        if meta_ttl > 0 then
-            redis.call("pexpire", meta_key, meta_ttl)
-        end
+        map_meta_expire(meta_key, meta_ttl, empty_ttl, below_half, stream_offset)
         epoch_out = epoch .. lineage_map_obs(meta_key) .. lineage_reset_ext(dropped)
     end
 
