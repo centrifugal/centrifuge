@@ -260,8 +260,10 @@ type RedisBrokerConfig struct {
 
 	// UseInfoCommandForLineage makes meta scripts read the server's replication
 	// ID with INFO to see that a failover or a restart may have lost writes to
-	// a stream: exact on every server, including Redis 6 and Dragonfly, at the
-	// cost of INFO in every meta script. INFO needs the @dangerous ACL category.
+	// a stream, on every server, including Redis 6 and Dragonfly, at the cost of
+	// INFO in every meta script. INFO needs the @dangerous ACL category. The ID
+	// also changes when nothing was lost - a primary gets its first replica, or
+	// has had none for repl-backlog-ttl - and streams then start new epochs too.
 	// Without it the broker uses the script cache of Redis 7+ and Valkey, which
 	// needs no extra permissions (no detection on Redis 6 and Dragonfly).
 	UseInfoCommandForLineage bool

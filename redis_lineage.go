@@ -56,8 +56,11 @@ import (
 // Redis 6 and Dragonfly send scripts to replicas, so the gate can't be used
 // there: no lineage, only the reused-offset check per channel. With
 // UseInfoCommandForLineage the scripts read master_replid with INFO on every
-// server instead: exact (it changes on every restart and promotion), at the
-// cost of INFO in every meta script and the @dangerous ACL category.
+// server instead, at the cost of INFO in every meta script and the @dangerous
+// ACL category. It changes on every restart and promotion, and also when
+// nothing was lost: a primary creating its replication backlog (its first
+// replica) or freeing it (no replicas for repl-backlog-ttl) takes a new ID, so
+// every stream on it starts a new epoch.
 
 type lineageMode int
 
