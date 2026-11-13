@@ -545,3 +545,35 @@ func TestRedisBroker_LateMessageNotALoss(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, last.Epoch, top.Epoch)
 }
+
+// A PUB/SUB message whose epoch carries an extension this version doesn't know
+// (a later version's data) reaches subscribers with the plain epoch.
+func TestRedisBroker_EpochExtensionIgnored(t *testing.T) {
+	node, b, insufficient := newWatermarkTestNode(t)
+	ch := "epoch_ext_" + randString(8)
+	client := newTestConnectedClientV2(t, node, "42")
+	rw := testReplyWriterWrapper()
+	require.NoError(t, client.handleSubscribe(&protocol.SubscribeRequest{Channel: ch, Recover: true}, &protocol.Command{}, time.Now(), rw.rw))
+	res, err := node.Publish(ch, []byte(`{}`), WithHistory(10, time.Minute))
+	require.NoError(t, err)
+
+	s := b.shards[0].shard
+	ctx := context.Background()
+	pub := &protocol.Publication{Data: []byte(`{}`), Time: time.Now().UnixMilli()}
+	payload, err := pub.MarshalCF()
+	require.NoError(t, err)
+	msg := "__p1:2:" + res.StreamPosition.Epoch + ";o=9.gfuture;zz=1__" + string(payload)
+	require.NoError(t, s.client.Do(ctx, s.client.B().Publish().Channel(string(b.messageChannelID(s, ch))).Message(msg).Build()).Error())
+
+	require.Eventually(t, func() bool {
+		client.mu.RLock()
+		defer client.mu.RUnlock()
+		pos := client.channels[ch].streamPosition
+		return pos.Offset == 2 && pos.Epoch == res.StreamPosition.Epoch
+	}, 5*time.Second, 10*time.Millisecond)
+	select {
+	case <-insufficient:
+		t.Fatal("an extension must not look like another epoch")
+	default:
+	}
+}

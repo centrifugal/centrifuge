@@ -1012,6 +1012,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 	if err != nil {
 		return PublishResult{}, errors.New("wrong Redis reply epoch")
 	}
+	epoch = s.shard.lineage.epochExt(string(historyMetaKey), epoch)
 	result := PublishResult{StreamPosition: StreamPosition{Offset: uint64(offset), Epoch: epoch}}
 	if len(replies) >= 3 {
 		fromCacheStr, err := replies[2].ToString()
@@ -1696,6 +1697,10 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 	if channel == "" {
 		return fmt.Errorf("unsupported channel: %s", chID)
 	}
+	if strings.IndexByte(sp.Epoch, pubsubEpochExt) >= 0 {
+		shard := b.getShard(channel).shard
+		sp.Epoch = shard.lineage.epochExt(string(b.historyMetaKey(shard, channel)), sp.Epoch)
+	}
 	if typeOfPush == pubPushType {
 		var pub protocol.Publication
 		err := pub.UnmarshalCF(pushData)
@@ -1825,6 +1830,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOption
 	if err != nil {
 		return nil, StreamPosition{}, errors.New("wrong Redis reply epoch")
 	}
+	epoch = s.lineage.epochExt(string(historyMetaKey), epoch)
 
 	if includePubs == "1" && len(replies) >= 3 {
 		values, err := replies[2].ToArray()
@@ -1915,6 +1921,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 	if err != nil {
 		return nil, StreamPosition{}, errors.New("wrong Redis reply epoch")
 	}
+	epoch = s.lineage.epochExt(string(historyMetaKey), epoch)
 
 	latestPosition := StreamPosition{Offset: uint64(offs), Epoch: epoch}
 
@@ -2071,7 +2078,7 @@ func extractPushData(data []byte) ([]byte, pushType, StreamPosition, bool, []byt
 		}
 		var err error
 		offset, err = strconv.ParseUint(stringHeader[:epochDelimiterPos], 10, 64)
-		epoch = pubsubEpoch(stringHeader[epochDelimiterPos+1:])
+		epoch = stringHeader[epochDelimiterPos+1:]
 		return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, err == nil
 	case 'd':
 		// d1:offset:epoch:prev_payload_length:prev_payload:payload_length:payload
@@ -2123,7 +2130,7 @@ func parseDeltaPush(input string) (deltaPublicationPush, error) {
 	if idx == -1 {
 		return deltaPublicationPush{}, fmt.Errorf("invalid format, missing epoch")
 	}
-	epoch := pubsubEpoch(input[:idx])
+	epoch := input[:idx]
 	input = input[idx+1:]
 
 	// prev_payload_length:prev_payload:payload_length:payload

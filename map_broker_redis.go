@@ -344,7 +344,7 @@ func parseStateValue(val []byte) (uint64, string, []byte, error) {
 	}
 
 	// Extract epoch
-	epoch := pubsubEpoch(convert.BytesToString(remaining[:secondColon]))
+	epoch := convert.BytesToString(remaining[:secondColon])
 
 	// Everything after second colon is payload
 	payload := remaining[secondColon+1:]
@@ -1153,6 +1153,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 		return MapStateResult{}, err
 	}
 	streamEpoch, _ := replies[1].ToString()
+	streamEpoch = s.shard.lineage.epochExt(e.metaKey(s.shard, ch), streamEpoch)
 	nextCursor, _ := replies[2].ToString()
 	if nextCursor == "0" {
 		nextCursor = "" // Convert Redis HSCAN "0" (complete) to empty string
@@ -1412,6 +1413,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 		return MapStateResult{}, err
 	}
 	streamEpoch, _ := replies[1].ToString()
+	streamEpoch = s.shard.lineage.epochExt(e.metaKey(s.shard, ch), streamEpoch)
 	keysArr, _ := replies[2].ToArray()
 	valuesArr, _ := replies[3].ToArray()
 	nextCursorScore, _ := replies[4].ToString()
@@ -2014,6 +2016,7 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 	if err != nil {
 		return MapStreamResult{}, fmt.Errorf("could not parse epoch: %w", err)
 	}
+	epoch = s.shard.lineage.epochExt(e.metaKey(s.shard, ch), epoch)
 
 	// Validate epoch if provided in Since filter.
 	if opts.Filter.Since != nil && opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != epoch {
@@ -2162,6 +2165,7 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 	if err != nil {
 		return MapStreamResult{}, fmt.Errorf("could not parse epoch: %w", err)
 	}
+	epoch = s.shard.lineage.epochExt(e.metaKey(s.shard, ch), epoch)
 
 	// Validate epoch if provided in Since filter.
 	if opts.Filter.Since != nil && opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != epoch {
@@ -2947,6 +2951,10 @@ func (e *RedisMapBroker) handleRedisClientMessage(isCluster bool, eventHandler B
 	if channel == "" {
 		return fmt.Errorf("unsupported channel: %s", chID)
 	}
+	if strings.IndexByte(epoch, pubsubEpochExt) >= 0 {
+		shard := e.getShard(channel).shard
+		epoch = shard.lineage.epochExt(e.metaKey(shard, channel), epoch)
+	}
 
 	sp := StreamPosition{Offset: offset, Epoch: epoch}
 
@@ -3281,7 +3289,7 @@ func parseMessage(data []byte) (uint64, string, []byte, bool, []byte, error) {
 	}
 
 	// Extract epoch
-	epoch := pubsubEpoch(convert.BytesToString(remaining[:secondColon]))
+	epoch := convert.BytesToString(remaining[:secondColon])
 
 	// Everything after second colon is protobuf bytes
 	protobuf := remaining[secondColon+1:]
@@ -3307,7 +3315,7 @@ func parseDeltaMessage(data []byte) (uint64, string, []byte, bool, []byte, error
 	if secondColon == -1 {
 		return 0, "", nil, false, nil, fmt.Errorf("delta: missing epoch separator")
 	}
-	epoch := pubsubEpoch(convert.BytesToString(remaining[:secondColon]))
+	epoch := convert.BytesToString(remaining[:secondColon])
 
 	// Parse prev_len
 	remaining = remaining[secondColon+1:]
@@ -3427,11 +3435,13 @@ func (e *RedisMapBroker) execLineage(ctx context.Context, s *RedisShard, ls *lin
 	return resp
 }
 
-// observeUpdate takes the observation off a map write's reply.
+// observeUpdate takes a map write's reply epoch through the lineage's
+// extension hook (see redisLineage.epochExt).
 func (e *RedisMapBroker) observeUpdate(s *RedisShard, ch string, res MapUpdateResult, err error) (MapUpdateResult, error) {
 	if err != nil {
 		return res, err
 	}
+	res.Position.Epoch = s.lineage.epochExt(e.metaKey(s, ch), res.Position.Epoch)
 	return res, nil
 }
 

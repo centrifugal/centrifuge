@@ -1290,3 +1290,10 @@ func (t *lineageLeftTokens) recent(n int) []string {
 	}
 	return append([]string(nil), t.order[len(t.order)-n:]...)
 }
+
+// epochExt takes an epoch as a script reply or a PUB/SUB message has it and
+// returns it without extensions (see pubsubEpochExt): the hook of data later
+// versions add there. key is the meta key it belongs to.
+func (l *redisLineage) epochExt(key, epoch string) string {
+	return pubsubEpoch(epoch)
+}

@@ -146,12 +146,15 @@ func TestLineageLeftTokens(t *testing.T) {
 func TestPubsubEpochExtension(t *testing.T) {
 	require.Equal(t, "Abc", pubsubEpoch("Abc"))
 	require.Equal(t, "Abc", pubsubEpoch("Abc;anything=a later version adds"))
+	// Parsers keep the extension for the lineage hook, which drops it.
 	_, _, sp, _, _, ok := extractPushData([]byte("__p1:7:Abc;x=1__payload"))
 	require.True(t, ok)
-	require.Equal(t, StreamPosition{Offset: 7, Epoch: "Abc"}, sp)
+	require.Equal(t, StreamPosition{Offset: 7, Epoch: "Abc;x=1"}, sp)
 	off, epoch, payload, _, _, err := parseMessage([]byte("7:Abc;x=1:payload"))
 	require.NoError(t, err)
 	require.Equal(t, uint64(7), off)
-	require.Equal(t, "Abc", epoch)
+	require.Equal(t, "Abc;x=1", epoch)
 	require.Equal(t, "payload", string(payload))
+	l := newRedisLineage(&RedisShard{closeCh: make(chan struct{})})
+	require.Equal(t, "Abc", l.epochExt("k", "Abc;x=1"))
 }
