@@ -2811,13 +2811,13 @@ func (e *RedisMapBroker) batchRemoveExpired(ctx context.Context, shard *RedisSha
 
 	result, err := e.execLineage(ctx, shard, e.batchRemoveScript,
 		[]string{
-			e.stateHashKey(shard, ch),                    // KEYS[1]
-			e.stateExpireKey(shard, ch),                  // KEYS[2]
-			e.streamKey(shard, ch),                       // KEYS[3]
-			e.metaKey(shard, ch),                         // KEYS[4]
-			cleanupKey,                                   // KEYS[5]
-			e.stateOrderKey(shard, ch),                   // KEYS[6]
-			e.stateMetaKey(shard, ch),                    // KEYS[7]
+			e.stateHashKey(shard, ch),                   // KEYS[1]
+			e.stateExpireKey(shard, ch),                 // KEYS[2]
+			e.streamKey(shard, ch),                      // KEYS[3]
+			e.metaKey(shard, ch),                        // KEYS[4]
+			cleanupKey,                                  // KEYS[5]
+			e.stateOrderKey(shard, ch),                  // KEYS[6]
+			e.stateMetaKey(shard, ch),                   // KEYS[7]
 			e.lin(shard).tokenKey(e.metaKey(shard, ch)), // KEYS[8]
 		},
 		argv,
