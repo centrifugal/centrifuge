@@ -230,3 +230,41 @@ func TestRedisLineage_PrefixesIndependent(t *testing.T) {
 	require.Equal(t, bBefore.Epoch, bAfter.Epoch, "the other deployment keeps its streams")
 	require.Equal(t, uint64(3), bAfter.Offset)
 }
+
+// With LoadSHA1 (FIPS-only mode) the gate works the same: digests come from
+// the server without loading the gated scripts (SCRIPT LOAD would open the
+// gate on a server it hasn't checked), and a server that lost its scripts
+// still starts new epochs.
+func TestRedisLineage_LoadSHA1(t *testing.T) {
+	node := testNode(t)
+	s, err := NewRedisShard(node, testSingleRedisConf(6379))
+	require.NoError(t, err)
+	b, err := NewRedisBroker(node, RedisBrokerConfig{
+		Prefix:   getUniquePrefix(),
+		Shards:   []*RedisShard{s},
+		LoadSHA1: true,
+	})
+	require.NoError(t, err)
+	node.SetBroker(b)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()); stopRedisBroker(b) })
+
+	ch := "lineage_fips_" + randString(6)
+	before := lineagePublish(t, b, ch, 2)
+	require.Equal(t, uint64(2), before.Offset)
+
+	l := b.lin(s)
+	token := l.token(l.slotIndex(string(b.historyMetaKey(s, ch))))
+	require.NotEmpty(t, token)
+	cached, ok := b.addHistoryStreamScript.shas.Load(token)
+	require.True(t, ok)
+	server, err := s.client.Do(context.Background(), s.client.B().Eval().Script(lineageSha1Source).
+		Numkeys(0).Arg(b.addHistoryStreamScript.gatedSource(token)).Build()).ToString()
+	require.NoError(t, err)
+	require.Equal(t, server, cached, "the digest is the server's")
+
+	flushScripts(t, s)
+	after := lineagePublish(t, b, ch, 1)
+	require.NotEqual(t, before.Epoch, after.Epoch, "a server without the scripts starts a new epoch")
+	require.Equal(t, uint64(1), after.Offset)
+}
