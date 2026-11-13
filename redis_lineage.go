@@ -648,7 +648,9 @@ func (l *redisLineage) sha(ctx context.Context, c rueidis.CoreClient, cacheKey *
 		sha = sha1Hex(src)
 	} else {
 		// The helper is not gated: loading it opens nothing.
-		res, err := c.Do(ctx, c.B().Eval().Script(lineageSha1Source).Numkeys(1).Key(l.anyTokenKey()).Arg(src).Build()).ToString()
+		// No key: the digest is the same on every node, and over a dedicated
+		// connection in Redis Cluster a key of another slot is refused.
+		res, err := c.Do(ctx, c.B().Eval().Script(lineageSha1Source).Numkeys(0).Arg(src).Build()).ToString()
 		if err != nil {
 			return "", err
 		}
