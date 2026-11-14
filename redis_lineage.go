@@ -880,10 +880,19 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 			// A server without an intact token of its own (no node used it
 			// yet, like a node just added to the cluster) can't tell a
 			// migration from a restart: the slot rotates and its streams start
-			// new epochs.
+			// new epochs. So does a slot whose token no other primary holds the
+			// marker of: the server it came from may have lost writes (a
+			// promotion or restart no node has called yet) before the slot
+			// moved.
 			own, ok, err := l.intactServerToken(ctx, c, slots, slot, left)
 			if err != nil {
 				return err
+			}
+			if ok && current != "" {
+				ok, err = l.tokenServedElsewhere(ctx, c, current, slots)
+				if err != nil {
+					return err
+				}
 			}
 			if ok {
 				adoptedValue, err = l.adoptSlot(ctx, c, tokenKey, currentValue, own)
@@ -1250,6 +1259,37 @@ func (l *redisLineage) intactServerToken(ctx context.Context, c rueidis.Dedicate
 		}
 	}
 	return "", false, nil
+}
+
+// tokenServedElsewhere tells whether a primary serving none of slots (the
+// gate's server) holds the marker of token: the lineage a migrated slot came
+// from is still intact there. A primary that can't be asked counts as not
+// holding it.
+func (l *redisLineage) tokenServedElsewhere(ctx context.Context, c rueidis.DedicatedClient, token string, slots []int) (bool, error) {
+	msha, err := l.marker(ctx, c, token)
+	if err != nil {
+		return false, err
+	}
+	keys, err := l.primaryKeys(ctx)
+	if err != nil {
+		return false, nil
+	}
+	mine := make(map[int]bool, len(slots))
+	for _, s := range slots {
+		mine[s] = true
+	}
+	client := l.shard.client
+	for _, key := range keys {
+		if mine[int(redisKeySlot(key))] {
+			continue
+		}
+		// The marker script, keyed to reach that primary: it runs only where
+		// it is loaded.
+		if client.Do(ctx, client.B().Evalsha().Sha1(msha).Numkeys(1).Key(key).Build()).Error() == nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // adoptSlot gives a slot migrated in the server's token, with the slot's token

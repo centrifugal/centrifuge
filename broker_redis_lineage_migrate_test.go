@@ -16,22 +16,26 @@ import (
 
 // A slot moved to another node of a Redis Cluster. The gate adopts it under
 // the target server's lineage, so its streams keep their epochs - when the
-// target has one: on a server no node used yet (a node just added) the
-// migrated streams start new epochs. The INFO mode can't tell a migration
-// from a new lineage: migrated streams always start new epochs. Opt-in:
+// target has one and the source still serves the slot's lineage: on a server
+// no node used yet (a node just added) the migrated streams start new epochs,
+// and so do streams from a source that lost its scripts (restarted or
+// promoted) before the move. The INFO mode can't tell a migration from a new
+// lineage: migrated streams always start new epochs. Opt-in:
 // CENTRIFUGE_REDIS_MIGRATE_TEST=1 (ports 7001-7003).
 func TestRedisLineage_SlotMigrationModes(t *testing.T) {
 	if os.Getenv("CENTRIFUGE_REDIS_MIGRATE_TEST") == "" {
 		t.Skip("set CENTRIFUGE_REDIS_MIGRATE_TEST=1")
 	}
 	for _, tc := range []struct {
-		name        string
-		useInfo     bool
-		targetInUse bool
+		name          string
+		useInfo       bool
+		targetInUse   bool
+		sourceFlushed bool
 	}{
-		{"gate_target_in_use", false, true},
-		{"gate_fresh_target", false, false},
-		{"info", true, true},
+		{"gate_target_in_use", false, true, false},
+		{"gate_fresh_target", false, false, false},
+		{"gate_source_flushed", false, true, true},
+		{"info", true, true, false},
 	} {
 		useInfo := tc.useInfo
 		t.Run(tc.name, func(t *testing.T) {
@@ -69,6 +73,15 @@ func TestRedisLineage_SlotMigrationModes(t *testing.T) {
 					}
 				}
 			}
+			if tc.sourceFlushed {
+				// The source lost its scripts (as after a restart or a
+				// promotion) and no node called it since: it may have lost
+				// writes too, so the slot can't be adopted.
+				src, err := rueidis.NewClient(rueidis.ClientOption{InitAddress: []string{from}, ForceSingleClient: true})
+				require.NoError(t, err)
+				require.NoError(t, src.Do(ctx, src.B().ScriptFlush().Build()).Error())
+				src.Close()
+			}
 			migrateSlotForTest(t, addrs, slot, from, to)
 			require.Equal(t, to, slotOwnerForTest(t, addrs, slot))
 
@@ -83,6 +96,9 @@ func TestRedisLineage_SlotMigrationModes(t *testing.T) {
 			}, 10*time.Second, 50*time.Millisecond)
 			if useInfo {
 				require.NotEqual(t, before.Epoch, after.Epoch, "the INFO mode restarts a migrated stream")
+				require.Equal(t, uint64(1), after.Offset)
+			} else if tc.sourceFlushed {
+				require.NotEqual(t, before.Epoch, after.Epoch, "a slot from a source that lost its lineage restarts")
 				require.Equal(t, uint64(1), after.Offset)
 			} else if tc.targetInUse {
 				require.Equal(t, before.Epoch, after.Epoch, "the gate adopts a migrated slot")

@@ -412,35 +412,84 @@ func TestRedisLineage_MigratedSlotAdopted(t *testing.T) {
 		if !tt.Gate || !tt.UseCluster {
 			continue
 		}
-		t.Run(tt.Name, func(t *testing.T) {
-			b := newLineageTestBroker(t, tt, false)
-			s := b.shards[0].shard
-			ctx := context.Background()
-			ch := "lineage_migrated_" + randString(6)
-			other := "lineage_migrated_other_" + randString(6)
-			before := lineagePublish(t, b, ch, 2)
-			otherBefore := lineagePublish(t, b, other, 1)
-
-			// Emulate the migration: the slot's token key and the meta carry a
-			// foreign token.
-			metaKey := string(b.historyMetaKey(s, ch))
-			tokenKey := b.lin(s).tokenKey(metaKey)
-			require.NoError(t, s.client.Do(ctx, s.client.B().Hset().Key(tokenKey).FieldValue().FieldValue("t", "gforeign").Build()).Error())
-			require.NoError(t, s.client.Do(ctx, s.client.B().Hset().Key(metaKey).FieldValue().FieldValue("i", "gforeign").Build()).Error())
-
-			after := lineagePublish(t, b, ch, 1)
-			require.Equal(t, before.Epoch, after.Epoch, "a migrated slot keeps its streams")
-			require.Equal(t, uint64(3), after.Offset)
-			value, err := s.client.Do(ctx, s.client.B().Hget().Key(tokenKey).Field("t").Build()).ToString()
-			require.NoError(t, err)
-			tok, anc := parseTokenValue(value)
-			require.NotEqual(t, "gforeign", tok)
-			require.Equal(t, "gforeign", anc, "the foreign token is the ancestor")
-
-			otherAfter := lineagePublish(t, b, other, 1)
-			if redisKeySlot(string(b.historyMetaKey(s, other))) != redisKeySlot(metaKey) {
-				require.Equal(t, otherBefore.Epoch, otherAfter.Epoch, "other slots of the server are untouched")
+		for _, served := range []bool{true, false} {
+			name := tt.Name + "/source_served"
+			if !served {
+				name = tt.Name + "/source_gone"
 			}
-		})
+			t.Run(name, func(t *testing.T) {
+				b := newLineageTestBroker(t, tt, false)
+				s := b.shards[0].shard
+				ctx := context.Background()
+				ch := "lineage_migrated_" + randString(6)
+				other := "lineage_migrated_other_" + randString(6)
+				before := lineagePublish(t, b, ch, 2)
+				otherBefore := lineagePublish(t, b, other, 1)
+
+				// Emulate the migration: the slot's token key and the meta carry a
+				// foreign token - one another primary still serves (its marker is
+				// loaded there), or one nobody serves any more.
+				foreign := "gforeign" + randString(6)
+				metaKey := string(b.historyMetaKey(s, ch))
+				tokenKey := b.lin(s).tokenKey(metaKey)
+				if served {
+					loadMarkerOnOtherPrimaries(t, s, metaKey, foreign)
+				}
+				require.NoError(t, s.client.Do(ctx, s.client.B().Hset().Key(tokenKey).FieldValue().FieldValue("t", foreign).Build()).Error())
+				require.NoError(t, s.client.Do(ctx, s.client.B().Hset().Key(metaKey).FieldValue().FieldValue("i", foreign).Build()).Error())
+
+				after := lineagePublish(t, b, ch, 1)
+				if !served {
+					require.NotEqual(t, before.Epoch, after.Epoch, "a slot whose lineage nobody serves restarts")
+					require.Equal(t, uint64(1), after.Offset)
+					return
+				}
+				require.Equal(t, before.Epoch, after.Epoch, "a migrated slot keeps its streams")
+				require.Equal(t, uint64(3), after.Offset)
+				value, err := s.client.Do(ctx, s.client.B().Hget().Key(tokenKey).Field("t").Build()).ToString()
+				require.NoError(t, err)
+				tok, anc := parseTokenValue(value)
+				require.NotEqual(t, foreign, tok)
+				require.Equal(t, foreign, anc, "the foreign token is the ancestor")
+
+				otherAfter := lineagePublish(t, b, other, 1)
+				if redisKeySlot(string(b.historyMetaKey(s, other))) != redisKeySlot(metaKey) {
+					require.Equal(t, otherBefore.Epoch, otherAfter.Epoch, "other slots of the server are untouched")
+				}
+			})
+		}
 	}
+}
+
+// loadMarkerOnOtherPrimaries loads the marker script of token on every
+// cluster node except the one serving key: the lineage of token is served
+// elsewhere.
+func loadMarkerOnOtherPrimaries(t *testing.T, s *RedisShard, key, token string) {
+	t.Helper()
+	ctx := context.Background()
+	slot := int64(redisKeySlot(key))
+	raw, err := s.client.Do(ctx, s.client.B().ClusterSlots().Build()).ToArray()
+	require.NoError(t, err)
+	owner := ""
+	for _, r := range raw {
+		e, _ := r.ToArray()
+		lo, _ := e[0].AsInt64()
+		hi, _ := e[1].AsInt64()
+		if slot >= lo && slot <= hi {
+			m, _ := e[2].ToArray()
+			host, _ := m[0].ToString()
+			port, _ := m[1].AsInt64()
+			owner = net.JoinHostPort(host, strconv.FormatInt(port, 10))
+		}
+	}
+	require.NotEmpty(t, owner)
+	loaded := 0
+	for addr, c := range s.client.Nodes() {
+		if addr == owner {
+			continue
+		}
+		require.NoError(t, c.Do(ctx, c.B().ScriptLoad().Script(lineageMarkerSource(token)).Build()).Error())
+		loaded++
+	}
+	require.Positive(t, loaded)
 }
