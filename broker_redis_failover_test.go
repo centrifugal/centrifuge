@@ -303,9 +303,7 @@ func TestRedisFailover_ReadOnlyReconnects(t *testing.T) {
 // address and rotates there, so the old server's cached scripts don't match
 // any more when it serves again.
 func TestRedisFailover_FailbackToDemotedServer(t *testing.T) {
-	prev := lineageProbeInterval
-	lineageProbeInterval = 100 * time.Millisecond
-	t.Cleanup(func() { lineageProbeInterval = prev })
+	setLineageProbeInterval(t, 100 * time.Millisecond)
 	for _, p := range failoverPairs(t) {
 		t.Run(p.name, func(t *testing.T) {
 			br, proxy, a, b := setupPair(t, p)
@@ -381,9 +379,7 @@ func TestRedisFailover_ClusterFailover(t *testing.T) {
 	if v == "" {
 		t.Skip("CENTRIFUGE_REDIS_CLUSTER_REPLICAS_ADDRS not set")
 	}
-	prev := lineageProbeInterval
-	lineageProbeInterval = 100 * time.Millisecond
-	t.Cleanup(func() { lineageProbeInterval = prev })
+	setLineageProbeInterval(t, 100 * time.Millisecond)
 
 	node := testNode(t)
 	s, err := NewRedisShard(node, RedisShardConfig{ClusterAddresses: strings.Split(v, ","), IOTimeout: 5 * time.Second})
@@ -495,9 +491,7 @@ func TestRedisFailover_FastFailbackUnwatchedGap(t *testing.T) {
 }
 
 func testFastFailback(t *testing.T, watched bool) {
-	prev := lineageProbeInterval
-	lineageProbeInterval = time.Hour // nothing reaches the new primary
-	t.Cleanup(func() { lineageProbeInterval = prev })
+	setLineageProbeInterval(t, time.Hour) // nothing reaches the new primary
 	for _, p := range failoverPairs(t) {
 		t.Run(p.name, func(t *testing.T) {
 			br, _, a, b := setupPairHook(t, p, false, nil)

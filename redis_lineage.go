@@ -1100,9 +1100,17 @@ func lineageParseClusterNodes(nodes string) []clusterNodeLine {
 	return out
 }
 
+// lineageProbeIntervalNs holds lineageProbeInterval. It is atomic: tests
+// change it while probes of shards from earlier tests may still read it.
+var lineageProbeIntervalNs atomic.Int64
+
+func init() { lineageProbeIntervalNs.Store(int64(time.Second)) }
+
 // lineageProbeInterval: a node that made no call to a shard for this long
 // calls each of its primaries.
-var lineageProbeInterval = time.Second
+func lineageProbeInterval() time.Duration {
+	return time.Duration(lineageProbeIntervalNs.Load())
+}
 
 // lineageProbeSlotsRefresh is how often the probe refreshes which slots the
 // primaries of a Redis Cluster serve.
@@ -1118,7 +1126,8 @@ func (l *redisLineage) startProbe() {
 }
 
 func (l *redisLineage) runProbe() {
-	t := time.NewTicker(lineageProbeInterval)
+	interval := lineageProbeInterval()
+	t := time.NewTicker(interval)
 	defer t.Stop()
 	var keys []string
 	var keysAt time.Time
@@ -1127,7 +1136,7 @@ func (l *redisLineage) runProbe() {
 		case <-l.shard.closeCh:
 			return
 		case <-t.C:
-			if time.Since(time.Unix(0, l.lastCall.Load())) < lineageProbeInterval {
+			if time.Since(time.Unix(0, l.lastCall.Load())) < interval {
 				continue // the node calls the shard anyway
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

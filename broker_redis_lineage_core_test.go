@@ -121,9 +121,7 @@ func TestRedisLineage_ReplacedTokensExchanged(t *testing.T) {
 // no calls: a restart (emulated: the script cache flushed) rotates before any
 // traffic.
 func TestRedisLineage_IdleProbeOpensGate(t *testing.T) {
-	prev := lineageProbeInterval
-	lineageProbeInterval = 50 * time.Millisecond
-	t.Cleanup(func() { lineageProbeInterval = prev })
+	setLineageProbeInterval(t, 50 * time.Millisecond)
 	b := newLineageTestBroker(t, lineageSingle, false)
 	ch := "lineage_probe_" + randString(6)
 	lineagePublish(t, b, ch, 1)
@@ -267,4 +265,13 @@ func TestRedisLineage_LoadSHA1(t *testing.T) {
 	after := lineagePublish(t, b, ch, 1)
 	require.NotEqual(t, before.Epoch, after.Epoch, "a server without the scripts starts a new epoch")
 	require.Equal(t, uint64(1), after.Offset)
+}
+
+// setLineageProbeInterval sets the idle probe's interval for a test and
+// restores it when the test ends.
+func setLineageProbeInterval(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := lineageProbeInterval()
+	lineageProbeIntervalNs.Store(int64(d))
+	t.Cleanup(func() { lineageProbeIntervalNs.Store(int64(prev)) })
 }
