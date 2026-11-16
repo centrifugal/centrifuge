@@ -402,28 +402,6 @@ func redisClientOptions(conf RedisShardConfig) (options rueidis.ClientOption, is
 			addressOpts.ClientOption, addressOpts.IsCluster, addressOpts.IsSentinel, addressOpts.ReplicaClientEnabled
 	}
 
-	// Track the connections the client dials, so a READONLY reply (a demoted
-	// server behind the same address, centrifugo#1320) can drop them: the
-	// client then dials again and resolves the address again.
-	conns := &redisConnSet{conns: map[*trackedConn]struct{}{}}
-	userDial := options.DialCtxFn
-	options.DialCtxFn = func(ctx context.Context, dst string, dialer *net.Dialer, tlsConfig *tls.Config) (net.Conn, error) {
-		var conn net.Conn
-		var err error
-		if userDial != nil {
-			conn, err = userDial(ctx, dst, dialer, tlsConfig)
-		} else if tlsConfig != nil {
-			td := tls.Dialer{NetDialer: dialer, Config: tlsConfig}
-			conn, err = td.DialContext(ctx, "tcp", dst)
-		} else {
-			conn, err = dialer.DialContext(ctx, "tcp", dst)
-		}
-		if err != nil {
-			return nil, err
-		}
-		return conns.add(conn), nil
-	}
-
 	if isSentinel {
 		if options.Sentinel.MasterSet == "" {
 			return rueidis.ClientOption{}, false, false, false, errors.New("sentinel master name must be configured for Redis Sentinel setup")
@@ -453,6 +431,28 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	options, isCluster, isSentinel, replicaClientEnabled, err := redisClientOptions(conf)
 	if err != nil {
 		return nil, err
+	}
+
+	// Track the connections the client dials, so a READONLY reply (a demoted
+	// server behind the same address, centrifugo#1320) can drop them: the
+	// client then dials again and resolves the address again.
+	conns := &redisConnSet{conns: map[*trackedConn]struct{}{}}
+	userDial := options.DialCtxFn
+	options.DialCtxFn = func(ctx context.Context, dst string, dialer *net.Dialer, tlsConfig *tls.Config) (net.Conn, error) {
+		var conn net.Conn
+		var err error
+		if userDial != nil {
+			conn, err = userDial(ctx, dst, dialer, tlsConfig)
+		} else if tlsConfig != nil {
+			td := tls.Dialer{NetDialer: dialer, Config: tlsConfig}
+			conn, err = td.DialContext(ctx, "tcp", dst)
+		} else {
+			conn, err = dialer.DialContext(ctx, "tcp", dst)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return conns.add(conn), nil
 	}
 
 	client, err := rueidis.NewClient(options)
