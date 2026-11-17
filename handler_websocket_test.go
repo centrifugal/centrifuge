@@ -2650,3 +2650,106 @@ func TestWsCloseDictionaryCompressionIsIdempotent(t *testing.T) {
 		require.EqualValues(t, 1, cc.closed.Load())
 	})
 }
+
+// newDrainTestServer returns the websocket URL of a server whose connect is
+// answered by connectErr, and a channel receiving the connection's graceCh.
+func newDrainTestServer(t *testing.T, connectErr error) (string, chan chan struct{}) {
+	t.Helper()
+	n, _ := New(Config{})
+	require.NoError(t, n.Run())
+	t.Cleanup(func() { _ = n.Shutdown(context.Background()) })
+	graceChs := make(chan chan struct{}, 1)
+	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		graceChs <- event.Transport.(*websocketTransport).graceCh
+		return ConnectReply{}, connectErr
+	})
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{}))
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return "ws" + server.URL[4:] + "/connection/websocket", graceChs
+}
+
+func dialDrainTest(t *testing.T, url string) *websocket.Conn {
+	t.Helper()
+	conn, resp, _, err := (&websocket.Dialer{}).Dial(url, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close(); _ = conn.Close() })
+	cmdBytes, _ := json.Marshal(&protocol.Command{Id: 1, Connect: &protocol.ConnectRequest{}})
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cmdBytes))
+	return conn
+}
+
+// floodUntilClosed writes messages without reading until a write fails, and
+// returns how long that took.
+func floodUntilClosed(t *testing.T, conn *websocket.Conn) time.Duration {
+	t.Helper()
+	started := time.Now()
+	_ = conn.SetWriteDeadline(started.Add(2 * closeFrameWait))
+	for {
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"id":2,"rpc":{}}`)); err != nil {
+			return time.Since(started)
+		}
+	}
+}
+
+// A client which still had messages in flight when the server closed must get
+// the server's close code through a completed closing handshake: the bound on
+// the drain must not cut it short.
+func TestWebsocketHandlerCloseHandshakeWithMessagesInFlight(t *testing.T) {
+	t.Parallel()
+	url, graceChs := newDrainTestServer(t, DisconnectInvalidToken)
+	conn := dialDrainTest(t, url)
+	graceCh := <-graceChs
+	for i := 0; i < closeDrainMaxMessages/2; i++ {
+		require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"id":2,"rpc":{}}`)))
+	}
+
+	// Reading the close frame makes the client answer it.
+	_, _, err := conn.ReadMessage()
+	var closeErr *websocket.CloseError
+	require.True(t, errors.As(err, &closeErr), "expected close error, got %v", err)
+	require.Equal(t, int(DisconnectInvalidToken.Code), closeErr.Code)
+	select {
+	case <-graceCh:
+	case <-time.After(closeFrameWait / 2):
+		require.Fail(t, "closing handshake did not complete")
+	}
+}
+
+// A client which keeps sending after the server closed is not closing: the
+// server stops reading it after a bounded number of messages rather than
+// reading everything it sends for closeFrameWait.
+func TestWebsocketHandlerCloseDrainBoundedAfterDisconnect(t *testing.T) {
+	t.Parallel()
+	url, _ := newDrainTestServer(t, DisconnectInvalidToken)
+	conn := dialDrainTest(t, url)
+	require.Less(t, floodUntilClosed(t, conn), closeFrameWait/2)
+}
+
+// A refused connect leaves the connection to the client to close. One which
+// floods instead is cut off the same way.
+func TestWebsocketHandlerCloseDrainBoundedAfterRefusedConnect(t *testing.T) {
+	t.Parallel()
+	url, _ := newDrainTestServer(t, ErrorTooManyRequests)
+	conn := dialDrainTest(t, url)
+	require.Less(t, floodUntilClosed(t, conn), closeFrameWait/2)
+}
+
+// A refused connect is answered with the error reply, and a client which
+// closes after it completes the closing handshake as before.
+func TestWebsocketHandlerRefusedConnectClientCloses(t *testing.T) {
+	t.Parallel()
+	url, graceChs := newDrainTestServer(t, ErrorTooManyRequests)
+	conn := dialDrainTest(t, url)
+	graceCh := <-graceChs
+	_, data, err := conn.ReadMessage()
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"code":111`)
+	require.NoError(t, conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)))
+	select {
+	case <-graceCh:
+	case <-time.After(closeFrameWait / 2):
+		require.Fail(t, "server did not finish on client close")
+	}
+}
