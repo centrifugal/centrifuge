@@ -1627,13 +1627,13 @@ const lineageCheckScript = `return 1`
 // the gate's rotation uses in Redis Cluster.
 const lineageCheckCrossSlotScript = "#!lua flags=allow-cross-slot-keys\nreturn 1"
 
-// reportEnvironment logs, once per broker kind on a shard and key prefix,
-// what lost-writes detection runs with: the shard, the server, the detection
-// chosen and why, the options, and whether the server allows each command the
-// gate needs. It changes nothing on the server: it doesn't open the gate, and
-// its only writes are harmless scripts in the script cache. With detection off
-// (enabled false) it says what DetectPotentialLostWrites would run with on this
-// server, without touching the shard's detection state.
+// reportEnvironment logs, once per broker kind and name on a shard and key
+// prefix, the state of potential lost writes detection: whether the options
+// are on, which detection is in use, and whether this server supports each
+// detection (with the reasons when it doesn't). It changes nothing on the
+// server: it doesn't open the gate, and its only writes are harmless scripts in
+// the script cache. With detection off it caches nothing, so the shard's
+// detection state stays untouched.
 func (l *redisLineage) reportEnvironment(n *Node, broker, brokerName string, enabled, useInfo bool) {
 	if l.disabledForTest {
 		return
@@ -1643,50 +1643,7 @@ func (l *redisLineage) reportEnvironment(n *Node, broker, brokerName string, ena
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	fields := map[string]any{
-		"broker":                         broker,
-		"broker_name":                    brokerName,
-		"shard":                          l.shard.string(),
-		"shard_mode":                     string(l.shard.Mode()),
-		"prefix":                         l.prefix,
-		"detect_potential_lost_writes":   enabled,
-		"potential_lost_writes_use_info": useInfo,
-		"force_resp2":                    l.shard.alwaysRESP2,
-		"load_sha1":                      l.loadSHA1,
-	}
-	detection, reason := l.describeMode(ctx, enabled, useInfo, fields)
-	checksFailed := false
-	if detection == "script_cache" {
-		checksFailed = l.checkGateCommands(ctx, fields)
-	}
-	level := LogLevelInfo
-	if enabled {
-		fields["detection"] = detection
-		if reason != "" {
-			fields["detection_reason"] = reason
-		}
-		if detection == "off" || checksFailed {
-			level = LogLevelWarn
-		}
-	} else {
-		fields["detection"] = "off"
-		fields["detection_reason"] = "DetectPotentialLostWrites is not set"
-		fields["if_enabled"] = detection
-		if reason != "" {
-			fields["if_enabled_reason"] = reason
-		}
-		fields["supported_by_server"] = detection != "off" && !checksFailed
-	}
-	if n.logEnabled(level) {
-		n.logger.log(newLogEntry(level, "redis lost writes detection", fields))
-	}
-}
 
-// describeMode returns the detection a broker on the shard runs with (or
-// would run with), and why when it is off or not the default, filling in what
-// the server said. With detection off nothing is cached, so the shard's
-// detection state stays untouched.
-func (l *redisLineage) describeMode(ctx context.Context, enabled, useInfo bool, fields map[string]any) (string, string) {
 	var kind redisServerKind
 	var kindErr error
 	if enabled {
@@ -1694,58 +1651,99 @@ func (l *redisLineage) describeMode(ctx context.Context, enabled, useInfo bool, 
 	} else {
 		kind, kindErr = l.helloKind(ctx)
 	}
-	if kindErr != nil {
-		fields["hello_error"] = kindErr.Error()
-	} else {
+	scriptCache := l.scriptCacheSupport(ctx, kind, kindErr)
+	var infoOK bool
+	if enabled && useInfo {
+		infoOK = l.probeInfo(ctx)
+	}
+	info := l.infoSupport(ctx)
+
+	// What mode() picks.
+	detection := "off"
+	if enabled {
+		switch {
+		case useInfo && infoOK:
+			detection = "info"
+		case kindErr == nil && kind.gateCapable:
+			detection = "script_cache"
+		}
+	}
+	fields := map[string]any{
+		"broker":                         broker,
+		"broker_name":                    brokerName,
+		"shard":                          l.shard.string(),
+		"detect_potential_lost_writes":   enabled,
+		"potential_lost_writes_use_info": useInfo,
+		"detection":                      detection,
+		"script_cache":                   supportText(scriptCache),
+		"info":                           supportText(info),
+	}
+	if kindErr == nil {
 		fields["server"] = kind.desc
-		fields["primary"] = kind.primary
 	}
-	if useInfo {
-		var allowed bool
-		if enabled {
-			allowed = l.probeInfo(ctx)
-		} else {
-			allowed, _, _ = l.infoCheck(ctx)
-		}
-		fields["info_allowed"] = allowed
-		if allowed {
-			return "info", ""
-		}
+	level := LogLevelInfo
+	if enabled && (detection == "off" ||
+		(detection == "script_cache" && len(scriptCache) > 0) ||
+		(useInfo && len(info) > 0)) {
+		level = LogLevelWarn
 	}
-	if kindErr != nil {
-		return "off", "HELLO failed"
+	if n.logEnabled(level) {
+		n.logger.log(newLogEntry(level, "redis potential lost writes detection", fields))
 	}
-	if kind.gateCapable {
-		if useInfo {
-			return "script_cache", "scripts can't call INFO"
-		}
-		return "script_cache", ""
-	}
-	return "off", "the server's script cache can't show a failover or a restart (Redis below 7, Dragonfly or an unknown server); reused offsets are still detected per channel"
 }
 
-// checkGateCommands runs harmless versions of the commands the gate needs and
-// records the result of each; it returns whether any failed.
-func (l *redisLineage) checkGateCommands(ctx context.Context, fields map[string]any) bool {
+// supportText is "supported", or "not supported: " and the reasons.
+func supportText(reasons []string) string {
+	if len(reasons) == 0 {
+		return "supported"
+	}
+	return "not supported: " + strings.Join(reasons, "; ")
+}
+
+// scriptCacheSupport returns why this server can't run detection with the
+// script cache (none when it can): its kind, and the commands the gate needs,
+// tried with harmless scripts.
+func (l *redisLineage) scriptCacheSupport(ctx context.Context, kind redisServerKind, kindErr error) []string {
+	if kindErr != nil {
+		return []string{"HELLO failed: " + kindErr.Error()}
+	}
+	var reasons []string
+	if !kind.gateCapable {
+		reasons = append(reasons, kind.desc+" is not Redis 7+ or Valkey: its script cache can't show a failover or a restart")
+	}
+	if !kind.primary {
+		reasons = append(reasons, "the server is not a primary")
+	}
 	c := l.shard.client
 	key := l.anyTokenKey()
-	failed := false
-	check := func(name string, err error) {
-		if err != nil {
-			fields["check_"+name] = err.Error()
-			failed = true
-			return
-		}
-		fields["check_"+name] = "ok"
-	}
 	sha, err := c.Do(ctx, c.B().ScriptLoad().Script(lineageCheckScript).Build()).ToString()
-	check("script_load", err)
-	if err == nil {
-		check("evalsha", c.Do(ctx, c.B().Evalsha().Sha1(sha).Numkeys(1).Key(key).Build()).Error())
+	if err != nil {
+		reasons = append(reasons, "SCRIPT LOAD failed: "+err.Error())
+	} else if err := c.Do(ctx, c.B().Evalsha().Sha1(sha).Numkeys(1).Key(key).Build()).Error(); err != nil {
+		reasons = append(reasons, "EVALSHA failed: "+err.Error())
 	}
 	if l.shard.isCluster {
-		check("cluster_nodes", c.Do(ctx, c.B().ClusterNodes().Build()).Error())
-		check("cross_slot_script", c.Do(ctx, c.B().Eval().Script(lineageCheckCrossSlotScript).Numkeys(1).Key(key).Build()).Error())
+		if err := c.Do(ctx, c.B().ClusterNodes().Build()).Error(); err != nil {
+			reasons = append(reasons, "CLUSTER NODES failed: "+err.Error())
+		}
+		if err := c.Do(ctx, c.B().Eval().Script(lineageCheckCrossSlotScript).Numkeys(1).Key(key).Build()).Error(); err != nil {
+			reasons = append(reasons, "a script with allow-cross-slot-keys failed: "+err.Error())
+		}
 	}
-	return failed
+	return reasons
+}
+
+// infoSupport returns why this server can't run detection with INFO (none
+// when it can), from a harmless script reading INFO replication.
+func (l *redisLineage) infoSupport(ctx context.Context) []string {
+	allowed, redisErr, err := l.infoCheck(ctx)
+	switch {
+	case err != nil && redisErr:
+		return []string{"scripts can't call INFO (the ACL user needs the @dangerous category): " + err.Error()}
+	case err != nil:
+		return []string{"the INFO check failed: " + err.Error()}
+	case !allowed:
+		return []string{"INFO replication has no master_replid"}
+	}
+	return nil
 }

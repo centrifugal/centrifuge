@@ -4,8 +4,10 @@ package centrifuge
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -533,4 +535,63 @@ func TestRedisLineage_OffByDefault(t *testing.T) {
 	after := lineagePublish(t, b, ch, 1)
 	require.Equal(t, before.Epoch, after.Epoch, "no detection: the epoch is kept")
 	require.Equal(t, before.Offset+1, after.Offset)
+}
+
+// At start each broker logs one line with the state of the options, the
+// detection in use and whether the server supports each detection - also with
+// the options off. The CI Redis (7+, default user) supports both.
+func TestRedisLineage_StartupReport(t *testing.T) {
+	for _, detect := range []bool{false, true} {
+		t.Run(fmt.Sprintf("detect=%v", detect), func(t *testing.T) {
+			var mu sync.Mutex
+			var report *LogEntry
+			node, err := New(Config{LogLevel: LogLevelInfo, LogHandler: func(e LogEntry) {
+				if e.Message == "redis potential lost writes detection" {
+					mu.Lock()
+					report = &e
+					mu.Unlock()
+				}
+			}})
+			require.NoError(t, err)
+			s, err := NewRedisShard(node, testSingleRedisConf(6379))
+			require.NoError(t, err)
+			b, err := NewRedisBroker(node, RedisBrokerConfig{
+				Name:                      "reported",
+				Prefix:                    getUniquePrefix(),
+				Shards:                    []*RedisShard{s},
+				DetectPotentialLostWrites: detect,
+			})
+			require.NoError(t, err)
+			node.SetBroker(b)
+			require.NoError(t, node.Run())
+			t.Cleanup(func() { _ = node.Shutdown(context.Background()); stopRedisBroker(b) })
+
+			require.Eventually(t, func() bool {
+				mu.Lock()
+				defer mu.Unlock()
+				return report != nil
+			}, 10*time.Second, 20*time.Millisecond)
+			mu.Lock()
+			defer mu.Unlock()
+			require.Equal(t, LogLevelInfo, report.Level)
+			f := report.Fields
+			require.Equal(t, "broker", f["broker"])
+			require.Equal(t, "reported", f["broker_name"])
+			require.Equal(t, detect, f["detect_potential_lost_writes"])
+			require.Equal(t, false, f["potential_lost_writes_use_info"])
+			if detect {
+				require.Equal(t, "script_cache", f["detection"])
+			} else {
+				require.Equal(t, "off", f["detection"])
+			}
+			require.Equal(t, "supported", f["script_cache"])
+			require.Equal(t, "supported", f["info"])
+			require.NotEmpty(t, f["server"])
+		})
+	}
+}
+
+func TestSupportText(t *testing.T) {
+	require.Equal(t, "supported", supportText(nil))
+	require.Equal(t, "not supported: a; b", supportText([]string{"a", "b"}))
 }
