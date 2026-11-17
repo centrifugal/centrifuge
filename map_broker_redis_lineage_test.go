@@ -6,6 +6,7 @@ import (
 	"context"
 	"testing"
 
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,11 +29,13 @@ func TestRedisMapBroker_NewLineageKeepsState(t *testing.T) {
 		require.Equal(t, uint64(3), before.Position.Offset)
 
 		s := broker.shards[0].shard
+		resets := counterValue(t, node.metrics.redisPotentialLostWritesEpochResets.WithLabelValues("map", "script_cache"))
 		flushScripts(t, s)
 
 		after, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
 		require.NoError(t, err)
 		require.NotEqual(t, before.Position.Epoch, after.Position.Epoch, "clients must reload: a new epoch")
+		require.GreaterOrEqual(t, counterValue(t, node.metrics.redisPotentialLostWritesEpochResets.WithLabelValues("map", "script_cache")), resets+1, "the reset map is counted")
 		require.Zero(t, after.Position.Offset, "the change stream starts again")
 		state := stateToMap(after.Publications)
 		require.Len(t, state, 2, "the state is kept")

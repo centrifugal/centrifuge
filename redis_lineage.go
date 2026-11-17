@@ -147,6 +147,12 @@ end
 local function lineage_obs(count)
     return ""
 end
+local function lineage_reset_ext(reset)
+    if reset then
+        return ";lr=" .. LINEAGE_FIELD
+    end
+    return ""
+end
 if #ARGV == 1 and ARGV[1] == "` + lineageGateLoadArg + `" then
     return 0
 end
@@ -175,6 +181,12 @@ end
 local function lineage_obs(count)
     return ""
 end
+local function lineage_reset_ext(reset)
+    if reset then
+        return ";lr=" .. LINEAGE_FIELD
+    end
+    return ""
+end
 `
 
 // lineagePreludeNone defines lineage_token(key) as no token: nothing is
@@ -189,6 +201,12 @@ local function lineage_count(key)
     return false
 end
 local function lineage_obs(count)
+    return ""
+end
+local function lineage_reset_ext(reset)
+    if reset then
+        return ";lr=" .. LINEAGE_FIELD
+    end
     return ""
 end
 `
@@ -422,6 +440,9 @@ type redisLineage struct {
 
 	openMu sync.Mutex
 
+	// reported: the broker kinds that logged their environment.
+	reported sync.Map
+
 	scriptsMu sync.Mutex
 	scripts   []*lineageScript // gated scripts, loaded whenever the gate opens
 	loadSHA1  bool
@@ -535,9 +556,6 @@ func (l *redisLineage) serverKind(ctx context.Context) (redisServerKind, error) 
 	}
 	l.kind = parseHelloReply(helloFields(m))
 	l.kindDone = true
-	if !l.kind.gateCapable {
-		l.log(LogLevelWarn, "redis lineage: this server can't detect a failover or a restart that lost writes (Redis below 7, Dragonfly or an unknown server): use Redis 7+ or Valkey, or enable UseInfoCommandForLineage to detect it with INFO", map[string]any{"server": l.kind.desc})
-	}
 	return l.kind, nil
 }
 
@@ -974,6 +992,14 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 			l.stats.stale++
 		}
 		l.stats.mu.Unlock()
+		switch {
+		case staleSeen:
+			l.countDetection("stale_copy")
+		case force:
+			l.countDetection("reused_offset")
+		default:
+			l.countDetection("restart_or_failover")
+		}
 		l.log(LogLevelInfo, "redis lineage: new lineage token (a restart, a failover or a stale copy may have lost writes), streams and maps on the server start new epochs", map[string]any{
 			"previous_token": prevToken, "stale_copy": staleSeen, "forced": force, "slots": len(slots),
 		})
@@ -1494,7 +1520,161 @@ func lineageTokenMinted(tok string) (int64, bool) {
 
 // epochExt takes an epoch as a script reply or a PUB/SUB message has it and
 // returns it without extensions (see pubsubEpochExt): the hook of data later
-// versions add there. key is the meta key it belongs to.
-func (l *redisLineage) epochExt(key, epoch string) string {
-	return pubsubEpoch(epoch)
+// versions add there. kind is "stream" or "map", key the meta key it belongs
+// to. A reply whose meta was dropped for a lineage mismatch carries the reset
+// extension (lineage_reset_ext in the preludes), counted here; PUB/SUB
+// messages never carry it.
+func (l *redisLineage) epochExt(kind, key, epoch string) string {
+	i := strings.IndexByte(epoch, pubsubEpochExt)
+	if i < 0 {
+		return epoch
+	}
+	for _, part := range strings.Split(epoch[i+1:], string(pubsubEpochExt)) {
+		if field, ok := strings.CutPrefix(part, lineageResetExtPrefix); ok {
+			l.countEpochReset(kind, lineageDetectionName(field))
+		}
+	}
+	return epoch[:i]
+}
+
+// lineageResetExtPrefix starts the epoch extension of a reply whose meta was
+// dropped for a lineage mismatch: "lr=<the mode's stamp field>".
+const lineageResetExtPrefix = "lr="
+
+// lineageDetectionName names a mode by its stamp field, for metrics and logs.
+func lineageDetectionName(field string) string {
+	switch field {
+	case lineageStampGate:
+		return "script_cache"
+	case lineageStampInfo:
+		return "info"
+	default:
+		return "other"
+	}
+}
+
+func (l *redisLineage) countEpochReset(kind, detection string) {
+	if m := l.metrics(); m != nil {
+		m.incPotentialLostWritesEpochReset(kind, detection)
+	}
+}
+
+func (l *redisLineage) countDetection(reason string) {
+	if m := l.metrics(); m != nil {
+		m.incPotentialLostWritesDetection(reason)
+	}
+}
+
+func (l *redisLineage) metrics() *metrics {
+	l.scriptsMu.Lock()
+	n := l.node
+	l.scriptsMu.Unlock()
+	if n == nil {
+		return nil
+	}
+	return n.metrics
+}
+
+// lineageCheckScript is a harmless script the startup report loads and runs
+// to see that the server allows what the gate needs.
+const lineageCheckScript = `return 1`
+
+// lineageCheckCrossSlotScript checks that the server accepts the script flag
+// the gate's rotation uses in Redis Cluster.
+const lineageCheckCrossSlotScript = "#!lua flags=allow-cross-slot-keys\nreturn 1"
+
+// reportEnvironment logs, once per broker kind on a shard and key prefix, what lost-writes
+// detection runs with: the shard, the server, the detection chosen and why,
+// the options, and whether the server allows each command the gate needs. It
+// changes nothing on the server: it doesn't open the gate.
+func (l *redisLineage) reportEnvironment(broker string, useInfo bool) {
+	if l.disabledForTest {
+		return
+	}
+	if _, done := l.reported.LoadOrStore(broker, true); done {
+		return
+	}
+	func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		fields := map[string]any{
+			"broker":                       broker,
+			"shard":                        l.shard.string(),
+			"shard_mode":                   string(l.shard.Mode()),
+			"prefix":                       l.prefix,
+			"use_info_command_for_lineage": useInfo,
+			"force_resp2":                  l.shard.alwaysRESP2,
+			"load_sha1":                    l.loadSHA1,
+		}
+		level := LogLevelInfo
+		detection, reason := l.describeMode(ctx, useInfo, fields)
+		fields["detection"] = detection
+		if reason != "" {
+			fields["detection_reason"] = reason
+		}
+		if detection == "off" {
+			level = LogLevelWarn
+		}
+		if detection == "script_cache" {
+			if failed := l.checkGateCommands(ctx, fields); failed {
+				level = LogLevelWarn
+			}
+		}
+		l.log(level, "redis lost writes detection", fields)
+	}()
+}
+
+// describeMode returns the detection a broker on the shard runs with, and why
+// when it is off or not the default, filling in what the server said.
+func (l *redisLineage) describeMode(ctx context.Context, useInfo bool, fields map[string]any) (string, string) {
+	kind, kindErr := l.serverKind(ctx)
+	if kindErr != nil {
+		fields["hello_error"] = kindErr.Error()
+	} else {
+		fields["server"] = kind.desc
+		fields["primary"] = kind.primary
+	}
+	if useInfo {
+		allowed := l.probeInfo(ctx)
+		fields["info_allowed"] = allowed
+		if allowed {
+			return "info", ""
+		}
+	}
+	if kindErr != nil {
+		return "off", "HELLO failed"
+	}
+	if kind.gateCapable {
+		if useInfo {
+			return "script_cache", "scripts can't call INFO"
+		}
+		return "script_cache", ""
+	}
+	return "off", "the server's script cache can't show a failover or a restart (Redis below 7, Dragonfly or an unknown server); reused offsets are still detected per channel"
+}
+
+// checkGateCommands runs harmless versions of the commands the gate needs and
+// records the result of each; it returns whether any failed.
+func (l *redisLineage) checkGateCommands(ctx context.Context, fields map[string]any) bool {
+	c := l.shard.client
+	key := l.anyTokenKey()
+	failed := false
+	check := func(name string, err error) {
+		if err != nil {
+			fields["check_"+name] = err.Error()
+			failed = true
+			return
+		}
+		fields["check_"+name] = "ok"
+	}
+	sha, err := c.Do(ctx, c.B().ScriptLoad().Script(lineageCheckScript).Build()).ToString()
+	check("script_load", err)
+	if err == nil {
+		check("evalsha", c.Do(ctx, c.B().Evalsha().Sha1(sha).Numkeys(1).Key(key).Build()).Error())
+	}
+	if l.shard.isCluster {
+		check("cluster_nodes", c.Do(ctx, c.B().ClusterNodes().Build()).Error())
+		check("cross_slot_script", c.Do(ctx, c.B().Eval().Script(lineageCheckCrossSlotScript).Numkeys(1).Key(key).Build()).Error())
+	}
+	return failed
 }

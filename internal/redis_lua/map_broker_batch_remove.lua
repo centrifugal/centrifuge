@@ -71,11 +71,14 @@ end
 -- Get or create epoch (only in streamed mode)
 local current_epoch
 local top_offset = 0
+-- Whether the meta was dropped for a lineage mismatch (see lineage_reset_ext).
+local lineage_reset = false
 
 if not streamless then
     local token, ancestor = lineage_token(token_key)
     local dropped
     current_epoch, dropped = lineage_map_meta(meta_key, stream_key, token, ancestor)
+    lineage_reset = dropped ~= false and dropped ~= nil
     if not current_epoch then
         current_epoch = new_epoch_if_empty
         lineage_map_create(meta_key, state_meta_key, current_epoch, token, dropped)
@@ -145,4 +148,4 @@ if not streamless then
     final_offset = redis.call("hget", meta_key, "s") or 0
 end
 
-return { removed_count, tostring(final_offset), current_epoch .. write_obs }
+return { removed_count, tostring(final_offset), current_epoch .. write_obs .. lineage_reset_ext(lineage_reset) }

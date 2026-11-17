@@ -69,4 +69,4 @@ if include_publications ~= "0" then
     end
 end
 
-return { top_offset, current_epoch .. lineage_map_obs(meta_key), pubs }
+return { top_offset, current_epoch .. lineage_map_obs(meta_key) .. lineage_reset_ext(dropped), pubs }

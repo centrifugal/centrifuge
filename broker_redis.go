@@ -525,6 +525,9 @@ func (b *RedisBroker) RegisterBrokerEventHandler(h BrokerEventHandler) error {
 		if err := b.checkCapabilities(wrapper.shard); err != nil {
 			return fmt.Errorf("capability error on shard [%s]: %v", wrapper.shard.string(), err)
 		}
+		if !b.config.UseLists {
+			go b.lin(wrapper.shard).reportEnvironment("broker", b.config.UseInfoCommandForLineage)
+		}
 	}
 	for i := 0; i < len(b.shards); i++ {
 		if b.shards[i].controlPubSubStart != nil {
@@ -1023,7 +1026,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 	if err != nil {
 		return PublishResult{}, errors.New("wrong Redis reply epoch")
 	}
-	epoch = b.lin(s.shard).epochExt(string(historyMetaKey), epoch)
+	epoch = b.lin(s.shard).epochExt("stream", string(historyMetaKey), epoch)
 	result := PublishResult{StreamPosition: StreamPosition{Offset: uint64(offset), Epoch: epoch}}
 	if len(replies) >= 3 {
 		fromCacheStr, err := replies[2].ToString()
@@ -1710,7 +1713,7 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 	}
 	if strings.IndexByte(sp.Epoch, pubsubEpochExt) >= 0 {
 		shard := b.getShard(channel).shard
-		sp.Epoch = b.lin(shard).epochExt(string(b.historyMetaKey(shard, channel)), sp.Epoch)
+		sp.Epoch = b.lin(shard).epochExt("stream", string(b.historyMetaKey(shard, channel)), sp.Epoch)
 	}
 	if typeOfPush == pubPushType {
 		var pub protocol.Publication
@@ -1841,7 +1844,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOption
 	if err != nil {
 		return nil, StreamPosition{}, errors.New("wrong Redis reply epoch")
 	}
-	epoch = b.lin(s).epochExt(string(historyMetaKey), epoch)
+	epoch = b.lin(s).epochExt("stream", string(historyMetaKey), epoch)
 
 	if includePubs == "1" && len(replies) >= 3 {
 		values, err := replies[2].ToArray()
@@ -1932,7 +1935,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 	if err != nil {
 		return nil, StreamPosition{}, errors.New("wrong Redis reply epoch")
 	}
-	epoch = b.lin(s).epochExt(string(historyMetaKey), epoch)
+	epoch = b.lin(s).epochExt("stream", string(historyMetaKey), epoch)
 
 	latestPosition := StreamPosition{Offset: uint64(offs), Epoch: epoch}
 
@@ -2267,6 +2270,10 @@ func (b *RedisBroker) resetLostStream(ch string, epoch string, offset uint64) {
 	if err != nil {
 		b.node.logger.log(newErrorLogEntry(err, "error resetting a stream with reused offsets", map[string]any{"channel": ch, "epoch": epoch}))
 		return
+	}
+	b.lin(s).countDetection("reused_offset")
+	if reset == 1 {
+		b.lin(s).countEpochReset("stream", "reused_offset")
 	}
 	b.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused stream offsets, writes were lost: stream reset", map[string]any{"channel": ch, "epoch": epoch, "offset": offset, "reset": reset == 1}))
 }

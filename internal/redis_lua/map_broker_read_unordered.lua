@@ -51,7 +51,7 @@ if not streamless then
         if meta_ttl > 0 then
             redis.call("pexpire", meta_key, meta_ttl)
         end
-        epoch_out = epoch .. lineage_map_obs(meta_key)
+        epoch_out = epoch .. lineage_map_obs(meta_key) .. lineage_reset_ext(dropped)
     end
 
     -- Validate state epoch against stream epoch

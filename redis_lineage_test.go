@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"crypto/fips140"
+	dto "github.com/prometheus/client_model/go"
 	"strconv"
 	"testing"
 	"time"
@@ -219,5 +220,29 @@ func TestPubsubEpochExtension(t *testing.T) {
 	require.Equal(t, "Abc;x=1", epoch)
 	require.Equal(t, "payload", string(payload))
 	l := newRedisLineage(&RedisShard{closeCh: make(chan struct{})}, "p")
-	require.Equal(t, "Abc", l.epochExt("k", "Abc;x=1"))
+	require.Equal(t, "Abc", l.epochExt("stream", "k", "Abc;x=1"))
+}
+
+// A reply whose meta was dropped for a lineage mismatch carries the reset
+// extension: the hook strips it and counts the reset by kind and detection.
+func TestLineageEpochExtCountsResets(t *testing.T) {
+	n, err := New(Config{})
+	require.NoError(t, err)
+	l := newRedisLineage(&RedisShard{closeCh: make(chan struct{})}, "p")
+	l.setLogger(n)
+	resets := func(kind, detection string) float64 {
+		m := &dto.Metric{}
+		require.NoError(t, n.metrics.redisPotentialLostWritesEpochResets.WithLabelValues(kind, detection).Write(m))
+		return m.GetCounter().GetValue()
+	}
+	gate, info := resets("stream", "script_cache"), resets("map", "info")
+
+	require.Equal(t, "E", l.epochExt("stream", "k", "E"))
+	require.Equal(t, "E", l.epochExt("stream", "k", "E;x=1"))
+	require.Equal(t, gate, resets("stream", "script_cache"), "no reset extension")
+
+	require.Equal(t, "E", l.epochExt("stream", "k", "E;lr="+lineageStampGate))
+	require.Equal(t, gate+1, resets("stream", "script_cache"))
+	require.Equal(t, "E", l.epochExt("map", "k", "E;x=1;lr="+lineageStampInfo))
+	require.Equal(t, info+1, resets("map", "info"))
 }

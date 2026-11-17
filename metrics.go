@@ -151,6 +151,12 @@ type metrics struct {
 	mapBrokerCleanupRemoved         *prometheus.CounterVec
 	mapBrokerCleanupErrors          *prometheus.CounterVec
 
+	// Redis potential lost writes: streams and maps that started a new epoch
+	// because the server's data may have lost writes, and the server-level
+	// detections, whatever detects them (script cache, INFO, later a dataset ID).
+	redisPotentialLostWritesEpochResets *prometheus.CounterVec
+	redisPotentialLostWritesDetections  *prometheus.CounterVec
+
 	redisBrokerPubSubErrors           *prometheus.CounterVec
 	redisBrokerPubSubDroppedMessages  *prometheus.CounterVec
 	redisBrokerPubSubBufferedMessages *prometheus.GaugeVec
@@ -969,6 +975,20 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "Total number of tracked keys.",
 	})
 
+	m.redisPotentialLostWritesEpochResets = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "broker",
+		Name:      "redis_potential_lost_writes_epoch_resets",
+		Help:      "Number of streams and maps in Redis that started a new epoch because the server's data may have lost writes (a failover, a restart, a stale copy). Subscribers resync them.",
+	}, []string{"kind", "detection"})
+
+	m.redisPotentialLostWritesDetections = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "broker",
+		Name:      "redis_potential_lost_writes_detections",
+		Help:      "Number of times this node detected that a Redis server's data may have lost writes, by reason.",
+	}, []string{"reason"})
+
 	m.redisBrokerPubSubErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "broker",
@@ -1055,6 +1075,8 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		registerCollector(registerer, &m.mapBrokerCleanupLag),
 		registerCollector(registerer, &m.mapBrokerCleanupRemoved),
 		registerCollector(registerer, &m.mapBrokerCleanupErrors),
+		registerCollector(registerer, &m.redisPotentialLostWritesEpochResets),
+		registerCollector(registerer, &m.redisPotentialLostWritesDetections),
 		registerCollector(registerer, &m.redisBrokerPubSubErrors),
 		registerCollector(registerer, &m.redisBrokerPubSubDroppedMessages),
 		registerCollector(registerer, &m.redisBrokerPubSubBufferedMessages),
@@ -1857,4 +1879,17 @@ func getAcceptProtocolLabel(protoMajor int8) string {
 	default:
 		return "unknown"
 	}
+}
+
+// incPotentialLostWritesEpochReset counts a stream or a map (kind) that
+// started a new epoch because its server's data may have lost writes, as
+// detection found it.
+func (m *metrics) incPotentialLostWritesEpochReset(kind, detection string) {
+	m.redisPotentialLostWritesEpochResets.WithLabelValues(kind, detection).Inc()
+}
+
+// incPotentialLostWritesDetection counts a detection that a server's data
+// may have lost writes.
+func (m *metrics) incPotentialLostWritesDetection(reason string) {
+	m.redisPotentialLostWritesDetections.WithLabelValues(reason).Inc()
 }

@@ -1164,7 +1164,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 		return MapStateResult{}, err
 	}
 	streamEpoch, _ := replies[1].ToString()
-	streamEpoch = e.lin(s.shard).epochExt(e.metaKey(s.shard, ch), streamEpoch)
+	streamEpoch = e.lin(s.shard).epochExt("map", e.metaKey(s.shard, ch), streamEpoch)
 	nextCursor, _ := replies[2].ToString()
 	if nextCursor == "0" {
 		nextCursor = "" // Convert Redis HSCAN "0" (complete) to empty string
@@ -1424,7 +1424,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 		return MapStateResult{}, err
 	}
 	streamEpoch, _ := replies[1].ToString()
-	streamEpoch = e.lin(s.shard).epochExt(e.metaKey(s.shard, ch), streamEpoch)
+	streamEpoch = e.lin(s.shard).epochExt("map", e.metaKey(s.shard, ch), streamEpoch)
 	keysArr, _ := replies[2].ToArray()
 	valuesArr, _ := replies[3].ToArray()
 	nextCursorScore, _ := replies[4].ToString()
@@ -2027,7 +2027,7 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 	if err != nil {
 		return MapStreamResult{}, fmt.Errorf("could not parse epoch: %w", err)
 	}
-	epoch = e.lin(s.shard).epochExt(e.metaKey(s.shard, ch), epoch)
+	epoch = e.lin(s.shard).epochExt("map", e.metaKey(s.shard, ch), epoch)
 
 	// Validate epoch if provided in Since filter.
 	if opts.Filter.Since != nil && opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != epoch {
@@ -2176,7 +2176,7 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 	if err != nil {
 		return MapStreamResult{}, fmt.Errorf("could not parse epoch: %w", err)
 	}
-	epoch = e.lin(s.shard).epochExt(e.metaKey(s.shard, ch), epoch)
+	epoch = e.lin(s.shard).epochExt("map", e.metaKey(s.shard, ch), epoch)
 
 	// Validate epoch if provided in Since filter.
 	if opts.Filter.Since != nil && opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != epoch {
@@ -2343,6 +2343,7 @@ func (e *RedisMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 		if err := wrapper.pubSubRunner.run(wrapper, h); err != nil {
 			return err
 		}
+		go e.lin(wrapper.shard).reportEnvironment("map_broker", e.conf.UseInfoCommandForLineage)
 	}
 	for i := 0; i < len(e.shards); i++ {
 		for j := 0; j < len(e.shards[i].pubSubStartChannels); j++ {
@@ -2842,6 +2843,12 @@ func (e *RedisMapBroker) batchRemoveExpired(ctx context.Context, shard *RedisSha
 			}
 		}
 	}
+	if len(result) > 2 {
+		// The epoch is unused here; the hook counts a lineage reset.
+		if epoch, err := result[2].ToString(); err == nil {
+			_ = e.lin(shard).epochExt("map", "", epoch)
+		}
+	}
 	return nil
 }
 
@@ -2964,7 +2971,7 @@ func (e *RedisMapBroker) handleRedisClientMessage(isCluster bool, eventHandler B
 	}
 	if strings.IndexByte(epoch, pubsubEpochExt) >= 0 {
 		shard := e.getShard(channel).shard
-		epoch = e.lin(shard).epochExt(e.metaKey(shard, channel), epoch)
+		epoch = e.lin(shard).epochExt("map", e.metaKey(shard, channel), epoch)
 	}
 
 	sp := StreamPosition{Offset: offset, Epoch: epoch}
@@ -3452,7 +3459,7 @@ func (e *RedisMapBroker) observeUpdate(s *RedisShard, ch string, res MapUpdateRe
 	if err != nil {
 		return res, err
 	}
-	res.Position.Epoch = e.lin(s).epochExt(e.metaKey(s, ch), res.Position.Epoch)
+	res.Position.Epoch = e.lin(s).epochExt("map", e.metaKey(s, ch), res.Position.Epoch)
 	return res, nil
 }
 
@@ -3501,6 +3508,10 @@ func (e *RedisMapBroker) resetLostStream(ch string, lostEpoch string, offset uin
 	if err != nil {
 		e.node.logger.log(newErrorLogEntry(err, "error resetting a map stream with reused offsets", map[string]any{"channel": ch, "epoch": lostEpoch}))
 		return
+	}
+	e.lin(s).countDetection("reused_offset")
+	if reset == 1 {
+		e.lin(s).countEpochReset("map", "reused_offset")
 	}
 	e.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused map stream offsets, writes were lost: stream reset", map[string]any{"channel": ch, "epoch": lostEpoch, "offset": offset, "reset": reset == 1}))
 }

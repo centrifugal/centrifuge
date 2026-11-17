@@ -29,4 +29,4 @@ if meta_expire ~= '0' then
     redis.call("pexpire", meta_key, meta_expire)
 end
 
-return { top_offset, current_epoch .. lineage_map_obs(meta_key) }
+return { top_offset, current_epoch .. lineage_map_obs(meta_key) .. lineage_reset_ext(dropped) }

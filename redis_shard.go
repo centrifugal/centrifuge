@@ -47,6 +47,8 @@ type RedisShard struct {
 	isCluster     bool
 	isSentinel    bool
 	finalAddress  []string
+	// alwaysRESP2: the client speaks RESP2 (ForceRESP2, force_resp2).
+	alwaysRESP2 bool
 	// lineages detect new lineages of the server's data, one per key prefix
 	// (see redis_lineage.go).
 	lineagesMu sync.RWMutex
@@ -469,6 +471,7 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	shard := &RedisShard{
 		conns:        conns,
 		config:       conf,
+		alwaysRESP2:  options.AlwaysRESP2,
 		isCluster:    isCluster,
 		isSentinel:   isSentinel,
 		closeCh:      make(chan struct{}),

@@ -184,11 +184,14 @@ local current_epoch = "0"
 local top_offset = 0
 -- The observation suffix of this write's epoch (see lineage_obs).
 local write_obs = ""
+-- Whether the meta was dropped for a lineage mismatch (see lineage_reset_ext).
+local lineage_reset = false
 
 if meta_key ~= '' then
     local token, ancestor = lineage_token(token_key)
     local dropped
     current_epoch, dropped = lineage_map_meta(meta_key, stream_key, token, ancestor)
+    lineage_reset = dropped ~= false and dropped ~= nil
     if not current_epoch then
         current_epoch = new_epoch_if_empty
         lineage_map_create(meta_key, state_meta_key, current_epoch, token, dropped)
@@ -535,4 +538,4 @@ if result_key_expire ~= '' and result_key ~= '' then
 end
 
 -- ==== Step 9: Return top_offset and epoch ====
-return { top_offset, current_epoch .. write_obs, "" }
+return { top_offset, current_epoch .. write_obs .. lineage_reset_ext(lineage_reset), "" }

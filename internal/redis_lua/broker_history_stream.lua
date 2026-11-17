@@ -11,6 +11,7 @@ local token_key = KEYS[3]
 
 -- See add_history in broker_history_add_stream_fn.lua for the lineage token.
 local token, ancestor = lineage_token(token_key)
+local lineage_reset = false
 local stream_meta = redis.call("hmget", meta_key, "e", "s", LINEAGE_FIELD, "w")
 local current_epoch, top_offset = stream_meta[1], stream_meta[2]
 
@@ -21,6 +22,7 @@ if token ~= "" and current_epoch ~= false and stream_meta[3] ~= token then
         redis.call("del", meta_key, stream_key)
         current_epoch = false
         stream_meta[4] = false
+        lineage_reset = true
     end
 end
 
@@ -68,4 +70,4 @@ if include_publications ~= "0" then
     end
 end
 
-return { top_offset, current_epoch .. lineage_obs(stream_meta[4]), pubs }
+return { top_offset, current_epoch .. lineage_obs(stream_meta[4]) .. lineage_reset_ext(lineage_reset), pubs }
