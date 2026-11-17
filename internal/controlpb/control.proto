@@ -36,8 +36,15 @@ message Node {
     Metrics metrics = 8;
     bytes data = 9;
     uint32 num_subs = 10;
-    // lineage_left: Redis lineage tokens the node saw replaced (the newest).
-    repeated string lineage_left = 11;
+    // lineage_left: Redis lineage tokens the node saw replaced recently, the
+    // most recently replaced first.
+    repeated LineageToken lineage_left = 11;
+}
+
+message LineageToken {
+    string token = 1;
+    // replaced_at: when the token was replaced, in unix seconds.
+    int64 replaced_at = 2;
 }
 
 message Metrics {

@@ -108,8 +108,8 @@ func TestRedisLineage_ReplacedTokensExchanged(t *testing.T) {
 	n1 := testNode(t)
 	b1 := NewTestRedisBroker(t, n1, prefix, true, 6379)
 	t.Cleanup(func() { _ = n1.Shutdown(context.Background()); stopRedisBroker(b1) })
-	n1.lineageLeft.add("gexchanged" + randString(6))
-	token := n1.lineageLeft.recent(1)[0]
+	token := "gexchanged" + randString(6)
+	n1.lineageLeft.add(token)
 
 	n2 := testNode(t)
 	b2 := NewTestRedisBroker(t, n2, prefix, true, 6379)

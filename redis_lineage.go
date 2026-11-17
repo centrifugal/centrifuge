@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -715,7 +716,7 @@ func (l *redisLineage) handleErr(ctx context.Context, routeKey, token string, er
 		return false, nil
 	}
 	left := l.leftTokens()
-	left.add(preds...)
+	left.addChain(value, preds)
 	if t, _ := parseTokenValue(value); t != "" && left.has(t) {
 		// A token this node saw replaced: a stale copy.
 		return true, l.open(ctx, routeKey, true, token, value)
@@ -833,7 +834,7 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 		}
 		currentValue, _ := state[0].ToString()
 		predsValue, _ := state[1].ToString()
-		left.add(strings.Fields(predsValue)...)
+		left.addChain(currentValue, strings.Fields(predsValue))
 		current, _ := parseTokenValue(currentValue)
 		hello, err := c.Do(ctx, c.B().Hello().Build()).AsMap()
 		if err != nil {
@@ -1331,10 +1332,11 @@ redis.call("hset", ARGV[1], "t", ARGV[3])
 return false
 `
 
-// lineageLeftTokens are tokens a node saw replaced, the newest kept (bounded).
+// lineageLeftTokens are tokens a node saw replaced, each with the time it was
+// replaced (unix seconds), the newest kept (bounded).
 type lineageLeftTokens struct {
 	mu    sync.RWMutex
-	set   map[string]struct{}
+	at    map[string]int64
 	order []string
 }
 
@@ -1342,11 +1344,17 @@ type lineageLeftTokens struct {
 const lineageLeftMax = 4096
 
 func newLineageLeftTokens() *lineageLeftTokens {
-	return &lineageLeftTokens{set: make(map[string]struct{})}
+	return &lineageLeftTokens{at: make(map[string]int64)}
 }
 
-// add records tokens; it returns whether any was new.
+// add records tokens replaced now; it returns whether any was new.
 func (t *lineageLeftTokens) add(tokens ...string) bool {
+	return t.addAt(time.Now().Unix(), tokens...)
+}
+
+// addAt records tokens replaced at the unix time at; it returns whether any
+// was new. A token known already keeps the earlier of its two times.
+func (t *lineageLeftTokens) addAt(at int64, tokens ...string) bool {
 	if len(tokens) == 0 {
 		return false
 	}
@@ -1354,38 +1362,134 @@ func (t *lineageLeftTokens) add(tokens ...string) bool {
 	defer t.mu.Unlock()
 	added := false
 	for _, tok := range tokens {
-		if tok == "" {
-			continue
-		}
-		if _, ok := t.set[tok]; ok {
-			continue
-		}
-		t.set[tok] = struct{}{}
-		t.order = append(t.order, tok)
-		added = true
+		added = t.put(tok, at) || added
 	}
+	t.trim()
+	return added
+}
+
+// addChain records the tokens a lineage key's token value replaced, newest
+// first, as the key and LINEAGE errors list them. Each was replaced when the
+// token after it was minted, so every node gets the same times, however late
+// it reads them.
+func (t *lineageLeftTokens) addChain(value string, preds []string) bool {
+	if len(preds) == 0 {
+		return false
+	}
+	now := time.Now().Unix()
+	replacer, _ := parseTokenValue(value)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	added := false
+	for _, p := range preds {
+		at, ok := lineageTokenMinted(replacer)
+		if !ok || at > now {
+			at = now
+		}
+		added = t.put(p, at) || added
+		replacer = p
+	}
+	t.trim()
+	return added
+}
+
+// addPairs records tokens other nodes sent with the times they were replaced
+// (now where a time is missing); it returns whether any was new.
+func (t *lineageLeftTokens) addPairs(tokens []string, ats []int64) bool {
+	if len(tokens) == 0 {
+		return false
+	}
+	now := time.Now().Unix()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	added := false
+	for i, tok := range tokens {
+		at := now
+		if i < len(ats) && ats[i] > 0 && ats[i] < now {
+			at = ats[i]
+		}
+		added = t.put(tok, at) || added
+	}
+	t.trim()
+	return added
+}
+
+func (t *lineageLeftTokens) put(tok string, at int64) bool {
+	if tok == "" {
+		return false
+	}
+	if prev, ok := t.at[tok]; ok {
+		if at < prev {
+			t.at[tok] = at
+		}
+		return false
+	}
+	t.at[tok] = at
+	t.order = append(t.order, tok)
+	return true
+}
+
+func (t *lineageLeftTokens) trim() {
 	for len(t.order) > lineageLeftMax {
-		delete(t.set, t.order[0])
+		delete(t.at, t.order[0])
 		t.order = t.order[1:]
 	}
-	return added
 }
 
 func (t *lineageLeftTokens) has(tok string) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	_, ok := t.set[tok]
+	_, ok := t.at[tok]
 	return ok
 }
 
-// recent returns up to n of the newest tokens.
-func (t *lineageLeftTokens) recent(n int) []string {
+// recent returns up to n tokens replaced at or after the unix time since,
+// the most recently replaced first, with their times.
+func (t *lineageLeftTokens) recent(n int, since int64) ([]string, []int64) {
 	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if len(t.order) <= n {
-		return append([]string(nil), t.order...)
+	type entry struct {
+		tok string
+		at  int64
 	}
-	return append([]string(nil), t.order[len(t.order)-n:]...)
+	var entries []entry
+	for tok, at := range t.at {
+		if at >= since {
+			entries = append(entries, entry{tok, at})
+		}
+	}
+	t.mu.RUnlock()
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].at != entries[j].at {
+			return entries[i].at > entries[j].at
+		}
+		return entries[i].tok < entries[j].tok
+	})
+	if len(entries) > n {
+		entries = entries[:n]
+	}
+	toks := make([]string, len(entries))
+	ats := make([]int64, len(entries))
+	for i, e := range entries {
+		toks[i], ats[i] = e.tok, e.at
+	}
+	return toks, ats
+}
+
+// lineageTokenMinted returns when a gate token was minted (unix seconds): a
+// gate token is "g", the mint time in nanoseconds in base 36 (12 digits), and
+// a random part.
+func lineageTokenMinted(tok string) (int64, bool) {
+	if len(tok) < 13 || tok[0] != 'g' {
+		return 0, false
+	}
+	ns, err := strconv.ParseInt(tok[1:13], 36, 64)
+	if err != nil || ns <= 0 {
+		return 0, false
+	}
+	return ns / int64(time.Second), true
 }
 
 // epochExt takes an epoch as a script reply or a PUB/SUB message has it and

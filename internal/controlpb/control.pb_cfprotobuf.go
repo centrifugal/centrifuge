@@ -507,7 +507,7 @@ func (m *Node) SizeCF() (n int) {
 		n += 1 + cfprotobuf.SizeOfInt(m.NumSubs)
 	}
 	for _, e := range m.LineageLeft {
-		n += 1 + len(e) + cfprotobuf.SizeOfLen(len(e))
+		n += 1 + cfprotobuf.SizeOfMessage(e.SizeCF())
 	}
 	n += len(m.unknownFields)
 	return n
@@ -544,9 +544,14 @@ func (m *Node) MarshalToSizedBufferCF(b []byte) (int, error) {
 		copy(b[i:], m.unknownFields)
 	}
 	for n := len(m.LineageLeft) - 1; n >= 0; n-- {
-		i -= len(m.LineageLeft[n])
-		copy(b[i:], m.LineageLeft[n])
-		i = cfprotobuf.PutLen(b, i, len(m.LineageLeft[n]))
+		{
+			size, err := m.LineageLeft[n].MarshalToSizedBufferCF(b[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = cfprotobuf.PutLen(b, i, size)
+		}
 		i--
 		b[i] = 0x5a
 	}
@@ -782,7 +787,111 @@ func (m *Node) unmarshalCF(b []byte, depth int) error {
 			}
 		case 11: // LineageLeft
 			if tag&7 == 2 {
-				var e string
+				e := new(LineageToken)
+				from := i + 1
+				var to int
+				if i < len(b) && b[i] < 0x80 && int(b[i]) <= len(b)-from {
+					to = from + int(b[i])
+				} else if from, to = cfprotobuf.Length(b, i); from < 0 {
+					return cfprotobuf.Error(from)
+				}
+				if err := e.unmarshalCF(b[from:to], depth); err != nil {
+					return err
+				}
+				i = to
+				m.LineageLeft = append(m.LineageLeft, e)
+				continue
+			}
+		}
+		next = cfprotobuf.Skip(b, i, tag)
+		if next < 0 {
+			return cfprotobuf.Error(next)
+		}
+		m.unknownFields = cfprotobuf.AppendUnknown(m.unknownFields, tag, b[i:next])
+		i = next
+	}
+	return nil
+}
+
+// SizeCF returns the size of the Protobuf encoding of m.
+func (m *LineageToken) SizeCF() (n int) {
+	if m == nil {
+		return 0
+	}
+	if m.Token != "" {
+		n += 1 + len(m.Token) + cfprotobuf.SizeOfLen(len(m.Token))
+	}
+	if m.ReplacedAt != 0 {
+		n += 1 + cfprotobuf.SizeOfInt(m.ReplacedAt)
+	}
+	n += len(m.unknownFields)
+	return n
+}
+
+// MarshalCF returns the Protobuf encoding of m.
+func (m *LineageToken) MarshalCF() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	b := make([]byte, m.SizeCF())
+	n, err := m.MarshalToSizedBufferCF(b)
+	if err != nil {
+		return nil, err
+	}
+	return b[:n], nil
+}
+
+// MarshalToCF writes the Protobuf encoding of m to the beginning of b, which must
+// have room for SizeCF bytes, and returns the number of bytes written.
+func (m *LineageToken) MarshalToCF(b []byte) (int, error) {
+	return m.MarshalToSizedBufferCF(b[:m.SizeCF()])
+}
+
+// MarshalToSizedBufferCF writes the Protobuf encoding of m to the end of b, which
+// must have room for SizeCF bytes, and returns the number of bytes written.
+func (m *LineageToken) MarshalToSizedBufferCF(b []byte) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	i := len(b)
+	if m.unknownFields != nil {
+		i -= len(m.unknownFields)
+		copy(b[i:], m.unknownFields)
+	}
+	if m.ReplacedAt != 0 {
+		i = cfprotobuf.PutInt(b, i, m.ReplacedAt)
+		i--
+		b[i] = 0x10
+	}
+	if m.Token != "" {
+		i -= len(m.Token)
+		copy(b[i:], m.Token)
+		i = cfprotobuf.PutLen(b, i, len(m.Token))
+		i--
+		b[i] = 0xa
+	}
+	return len(b) - i, nil
+}
+
+// UnmarshalCF decodes the Protobuf encoding of a message from b into m. Fields
+// which are not in b are left as they are. Everything decoded is copied out of
+// b, which may be reused afterwards.
+func (m *LineageToken) UnmarshalCF(b []byte) error {
+	return m.unmarshalCF(b, 0)
+}
+
+func (m *LineageToken) unmarshalCF(b []byte, depth int) error {
+	for i := 0; i < len(b); {
+		tag, next := uint64(b[i]), i+1
+		if tag >= 0x80 {
+			if tag, next = cfprotobuf.Varint(b, i); next < 0 {
+				return cfprotobuf.Error(next)
+			}
+		}
+		i = next
+		switch tag >> 3 {
+		case 1: // Token
+			if tag&7 == 2 {
 				from := i + 1
 				var to int
 				if i < len(b) && b[i] < 0x80 && int(b[i]) <= len(b)-from {
@@ -794,9 +903,20 @@ func (m *Node) unmarshalCF(b []byte, depth int) error {
 				if !cfprotobuf.ShortASCII(s) && !cfprotobuf.ValidString(s) {
 					return cfprotobuf.ErrInvalidUTF8
 				}
-				e = string(s)
+				m.Token = string(s)
 				i = to
-				m.LineageLeft = append(m.LineageLeft, e)
+				continue
+			}
+		case 2: // ReplacedAt
+			if tag&7 == 0 {
+				var v uint64
+				if i < len(b) && b[i] < 0x80 {
+					v, next = uint64(b[i]), i+1
+				} else if v, next = cfprotobuf.Varint(b, i); next < 0 {
+					return cfprotobuf.Error(next)
+				}
+				m.ReplacedAt = cfprotobuf.Int[int64](v)
+				i = next
 				continue
 			}
 		}

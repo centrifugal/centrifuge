@@ -1062,6 +1062,14 @@ func (n *Node) pubNode(nodeID string) error {
 		reply := n.nodeInfoSendHandler()
 		data = reply.Data
 	}
+	leftTokens, leftAt := n.lineageLeft.recent(lineageLeftExchanged, time.Now().Add(-lineageLeftExchangeWindow).Unix())
+	var lineageLeft []*controlpb.LineageToken
+	if len(leftTokens) > 0 {
+		lineageLeft = make([]*controlpb.LineageToken, len(leftTokens))
+		for i, tok := range leftTokens {
+			lineageLeft[i] = &controlpb.LineageToken{Token: tok, ReplacedAt: leftAt[i]}
+		}
+	}
 	n.mu.RLock()
 	node := &controlpb.Node{
 		Uid:         n.uid,
@@ -1073,7 +1081,7 @@ func (n *Node) pubNode(nodeID string) error {
 		NumSubs:     uint32(n.hub.NumSubscriptions()),
 		Uptime:      uint32(time.Now().Unix() - n.startedAt),
 		Data:        data,
-		LineageLeft: n.lineageLeft.recent(lineageLeftExchanged),
+		LineageLeft: lineageLeft,
 	}
 
 	n.metricsMu.Lock()
@@ -2448,9 +2456,17 @@ func (n *Node) MapClear(ctx context.Context, ch string, opts MapClearOptions) er
 	return mapBroker.Clear(ctx, ch, opts)
 }
 
-// lineageLeftExchanged is how many of its newest replaced lineage tokens a node
-// sends with its node info.
+// lineageLeftExchanged is how many of its most recently replaced lineage tokens
+// a node sends with its node info.
 const lineageLeftExchanged = 64
+
+// lineageLeftExchangeWindow: a node sends the tokens replaced within this
+// window. Only a primary that stayed up isolated, kept our scripts and never
+// resynced can present a replaced token and pass the gate, so the tokens that
+// matter are those replaced since such a server was cut off. Older tokens stay
+// known to the nodes that saw them; with no rotation within the window, node
+// info carries none.
+const lineageLeftExchangeWindow = 24 * time.Hour
 
 // lineagePeersWait bounds how long a node starting its first lineage call
 // waits to hear from another node (others answer a new node at once).
@@ -2485,8 +2501,16 @@ func (n *Node) awaitLineagePeers(ctx context.Context) {
 
 // learnLineageLeft records lineage tokens another node saw replaced. A lineage
 // whose current token is among them rotates: its server is a stale copy.
-func (n *Node) learnLineageLeft(tokens []string) {
-	if !n.lineageLeft.add(tokens...) {
+func (n *Node) learnLineageLeft(left []*controlpb.LineageToken) {
+	if len(left) == 0 {
+		return
+	}
+	tokens := make([]string, len(left))
+	ats := make([]int64, len(left))
+	for i, t := range left {
+		tokens[i], ats[i] = t.GetToken(), t.GetReplacedAt()
+	}
+	if !n.lineageLeft.addPairs(tokens, ats) {
 		return
 	}
 	n.lineages.Range(func(k, _ any) bool {

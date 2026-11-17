@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestNodeProtoExtra(t *testing.T) {
@@ -108,4 +109,27 @@ func TestFilterNodeRoundTrip(t *testing.T) {
 			require.Equal(t, "blocked", got.Nodes[1].Nodes[1].Nodes[0].Key)
 		})
 	}
+}
+
+// The fast codec and the generated one agree on the lineage tokens of a Node.
+func TestNodeLineageLeftRoundTrip(t *testing.T) {
+	msg := &Node{
+		Uid: "test",
+		LineageLeft: []*LineageToken{
+			{Token: "gabc", ReplacedAt: 1763300000},
+			{Token: "gdef"},
+		},
+	}
+	fast, err := msg.MarshalCF()
+	require.NoError(t, err)
+	var std Node
+	require.NoError(t, proto.Unmarshal(fast, &std))
+	require.True(t, proto.Equal(msg, &std))
+
+	stdBytes, err := proto.Marshal(msg)
+	require.NoError(t, err)
+	var decoded Node
+	require.NoError(t, decoded.UnmarshalCF(stdBytes))
+	require.True(t, proto.Equal(msg, &decoded))
+	require.Equal(t, int64(1763300000), decoded.GetLineageLeft()[0].GetReplacedAt())
 }

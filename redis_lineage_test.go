@@ -4,6 +4,7 @@ import (
 	"crypto/fips140"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/centrifugal/centrifuge/internal/redispartition"
 
@@ -145,13 +146,64 @@ func TestLineageLeftTokens(t *testing.T) {
 	require.False(t, l.add("a"), "known already")
 	require.True(t, l.has("a"))
 	require.False(t, l.has(""))
-	require.Equal(t, []string{"b"}, l.recent(1))
+	toks, _ := l.recent(10, 0)
+	require.ElementsMatch(t, []string{"a", "b"}, toks)
 	for i := 0; i < lineageLeftMax+10; i++ {
 		l.add("t" + strconv.Itoa(i))
 	}
 	require.False(t, l.has("a"), "the oldest are dropped")
 	require.True(t, l.has("t"+strconv.Itoa(lineageLeftMax+9)))
-	require.Len(t, l.recent(lineageLeftExchanged), lineageLeftExchanged)
+	toks, _ = l.recent(lineageLeftExchanged, 0)
+	require.Len(t, toks, lineageLeftExchanged)
+}
+
+// Node info carries only tokens replaced within the window, the most recently
+// replaced first; a token keeps the earliest time it was reported with.
+func TestLineageLeftTokens_Window(t *testing.T) {
+	now := time.Now().Unix()
+	day := int64(24 * time.Hour / time.Second)
+	l := newLineageLeftTokens()
+	l.addAt(now-3*day, "old")
+	l.addAt(now-60, "recent")
+	l.addAt(now, "newest")
+	toks, ats := l.recent(10, now-day)
+	require.Equal(t, []string{"newest", "recent"}, toks)
+	require.Equal(t, []int64{now, now - 60}, ats)
+	require.True(t, l.has("old"), "older tokens stay known locally")
+
+	require.False(t, l.addPairs([]string{"recent"}, []int64{now - 2*day}), "known already")
+	toks, _ = l.recent(10, now-day)
+	require.Equal(t, []string{"newest"}, toks, "the earlier time wins")
+
+	// A missing or future time counts as now.
+	require.True(t, l.addPairs([]string{"x", "y"}, []int64{now + day}))
+	toks, _ = l.recent(10, now)
+	require.ElementsMatch(t, []string{"newest", "x", "y"}, toks)
+}
+
+// Tokens read from a lineage key or a LINEAGE error were replaced when the
+// token after them was minted, so a node reading them late gets the same times.
+func TestLineageLeftTokens_Chain(t *testing.T) {
+	mint := func(at time.Time) string {
+		return "g" + strconv.FormatInt(at.UnixNano(), 36) + "r"
+	}
+	now := time.Now()
+	t3 := mint(now.Add(-time.Hour))
+	t2 := mint(now.Add(-48 * time.Hour))
+	t1 := mint(now.Add(-72 * time.Hour))
+	at, ok := lineageTokenMinted(t3)
+	require.True(t, ok)
+	require.Equal(t, now.Add(-time.Hour).Unix(), at)
+	_, ok = lineageTokenMinted("rabc")
+	require.False(t, ok)
+
+	l := newLineageLeftTokens()
+	require.True(t, l.addChain(t3+"|ancestor", []string{t2, t1}))
+	toks, ats := l.recent(10, 0)
+	require.Equal(t, []string{t2, t1}, toks)
+	require.Equal(t, []int64{now.Add(-time.Hour).Unix(), now.Add(-48 * time.Hour).Unix()}, ats)
+	toks, _ = l.recent(10, now.Add(-24*time.Hour).Unix())
+	require.Equal(t, []string{t2}, toks, "t1 was replaced two days ago")
 }
 
 func TestPubsubEpochExtension(t *testing.T) {
