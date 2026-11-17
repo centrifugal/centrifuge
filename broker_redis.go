@@ -375,9 +375,6 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 			l.setLogger(n, config.Name)
 		}
 	}
-	if config.DetectPotentialLostWrites && config.UseLists {
-		n.logger.log(newLogEntry(LogLevelWarn, "redis broker: DetectPotentialLostWrites has no effect with UseLists (list history has no offsets to protect)", map[string]any{"broker_name": config.Name}))
-	}
 	if config.PotentialLostWritesUseInfo && !config.DetectPotentialLostWrites {
 		n.logger.log(newLogEntry(LogLevelWarn, "redis broker: PotentialLostWritesUseInfo has no effect without DetectPotentialLostWrites", map[string]any{"broker_name": config.Name}))
 	}
