@@ -2357,9 +2357,7 @@ func (e *RedisMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 		if err := wrapper.pubSubRunner.run(wrapper, h); err != nil {
 			return err
 		}
-		if e.conf.DetectPotentialLostWrites {
-			go e.lin(wrapper.shard).reportEnvironment("map_broker", e.conf.PotentialLostWritesUseInfo)
-		}
+		go e.lin(wrapper.shard).reportEnvironment(e.node, "map_broker", e.conf.DetectPotentialLostWrites, e.conf.PotentialLostWritesUseInfo)
 	}
 	for i := 0; i < len(e.shards); i++ {
 		for j := 0; j < len(e.shards[i].pubSubStartChannels); j++ {

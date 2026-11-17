@@ -502,9 +502,10 @@ func loadMarkerOnOtherPrimaries(t *testing.T, s *RedisShard, key, token string) 
 }
 
 // Without DetectPotentialLostWrites the broker works as it did before the
-// option existed: it never asks the server what it is, creates no lineage
-// key, stamps no meta, watches no offsets, and a new script cache (a restart,
-// a failover) keeps the epoch.
+// option existed: it creates no lineage key, stamps no meta, opens no gate,
+// watches no offsets, and a new script cache (a restart, a failover) keeps the
+// epoch. Only the startup report talks to the server (to tell whether the
+// option would work there), without touching the detection state.
 func TestRedisLineage_OffByDefault(t *testing.T) {
 	node := testNode(t)
 	b := NewTestRedisBroker(t, node, getUniquePrefix(), true, 6379)
@@ -524,7 +525,7 @@ func TestRedisLineage_OffByDefault(t *testing.T) {
 	l.kindMu.Lock()
 	asked := l.kindDone
 	l.kindMu.Unlock()
-	require.False(t, asked, "the server was never asked what it is")
+	require.False(t, asked, "the detection state is untouched")
 	require.False(t, l.gateMode())
 	require.Nil(t, b.watermarks)
 

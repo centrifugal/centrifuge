@@ -535,8 +535,8 @@ func (b *RedisBroker) RegisterBrokerEventHandler(h BrokerEventHandler) error {
 		if err := b.checkCapabilities(wrapper.shard); err != nil {
 			return fmt.Errorf("capability error on shard [%s]: %v", wrapper.shard.string(), err)
 		}
-		if b.config.DetectPotentialLostWrites && !b.config.UseLists {
-			go b.lin(wrapper.shard).reportEnvironment("broker", b.config.PotentialLostWritesUseInfo)
+		if !b.config.UseLists {
+			go b.lin(wrapper.shard).reportEnvironment(b.node, "broker", b.config.DetectPotentialLostWrites, b.config.PotentialLostWritesUseInfo)
 		}
 	}
 	for i := 0; i < len(b.shards); i++ {

@@ -550,13 +550,35 @@ func (l *redisLineage) serverKind(ctx context.Context) (redisServerKind, error) 
 	if l.kindDone {
 		return l.kind, nil
 	}
+	kind, err := l.helloKind(ctx)
+	if err != nil {
+		return redisServerKind{}, err
+	}
+	l.kind = kind
+	l.kindDone = true
+	return l.kind, nil
+}
+
+// helloKind asks the server what it is with HELLO (not cached).
+func (l *redisLineage) helloKind(ctx context.Context) (redisServerKind, error) {
 	m, err := l.shard.client.Do(ctx, l.shard.client.B().Hello().Build()).AsMap()
 	if err != nil {
 		return redisServerKind{}, fmt.Errorf("lineage: HELLO: %w", err)
 	}
-	l.kind = parseHelloReply(helloFields(m))
-	l.kindDone = true
-	return l.kind, nil
+	return parseHelloReply(helloFields(m)), nil
+}
+
+// infoCheck runs a script calling INFO (not cached). redisErr tells that the
+// server refused it (an ACL refusal, for example) rather than failing to answer.
+func (l *redisLineage) infoCheck(ctx context.Context) (allowed bool, redisErr bool, err error) {
+	probe := rueidis.NewLuaScript(`local i = redis.call("info", "replication"); return string.match(i, "master_replid:(%w+)") or ""`,
+		rueidis.WithLoadSHA1(l.loadSHA1))
+	res, err := probe.Exec(ctx, l.shard.client, []string{l.anyTokenKey()}, nil).ToString()
+	if err != nil {
+		_, redisErr = rueidis.IsRedisErr(err)
+		return false, redisErr, err
+	}
+	return res != "", false, nil
 }
 
 // probeInfo checks once whether scripts may call INFO.
@@ -566,11 +588,9 @@ func (l *redisLineage) probeInfo(ctx context.Context) bool {
 	if l.infoProbed {
 		return l.infoAllowed
 	}
-	probe := rueidis.NewLuaScript(`local i = redis.call("info", "replication"); return string.match(i, "master_replid:(%w+)") or ""`,
-		rueidis.WithLoadSHA1(l.loadSHA1))
-	res, err := probe.Exec(ctx, l.shard.client, []string{l.anyTokenKey()}, nil).ToString()
+	allowed, redisErr, err := l.infoCheck(ctx)
 	if err != nil {
-		if _, ok := rueidis.IsRedisErr(err); ok {
+		if redisErr {
 			// A Redis error (an ACL refusal, for example): INFO isn't allowed.
 			l.infoProbed = true
 			l.infoAllowed = false
@@ -579,7 +599,7 @@ func (l *redisLineage) probeInfo(ctx context.Context) bool {
 		return false
 	}
 	l.infoProbed = true
-	l.infoAllowed = res != ""
+	l.infoAllowed = allowed
 	return l.infoAllowed
 }
 
@@ -1583,51 +1603,72 @@ const lineageCheckScript = `return 1`
 // the gate's rotation uses in Redis Cluster.
 const lineageCheckCrossSlotScript = "#!lua flags=allow-cross-slot-keys\nreturn 1"
 
-// reportEnvironment logs, once per broker kind on a shard and key prefix, what lost-writes
-// detection runs with: the shard, the server, the detection chosen and why,
-// the options, and whether the server allows each command the gate needs. It
-// changes nothing on the server: it doesn't open the gate.
-func (l *redisLineage) reportEnvironment(broker string, useInfo bool) {
+// reportEnvironment logs, once per broker kind on a shard and key prefix,
+// what lost-writes detection runs with: the shard, the server, the detection
+// chosen and why, the options, and whether the server allows each command the
+// gate needs. It changes nothing on the server: it doesn't open the gate, and
+// its only writes are harmless scripts in the script cache. With detection off
+// (enabled false) it says what DetectPotentialLostWrites would run with on this
+// server, without touching the shard's detection state.
+func (l *redisLineage) reportEnvironment(n *Node, broker string, enabled, useInfo bool) {
 	if l.disabledForTest {
 		return
 	}
 	if _, done := l.reported.LoadOrStore(broker, true); done {
 		return
 	}
-	func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		fields := map[string]any{
-			"broker":                         broker,
-			"shard":                          l.shard.string(),
-			"shard_mode":                     string(l.shard.Mode()),
-			"prefix":                         l.prefix,
-			"potential_lost_writes_use_info": useInfo,
-			"force_resp2":                    l.shard.alwaysRESP2,
-			"load_sha1":                      l.loadSHA1,
-		}
-		level := LogLevelInfo
-		detection, reason := l.describeMode(ctx, useInfo, fields)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	fields := map[string]any{
+		"broker":                         broker,
+		"shard":                          l.shard.string(),
+		"shard_mode":                     string(l.shard.Mode()),
+		"prefix":                         l.prefix,
+		"detect_potential_lost_writes":   enabled,
+		"potential_lost_writes_use_info": useInfo,
+		"force_resp2":                    l.shard.alwaysRESP2,
+		"load_sha1":                      l.loadSHA1,
+	}
+	detection, reason := l.describeMode(ctx, enabled, useInfo, fields)
+	checksFailed := false
+	if detection == "script_cache" {
+		checksFailed = l.checkGateCommands(ctx, fields)
+	}
+	level := LogLevelInfo
+	if enabled {
 		fields["detection"] = detection
 		if reason != "" {
 			fields["detection_reason"] = reason
 		}
-		if detection == "off" {
+		if detection == "off" || checksFailed {
 			level = LogLevelWarn
 		}
-		if detection == "script_cache" {
-			if failed := l.checkGateCommands(ctx, fields); failed {
-				level = LogLevelWarn
-			}
+	} else {
+		fields["detection"] = "off"
+		fields["detection_reason"] = "DetectPotentialLostWrites is not set"
+		fields["if_enabled"] = detection
+		if reason != "" {
+			fields["if_enabled_reason"] = reason
 		}
-		l.log(level, "redis lost writes detection", fields)
-	}()
+		fields["supported_by_server"] = detection != "off" && !checksFailed
+	}
+	if n.logEnabled(level) {
+		n.logger.log(newLogEntry(level, "redis lost writes detection", fields))
+	}
 }
 
-// describeMode returns the detection a broker on the shard runs with, and why
-// when it is off or not the default, filling in what the server said.
-func (l *redisLineage) describeMode(ctx context.Context, useInfo bool, fields map[string]any) (string, string) {
-	kind, kindErr := l.serverKind(ctx)
+// describeMode returns the detection a broker on the shard runs with (or
+// would run with), and why when it is off or not the default, filling in what
+// the server said. With detection off nothing is cached, so the shard's
+// detection state stays untouched.
+func (l *redisLineage) describeMode(ctx context.Context, enabled, useInfo bool, fields map[string]any) (string, string) {
+	var kind redisServerKind
+	var kindErr error
+	if enabled {
+		kind, kindErr = l.serverKind(ctx)
+	} else {
+		kind, kindErr = l.helloKind(ctx)
+	}
 	if kindErr != nil {
 		fields["hello_error"] = kindErr.Error()
 	} else {
@@ -1635,7 +1676,12 @@ func (l *redisLineage) describeMode(ctx context.Context, useInfo bool, fields ma
 		fields["primary"] = kind.primary
 	}
 	if useInfo {
-		allowed := l.probeInfo(ctx)
+		var allowed bool
+		if enabled {
+			allowed = l.probeInfo(ctx)
+		} else {
+			allowed, _, _ = l.infoCheck(ctx)
+		}
 		fields["info_allowed"] = allowed
 		if allowed {
 			return "info", ""
