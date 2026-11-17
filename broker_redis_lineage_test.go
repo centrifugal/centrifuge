@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-
 	"github.com/redis/rueidis"
 	"github.com/stretchr/testify/require"
 )
@@ -51,9 +50,10 @@ func newLineageTestBrokerPrefix(t *testing.T, tt lineageRedisTest, allowInfo boo
 	s, err := NewRedisShard(node, conf)
 	require.NoError(t, err)
 	b, err := NewRedisBroker(node, RedisBrokerConfig{
-		Prefix:                   prefix,
-		Shards:                   []*RedisShard{s},
-		UseInfoCommandForLineage: allowInfo,
+		Prefix:                     prefix,
+		Shards:                     []*RedisShard{s},
+		DetectPotentialLostWrites:  true,
+		PotentialLostWritesUseInfo: allowInfo,
 	})
 	require.NoError(t, err)
 	node.SetBroker(b)
@@ -112,12 +112,12 @@ func TestRedisLineage_Mode(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 			b := newLineageTestBroker(t, tt, false)
 			s := b.shards[0].shard
-			mode, err := b.lin(s).mode(context.Background(), b.config.UseInfoCommandForLineage)
+			mode, err := b.lin(s).mode(context.Background(), b.config.PotentialLostWritesUseInfo)
 			require.NoError(t, err)
 			if tt.Gate {
 				require.Equal(t, lineageGate, mode)
 			} else {
-				require.Equal(t, lineageNone, mode, "no INFO without UseInfoCommandForLineage")
+				require.Equal(t, lineageNone, mode, "no INFO without PotentialLostWritesUseInfo")
 			}
 		})
 	}
@@ -499,4 +499,37 @@ func loadMarkerOnOtherPrimaries(t *testing.T, s *RedisShard, key, token string) 
 		loaded++
 	}
 	require.Positive(t, loaded)
+}
+
+// Without DetectPotentialLostWrites the broker works as it did before the
+// option existed: it never asks the server what it is, creates no lineage
+// key, stamps no meta, watches no offsets, and a new script cache (a restart,
+// a failover) keeps the epoch.
+func TestRedisLineage_OffByDefault(t *testing.T) {
+	node := testNode(t)
+	b := NewTestRedisBroker(t, node, getUniquePrefix(), true, 6379)
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()); stopRedisBroker(b) })
+	s := b.shards[0].shard
+	ch := "lineage_off_" + randString(6)
+
+	before := lineagePublish(t, b, ch, 2)
+	ctx := context.Background()
+	exists, err := s.client.Do(ctx, s.client.B().Exists().Key(b.lin(s).anyTokenKey()).Build()).AsInt64()
+	require.NoError(t, err)
+	require.Zero(t, exists, "no lineage key")
+	stamp := s.client.Do(ctx, s.client.B().Hget().Key(string(b.historyMetaKey(s, ch))).Field(lineageStampGate).Build())
+	require.True(t, rueidis.IsRedisNil(stamp.Error()), "no stamp in the meta")
+
+	l := b.lin(s)
+	l.kindMu.Lock()
+	asked := l.kindDone
+	l.kindMu.Unlock()
+	require.False(t, asked, "the server was never asked what it is")
+	require.False(t, l.gateMode())
+	require.Nil(t, b.watermarks)
+
+	flushScripts(t, s)
+	after := lineagePublish(t, b, ch, 1)
+	require.Equal(t, before.Epoch, after.Epoch, "no detection: the epoch is kept")
+	require.Equal(t, before.Offset+1, after.Offset)
 }

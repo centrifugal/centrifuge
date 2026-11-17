@@ -139,17 +139,24 @@ type RedisMapBrokerConfig struct {
 	// it on the client side. This is useful for FIPS compliance. It is always on
 	// in FIPS-only mode (GODEBUG=fips140=only), where SHA-1 can't be computed here.
 	LoadSHA1 bool
-	// UseInfoCommandForLineage makes meta scripts read the server's replication
-	// ID with INFO to see that a failover or a restart may have lost writes to
-	// a map, on every server, including Redis 6 and Dragonfly, at the cost of
-	// INFO in every meta script. INFO needs the @dangerous ACL category. The ID
-	// also changes when nothing was lost - a primary gets its first replica, or
-	// has had none for repl-backlog-ttl - and maps then start new epochs too.
-	// In Redis Cluster, maps of a slot moved to another node start new epochs
-	// as well: their metas carry the source node's ID.
-	// Without it the broker uses the script cache of Redis 7+ and Valkey, which
-	// needs no extra permissions (no detection on Redis 6 and Dragonfly).
-	UseInfoCommandForLineage bool
+	// DetectPotentialLostWrites makes the broker detect that a Redis failover
+	// or a restart may have lost writes to a map (a promoted replica that
+	// missed the last writes, a restart from an older RDB or AOF), so its
+	// maps start a new epoch and subscribers resync instead of missing
+	// publications. It uses the script cache of Redis 7+ and Valkey and needs no
+	// extra permissions; on other servers only reused offsets are detected, per
+	// channel. Off by default: the broker then works as it did before the option
+	// existed.
+	DetectPotentialLostWrites bool
+	// PotentialLostWritesUseInfo makes the detection read the server's
+	// replication ID with INFO instead, on every server, including Redis 6 and
+	// Dragonfly, at the cost of INFO in every meta script. INFO needs the
+	// @dangerous ACL category. The ID also changes when nothing was lost - a
+	// primary gets its first replica, or has had none for repl-backlog-ttl - and
+	// maps then start new epochs too. In Redis Cluster, maps of a slot
+	// moved to another node start new epochs as well. It has an effect only with
+	// DetectPotentialLostWrites.
+	PotentialLostWritesUseInfo bool
 	// IdempotentResultTTL is a time-to-live for idempotent result.
 	IdempotentResultTTL time.Duration
 	// SubscribeOnReplica allows subscribing on replica Redis nodes.
@@ -287,16 +294,23 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 		),
 		batchRemoveScript: newLineageScript("map_batch_remove", lineageMapHelpers+brokerStateBatchRemoveScriptSource, conf.LoadSHA1),
 		closeCh:           make(chan struct{}),
-		watermarks:        newOffsetWatermarks(),
 		resetLostScript:   rueidis.NewLuaScript(resetLostMapStreamSource, rueidis.WithLoadSHA1(conf.LoadSHA1)),
 	}
 	for _, sw := range e.shards {
 		sw.shard.ensureLineage()
-		l := e.lin(sw.shard)
-		for _, ls := range []*lineageScript{e.addScript, e.readOrderedScript, e.readUnorderedScript, e.readStreamScript, e.readMetaScript, e.batchRemoveScript} {
-			l.register(ls, conf.LoadSHA1)
+	}
+	if conf.DetectPotentialLostWrites {
+		e.watermarks = newOffsetWatermarks()
+		for _, sw := range e.shards {
+			l := e.lin(sw.shard)
+			for _, ls := range []*lineageScript{e.addScript, e.readOrderedScript, e.readUnorderedScript, e.readStreamScript, e.readMetaScript, e.batchRemoveScript} {
+				l.register(ls, conf.LoadSHA1)
+			}
+			l.setLogger(n)
 		}
-		l.setLogger(n)
+	}
+	if conf.PotentialLostWritesUseInfo && !conf.DetectPotentialLostWrites {
+		n.logger.log(newLogEntry(LogLevelWarn, "redis map broker: PotentialLostWritesUseInfo has no effect without DetectPotentialLostWrites", nil))
 	}
 	e.shardChannel = conf.Prefix + redisPubSubShardChannelSuffix
 	e.messagePrefix = conf.Prefix + redisClientChannelPrefix
@@ -2343,7 +2357,9 @@ func (e *RedisMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 		if err := wrapper.pubSubRunner.run(wrapper, h); err != nil {
 			return err
 		}
-		go e.lin(wrapper.shard).reportEnvironment("map_broker", e.conf.UseInfoCommandForLineage)
+		if e.conf.DetectPotentialLostWrites {
+			go e.lin(wrapper.shard).reportEnvironment("map_broker", e.conf.PotentialLostWritesUseInfo)
+		}
 	}
 	for i := 0; i < len(e.shards); i++ {
 		for j := 0; j < len(e.shards[i].pubSubStartChannels); j++ {
@@ -2983,12 +2999,14 @@ func (e *RedisMapBroker) handleRedisClientMessage(isCluster bool, eventHandler B
 		return fmt.Errorf("can not unmarshal value to Publication: %v", err)
 	}
 
-	var check *watermarkCheck
-	sp.Epoch, check = e.watermarks.observe(channel, epoch, offset, protoPub.Time, func() bool {
-		return e.node.hub.NumSubscribers(channel) > 0
-	})
-	if check != nil {
-		go e.checkReusedOffset(check)
+	if e.watermarks != nil {
+		var check *watermarkCheck
+		sp.Epoch, check = e.watermarks.observe(channel, epoch, offset, protoPub.Time, func() bool {
+			return e.node.hub.NumSubscribers(channel) > 0
+		})
+		if check != nil {
+			go e.checkReusedOffset(check)
+		}
 	}
 
 	if protoPub.Offset == 0 {
@@ -3220,7 +3238,9 @@ func (e *RedisMapBroker) Unsubscribe(channels ...string) error {
 	if len(channels) == 0 {
 		return nil
 	}
-	e.watermarks.forget(channels...)
+	if e.watermarks != nil {
+		e.watermarks.forget(channels...)
+	}
 	if len(channels) == 1 {
 		return e.unsubscribe(e.getShard(channels[0]), channels[0])
 	}
@@ -3436,7 +3456,12 @@ func parseAddScriptResult(replies []rueidis.RedisMessage) (MapUpdateResult, erro
 // execLineage runs a map meta script in the lineage mode of the shard (see
 // RedisBroker.execLineageScript).
 func (e *RedisMapBroker) execLineage(ctx context.Context, s *RedisShard, ls *lineageScript, keys, args []string) rueidis.RedisResult {
-	mode, err := e.lin(s).mode(ctx, e.conf.UseInfoCommandForLineage)
+	if !e.conf.DetectPotentialLostWrites {
+		resp := ls.lua(lineageNone).Exec(ctx, s.client, keys, args)
+		s.noteError(resp.Error())
+		return resp
+	}
+	mode, err := e.lin(s).mode(ctx, e.conf.PotentialLostWritesUseInfo)
 	if err != nil {
 		return rueidis.NewErrorResult(err)
 	}

@@ -256,7 +256,7 @@ func TestRedisBroker_WatermarkNoFalsePositives(t *testing.T) {
 				}
 				s, err := NewRedisShard(node, conf)
 				require.NoError(t, err)
-				b, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}, NumShardedPubSubPartitions: tc.partitions})
+				b, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}, NumShardedPubSubPartitions: tc.partitions, DetectPotentialLostWrites: true})
 				require.NoError(t, err)
 				node.SetBroker(b)
 				require.NoError(t, node.Run())
@@ -364,7 +364,7 @@ func testWatermarkSlotMigration(t *testing.T, partitions int) {
 		require.NoError(t, err)
 		s, err := NewRedisShard(node, RedisShardConfig{ClusterAddresses: addrs, IOTimeout: 10 * time.Second})
 		require.NoError(t, err)
-		b, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}, NumShardedPubSubPartitions: partitions})
+		b, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}, NumShardedPubSubPartitions: partitions, DetectPotentialLostWrites: true})
 		require.NoError(t, err)
 		node.SetBroker(b)
 		require.NoError(t, node.Run())

@@ -106,13 +106,13 @@ func TestRedisLineage_LearnsReplacedTokensFromKey(t *testing.T) {
 func TestRedisLineage_ReplacedTokensExchanged(t *testing.T) {
 	prefix := getUniquePrefix()
 	n1 := testNode(t)
-	b1 := NewTestRedisBroker(t, n1, prefix, true, 6379)
+	b1 := newDetectingTestRedisBroker(t, n1, prefix)
 	t.Cleanup(func() { _ = n1.Shutdown(context.Background()); stopRedisBroker(b1) })
 	token := "gexchanged" + randString(6)
 	n1.lineageLeft.add(token)
 
 	n2 := testNode(t)
-	b2 := NewTestRedisBroker(t, n2, prefix, true, 6379)
+	b2 := newDetectingTestRedisBroker(t, n2, prefix)
 	t.Cleanup(func() { _ = n2.Shutdown(context.Background()); stopRedisBroker(b2) })
 	require.Eventually(t, func() bool { return n2.lineageLeft.has(token) }, 10*time.Second, 20*time.Millisecond)
 }
@@ -121,7 +121,7 @@ func TestRedisLineage_ReplacedTokensExchanged(t *testing.T) {
 // no calls: a restart (emulated: the script cache flushed) rotates before any
 // traffic.
 func TestRedisLineage_IdleProbeOpensGate(t *testing.T) {
-	setLineageProbeInterval(t, 50 * time.Millisecond)
+	setLineageProbeInterval(t, 50*time.Millisecond)
 	b := newLineageTestBroker(t, lineageSingle, false)
 	ch := "lineage_probe_" + randString(6)
 	lineagePublish(t, b, ch, 1)
@@ -238,9 +238,10 @@ func TestRedisLineage_LoadSHA1(t *testing.T) {
 	s, err := NewRedisShard(node, testSingleRedisConf(6379))
 	require.NoError(t, err)
 	b, err := NewRedisBroker(node, RedisBrokerConfig{
-		Prefix:   getUniquePrefix(),
-		Shards:   []*RedisShard{s},
-		LoadSHA1: true,
+		Prefix:                    getUniquePrefix(),
+		Shards:                    []*RedisShard{s},
+		LoadSHA1:                  true,
+		DetectPotentialLostWrites: true,
 	})
 	require.NoError(t, err)
 	node.SetBroker(b)
@@ -274,4 +275,21 @@ func setLineageProbeInterval(t *testing.T, d time.Duration) {
 	prev := lineageProbeInterval()
 	lineageProbeIntervalNs.Store(int64(d))
 	t.Cleanup(func() { lineageProbeIntervalNs.Store(int64(prev)) })
+}
+
+// newDetectingTestRedisBroker is NewTestRedisBroker (streams, port 6379) with
+// DetectPotentialLostWrites.
+func newDetectingTestRedisBroker(tb testing.TB, n *Node, prefix string) *RedisBroker {
+	tb.Helper()
+	s, err := NewRedisShard(n, testSingleRedisConf(6379))
+	require.NoError(tb, err)
+	e, err := NewRedisBroker(n, RedisBrokerConfig{
+		Prefix:                    prefix,
+		Shards:                    []*RedisShard{s},
+		DetectPotentialLostWrites: true,
+	})
+	require.NoError(tb, err)
+	n.SetBroker(e)
+	require.NoError(tb, n.Run())
+	return e
 }

@@ -211,7 +211,7 @@ func setupPairHook(t *testing.T, p failoverPair, noLineage bool, hook func(*Redi
 	if hook != nil {
 		hook(s)
 	}
-	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}})
+	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}, DetectPotentialLostWrites: !noLineage})
 	require.NoError(t, err)
 	node.SetBroker(br)
 	require.NoError(t, node.Run())
@@ -303,7 +303,7 @@ func TestRedisFailover_ReadOnlyReconnects(t *testing.T) {
 // address and rotates there, so the old server's cached scripts don't match
 // any more when it serves again.
 func TestRedisFailover_FailbackToDemotedServer(t *testing.T) {
-	setLineageProbeInterval(t, 100 * time.Millisecond)
+	setLineageProbeInterval(t, 100*time.Millisecond)
 	for _, p := range failoverPairs(t) {
 		t.Run(p.name, func(t *testing.T) {
 			br, proxy, a, b := setupPair(t, p)
@@ -379,12 +379,12 @@ func TestRedisFailover_ClusterFailover(t *testing.T) {
 	if v == "" {
 		t.Skip("CENTRIFUGE_REDIS_CLUSTER_REPLICAS_ADDRS not set")
 	}
-	setLineageProbeInterval(t, 100 * time.Millisecond)
+	setLineageProbeInterval(t, 100*time.Millisecond)
 
 	node := testNode(t)
 	s, err := NewRedisShard(node, RedisShardConfig{ClusterAddresses: strings.Split(v, ","), IOTimeout: 5 * time.Second})
 	require.NoError(t, err)
-	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: getUniquePrefix(), Shards: []*RedisShard{s}})
+	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: getUniquePrefix(), Shards: []*RedisShard{s}, DetectPotentialLostWrites: true})
 	require.NoError(t, err)
 	node.SetBroker(br)
 	require.NoError(t, node.Run())
@@ -480,7 +480,7 @@ func lineageRotations(b *RedisBroker) int {
 // primary role back, behind the same address, before any call or probe
 // reached the new one. A subscriber that saw the lost offset catches it at the
 // next publication: the server's lineage rotates. Without a subscriber of that
-// channel it goes unseen - the documented gap (UseInfoCommandForLineage closes
+// channel it goes unseen - the documented gap (PotentialLostWritesUseInfo closes
 // it).
 func TestRedisFailover_FastFailbackCaughtByReusedOffset(t *testing.T) {
 	testFastFailback(t, true)

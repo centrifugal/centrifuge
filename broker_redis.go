@@ -260,17 +260,24 @@ type RedisBrokerConfig struct {
 	// in FIPS-only mode (GODEBUG=fips140=only), where SHA-1 can't be computed here.
 	LoadSHA1 bool
 
-	// UseInfoCommandForLineage makes meta scripts read the server's replication
-	// ID with INFO to see that a failover or a restart may have lost writes to
-	// a stream, on every server, including Redis 6 and Dragonfly, at the cost of
-	// INFO in every meta script. INFO needs the @dangerous ACL category. The ID
-	// also changes when nothing was lost - a primary gets its first replica, or
-	// has had none for repl-backlog-ttl - and streams then start new epochs too.
-	// In Redis Cluster, streams of a slot moved to another node start new
-	// epochs as well: their metas carry the source node's ID.
-	// Without it the broker uses the script cache of Redis 7+ and Valkey, which
-	// needs no extra permissions (no detection on Redis 6 and Dragonfly).
-	UseInfoCommandForLineage bool
+	// DetectPotentialLostWrites makes the broker detect that a Redis failover
+	// or a restart may have lost writes to a stream (a promoted replica that
+	// missed the last writes, a restart from an older RDB or AOF), so its
+	// streams start a new epoch and subscribers resync instead of missing
+	// publications. It uses the script cache of Redis 7+ and Valkey and needs no
+	// extra permissions; on other servers only reused offsets are detected, per
+	// channel. Off by default: the broker then works as it did before the option
+	// existed.
+	DetectPotentialLostWrites bool
+	// PotentialLostWritesUseInfo makes the detection read the server's
+	// replication ID with INFO instead, on every server, including Redis 6 and
+	// Dragonfly, at the cost of INFO in every meta script. INFO needs the
+	// @dangerous ACL category. The ID also changes when nothing was lost - a
+	// primary gets its first replica, or has had none for repl-backlog-ttl - and
+	// streams then start new epochs too. In Redis Cluster, streams of a slot
+	// moved to another node start new epochs as well. It has an effect only with
+	// DetectPotentialLostWrites.
+	PotentialLostWritesUseInfo bool
 }
 
 // NewRedisBroker initializes Redis Broker.
@@ -355,18 +362,21 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		addHistoryListScript:    rueidis.NewLuaScript(addHistoryListSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
 		closeCh:                 make(chan struct{}),
 	}
-	if !config.UseLists {
-		b.watermarks = newOffsetWatermarks()
-		b.resetLostStreamScript = rueidis.NewLuaScript(resetLostStreamSource, rueidis.WithLoadSHA1(config.LoadSHA1))
-	}
 	for _, sw := range b.shards {
 		sw.shard.ensureLineage()
-		l := b.lin(sw.shard)
-		if !config.UseLists {
+	}
+	if config.DetectPotentialLostWrites && !config.UseLists {
+		b.watermarks = newOffsetWatermarks()
+		b.resetLostStreamScript = rueidis.NewLuaScript(resetLostStreamSource, rueidis.WithLoadSHA1(config.LoadSHA1))
+		for _, sw := range b.shards {
+			l := b.lin(sw.shard)
 			l.register(b.historyStreamScript, config.LoadSHA1)
 			l.register(b.addHistoryStreamScript, config.LoadSHA1)
+			l.setLogger(n)
 		}
-		l.setLogger(n)
+	}
+	if config.PotentialLostWritesUseInfo && !config.DetectPotentialLostWrites {
+		n.logger.log(newLogEntry(LogLevelWarn, "redis broker: PotentialLostWritesUseInfo has no effect without DetectPotentialLostWrites", nil))
 	}
 	b.shardChannel = config.Prefix + redisPubSubShardChannelSuffix
 	b.messagePrefix = config.Prefix + redisClientChannelPrefix
@@ -525,8 +535,8 @@ func (b *RedisBroker) RegisterBrokerEventHandler(h BrokerEventHandler) error {
 		if err := b.checkCapabilities(wrapper.shard); err != nil {
 			return fmt.Errorf("capability error on shard [%s]: %v", wrapper.shard.string(), err)
 		}
-		if !b.config.UseLists {
-			go b.lin(wrapper.shard).reportEnvironment("broker", b.config.UseInfoCommandForLineage)
+		if b.config.DetectPotentialLostWrites && !b.config.UseLists {
+			go b.lin(wrapper.shard).reportEnvironment("broker", b.config.PotentialLostWritesUseInfo)
 		}
 	}
 	for i := 0; i < len(b.shards); i++ {
@@ -2206,7 +2216,12 @@ func parseDeltaPush(input string) (deltaPublicationPush, error) {
 // execLineageScript runs a meta script in the lineage mode of the shard: gated
 // with EVALSHA on Redis 7+ and Valkey, otherwise as a plain script.
 func (b *RedisBroker) execLineageScript(ctx context.Context, s *RedisShard, ls *lineageScript, keys, args []string) rueidis.RedisResult {
-	mode, err := b.lin(s).mode(ctx, b.config.UseInfoCommandForLineage)
+	if !b.config.DetectPotentialLostWrites {
+		resp := ls.lua(lineageNone).Exec(ctx, s.client, keys, args)
+		s.noteError(resp.Error())
+		return resp
+	}
+	mode, err := b.lin(s).mode(ctx, b.config.PotentialLostWritesUseInfo)
 	if err != nil {
 		return rueidis.NewErrorResult(err)
 	}

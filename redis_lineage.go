@@ -56,7 +56,7 @@ import (
 //
 // Redis 6 and Dragonfly send scripts to replicas, so the gate can't be used
 // there: no lineage, only the reused-offset check per channel. With
-// UseInfoCommandForLineage the scripts read master_replid with INFO on every
+// PotentialLostWritesUseInfo the scripts read master_replid with INFO on every
 // server instead, at the cost of INFO in every meta script and the @dangerous
 // ACL category. It changes on every restart and promotion, and also when
 // nothing was lost: a primary creating its replication backlog (its first
@@ -574,7 +574,7 @@ func (l *redisLineage) probeInfo(ctx context.Context) bool {
 			// A Redis error (an ACL refusal, for example): INFO isn't allowed.
 			l.infoProbed = true
 			l.infoAllowed = false
-			l.log(LogLevelWarn, "redis lineage: UseInfoCommandForLineage is on but scripts can't call INFO (the ACL user needs the @dangerous category)", map[string]any{"error": err.Error()})
+			l.log(LogLevelWarn, "redis lineage: PotentialLostWritesUseInfo is on but scripts can't call INFO (the ACL user needs the @dangerous category)", map[string]any{"error": err.Error()})
 		}
 		return false
 	}
@@ -1598,13 +1598,13 @@ func (l *redisLineage) reportEnvironment(broker string, useInfo bool) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		fields := map[string]any{
-			"broker":                       broker,
-			"shard":                        l.shard.string(),
-			"shard_mode":                   string(l.shard.Mode()),
-			"prefix":                       l.prefix,
-			"use_info_command_for_lineage": useInfo,
-			"force_resp2":                  l.shard.alwaysRESP2,
-			"load_sha1":                    l.loadSHA1,
+			"broker":                         broker,
+			"shard":                          l.shard.string(),
+			"shard_mode":                     string(l.shard.Mode()),
+			"prefix":                         l.prefix,
+			"potential_lost_writes_use_info": useInfo,
+			"force_resp2":                    l.shard.alwaysRESP2,
+			"load_sha1":                      l.loadSHA1,
 		}
 		level := LogLevelInfo
 		detection, reason := l.describeMode(ctx, useInfo, fields)
