@@ -306,7 +306,7 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 			for _, ls := range []*lineageScript{e.addScript, e.readOrderedScript, e.readUnorderedScript, e.readStreamScript, e.readMetaScript, e.batchRemoveScript} {
 				l.register(ls, conf.LoadSHA1)
 			}
-			l.setLogger(n)
+			l.setLogger(n, conf.Name)
 		}
 	}
 	if conf.PotentialLostWritesUseInfo && !conf.DetectPotentialLostWrites {
@@ -1178,7 +1178,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 		return MapStateResult{}, err
 	}
 	streamEpoch, _ := replies[1].ToString()
-	streamEpoch = e.lin(s.shard).epochExt("map", e.metaKey(s.shard, ch), streamEpoch)
+	streamEpoch = e.lin(s.shard).epochExt("map", e.conf.Name, e.metaKey(s.shard, ch), streamEpoch)
 	nextCursor, _ := replies[2].ToString()
 	if nextCursor == "0" {
 		nextCursor = "" // Convert Redis HSCAN "0" (complete) to empty string
@@ -1438,7 +1438,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 		return MapStateResult{}, err
 	}
 	streamEpoch, _ := replies[1].ToString()
-	streamEpoch = e.lin(s.shard).epochExt("map", e.metaKey(s.shard, ch), streamEpoch)
+	streamEpoch = e.lin(s.shard).epochExt("map", e.conf.Name, e.metaKey(s.shard, ch), streamEpoch)
 	keysArr, _ := replies[2].ToArray()
 	valuesArr, _ := replies[3].ToArray()
 	nextCursorScore, _ := replies[4].ToString()
@@ -2041,7 +2041,7 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 	if err != nil {
 		return MapStreamResult{}, fmt.Errorf("could not parse epoch: %w", err)
 	}
-	epoch = e.lin(s.shard).epochExt("map", e.metaKey(s.shard, ch), epoch)
+	epoch = e.lin(s.shard).epochExt("map", e.conf.Name, e.metaKey(s.shard, ch), epoch)
 
 	// Validate epoch if provided in Since filter.
 	if opts.Filter.Since != nil && opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != epoch {
@@ -2190,7 +2190,7 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 	if err != nil {
 		return MapStreamResult{}, fmt.Errorf("could not parse epoch: %w", err)
 	}
-	epoch = e.lin(s.shard).epochExt("map", e.metaKey(s.shard, ch), epoch)
+	epoch = e.lin(s.shard).epochExt("map", e.conf.Name, e.metaKey(s.shard, ch), epoch)
 
 	// Validate epoch if provided in Since filter.
 	if opts.Filter.Since != nil && opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != epoch {
@@ -2357,7 +2357,7 @@ func (e *RedisMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 		if err := wrapper.pubSubRunner.run(wrapper, h); err != nil {
 			return err
 		}
-		go e.lin(wrapper.shard).reportEnvironment(e.node, "map_broker", e.conf.DetectPotentialLostWrites, e.conf.PotentialLostWritesUseInfo)
+		go e.lin(wrapper.shard).reportEnvironment(e.node, "map_broker", e.conf.Name, e.conf.DetectPotentialLostWrites, e.conf.PotentialLostWritesUseInfo)
 	}
 	for i := 0; i < len(e.shards); i++ {
 		for j := 0; j < len(e.shards[i].pubSubStartChannels); j++ {
@@ -2860,7 +2860,7 @@ func (e *RedisMapBroker) batchRemoveExpired(ctx context.Context, shard *RedisSha
 	if len(result) > 2 {
 		// The epoch is unused here; the hook counts a lineage reset.
 		if epoch, err := result[2].ToString(); err == nil {
-			_ = e.lin(shard).epochExt("map", "", epoch)
+			_ = e.lin(shard).epochExt("map", e.conf.Name, "", epoch)
 		}
 	}
 	return nil
@@ -2985,7 +2985,7 @@ func (e *RedisMapBroker) handleRedisClientMessage(isCluster bool, eventHandler B
 	}
 	if strings.IndexByte(epoch, pubsubEpochExt) >= 0 {
 		shard := e.getShard(channel).shard
-		epoch = e.lin(shard).epochExt("map", e.metaKey(shard, channel), epoch)
+		epoch = e.lin(shard).epochExt("map", e.conf.Name, e.metaKey(shard, channel), epoch)
 	}
 
 	sp := StreamPosition{Offset: offset, Epoch: epoch}
@@ -3464,7 +3464,7 @@ func (e *RedisMapBroker) execLineage(ctx context.Context, s *RedisShard, ls *lin
 		return rueidis.NewErrorResult(err)
 	}
 	if mode == lineageGate {
-		return e.lin(s).exec(ctx, ls, keys, args)
+		return e.lin(s).exec(withLineageBroker(ctx, e.conf.Name), ls, keys, args)
 	}
 	var resp rueidis.RedisResult
 	if mode == lineageInfo {
@@ -3482,7 +3482,7 @@ func (e *RedisMapBroker) observeUpdate(s *RedisShard, ch string, res MapUpdateRe
 	if err != nil {
 		return res, err
 	}
-	res.Position.Epoch = e.lin(s).epochExt("map", e.metaKey(s, ch), res.Position.Epoch)
+	res.Position.Epoch = e.lin(s).epochExt("map", e.conf.Name, e.metaKey(s, ch), res.Position.Epoch)
 	return res, nil
 }
 
@@ -3514,11 +3514,11 @@ func (e *RedisMapBroker) resetLostStream(ch string, lostEpoch string, offset uin
 		// on it starts a new epoch (see RedisBroker.resetLostStream).
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := e.lin(s).rotateIfToken(ctx, e.metaKey(s, ch)); err != nil {
-			e.node.logger.log(newErrorLogEntry(err, "error rotating the lineage of a server that reused offsets", map[string]any{"channel": ch, "epoch": lostEpoch}))
+		if err := e.lin(s).rotateIfToken(withLineageBroker(ctx, e.conf.Name), e.metaKey(s, ch)); err != nil {
+			e.node.logger.log(newErrorLogEntry(err, "error rotating the lineage of a server that reused offsets", map[string]any{"broker_name": e.conf.Name, "channel": ch, "epoch": lostEpoch}))
 			return
 		}
-		e.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused map stream offsets, writes were lost: every stream and map on the server starts a new epoch", map[string]any{"channel": ch, "epoch": lostEpoch, "offset": offset}))
+		e.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused map stream offsets, writes were lost: every stream and map on the server starts a new epoch", map[string]any{"broker_name": e.conf.Name, "channel": ch, "epoch": lostEpoch, "offset": offset}))
 		return
 	}
 	chOpts, err := e.node.resolveMapChannelOptions(ch)
@@ -3529,14 +3529,14 @@ func (e *RedisMapBroker) resetLostStream(ch string, lostEpoch string, offset uin
 		[]string{e.metaKey(s, ch), e.streamKey(s, ch), e.stateMetaKey(s, ch)},
 		[]string{lostEpoch, epoch.Generate(), millis(chOpts.MetaTTL)}).AsInt64()
 	if err != nil {
-		e.node.logger.log(newErrorLogEntry(err, "error resetting a map stream with reused offsets", map[string]any{"channel": ch, "epoch": lostEpoch}))
+		e.node.logger.log(newErrorLogEntry(err, "error resetting a map stream with reused offsets", map[string]any{"broker_name": e.conf.Name, "channel": ch, "epoch": lostEpoch}))
 		return
 	}
-	e.lin(s).countDetection("reused_offset")
+	e.lin(s).countDetection(withLineageBroker(context.Background(), e.conf.Name), "reused_offset")
 	if reset == 1 {
-		e.lin(s).countEpochReset("map", "reused_offset")
+		e.lin(s).countEpochReset("map", e.conf.Name, "reused_offset")
 	}
-	e.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused map stream offsets, writes were lost: stream reset", map[string]any{"channel": ch, "epoch": lostEpoch, "offset": offset, "reset": reset == 1}))
+	e.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused map stream offsets, writes were lost: stream reset", map[string]any{"broker_name": e.conf.Name, "channel": ch, "epoch": lostEpoch, "offset": offset, "reset": reset == 1}))
 }
 
 // checkReusedOffset verifies a suspect offset (see offsetWatermarks) and

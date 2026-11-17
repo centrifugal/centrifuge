@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"context"
 	"crypto/fips140"
 	dto "github.com/prometheus/client_model/go"
 	"strconv"
@@ -220,7 +221,7 @@ func TestPubsubEpochExtension(t *testing.T) {
 	require.Equal(t, "Abc;x=1", epoch)
 	require.Equal(t, "payload", string(payload))
 	l := newRedisLineage(&RedisShard{closeCh: make(chan struct{})}, "p")
-	require.Equal(t, "Abc", l.epochExt("stream", "k", "Abc;x=1"))
+	require.Equal(t, "Abc", l.epochExt("stream", "test", "k", "Abc;x=1"))
 }
 
 // A reply whose meta was dropped for a lineage mismatch carries the reset
@@ -229,20 +230,34 @@ func TestLineageEpochExtCountsResets(t *testing.T) {
 	n, err := New(Config{})
 	require.NoError(t, err)
 	l := newRedisLineage(&RedisShard{closeCh: make(chan struct{})}, "p")
-	l.setLogger(n)
+	l.setLogger(n, "test")
 	resets := func(kind, detection string) float64 {
 		m := &dto.Metric{}
-		require.NoError(t, n.metrics.redisPotentialLostWritesEpochResets.WithLabelValues(kind, detection).Write(m))
+		require.NoError(t, n.metrics.redisPotentialLostWritesEpochResets.WithLabelValues("test", kind, detection).Write(m))
 		return m.GetCounter().GetValue()
 	}
 	gate, info := resets("stream", "script_cache"), resets("map", "info")
 
-	require.Equal(t, "E", l.epochExt("stream", "k", "E"))
-	require.Equal(t, "E", l.epochExt("stream", "k", "E;x=1"))
+	require.Equal(t, "E", l.epochExt("stream", "test", "k", "E"))
+	require.Equal(t, "E", l.epochExt("stream", "test", "k", "E;x=1"))
 	require.Equal(t, gate, resets("stream", "script_cache"), "no reset extension")
 
-	require.Equal(t, "E", l.epochExt("stream", "k", "E;lr="+lineageStampGate))
+	require.Equal(t, "E", l.epochExt("stream", "test", "k", "E;lr="+lineageStampGate))
 	require.Equal(t, gate+1, resets("stream", "script_cache"))
-	require.Equal(t, "E", l.epochExt("map", "k", "E;x=1;lr="+lineageStampInfo))
+	require.Equal(t, "E", l.epochExt("map", "test", "k", "E;x=1;lr="+lineageStampInfo))
 	require.Equal(t, info+1, resets("map", "info"))
+}
+
+// A detection is labelled with the broker whose call found it; one no broker
+// call triggered (the idle probe, tokens learned from other nodes) with the
+// first broker that enabled detection on the shard and prefix.
+func TestLineageBrokerName(t *testing.T) {
+	n, err := New(Config{})
+	require.NoError(t, err)
+	l := newRedisLineage(&RedisShard{closeCh: make(chan struct{})}, "p")
+	l.setLogger(n, "first")
+	l.setLogger(n, "second")
+	require.Equal(t, "first", l.brokerNameOf(context.Background()))
+	require.Equal(t, "maps", l.brokerNameOf(withLineageBroker(context.Background(), "maps")))
+	require.Equal(t, "", l.brokerNameOf(withLineageBroker(context.Background(), "")), "an unnamed broker stays unnamed")
 }

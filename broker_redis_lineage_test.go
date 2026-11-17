@@ -160,8 +160,8 @@ func TestRedisLineage_NewLineageStartsNewEpoch(t *testing.T) {
 			require.Equal(t, uint64(4), same.Offset)
 
 			m := b.node.metrics
-			resets := counterValue(t, m.redisPotentialLostWritesEpochResets.WithLabelValues("stream", "script_cache"))
-			detections := counterValue(t, m.redisPotentialLostWritesDetections.WithLabelValues("restart_or_failover"))
+			resets := counterValue(t, m.redisPotentialLostWritesEpochResets.WithLabelValues(b.config.Name, "stream", "script_cache"))
+			detections := counterValue(t, m.redisPotentialLostWritesDetections.WithLabelValues(b.config.Name, "restart_or_failover"))
 
 			flushScripts(t, s)
 
@@ -169,8 +169,8 @@ func TestRedisLineage_NewLineageStartsNewEpoch(t *testing.T) {
 			pubs, sp, err := b.History(ch, HistoryOptions{Filter: HistoryFilter{Limit: -1}})
 			require.NoError(t, err)
 			require.NotEqual(t, before.Epoch, sp.Epoch)
-			require.GreaterOrEqual(t, counterValue(t, m.redisPotentialLostWritesEpochResets.WithLabelValues("stream", "script_cache")), resets+1, "the reset stream is counted")
-			require.GreaterOrEqual(t, counterValue(t, m.redisPotentialLostWritesDetections.WithLabelValues("restart_or_failover")), detections+1, "the new lineage is counted")
+			require.GreaterOrEqual(t, counterValue(t, m.redisPotentialLostWritesEpochResets.WithLabelValues(b.config.Name, "stream", "script_cache")), resets+1, "the reset stream is counted")
+			require.GreaterOrEqual(t, counterValue(t, m.redisPotentialLostWritesDetections.WithLabelValues(b.config.Name, "restart_or_failover")), detections+1, "the new lineage is counted")
 			require.Zero(t, sp.Offset)
 			require.Empty(t, pubs)
 

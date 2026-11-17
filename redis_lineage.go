@@ -466,6 +466,10 @@ type redisLineage struct {
 	stats     lineageStats
 
 	logFn func(level LogLevel, msg string, fields map[string]any)
+	// brokerName names, in metrics and logs, what no broker call triggered (the
+	// idle probe, replaced tokens learned from other nodes): the first broker
+	// that enabled detection on the shard and prefix.
+	brokerName string
 
 	// disabledForTest turns detection off (tests showing the behavior without it).
 	disabledForTest bool
@@ -512,13 +516,14 @@ func (l *redisLineage) register(s *lineageScript, loadSHA1 bool) {
 
 // setLogger logs lineage events with the node's logger (the first node wins)
 // and shares the node's replaced tokens.
-func (l *redisLineage) setLogger(n *Node) {
+func (l *redisLineage) setLogger(n *Node, brokerName string) {
 	l.scriptsMu.Lock()
 	defer l.scriptsMu.Unlock()
 	if l.logFn != nil {
 		return
 	}
 	l.node = n
+	l.brokerName = brokerName
 	l.left = n.lineageLeft
 	n.registerLineage(l)
 	l.logFn = func(level LogLevel, msg string, fields map[string]any) {
@@ -1014,14 +1019,14 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 		l.stats.mu.Unlock()
 		switch {
 		case staleSeen:
-			l.countDetection("stale_copy")
+			l.countDetection(ctx, "stale_copy")
 		case force:
-			l.countDetection("reused_offset")
+			l.countDetection(ctx, "reused_offset")
 		default:
-			l.countDetection("restart_or_failover")
+			l.countDetection(ctx, "restart_or_failover")
 		}
 		l.log(LogLevelInfo, "redis lineage: new lineage token (a restart, a failover or a stale copy may have lost writes), streams and maps on the server start new epochs", map[string]any{
-			"previous_token": prevToken, "stale_copy": staleSeen, "forced": force, "slots": len(slots),
+			"previous_token": prevToken, "stale_copy": staleSeen, "forced": force, "slots": len(slots), "broker_name": l.brokerNameOf(ctx),
 		})
 	}
 	return nil
@@ -1544,14 +1549,14 @@ func lineageTokenMinted(tok string) (int64, bool) {
 // to. A reply whose meta was dropped for a lineage mismatch carries the reset
 // extension (lineage_reset_ext in the preludes), counted here; PUB/SUB
 // messages never carry it.
-func (l *redisLineage) epochExt(kind, key, epoch string) string {
+func (l *redisLineage) epochExt(kind, brokerName, key, epoch string) string {
 	i := strings.IndexByte(epoch, pubsubEpochExt)
 	if i < 0 {
 		return epoch
 	}
 	for _, part := range strings.Split(epoch[i+1:], string(pubsubEpochExt)) {
 		if field, ok := strings.CutPrefix(part, lineageResetExtPrefix); ok {
-			l.countEpochReset(kind, lineageDetectionName(field))
+			l.countEpochReset(kind, brokerName, lineageDetectionName(field))
 		}
 	}
 	return epoch[:i]
@@ -1573,16 +1578,35 @@ func lineageDetectionName(field string) string {
 	}
 }
 
-func (l *redisLineage) countEpochReset(kind, detection string) {
+func (l *redisLineage) countEpochReset(kind, brokerName, detection string) {
 	if m := l.metrics(); m != nil {
-		m.incPotentialLostWritesEpochReset(kind, detection)
+		m.incPotentialLostWritesEpochReset(brokerName, kind, detection)
 	}
 }
 
-func (l *redisLineage) countDetection(reason string) {
+func (l *redisLineage) countDetection(ctx context.Context, reason string) {
 	if m := l.metrics(); m != nil {
-		m.incPotentialLostWritesDetection(reason)
+		m.incPotentialLostWritesDetection(l.brokerNameOf(ctx), reason)
 	}
+}
+
+type lineageBrokerKey struct{}
+
+// withLineageBroker tells the lineage which broker a call comes from, for the
+// broker_name of metrics and logs.
+func withLineageBroker(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, lineageBrokerKey{}, name)
+}
+
+// brokerNameOf returns the broker a call comes from (see withLineageBroker),
+// or the first broker that enabled detection on the shard and prefix.
+func (l *redisLineage) brokerNameOf(ctx context.Context) string {
+	if name, ok := ctx.Value(lineageBrokerKey{}).(string); ok {
+		return name
+	}
+	l.scriptsMu.Lock()
+	defer l.scriptsMu.Unlock()
+	return l.brokerName
 }
 
 func (l *redisLineage) metrics() *metrics {
@@ -1610,17 +1634,18 @@ const lineageCheckCrossSlotScript = "#!lua flags=allow-cross-slot-keys\nreturn 1
 // its only writes are harmless scripts in the script cache. With detection off
 // (enabled false) it says what DetectPotentialLostWrites would run with on this
 // server, without touching the shard's detection state.
-func (l *redisLineage) reportEnvironment(n *Node, broker string, enabled, useInfo bool) {
+func (l *redisLineage) reportEnvironment(n *Node, broker, brokerName string, enabled, useInfo bool) {
 	if l.disabledForTest {
 		return
 	}
-	if _, done := l.reported.LoadOrStore(broker, true); done {
+	if _, done := l.reported.LoadOrStore(broker+"/"+brokerName, true); done {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	fields := map[string]any{
 		"broker":                         broker,
+		"broker_name":                    brokerName,
 		"shard":                          l.shard.string(),
 		"shard_mode":                     string(l.shard.Mode()),
 		"prefix":                         l.prefix,

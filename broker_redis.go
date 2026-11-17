@@ -372,7 +372,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 			l := b.lin(sw.shard)
 			l.register(b.historyStreamScript, config.LoadSHA1)
 			l.register(b.addHistoryStreamScript, config.LoadSHA1)
-			l.setLogger(n)
+			l.setLogger(n, config.Name)
 		}
 	}
 	if config.PotentialLostWritesUseInfo && !config.DetectPotentialLostWrites {
@@ -536,7 +536,7 @@ func (b *RedisBroker) RegisterBrokerEventHandler(h BrokerEventHandler) error {
 			return fmt.Errorf("capability error on shard [%s]: %v", wrapper.shard.string(), err)
 		}
 		if !b.config.UseLists {
-			go b.lin(wrapper.shard).reportEnvironment(b.node, "broker", b.config.DetectPotentialLostWrites, b.config.PotentialLostWritesUseInfo)
+			go b.lin(wrapper.shard).reportEnvironment(b.node, "broker", b.config.Name, b.config.DetectPotentialLostWrites, b.config.PotentialLostWritesUseInfo)
 		}
 	}
 	for i := 0; i < len(b.shards); i++ {
@@ -1036,7 +1036,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 	if err != nil {
 		return PublishResult{}, errors.New("wrong Redis reply epoch")
 	}
-	epoch = b.lin(s.shard).epochExt("stream", string(historyMetaKey), epoch)
+	epoch = b.lin(s.shard).epochExt("stream", b.config.Name, string(historyMetaKey), epoch)
 	result := PublishResult{StreamPosition: StreamPosition{Offset: uint64(offset), Epoch: epoch}}
 	if len(replies) >= 3 {
 		fromCacheStr, err := replies[2].ToString()
@@ -1723,7 +1723,7 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 	}
 	if strings.IndexByte(sp.Epoch, pubsubEpochExt) >= 0 {
 		shard := b.getShard(channel).shard
-		sp.Epoch = b.lin(shard).epochExt("stream", string(b.historyMetaKey(shard, channel)), sp.Epoch)
+		sp.Epoch = b.lin(shard).epochExt("stream", b.config.Name, string(b.historyMetaKey(shard, channel)), sp.Epoch)
 	}
 	if typeOfPush == pubPushType {
 		var pub protocol.Publication
@@ -1854,7 +1854,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOption
 	if err != nil {
 		return nil, StreamPosition{}, errors.New("wrong Redis reply epoch")
 	}
-	epoch = b.lin(s).epochExt("stream", string(historyMetaKey), epoch)
+	epoch = b.lin(s).epochExt("stream", b.config.Name, string(historyMetaKey), epoch)
 
 	if includePubs == "1" && len(replies) >= 3 {
 		values, err := replies[2].ToArray()
@@ -1945,7 +1945,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 	if err != nil {
 		return nil, StreamPosition{}, errors.New("wrong Redis reply epoch")
 	}
-	epoch = b.lin(s).epochExt("stream", string(historyMetaKey), epoch)
+	epoch = b.lin(s).epochExt("stream", b.config.Name, string(historyMetaKey), epoch)
 
 	latestPosition := StreamPosition{Offset: uint64(offs), Epoch: epoch}
 
@@ -2226,7 +2226,7 @@ func (b *RedisBroker) execLineageScript(ctx context.Context, s *RedisShard, ls *
 		return rueidis.NewErrorResult(err)
 	}
 	if mode == lineageGate {
-		return b.lin(s).exec(ctx, ls, keys, args)
+		return b.lin(s).exec(withLineageBroker(ctx, b.config.Name), ls, keys, args)
 	}
 	var resp rueidis.RedisResult
 	if mode == lineageInfo {
@@ -2271,26 +2271,26 @@ func (b *RedisBroker) resetLostStream(ch string, epoch string, offset uint64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if b.lin(s).gateMode() {
-		err := b.lin(s).rotateIfToken(ctx, string(b.historyMetaKey(s, ch)))
+		err := b.lin(s).rotateIfToken(withLineageBroker(ctx, b.config.Name), string(b.historyMetaKey(s, ch)))
 		if err != nil {
-			b.node.logger.log(newErrorLogEntry(err, "error rotating the lineage of a server that reused offsets", map[string]any{"channel": ch, "epoch": epoch}))
+			b.node.logger.log(newErrorLogEntry(err, "error rotating the lineage of a server that reused offsets", map[string]any{"broker_name": b.config.Name, "channel": ch, "epoch": epoch}))
 			return
 		}
-		b.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused stream offsets, writes were lost: every stream and map on the server starts a new epoch", map[string]any{"channel": ch, "epoch": epoch, "offset": offset}))
+		b.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused stream offsets, writes were lost: every stream and map on the server starts a new epoch", map[string]any{"broker_name": b.config.Name, "channel": ch, "epoch": epoch, "offset": offset}))
 		return
 	}
 	reset, err := b.resetLostStreamScript.Exec(ctx, s.client,
 		[]string{string(b.historyMetaKey(s, ch)), string(b.historyStreamKey(s, ch))},
 		[]string{epoch}).AsInt64()
 	if err != nil {
-		b.node.logger.log(newErrorLogEntry(err, "error resetting a stream with reused offsets", map[string]any{"channel": ch, "epoch": epoch}))
+		b.node.logger.log(newErrorLogEntry(err, "error resetting a stream with reused offsets", map[string]any{"broker_name": b.config.Name, "channel": ch, "epoch": epoch}))
 		return
 	}
-	b.lin(s).countDetection("reused_offset")
+	b.lin(s).countDetection(withLineageBroker(ctx, b.config.Name), "reused_offset")
 	if reset == 1 {
-		b.lin(s).countEpochReset("stream", "reused_offset")
+		b.lin(s).countEpochReset("stream", b.config.Name, "reused_offset")
 	}
-	b.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused stream offsets, writes were lost: stream reset", map[string]any{"channel": ch, "epoch": epoch, "offset": offset, "reset": reset == 1}))
+	b.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused stream offsets, writes were lost: stream reset", map[string]any{"broker_name": b.config.Name, "channel": ch, "epoch": epoch, "offset": offset, "reset": reset == 1}))
 }
 
 // checkReusedOffset verifies a suspect offset (see offsetWatermarks) and
@@ -2301,7 +2301,7 @@ func (b *RedisBroker) checkReusedOffset(c *watermarkCheck) {
 	defer cancel()
 	lost, err := verifyReusedOffset(ctx, s.client, string(b.historyStreamKey(s, c.ch)), string(b.historyMetaKey(s, c.ch)), c)
 	if err != nil {
-		b.node.logger.log(newErrorLogEntry(err, "error verifying a reused stream offset", map[string]any{"channel": c.ch}))
+		b.node.logger.log(newErrorLogEntry(err, "error verifying a reused stream offset", map[string]any{"broker_name": b.config.Name, "channel": c.ch}))
 	}
 	b.watermarks.settle(c, lost)
 	if lost {

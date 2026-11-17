@@ -980,14 +980,14 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Subsystem: "broker",
 		Name:      "redis_potential_lost_writes_epoch_resets",
 		Help:      "Number of streams and maps in Redis that started a new epoch because the server's data may have lost writes (a failover, a restart, a stale copy). Subscribers resync them.",
-	}, []string{"kind", "detection"})
+	}, []string{"broker_name", "kind", "detection"})
 
 	m.redisPotentialLostWritesDetections = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "broker",
 		Name:      "redis_potential_lost_writes_detections",
 		Help:      "Number of times this node detected that a Redis server's data may have lost writes, by reason.",
-	}, []string{"reason"})
+	}, []string{"broker_name", "reason"})
 
 	m.redisBrokerPubSubErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
@@ -1884,12 +1884,12 @@ func getAcceptProtocolLabel(protoMajor int8) string {
 // incPotentialLostWritesEpochReset counts a stream or a map (kind) that
 // started a new epoch because its server's data may have lost writes, as
 // detection found it.
-func (m *metrics) incPotentialLostWritesEpochReset(kind, detection string) {
-	m.redisPotentialLostWritesEpochResets.WithLabelValues(kind, detection).Inc()
+func (m *metrics) incPotentialLostWritesEpochReset(brokerName, kind, detection string) {
+	m.redisPotentialLostWritesEpochResets.WithLabelValues(brokerName, kind, detection).Inc()
 }
 
 // incPotentialLostWritesDetection counts a detection that a server's data
 // may have lost writes.
-func (m *metrics) incPotentialLostWritesDetection(reason string) {
-	m.redisPotentialLostWritesDetections.WithLabelValues(reason).Inc()
+func (m *metrics) incPotentialLostWritesDetection(brokerName, reason string) {
+	m.redisPotentialLostWritesDetections.WithLabelValues(brokerName, reason).Inc()
 }
