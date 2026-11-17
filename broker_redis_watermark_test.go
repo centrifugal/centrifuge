@@ -60,7 +60,7 @@ func newWatermarkTestNode(t *testing.T) (*Node, *RedisBroker, chan struct{}) {
 			}
 		})
 	})
-	b := newTestRedisBroker(t, node, true, false, 6379)
+	b := newDetectingTestRedisBroker(t, node, getUniquePrefix())
 	t.Cleanup(func() {
 		_ = node.Shutdown(context.Background())
 		stopRedisBroker(b)
@@ -147,7 +147,7 @@ func TestRedisBroker_NoLossNoReset(t *testing.T) {
 func TestRedisMapBroker_ReusedOffsetsDetected(t *testing.T) {
 	node, err := New(Config{LogLevel: LogLevelError, LogHandler: func(LogEntry) {}})
 	require.NoError(t, err)
-	mb := redisMapBrokerFactory{}.make(t, node)
+	mb := redisMapBrokerFactory{}.makeCustom(t, node, nil, func(c *RedisMapBrokerConfig) { c.DetectPotentialLostWrites = true })
 	node.SetMapBroker(mb)
 	require.NoError(t, node.Run())
 	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
