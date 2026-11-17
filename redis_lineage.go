@@ -1658,7 +1658,8 @@ func (l *redisLineage) reportEnvironment(n *Node, broker, brokerName string, ena
 	}
 	info := l.infoSupport(ctx)
 
-	// What mode() picks.
+	// What mode() picks. Without the gate or INFO, offsets a server gives out
+	// again are still detected, per channel.
 	detection := "off"
 	if enabled {
 		switch {
@@ -1666,6 +1667,8 @@ func (l *redisLineage) reportEnvironment(n *Node, broker, brokerName string, ena
 			detection = "info"
 		case kindErr == nil && kind.gateCapable:
 			detection = "script_cache"
+		default:
+			detection = "reused_offsets"
 		}
 	}
 	fields := map[string]any{
@@ -1682,7 +1685,7 @@ func (l *redisLineage) reportEnvironment(n *Node, broker, brokerName string, ena
 		fields["server"] = kind.desc
 	}
 	level := LogLevelInfo
-	if enabled && (detection == "off" ||
+	if enabled && (detection == "reused_offsets" ||
 		(detection == "script_cache" && len(scriptCache) > 0) ||
 		(useInfo && len(info) > 0)) {
 		level = LogLevelWarn

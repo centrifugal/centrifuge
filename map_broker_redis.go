@@ -310,7 +310,7 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 		}
 	}
 	if conf.PotentialLostWritesUseInfo && !conf.DetectPotentialLostWrites {
-		n.logger.log(newLogEntry(LogLevelWarn, "redis map broker: PotentialLostWritesUseInfo has no effect without DetectPotentialLostWrites", nil))
+		n.logger.log(newLogEntry(LogLevelWarn, "redis map broker: PotentialLostWritesUseInfo has no effect without DetectPotentialLostWrites", map[string]any{"broker_name": conf.Name}))
 	}
 	e.shardChannel = conf.Prefix + redisPubSubShardChannelSuffix
 	e.messagePrefix = conf.Prefix + redisClientChannelPrefix
