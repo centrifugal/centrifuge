@@ -1152,7 +1152,7 @@ func (c *Client) handleMapTransitionToLive(
 	// The reply is written, so the publications queued since the sync point can
 	// follow it.
 	if c.pubSubSync.StopBuffering(pubSubBuf, c.writePendingPublication) {
-		go c.handleInsufficientState(channel, false)
+		go c.handleInsufficientState(channel, subGen, false)
 	}
 
 	// Add presence and join handling.

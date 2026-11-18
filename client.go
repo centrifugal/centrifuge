@@ -4335,7 +4335,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			continue
 		}
 		if c.pubSubSync.StopBuffering(subCtx.pubSubBuffer, c.writePendingPublication) {
-			go c.handleInsufficientState(channel, true)
+			go c.handleInsufficientState(channel, 0, true)
 		}
 	}
 
@@ -4645,7 +4645,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	}
 	// Publications which came since the sync point follow the recovered ones.
 	if c.pubSubSync.StopBuffering(subCtx.pubSubBuffer, c.writePendingPublication) {
-		go c.handleInsufficientState(channel, true)
+		go c.handleInsufficientState(channel, 0, true)
 	}
 	// Only now release an unsubscribe waiting for this subscribe: its push must
 	// not come before the publications queued since the sync point.
@@ -5628,7 +5628,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		// The reply is written, so the publications queued since the sync point
 		// can follow it. In case of server side subscription the caller does this.
 		if c.pubSubSync.StopBuffering(pubSubBuf, c.writePendingPublication) {
-			go c.handleInsufficientState(channel, false)
+			go c.handleInsufficientState(channel, subGen, false)
 		}
 	}
 
@@ -5757,9 +5757,13 @@ func (c *Client) getSubscribeCommandReply(res *protocol.SubscribeResult) (*proto
 	return protocol.ReplyPool.AcquireSubscribeReply(res), nil
 }
 
-func (c *Client) handleInsufficientState(ch string, serverSide bool) {
+// handleInsufficientState tells the client its state in channel ch can't be
+// continued. subGen is the generation of the subscription whose state was found
+// insufficient: the async unsubscribe is restricted to it, so a fresh
+// subscription that replaced it in the meantime is left alone.
+func (c *Client) handleInsufficientState(ch string, subGen uint64, serverSide bool) {
 	if c.isAsyncUnsubscribe(serverSide) {
-		c.handleAsyncUnsubscribe(ch, 0, unsubscribeInsufficientState)
+		c.handleAsyncUnsubscribe(ch, subGen, unsubscribeInsufficientState)
 	} else {
 		c.handleInsufficientStateDisconnect()
 	}
@@ -5857,7 +5861,8 @@ func (c *Client) publicationDataUpdatePositionLocked(
 			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state (lag)", map[string]any{"channel": ch, "user": c.user, "client": c.uid}))
 		}
 		// Tell client about insufficient state, can reconnect/resubscribe to recover the state.
-		go func() { c.handleInsufficientState(ch, serverSide) }()
+		subGen := channelContext.subGen
+		go func() { c.handleInsufficientState(ch, subGen, serverSide) }()
 		return nil, false
 	}
 	if pubEpoch != channelContext.streamPosition.Epoch {
@@ -5875,7 +5880,8 @@ func (c *Client) publicationDataUpdatePositionLocked(
 			if c.node.logger.enabled(LogLevelDebug) {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state (epoch)", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "epoch": pubEpoch, "expectedEpoch": channelContext.streamPosition.Epoch}))
 			}
-			go func() { c.handleInsufficientState(ch, serverSide) }()
+			subGen := channelContext.subGen
+			go func() { c.handleInsufficientState(ch, subGen, serverSide) }()
 			return nil, false
 		}
 	}
@@ -5889,7 +5895,8 @@ func (c *Client) publicationDataUpdatePositionLocked(
 			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state (offset)", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "offset": pubOffset, "expectedOffset": nextExpectedOffset}))
 		}
 		// Tell client about insufficient state, can reconnect/resubscribe to recover the state.
-		go func() { c.handleInsufficientState(ch, serverSide) }()
+		subGen := channelContext.subGen
+		go func() { c.handleInsufficientState(ch, subGen, serverSide) }()
 		return nil, false
 	} else if pubOffset < nextExpectedOffset {
 		// Epoch is correct, but due to the lag in PUB/SUB processing we received non-actual update
