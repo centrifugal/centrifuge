@@ -19,6 +19,7 @@ Returns: { removed_count, final_offset_string, epoch }
 -- KEYS[5] = cleanup registration zset key (for scheduling)
 -- KEYS[6] = state order zset key (always passed, ZREM is no-op if key doesn't exist)
 -- KEYS[7] = state meta key (for per-key version cleanup)
+-- KEYS[8] = lineage token key
 
 -- ==== ARGV ====
 -- ARGV[1]  = num_entries (number of entries to process)
@@ -39,6 +40,7 @@ local meta_key = KEYS[4]
 local cleanup_registration_key = KEYS[5]
 local state_order_key = KEYS[6]
 local state_meta_key = KEYS[7]
+local token_key = KEYS[8]
 
 local num_entries = tonumber(ARGV[1])
 local channel = ARGV[2]
@@ -69,18 +71,28 @@ end
 -- Get or create epoch (only in streamed mode)
 local current_epoch
 local top_offset = 0
+-- Whether the meta was dropped for a lineage mismatch (see lineage_reset_ext).
+local lineage_reset = false
 
 if not streamless then
-    current_epoch = redis.call("hget", meta_key, "e")
+    local token, ancestor = lineage_token(token_key)
+    local dropped
+    current_epoch, dropped = lineage_map_meta(meta_key, stream_key, token, ancestor)
+    lineage_reset = dropped ~= false and dropped ~= nil
     if not current_epoch then
         current_epoch = new_epoch_if_empty
-        redis.call("hset", meta_key, "e", current_epoch)
+        lineage_map_create(meta_key, state_meta_key, current_epoch, token, dropped)
     end
 else
     current_epoch = new_epoch_if_empty
 end
 
 local removed_count = 0
+-- One write counter bump covers every removal of this call (see lineage_obs).
+local write_obs = ""
+if not streamless then
+    write_obs = lineage_map_count(meta_key, token_key)
+end
 
 for i = 0, num_entries - 1 do
     local base = 10 + i * 3
@@ -111,7 +123,7 @@ for i = 0, num_entries - 1 do
 
         -- Publish removal event
         if channel ~= '' and publish_command ~= '' then
-            local pub_payload = top_offset .. ":" .. current_epoch .. ":" .. removal_payload
+            local pub_payload = top_offset .. ":" .. current_epoch .. write_obs .. ":" .. removal_payload
             redis.call(publish_command, channel, pub_payload)
         end
 
@@ -136,4 +148,4 @@ if not streamless then
     final_offset = redis.call("hget", meta_key, "s") or 0
 end
 
-return { removed_count, tostring(final_offset), current_epoch }
+return { removed_count, tostring(final_offset), current_epoch .. write_obs .. lineage_reset_ext(lineage_reset) }

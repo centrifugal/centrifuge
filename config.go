@@ -197,6 +197,14 @@ type Config struct {
 	// When zero Centrifuge uses default 30 days which we believe is more than enough
 	// for most use cases.
 	HistoryMetaTTL time.Duration
+	// HistoryMetaTTLUnpublished, when set, is the TTL of the meta of a stream
+	// or map nobody published to yet: subscribing to such a channel keeps its
+	// meta only that long, kept alive by position checks of live subscribers.
+	// The first publication switches the meta to its usual TTL (HistoryMetaTTL,
+	// or the map's meta TTL; a permanent map becomes permanent again). Must be
+	// at least 3 × ClientChannelPositionCheckDelay. Zero: metas without
+	// publications get the usual TTL too.
+	HistoryMetaTTLUnpublished time.Duration
 	// Metrics is MetricsConfig to configure Prometheus metrics provided by Centrifuge.
 	Metrics MetricsConfig
 	// GetChannelMediumOptions is a way to provide ChannelMediumOptions for specific channel.

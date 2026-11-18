@@ -1,12 +1,14 @@
 package centrifuge
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"hash/fnv"
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,6 +48,123 @@ type RedisShard struct {
 	isCluster     bool
 	isSentinel    bool
 	finalAddress  []string
+	// alwaysRESP2: the client speaks RESP2 (ForceRESP2, force_resp2).
+	alwaysRESP2 bool
+	// lineages detect new lineages of the server's data, one per key prefix
+	// (see redis_lineage.go).
+	lineagesMu sync.RWMutex
+	lineages   map[string]*redisLineage
+	// conns are the connections the client dialed.
+	conns *redisConnSet
+	// logNode logs READONLY reconnects (see ensureLineage).
+	logNode *Node
+}
+
+// lineageFor returns the lineage of a key prefix on the shard.
+func (s *RedisShard) lineageFor(prefix string) *redisLineage {
+	s.lineagesMu.RLock()
+	l, ok := s.lineages[prefix]
+	s.lineagesMu.RUnlock()
+	if ok {
+		return l
+	}
+	s.lineagesMu.Lock()
+	defer s.lineagesMu.Unlock()
+	if l, ok := s.lineages[prefix]; ok {
+		return l
+	}
+	if s.lineages == nil {
+		s.lineages = map[string]*redisLineage{}
+	}
+	l = newRedisLineage(s, prefix)
+	s.lineages[prefix] = l
+	return l
+}
+
+// ensureLineage gives a shard not made by NewRedisShard what lineages need,
+// and the node whose logger tells about READONLY reconnects (the first one).
+func (s *RedisShard) ensureLineage(n *Node) {
+	s.lineagesMu.Lock()
+	defer s.lineagesMu.Unlock()
+	if s.conns == nil {
+		s.conns = &redisConnSet{conns: map[*trackedConn]struct{}{}}
+	}
+	if s.logNode == nil {
+		s.logNode = n
+	}
+}
+
+// redisConnSet tracks the open connections of a shard's client.
+type redisConnSet struct {
+	mu       sync.Mutex
+	conns    map[*trackedConn]struct{}
+	lastDrop time.Time
+}
+
+type trackedConn struct {
+	net.Conn
+	set  *redisConnSet
+	once sync.Once
+}
+
+func (c *trackedConn) Close() error {
+	c.once.Do(func() {
+		c.set.mu.Lock()
+		delete(c.set.conns, c)
+		c.set.mu.Unlock()
+	})
+	return c.Conn.Close()
+}
+
+func (s *redisConnSet) add(conn net.Conn) net.Conn {
+	tc := &trackedConn{Conn: conn, set: s}
+	s.mu.Lock()
+	s.conns[tc] = struct{}{}
+	s.mu.Unlock()
+	return tc
+}
+
+// redisReadOnlyDropInterval is the least time between two drops of a shard's
+// connections on READONLY: the address may still point at the old server for
+// a while.
+var redisReadOnlyDropInterval = 2 * time.Second
+
+// dropAll closes every connection, at most once per redisReadOnlyDropInterval.
+// It reports whether it did.
+func (s *redisConnSet) dropAll() bool {
+	s.mu.Lock()
+	if time.Since(s.lastDrop) < redisReadOnlyDropInterval {
+		s.mu.Unlock()
+		return false
+	}
+	s.lastDrop = time.Now()
+	conns := make([]*trackedConn, 0, len(s.conns))
+	for c := range s.conns {
+		conns = append(conns, c)
+	}
+	s.mu.Unlock()
+	for _, c := range conns {
+		_ = c.Close()
+	}
+	return true
+}
+
+// noteError reacts to a command error: a READONLY reply outside Redis Cluster
+// means the address now leads to a replica (a failover behind one address,
+// centrifugo#1320), so the connections are dropped and dialed again.
+func (s *RedisShard) noteError(err error) {
+	if err == nil || s.isCluster || !isReadOnly(err) {
+		return
+	}
+	s.lineagesMu.RLock()
+	conns, n := s.conns, s.logNode
+	s.lineagesMu.RUnlock()
+	if conns == nil || !conns.dropAll() {
+		return
+	}
+	if n != nil && n.logEnabled(LogLevelWarn) {
+		n.logger.log(newLogEntry(LogLevelWarn, "redis: READONLY reply, the server was demoted; reconnecting", map[string]any{"address": s.string()}))
+	}
 }
 
 var knownRedisURLPrefixes = []string{
@@ -214,15 +333,12 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (fromAddre
 	return result, nil
 }
 
-// NewRedisShard initializes new Redis shard.
-func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
-	if conf.ConnectTimeout == 0 {
-		conf.ConnectTimeout = defaultRedisConnectTimeout
-	}
-	if conf.IOTimeout == 0 {
-		conf.IOTimeout = defaultRedisIOTimeout
-	}
-	options := rueidis.ClientOption{
+// redisClientOptions builds the rueidis options of a shard from its config
+// (with ConnectTimeout and IOTimeout already set). It reports whether the
+// shard is a Redis Cluster or a Sentinel setup, and whether a replica client
+// is enabled.
+func redisClientOptions(conf RedisShardConfig) (options rueidis.ClientOption, isCluster bool, isSentinel bool, replicaClientEnabled bool, err error) {
+	options = rueidis.ClientOption{
 		SelectDB:         conf.DB,
 		ConnWriteTimeout: conf.IOTimeout,
 		TLSConfig:        conf.TLSConfig,
@@ -274,13 +390,11 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		}
 	}
 
-	var isCluster bool
-	var isSentinel bool
-	replicaClientEnabled := conf.ReplicaClientEnabled
+	replicaClientEnabled = conf.ReplicaClientEnabled
 
 	if len(conf.SentinelAddresses) > 0 {
 		isSentinel = true
-		options.InitAddress = conf.SentinelAddresses
+		options.InitAddress = slices.Clone(conf.SentinelAddresses)
 		options.Sentinel = rueidis.SentinelOption{
 			TLSConfig:  conf.SentinelTLSConfig,
 			MasterSet:  conf.SentinelMasterName,
@@ -290,12 +404,11 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		}
 	} else if len(conf.ClusterAddresses) > 0 {
 		isCluster = true
-		options.InitAddress = conf.ClusterAddresses
+		options.InitAddress = slices.Clone(conf.ClusterAddresses)
 	} else {
-		var err error
 		addressOpts, err := optionsFromAddress(conf.Address, options)
 		if err != nil {
-			return nil, fmt.Errorf("error processing Redis address: %v", err)
+			return rueidis.ClientOption{}, false, false, false, fmt.Errorf("error processing Redis address: %v", err)
 		}
 		options, isCluster, isSentinel, replicaClientEnabled =
 			addressOpts.ClientOption, addressOpts.IsCluster, addressOpts.IsSentinel, addressOpts.ReplicaClientEnabled
@@ -303,11 +416,60 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 
 	if isSentinel {
 		if options.Sentinel.MasterSet == "" {
-			return nil, errors.New("sentinel master name must be configured for Redis Sentinel setup")
+			return rueidis.ClientOption{}, false, false, false, errors.New("sentinel master name must be configured for Redis Sentinel setup")
 		}
 		options.Sentinel.TopologyRefreshInterval = sentinelTopologyRefreshInterval
+		// Sentinel connections get the connect timeout and keep-alive of the
+		// data connections. rueidis dials Sentinels with Sentinel.Dialer only,
+		// and a zero dialer has no connect timeout and no keep-alive PING. A
+		// Sentinel whose packets are silently dropped then holds the client:
+		// a dial waits for the kernel to give up, a request without an answer
+		// waits for TCP retransmissions, and the topology refresh waits behind
+		// both. Meanwhile the client stays on the old master's address after a
+		// failover (centrifugo#1325).
+		options.Sentinel.Dialer = options.Dialer
+	}
+	return options, isCluster, isSentinel, replicaClientEnabled, nil
+}
+
+// NewRedisShard initializes new Redis shard.
+func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
+	if conf.ConnectTimeout == 0 {
+		conf.ConnectTimeout = defaultRedisConnectTimeout
+	}
+	if conf.IOTimeout == 0 {
+		conf.IOTimeout = defaultRedisIOTimeout
+	}
+	options, isCluster, isSentinel, replicaClientEnabled, err := redisClientOptions(conf)
+	if err != nil {
+		return nil, err
 	}
 
+	// Track the connections the client dials, so a READONLY reply (a demoted
+	// server behind the same address, centrifugo#1320) can drop them: the
+	// client then dials again and resolves the address again.
+	conns := &redisConnSet{conns: map[*trackedConn]struct{}{}}
+	userDial := options.DialCtxFn
+	options.DialCtxFn = func(ctx context.Context, dst string, dialer *net.Dialer, tlsConfig *tls.Config) (net.Conn, error) {
+		var conn net.Conn
+		var err error
+		if userDial != nil {
+			conn, err = userDial(ctx, dst, dialer, tlsConfig)
+		} else if tlsConfig != nil {
+			td := tls.Dialer{NetDialer: dialer, Config: tlsConfig}
+			conn, err = td.DialContext(ctx, "tcp", dst)
+		} else {
+			conn, err = dialer.DialContext(ctx, "tcp", dst)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return conns.add(conn), nil
+	}
+
+	// rueidis.NewClient shuffles options.InitAddress in place: a copy of the
+	// configured addresses, so shards made from one configuration don't
+	// reorder each other's addresses while they are read (see string).
 	client, err := rueidis.NewClient(options)
 	if err != nil {
 		return nil, fmt.Errorf("error creating Redis client: %v", err)
@@ -320,11 +482,13 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	}
 
 	shard := &RedisShard{
+		conns:        conns,
 		config:       conf,
+		alwaysRESP2:  options.AlwaysRESP2,
 		isCluster:    isCluster,
 		isSentinel:   isSentinel,
 		closeCh:      make(chan struct{}),
-		finalAddress: options.InitAddress,
+		finalAddress: slices.Clone(options.InitAddress),
 	}
 
 	shard.client = client

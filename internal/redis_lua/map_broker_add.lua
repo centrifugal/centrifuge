@@ -21,6 +21,7 @@ Publishing format (via PUBLISH/SPUBLISH):
 -- KEYS[6] = state expire zset key (optional, empty '' to disable)
 -- KEYS[7] = state meta key (optional, empty '' to disable)
 -- KEYS[8] = cleanup registration zset key (optional, empty '' to disable) - for scheduling cleanup
+-- KEYS[9] = lineage token key
 
 -- ==== ARGV ====
 -- ARGV[1]  = message_key (Key for state field - Client ID for presence, state key for keyed state)
@@ -60,6 +61,7 @@ local state_order_key = KEYS[5]
 local state_expire_key = KEYS[6]
 local state_meta_key = KEYS[7]
 local cleanup_registration_key = KEYS[8]
+local token_key = KEYS[9]
 
 -- Local variables from ARGV
 local message_key = ARGV[1]
@@ -180,12 +182,19 @@ end
 -- ==== Step 1: Ensure epoch exists and increment offset (only if append log enabled) ====
 local current_epoch = "0"
 local top_offset = 0
+-- The observation suffix of this write's epoch (see lineage_obs).
+local write_obs = ""
+-- Whether the meta was dropped for a lineage mismatch (see lineage_reset_ext).
+local lineage_reset = false
 
 if meta_key ~= '' then
-    current_epoch = redis.call("hget", meta_key, "e")
+    local token, ancestor = lineage_token(token_key)
+    local dropped
+    current_epoch, dropped = lineage_map_meta(meta_key, stream_key, token, ancestor)
+    lineage_reset = dropped ~= false and dropped ~= nil
     if not current_epoch then
         current_epoch = new_epoch_if_empty
-        redis.call("hset", meta_key, "e", current_epoch)
+        lineage_map_create(meta_key, state_meta_key, current_epoch, token, dropped)
     end
 
     -- ==== Step 2: Epoch change check for state (moved here for version check correctness) ====
@@ -350,11 +359,11 @@ if meta_key ~= '' then
 
     -- ==== Step 3: Increment append log offset (only if not suppressed) ====
     top_offset = redis.call("hincrby", meta_key, "s", 1)
+    write_obs = lineage_map_count(meta_key, token_key)
 
-    -- Set meta TTL if needed
-    if meta_expire ~= '0' then
-        redis.call("pexpire", meta_key, meta_expire)
-    end
+    -- Set meta TTL if needed. ARGV[28]: the empty meta TTL, so a meta made
+    -- short-lived while empty is made permanent again.
+    map_meta_expire(meta_key, meta_expire, ARGV[28] or "0", false, top_offset)
 
     -- Update per-key version tracking in state_meta_key (tied to state lifecycle)
     if version ~= "0" and version_field ~= "" and state_meta_key ~= "" then
@@ -513,10 +522,10 @@ if channel ~= '' and publish_command ~= '' then
     if prev_key_value then
         -- Key-based delta: prev_key_value is raw state value ("offset:epoch:protobuf").
         -- Go parses it on the receiving side.
-        payload = "d:" .. top_offset .. ":" .. current_epoch .. ":" .. #prev_key_value .. ":" .. prev_key_value .. ":" .. #message_payload .. ":" .. message_payload
+        payload = "d:" .. top_offset .. ":" .. current_epoch .. write_obs .. ":" .. #prev_key_value .. ":" .. prev_key_value .. ":" .. #message_payload .. ":" .. message_payload
     else
         -- Non-delta format: offset:epoch:protobuf
-        payload = top_offset .. ":" .. current_epoch .. ":" .. message_payload
+        payload = top_offset .. ":" .. current_epoch .. write_obs .. ":" .. message_payload
     end
     redis.call(publish_command, channel, payload)
 end
@@ -528,4 +537,4 @@ if result_key_expire ~= '' and result_key ~= '' then
 end
 
 -- ==== Step 9: Return top_offset and epoch ====
-return { top_offset, current_epoch, "" }
+return { top_offset, current_epoch .. write_obs .. lineage_reset_ext(lineage_reset), "" }

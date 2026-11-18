@@ -1723,3 +1723,16 @@ func (s *subShard) NumSubscribers(ch string) int {
 	}
 	return len(clients)
 }
+
+// subscriberClients returns the clients subscribed to a channel.
+func (h *Hub) subscriberClients(ch string) []*Client {
+	s := h.subShards[index(ch, numHubShards)]
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	subs := s.subs[ch]
+	out := make([]*Client, 0, len(subs))
+	for _, sub := range subs {
+		out = append(out, sub.client)
+	}
+	return out
+}

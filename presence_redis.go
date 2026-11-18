@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"crypto/fips140"
 	"errors"
 	"fmt"
 	"strconv"
@@ -66,7 +67,8 @@ type RedisPresenceManagerConfig struct {
 	ReadFromReplica bool
 
 	// LoadSHA1 enables loading SHA1 from Redis via SCRIPT LOAD instead of calculating
-	// it on the client side. This is useful for FIPS compliance.
+	// it on the client side. This is useful for FIPS compliance. It is always on
+	// in FIPS-only mode (GODEBUG=fips140=only), where SHA-1 can't be computed here.
 	LoadSHA1 bool
 }
 
@@ -89,6 +91,10 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 	if len(config.Shards) == 0 {
 		return nil, errors.New("presence: no Redis shards provided in configuration")
 	}
+	if fips140.Enforced() {
+		// SHA-1 can't be computed here in FIPS-only mode.
+		config.LoadSHA1 = true
+	}
 
 	if config.ReadFromReplica && !config.UseHashFieldTTL {
 		return nil, errors.New("presence: ReadFromReplica requires UseHashFieldTTL to be enabled")
@@ -108,6 +114,9 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 
 	if config.Prefix == "" {
 		config.Prefix = "centrifuge"
+	}
+	for _, s := range config.Shards {
+		s.ensureLineage(n)
 	}
 
 	if config.PresenceTTL == 0 {
@@ -192,6 +201,7 @@ func (m *RedisPresenceManager) addPresence(s *RedisShard, ch string, uid string,
 		return err
 	}
 	resp := m.addPresenceScript.Exec(context.Background(), s.client, keys, args)
+	s.noteError(resp.Error())
 	if rueidis.IsRedisNil(resp.Error()) {
 		return nil
 	}
@@ -225,6 +235,7 @@ func (m *RedisPresenceManager) removePresence(s *RedisShard, ch string, clientID
 		return err
 	}
 	resp := m.remPresenceScript.Exec(context.Background(), s.client, keys, args)
+	s.noteError(resp.Error())
 	if rueidis.IsRedisNil(resp.Error()) {
 		return nil
 	}

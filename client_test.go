@@ -6171,13 +6171,49 @@ func TestClientHandleInsufficientStateDisconnect(t *testing.T) {
 	})
 
 	client := newTestConnectedClientV2(t, node, "u-disc")
-	client.handleInsufficientState("test", true)
+	client.handleInsufficientState("test", 0, true)
 	select {
 	case d := <-disconnected:
 		require.Equal(t, DisconnectInsufficientState.Code, d.Code)
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected disconnect")
 	}
+}
+
+// TestClientInsufficientStateTargetsItsSubscription verifies that an
+// insufficient state found for one subscription does not unsubscribe a newer
+// subscription to the same channel that replaced it before the async
+// unsubscribe ran.
+func TestClientInsufficientStateTargetsItsSubscription(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	transport := newTestTransport(func() {})
+	ctx := SetCredentials(context.Background(), &Credentials{UserID: "42"})
+	client, _ := newClient(ctx, node, transport)
+	connectClientV2(t, client)
+
+	subscribeClientV2(t, client, "test")
+	client.mu.RLock()
+	oldGen := client.channels["test"].subGen
+	client.mu.RUnlock()
+
+	client.Unsubscribe("test")
+	require.Eventually(t, func() bool { return !client.IsSubscribed("test") }, 2*time.Second, 10*time.Millisecond)
+	subscribeClientV2(t, client, "test")
+	client.mu.RLock()
+	newGen := client.channels["test"].subGen
+	client.mu.RUnlock()
+	require.NotEqual(t, oldGen, newGen)
+
+	// The insufficient state was found for the old subscription: the new one stays.
+	client.handleInsufficientState("test", oldGen, false)
+	require.True(t, client.IsSubscribed("test"))
+
+	// For the current subscription it unsubscribes.
+	client.handleInsufficientState("test", newGen, false)
+	require.False(t, client.IsSubscribed("test"))
 }
 
 // TestClientUnsubscribeOnClosedClient verifies that calling Unsubscribe on a
