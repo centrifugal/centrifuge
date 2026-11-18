@@ -595,3 +595,99 @@ func TestSupportText(t *testing.T) {
 	require.Equal(t, "supported", supportText(nil))
 	require.Equal(t, "not supported: a; b", supportText([]string{"a", "b"}))
 }
+
+// An ACL user limited to the keys of the prefix can use the brokers, with
+// detection off (the scripts get the same keys as before the lineage existed)
+// and on (the lineage key starts with the prefix, in Redis Cluster too).
+func TestRedisLineage_ACLUserLimitedToPrefix(t *testing.T) {
+	for _, tt := range lineageRedisTests {
+		if !tt.Gate {
+			continue // Dragonfly: no ACL key patterns assumed.
+		}
+		for _, detect := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/detect=%v", tt.Name, detect), func(t *testing.T) {
+				testLineageACLUserLimitedToPrefix(t, tt, detect)
+			})
+		}
+	}
+}
+
+func testLineageACLUserLimitedToPrefix(t *testing.T, tt lineageRedisTest, detect bool) {
+	var conf RedisShardConfig
+	if tt.UseCluster {
+		var addrs []string
+		for i := 0; i < 3; i++ {
+			addrs = append(addrs, net.JoinHostPort("127.0.0.1", strconv.Itoa(tt.Port+i)))
+		}
+		conf = RedisShardConfig{ClusterAddresses: addrs, IOTimeout: 10 * time.Second}
+	} else {
+		conf = testSingleRedisConf(tt.Port)
+	}
+	prefix := getUniquePrefix()
+	user, password := "acl_"+randString(8), randString(16)
+
+	adminNode := testNode(t)
+	admin, err := NewRedisShard(adminNode, conf)
+	require.NoError(t, err)
+	ctx := context.Background()
+	for _, c := range lineagePrimaries(t, admin) {
+		require.NoError(t, c.Do(ctx, c.B().AclSetuser().Username(user).Rule(
+			"on", ">"+password, "~"+prefix+"*", "~", "&*", "+@all").Build()).Error())
+	}
+	t.Cleanup(func() {
+		for _, c := range lineagePrimaries(t, admin) {
+			_ = c.Do(ctx, c.B().AclDeluser().Username(user).Build()).Error()
+		}
+		admin.Close()
+	})
+
+	// "~" allows the empty key: outside Redis Cluster the map broker passes
+	// "" for keys it doesn't use, as it did before the lineage existed.
+	conf.AuthCredentialsFn = nil
+	conf.User, conf.Password = user, password
+	node := testNode(t)
+	node.config.Map.GetMapChannelOptions = func(string) MapChannelOptions {
+		return MapChannelOptions{Mode: MapModeRecoverable, StreamSize: 100, StreamTTL: time.Minute, MetaTTL: time.Hour, KeyTTL: time.Minute}
+	}
+	s, err := NewRedisShard(node, conf)
+	require.NoError(t, err)
+	b, err := NewRedisBroker(node, RedisBrokerConfig{
+		Prefix:                    prefix,
+		Shards:                    []*RedisShard{s},
+		DetectPotentialLostWrites: detect,
+	})
+	require.NoError(t, err)
+	node.SetBroker(b)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+		stopRedisBroker(b)
+	})
+
+	ch := "acl_" + randString(6)
+	sp := lineagePublish(t, b, ch, 2)
+	require.Equal(t, uint64(2), sp.Offset)
+	pubs, hsp, err := b.History(ch, HistoryOptions{Filter: HistoryFilter{Limit: -1}})
+	require.NoError(t, err)
+	require.Len(t, pubs, 2)
+	require.Equal(t, sp, hsp)
+
+	mapConf := RedisMapBrokerConfig{
+		Prefix:                    prefix,
+		Shards:                    []*RedisShard{s},
+		DetectPotentialLostWrites: detect,
+	}
+	if tt.UseCluster {
+		mapConf.NumShardedPubSubPartitions = 16
+	}
+	mb, err := NewRedisMapBroker(node, mapConf)
+	require.NoError(t, err)
+	_, err = mb.Publish(ctx, ch, "k", MapPublishOptions{Data: []byte("v")})
+	require.NoError(t, err)
+	state, err := mb.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, state.Publications, 1)
+	stream, err := mb.ReadStream(ctx, ch, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
+	require.NoError(t, err)
+	require.Equal(t, state.Position, stream.Position)
+}

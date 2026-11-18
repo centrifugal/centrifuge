@@ -90,8 +90,10 @@ func (m lineageMode) String() string {
 const lineageGateLoadArg = "__centrifuge_lineage_load__"
 
 // lineageKeySuffix ends the name of the lineage key: "<prefix>.lineage.state" outside
-// Redis Cluster, "{<slot tag>}.<prefix>.lineage.state" in Redis Cluster (one per hash
-// slot, the tag first so a prefix can't move it). A lineage belongs to a key
+// Redis Cluster, "<prefix>.lineage.state.{<slot tag>}" in Redis Cluster (one per hash
+// slot). The prefix comes first, as in every other key, so an ACL user limited
+// to the prefix's keys may use it. A prefix with a "{" would move the hash tag:
+// its keys are "{<slot tag>}.<prefix>.lineage.state" instead. A lineage belongs to a key
 // prefix - a deployment, or a broker of one: deployments sharing a Redis server
 // detect lineage breaks independently and never adopt each other's metas.
 // It is a hash: "t" the token value ("token", or "token|ancestor" for a slot
@@ -575,16 +577,21 @@ func (l *redisLineage) helloKind(ctx context.Context) (redisServerKind, error) {
 
 // infoCheck runs a script calling INFO (not cached). redisErr tells that the
 // server refused it (an ACL refusal, for example) rather than failing to answer.
+//
+// It is sent with EVAL: a script made with rueidis.NewLuaScript would compute
+// its SHA-1 here, which panics in FIPS-only mode.
 func (l *redisLineage) infoCheck(ctx context.Context) (allowed bool, redisErr bool, err error) {
-	probe := rueidis.NewLuaScript(`local i = redis.call("info", "replication"); return string.match(i, "master_replid:(%w+)") or ""`,
-		rueidis.WithLoadSHA1(l.loadSHA1))
-	res, err := probe.Exec(ctx, l.shard.client, []string{l.anyTokenKey()}, nil).ToString()
+	c := l.shard.client
+	res, err := c.Do(ctx, c.B().Eval().Script(lineageInfoCheckScript).Numkeys(1).Key(l.anyTokenKey()).Build()).ToString()
 	if err != nil {
 		_, redisErr = rueidis.IsRedisErr(err)
 		return false, redisErr, err
 	}
 	return res != "", false, nil
 }
+
+// lineageInfoCheckScript reads master_replid with INFO from a script.
+const lineageInfoCheckScript = `local i = redis.call("info", "replication"); return string.match(i, "master_replid:(%w+)") or ""`
 
 // probeInfo checks once whether scripts may call INFO.
 func (l *redisLineage) probeInfo(ctx context.Context) bool {
@@ -1259,7 +1266,11 @@ func lineageKeyForSlot(prefix string, slot int) string {
 			}
 		}
 	})
-	return "{" + lineageSlotTags[slot] + "}." + prefix + lineageKeySuffix
+	if strings.IndexByte(prefix, '{') >= 0 {
+		// The prefix would hold the hash tag: the slot's tag goes first.
+		return "{" + lineageSlotTags[slot] + "}." + prefix + lineageKeySuffix
+	}
+	return prefix + lineageKeySuffix + ".{" + lineageSlotTags[slot] + "}"
 }
 
 // redisKeySlot returns the hash slot of a key, honouring hash tags.

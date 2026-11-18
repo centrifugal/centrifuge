@@ -297,7 +297,7 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 		resetLostScript:   rueidis.NewLuaScript(resetLostMapStreamSource, rueidis.WithLoadSHA1(conf.LoadSHA1)),
 	}
 	for _, sw := range e.shards {
-		sw.shard.ensureLineage()
+		sw.shard.ensureLineage(n)
 	}
 	if conf.DetectPotentialLostWrites {
 		e.watermarks = newOffsetWatermarks()
@@ -759,7 +759,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 	replies, err := e.execLineage(ctx, s.shard, e.addScript,
 		[]string{
 			streamKey, metaKey, resultKey, stateHashKey, stateOrderKey, stateExpireKey,
-			stateMetaKey, cleanupRegKey, e.lin(s.shard).tokenKey(e.metaKey(s.shard, ch)),
+			stateMetaKey, cleanupRegKey, e.lineageKey(s.shard, e.metaKey(s.shard, ch)),
 		},
 		[]string{
 			key,                                // message_key
@@ -933,7 +933,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 			stateExpireKey,
 			stateMetaKey,
 			cleanupRegKey,
-			e.lin(s.shard).tokenKey(e.metaKey(s.shard, ch)),
+			e.lineageKey(s.shard, e.metaKey(s.shard, ch)),
 		},
 		[]string{
 			key,                             // message_key
@@ -1154,7 +1154,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 			e.stateExpireKey(s.shard, ch),
 			e.metaKey(s.shard, ch),
 			e.stateMetaKey(s.shard, ch),
-			e.lin(s.shard).tokenKey(e.metaKey(s.shard, ch)),
+			e.lineageKey(s.shard, e.metaKey(s.shard, ch)),
 			e.streamKey(s.shard, ch),
 		},
 		[]string{
@@ -1412,7 +1412,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 			e.stateExpireKey(s.shard, ch),
 			e.metaKey(s.shard, ch),
 			e.stateMetaKey(s.shard, ch),
-			e.lin(s.shard).tokenKey(e.metaKey(s.shard, ch)),
+			e.lineageKey(s.shard, e.metaKey(s.shard, ch)),
 			e.streamKey(s.shard, ch),
 		},
 		[]string{
@@ -2014,7 +2014,7 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 	}
 
 	replies, err := e.execLineage(ctx, s.shard, e.readStreamScript,
-		[]string{e.streamKey(s.shard, ch), e.metaKey(s.shard, ch), e.stateMetaKey(s.shard, ch), e.lin(s.shard).tokenKey(e.metaKey(s.shard, ch))},
+		[]string{e.streamKey(s.shard, ch), e.metaKey(s.shard, ch), e.stateMetaKey(s.shard, ch), e.lineageKey(s.shard, e.metaKey(s.shard, ch))},
 		[]string{
 			includePubsStr,
 			offset,
@@ -2170,7 +2170,7 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 
 	// 2. Call 1: Get metadata using new simpler Lua script
 	metaReplies, err := e.execLineage(ctx, s.shard, e.readMetaScript,
-		[]string{e.metaKey(s.shard, ch), e.streamKey(s.shard, ch), e.stateMetaKey(s.shard, ch), e.lin(s.shard).tokenKey(e.metaKey(s.shard, ch))},
+		[]string{e.metaKey(s.shard, ch), e.streamKey(s.shard, ch), e.stateMetaKey(s.shard, ch), e.lineageKey(s.shard, e.metaKey(s.shard, ch))},
 		[]string{metaExpire, e.node.ID()},
 	).ToArray()
 	if err != nil {
@@ -2836,14 +2836,14 @@ func (e *RedisMapBroker) batchRemoveExpired(ctx context.Context, shard *RedisSha
 
 	result, err := e.execLineage(ctx, shard, e.batchRemoveScript,
 		[]string{
-			e.stateHashKey(shard, ch),                   // KEYS[1]
-			e.stateExpireKey(shard, ch),                 // KEYS[2]
-			e.streamKey(shard, ch),                      // KEYS[3]
-			e.metaKey(shard, ch),                        // KEYS[4]
-			cleanupKey,                                  // KEYS[5]
-			e.stateOrderKey(shard, ch),                  // KEYS[6]
-			e.stateMetaKey(shard, ch),                   // KEYS[7]
-			e.lin(shard).tokenKey(e.metaKey(shard, ch)), // KEYS[8]
+			e.stateHashKey(shard, ch),                 // KEYS[1]
+			e.stateExpireKey(shard, ch),               // KEYS[2]
+			e.streamKey(shard, ch),                    // KEYS[3]
+			e.metaKey(shard, ch),                      // KEYS[4]
+			cleanupKey,                                // KEYS[5]
+			e.stateOrderKey(shard, ch),                // KEYS[6]
+			e.stateMetaKey(shard, ch),                 // KEYS[7]
+			e.lineageKey(shard, e.metaKey(shard, ch)), // KEYS[8]
 		},
 		argv,
 	).ToArray()
@@ -3554,6 +3554,15 @@ func (e *RedisMapBroker) checkReusedOffset(c *watermarkCheck) {
 		e.resetLostStream(c.ch, c.epoch, c.got)
 		e.node.resyncLocalSubscribers(c.ch)
 	}
+}
+
+// lineageKey returns the key a map meta script gets as its lineage key (see
+// RedisBroker.lineageKey).
+func (e *RedisMapBroker) lineageKey(s *RedisShard, metaKey string) string {
+	if !e.conf.DetectPotentialLostWrites {
+		return metaKey
+	}
+	return e.lin(s).tokenKey(metaKey)
 }
 
 // lin returns the broker's lineage on a shard (see redis_lineage.go).

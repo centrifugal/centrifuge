@@ -115,6 +115,9 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 	if config.Prefix == "" {
 		config.Prefix = "centrifuge"
 	}
+	for _, s := range config.Shards {
+		s.ensureLineage(n)
+	}
 
 	if config.PresenceTTL == 0 {
 		config.PresenceTTL = 60 * time.Second

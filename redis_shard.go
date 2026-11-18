@@ -55,6 +55,8 @@ type RedisShard struct {
 	lineages   map[string]*redisLineage
 	// conns are the connections the client dialed.
 	conns *redisConnSet
+	// logNode logs READONLY reconnects (see ensureLineage).
+	logNode *Node
 }
 
 // lineageFor returns the lineage of a key prefix on the shard.
@@ -78,10 +80,16 @@ func (s *RedisShard) lineageFor(prefix string) *redisLineage {
 	return l
 }
 
-// ensureLineage gives a shard not made by NewRedisShard what lineages need.
-func (s *RedisShard) ensureLineage() {
+// ensureLineage gives a shard not made by NewRedisShard what lineages need,
+// and the node whose logger tells about READONLY reconnects (the first one).
+func (s *RedisShard) ensureLineage(n *Node) {
+	s.lineagesMu.Lock()
+	defer s.lineagesMu.Unlock()
 	if s.conns == nil {
 		s.conns = &redisConnSet{conns: map[*trackedConn]struct{}{}}
+	}
+	if s.logNode == nil {
+		s.logNode = n
 	}
 }
 
@@ -147,13 +155,14 @@ func (s *RedisShard) noteError(err error) {
 	if err == nil || s.isCluster || !isReadOnly(err) {
 		return
 	}
-	if s.conns.dropAll() {
-		s.lineagesMu.RLock()
-		for _, l := range s.lineages {
-			l.log(LogLevelWarn, "redis: READONLY reply, the server was demoted; reconnecting", map[string]any{"address": s.string()})
-			break
-		}
-		s.lineagesMu.RUnlock()
+	s.lineagesMu.RLock()
+	conns, n := s.conns, s.logNode
+	s.lineagesMu.RUnlock()
+	if conns == nil || !conns.dropAll() {
+		return
+	}
+	if n != nil && n.logEnabled(LogLevelWarn) {
+		n.logger.log(newLogEntry(LogLevelWarn, "redis: READONLY reply, the server was demoted; reconnecting", map[string]any{"address": s.string()}))
 	}
 }
 

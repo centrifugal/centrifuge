@@ -363,7 +363,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		closeCh:                 make(chan struct{}),
 	}
 	for _, sw := range b.shards {
-		sw.shard.ensureLineage()
+		sw.shard.ensureLineage(n)
 	}
 	if config.DetectPotentialLostWrites && !config.UseLists {
 		b.watermarks = newOffsetWatermarks()
@@ -1019,7 +1019,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 			[]string{string(streamKey), string(historyMetaKey), string(resultKey)}, addArgs).ToArray()
 	} else {
 		replies, err = b.execLineageScript(context.Background(), s.shard, b.addHistoryStreamScript,
-			[]string{string(streamKey), string(historyMetaKey), string(resultKey), b.lin(s.shard).tokenKey(string(historyMetaKey))},
+			[]string{string(streamKey), string(historyMetaKey), string(resultKey), b.lineageKey(s.shard, string(historyMetaKey))},
 			addArgs).ToArray()
 	}
 	if err != nil {
@@ -1833,7 +1833,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOption
 	historyMetaTTLSeconds := int(historyMetaTTL.Seconds())
 
 	replies, err := b.execLineageScript(context.Background(), s, b.historyStreamScript,
-		[]string{string(historyKey), string(historyMetaKey), b.lin(s).tokenKey(string(historyMetaKey))},
+		[]string{string(historyKey), string(historyMetaKey), b.lineageKey(s, string(historyMetaKey))},
 		[]string{includePubs, strconv.FormatUint(offset, 10), strconv.Itoa(limit), reverse, strconv.Itoa(historyMetaTTLSeconds), epoch.Generate()}).ToArray()
 	if err != nil {
 		return nil, StreamPosition{}, err
@@ -2308,6 +2308,17 @@ func (b *RedisBroker) checkReusedOffset(c *watermarkCheck) {
 		b.resetLostStream(c.ch, c.epoch, c.got)
 		b.node.resyncLocalSubscribers(c.ch)
 	}
+}
+
+// lineageKey returns the key a meta script gets as its lineage key. Without
+// detection the scripts never read it, and it is the meta key itself: every
+// key a script gets is checked against the ACL user's key patterns, so the
+// scripts get the same keys as before the lineage existed.
+func (b *RedisBroker) lineageKey(s *RedisShard, metaKey string) string {
+	if !b.config.DetectPotentialLostWrites {
+		return metaKey
+	}
+	return b.lin(s).tokenKey(metaKey)
 }
 
 // lin returns the broker's lineage on a shard (see redis_lineage.go).

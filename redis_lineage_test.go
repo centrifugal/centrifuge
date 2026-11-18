@@ -5,6 +5,7 @@ import (
 	"crypto/fips140"
 	dto "github.com/prometheus/client_model/go"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,14 +72,18 @@ func TestParseMyselfSlots(t *testing.T) {
 }
 
 func TestLineageTokenKeyForSlot(t *testing.T) {
-	seen := map[string]struct{}{}
-	for slot := 0; slot < 16384; slot++ {
-		key := lineageKeyForSlot("pre{fix}", slot)
-		require.Equal(t, uint16(slot), redisKeySlot(key), "token key must live in its slot")
-		_, dup := seen[key]
-		require.False(t, dup)
-		seen[key] = struct{}{}
+	for _, prefix := range []string{"centrifugo", "pre{fix}", "pre{"} {
+		seen := map[string]struct{}{}
+		for slot := 0; slot < 16384; slot++ {
+			key := lineageKeyForSlot(prefix, slot)
+			require.Equal(t, uint16(slot), redisKeySlot(key), "token key must live in its slot")
+			_, dup := seen[key]
+			require.False(t, dup)
+			seen[key] = struct{}{}
+		}
 	}
+	// The prefix comes first, so an ACL user limited to it may use the key.
+	require.True(t, strings.HasPrefix(lineageKeyForSlot("centrifugo", 0), "centrifugo.lineage.state.{"))
 }
 
 func TestRedisKeySlot(t *testing.T) {
