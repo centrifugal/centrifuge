@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -4641,4 +4642,85 @@ func TestRedisMapBroker_CleanupDropsOtherLayoutRegistration(t *testing.T) {
 
 	_, err = shard.client.Do(ctx, shard.client.B().Zscore().Key(staleKey).Member(ch).Build()).AsFloat64()
 	require.True(t, rueidis.IsRedisNil(err), "registration under the other layout kept")
+}
+
+// An ACL user limited to the keys of the prefix can publish to and remove
+// from maps: every key a script gets is checked against the user's key
+// patterns, including the ones the script doesn't use.
+func TestRedisMapBroker_ACLUserLimitedToPrefix(t *testing.T) {
+	for _, v := range mapBrokerVariants {
+		t.Run(v.Name, func(t *testing.T) {
+			conf := testSingleRedisConf(6379)
+			if v.UseCluster {
+				conf = RedisShardConfig{
+					ClusterAddresses: []string{"127.0.0.1:7001", "127.0.0.1:7002", "127.0.0.1:7003"},
+					IOTimeout:        10 * time.Second,
+					ConnectTimeout:   10 * time.Second,
+				}
+			}
+			testMapBrokerACLUserLimitedToPrefix(t, conf)
+		})
+	}
+}
+
+func testMapBrokerACLUserLimitedToPrefix(t *testing.T, conf RedisShardConfig) {
+	ctx := context.Background()
+	prefix := "acl_" + randString(8)
+	user, password := "acl_"+randString(8), randString(16)
+
+	admin, err := NewRedisShard(nil, conf)
+	require.NoError(t, err)
+	var nodes []rueidis.Client
+	if admin.isCluster {
+		for _, c := range admin.client.Nodes() {
+			nodes = append(nodes, c)
+		}
+	} else {
+		nodes = []rueidis.Client{admin.client}
+	}
+	for _, c := range nodes {
+		require.NoError(t, c.Do(ctx, c.B().AclSetuser().Username(user).Rule(
+			"on", ">"+password, "~"+prefix+"*", "&*", "+@all").Build()).Error())
+	}
+	t.Cleanup(func() {
+		for _, c := range nodes {
+			_ = c.Do(ctx, c.B().AclDeluser().Username(user).Build()).Error()
+		}
+		admin.Close()
+	})
+
+	node, err := New(Config{})
+	require.NoError(t, err)
+	node.config.Map.GetMapChannelOptions = func(channel string) MapChannelOptions {
+		if strings.HasPrefix(channel, "ephemeral") {
+			return MapChannelOptions{Mode: MapModeEphemeral, KeyTTL: time.Minute}
+		}
+		return MapChannelOptions{Mode: MapModeRecoverable, StreamSize: 100, StreamTTL: time.Minute, MetaTTL: time.Hour, KeyTTL: time.Minute}
+	}
+	conf.AuthCredentialsFn = nil
+	conf.User, conf.Password = user, password
+	shard, err := NewRedisShard(node, conf)
+	require.NoError(t, err)
+	brokerConf := RedisMapBrokerConfig{Prefix: prefix, Shards: []*RedisShard{shard}}
+	if shard.isCluster {
+		brokerConf.NumShardedPubSubPartitions = 1
+	}
+	broker, err := NewRedisMapBroker(node, brokerConf)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+		shard.Close()
+	})
+
+	for _, ch := range []string{randomChannel("recoverable"), randomChannel("ephemeral")} {
+		_, err = broker.Publish(ctx, ch, "a", MapPublishOptions{Data: []byte("1")})
+		require.NoError(t, err)
+		_, err = broker.Publish(ctx, ch, "b", MapPublishOptions{Data: []byte("2"), IdempotencyKey: "idem_" + randString(6)})
+		require.NoError(t, err)
+		_, err = broker.Remove(ctx, ch, "a", MapRemoveOptions{})
+		require.NoError(t, err)
+		state, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+		require.NoError(t, err)
+		require.Equal(t, map[string][]byte{"b": []byte("2")}, stateToMap(state.Publications))
+	}
 }

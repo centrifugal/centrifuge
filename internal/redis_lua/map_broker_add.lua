@@ -46,7 +46,7 @@ Publishing format (via PUBLISH/SPUBLISH):
 -- ARGV[20] = expected_offset (for CAS, empty '' to disable)
 -- ARGV[21] = expected_epoch (for CAS, empty '' to disable)
 -- ARGV[22] = state_payload (for state storage, empty '' to use message_payload)
--- ARGV[23] = nil_key (slot-aligned placeholder for unused KEYS in cluster mode, empty '' to disable)
+-- ARGV[23] = nil_key (placeholder for unused KEYS: slot-aligned, under the key prefix; empty '' to disable)
 -- ARGV[24] = version_field (pre-computed "v:KEY" for per-key version, empty '' to disable)
 -- ARGV[25] = version_epoch_field (pre-computed "ve:KEY" for per-key version epoch, empty '' to disable)
 -- ARGV[26] = now (current time in milliseconds, from Go)
