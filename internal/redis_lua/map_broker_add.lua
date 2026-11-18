@@ -361,10 +361,9 @@ if meta_key ~= '' then
     top_offset = redis.call("hincrby", meta_key, "s", 1)
     write_obs = lineage_map_count(meta_key, token_key)
 
-    -- Set meta TTL if needed
-    if meta_expire ~= '0' then
-        redis.call("pexpire", meta_key, meta_expire)
-    end
+    -- Set meta TTL if needed. ARGV[28]: the empty meta TTL, so a meta made
+    -- short-lived while empty is made permanent again.
+    map_meta_expire(meta_key, meta_expire, ARGV[28] or "0", false, top_offset)
 
     -- Update per-key version tracking in state_meta_key (tied to state lifecycle)
     if version ~= "0" and version_field ~= "" and state_meta_key ~= "" then

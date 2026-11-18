@@ -20,6 +20,8 @@ local limit = ARGV[3]
 local reverse = ARGV[4]
 local meta_expire = ARGV[5]
 local new_epoch_if_empty = ARGV[6]
+local empty_expire = ARGV[7] or "0"
+local below_half = ARGV[8] == "1"
 
 -- Get or create meta
 local current_epoch, dropped = lineage_map_meta(meta_key, stream_key, token, ancestor)
@@ -41,9 +43,7 @@ if top_offset == false then
     top_offset = 0
 end
 
-if meta_expire ~= '0' then
-    redis.call("pexpire", meta_key, meta_expire)
-end
+map_meta_expire(meta_key, meta_expire, empty_expire, below_half, top_offset)
 
 local pubs = {}
 
