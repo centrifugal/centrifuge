@@ -338,6 +338,23 @@ func runPubSubLoop(
 	})
 
 	var err error
+	if useShardedPubSub && shard.isCluster && !subscribeOnReplica {
+		// Make sure the connection is to the primary serving the partition's
+		// slot before subscribing. After a failover the client's slot map may
+		// still point at the demoted primary: a replica accepts SSUBSCRIBE
+		// without MOVED, so the subscription would succeed on a node that is
+		// about to leave (a managed service replacing nodes in maintenance)
+		// and receive nothing until the liveness probe gives up. A keyed
+		// command in the slot answers MOVED there instead, which refreshes
+		// the slot map, and the loop retries on the primary. The key is the
+		// shard channel's name: same slot, under the prefix, never set.
+		if err = conn.Do(context.Background(), conn.B().Exists().Key(shardChannel).Build()).Error(); err != nil {
+			startOnce(err)
+			psm.incErrors(name, "subscribe_shard_channel")
+			node.logger.log(newErrorLogEntry(err, "pub/sub subscribe error", logFields))
+			return
+		}
+	}
 	if useShardedPubSub {
 		err = conn.Do(context.Background(), conn.B().Ssubscribe().Channel(shardChannel).Build()).Error()
 	} else {
