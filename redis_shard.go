@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -393,7 +394,7 @@ func redisClientOptions(conf RedisShardConfig) (options rueidis.ClientOption, is
 
 	if len(conf.SentinelAddresses) > 0 {
 		isSentinel = true
-		options.InitAddress = conf.SentinelAddresses
+		options.InitAddress = slices.Clone(conf.SentinelAddresses)
 		options.Sentinel = rueidis.SentinelOption{
 			TLSConfig:  conf.SentinelTLSConfig,
 			MasterSet:  conf.SentinelMasterName,
@@ -403,7 +404,7 @@ func redisClientOptions(conf RedisShardConfig) (options rueidis.ClientOption, is
 		}
 	} else if len(conf.ClusterAddresses) > 0 {
 		isCluster = true
-		options.InitAddress = conf.ClusterAddresses
+		options.InitAddress = slices.Clone(conf.ClusterAddresses)
 	} else {
 		addressOpts, err := optionsFromAddress(conf.Address, options)
 		if err != nil {
@@ -466,6 +467,9 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		return conns.add(conn), nil
 	}
 
+	// rueidis.NewClient shuffles options.InitAddress in place: a copy of the
+	// configured addresses, so shards made from one configuration don't
+	// reorder each other's addresses while they are read (see string).
 	client, err := rueidis.NewClient(options)
 	if err != nil {
 		return nil, fmt.Errorf("error creating Redis client: %v", err)
@@ -484,7 +488,7 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		isCluster:    isCluster,
 		isSentinel:   isSentinel,
 		closeCh:      make(chan struct{}),
-		finalAddress: options.InitAddress,
+		finalAddress: slices.Clone(options.InitAddress),
 	}
 
 	shard.client = client

@@ -691,3 +691,32 @@ func testLineageACLUserLimitedToPrefix(t *testing.T, tt lineageRedisTest, detect
 	require.NoError(t, err)
 	require.Equal(t, state.Position, stream.Position)
 }
+
+// A server's first lineage (no lineage key yet) is no detection: nothing
+// that could have lost writes happened, so it isn't counted and logged as one.
+func TestRedisLineage_FirstUseIsNotADetection(t *testing.T) {
+	b := newLineageTestBroker(t, lineageRedisTests[0], false)
+	m := b.node.metrics
+	before := counterValue(t, m.redisPotentialLostWritesDetections.WithLabelValues(b.config.Name, "restart_or_failover"))
+	lineagePublish(t, b, "lineage_first_"+randString(6), 1)
+	require.Equal(t, before, counterValue(t, m.redisPotentialLostWritesDetections.WithLabelValues(b.config.Name, "restart_or_failover")))
+
+	// A restart afterwards is one.
+	flushScripts(t, b.shards[0].shard)
+	lineagePublish(t, b, "lineage_first_"+randString(6), 1)
+	require.Equal(t, before+1, counterValue(t, m.redisPotentialLostWritesDetections.WithLabelValues(b.config.Name, "restart_or_failover")))
+}
+
+// A shard keeps its own copy of the configured addresses: the client
+// shuffles the addresses it gets in place, and shards made from one
+// configuration read theirs concurrently (the startup report).
+func TestRedisShard_ConfiguredAddressesUntouched(t *testing.T) {
+	addrs := []string{"127.0.0.1:7001", "127.0.0.1:7002", "127.0.0.1:7003"}
+	conf := RedisShardConfig{ClusterAddresses: addrs, IOTimeout: 10 * time.Second}
+	for i := 0; i < 20; i++ {
+		s, err := NewRedisShard(nil, conf)
+		require.NoError(t, err)
+		s.Close()
+	}
+	require.Equal(t, []string{"127.0.0.1:7001", "127.0.0.1:7002", "127.0.0.1:7003"}, addrs)
+}
