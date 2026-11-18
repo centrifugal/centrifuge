@@ -37,6 +37,9 @@ func TestParseHelloReply(t *testing.T) {
 		{"redis 6", helloMap("server", "redis", "version", "6.2.24", "role", "master"), false, true},
 		{"dragonfly", helloMap("server", "redis", "version", "7.4.0", "dragonfly_version", "df-v1.40.1", "role", "master"), false, true},
 		{"unknown server", helloMap("server", "keydb", "version", "8.0.0"), false, false},
+		{"connection id", helloMap("server", "redis", "version", "7.2.4", "role", "master", "id", "42"), true, true},
+		// ElastiCache Serverless: a proxy keeping scripts itself.
+		{"proxy without a connection id", helloMap("server", "redis", "version", "7.2", "role", "master", "id", "-1"), false, true},
 		{"no version", helloMap("server", "redis"), false, false},
 	}
 	for _, tc := range cases {
@@ -44,6 +47,7 @@ func TestParseHelloReply(t *testing.T) {
 			k := parseHelloReply(tc.hello)
 			require.Equal(t, tc.gateCapable, k.gateCapable)
 			require.Equal(t, tc.primary, k.primary)
+			require.Equal(t, tc.hello["id"] == "-1", k.proxy)
 		})
 	}
 }

@@ -383,17 +383,23 @@ func sha1Hex(src string) string {
 
 // redisServerKind is what the server answered to HELLO.
 type redisServerKind struct {
-	gateCapable bool   // Redis 7+ or Valkey, not Dragonfly
+	gateCapable bool   // Redis 7+ or Valkey, not Dragonfly, not behind a proxy
 	primary     bool   // HELLO role is master
+	proxy       bool   // HELLO gives no connection id: a proxy answers
 	desc        string // for logs
+	// helloErr is the server's refusal of HELLO (a server or a proxy without
+	// it): no assumption about its script cache.
+	helloErr string
 }
 
-// helloFields keeps the string fields of a HELLO reply.
+// helloFields keeps the string and integer fields of a HELLO reply.
 func helloFields(m map[string]rueidis.RedisMessage) map[string]string {
 	fields := make(map[string]string, len(m))
 	for k, v := range m {
 		if str, err := v.ToString(); err == nil {
 			fields[k] = str
+		} else if n, err := v.AsInt64(); err == nil {
+			fields[k] = strconv.FormatInt(n, 10)
 		}
 	}
 	return fields
@@ -413,6 +419,14 @@ func parseHelloReply(fields map[string]string) redisServerKind {
 		major, _ = strconv.Atoi(version[:dot])
 	} else {
 		major, _ = strconv.Atoi(version)
+	}
+	if id, ok := fields["id"]; ok {
+		if n, err := strconv.ParseInt(id, 10, 64); err != nil || n <= 0 {
+			// A server gives every connection an id: a proxy without one
+			// (ElastiCache Serverless answers -1) keeps scripts itself, and a
+			// script missing behind it shows nothing about the servers.
+			return redisServerKind{primary: primary, proxy: true, desc: desc}
+		}
 	}
 	switch server {
 	case "redis", "valkey":
@@ -566,10 +580,29 @@ func (l *redisLineage) serverKind(ctx context.Context) (redisServerKind, error) 
 	return l.kind, nil
 }
 
-// helloKind asks the server what it is with HELLO (not cached).
+// helloKind asks the server what it is with HELLO (not cached), on a
+// connection to the primary serving the lineage key: in Redis Cluster a
+// keyless command may go to a replica. A server refusing HELLO (Redis before
+// 6, some proxies) is a kind without the gate, not an error.
 func (l *redisLineage) helloKind(ctx context.Context) (redisServerKind, error) {
-	m, err := l.shard.client.Do(ctx, l.shard.client.B().Hello().Build()).AsMap()
+	var m map[string]rueidis.RedisMessage
+	var helloErr error
+	err := l.shard.client.Dedicated(func(c rueidis.DedicatedClient) error {
+		// The first command is keyed: it binds the connection to the primary
+		// serving the key.
+		if err := c.Do(ctx, c.B().Exists().Key(l.anyTokenKey()).Build()).Error(); err != nil {
+			return err
+		}
+		m, helloErr = c.Do(ctx, c.B().Hello().Build()).AsMap()
+		return nil
+	})
+	if err == nil {
+		err = helloErr
+	}
 	if err != nil {
+		if re, ok := rueidis.IsRedisErr(err); ok && !isReadOnly(re) {
+			return redisServerKind{desc: "a server refusing HELLO", helloErr: re.Error()}, nil
+		}
 		return redisServerKind{}, fmt.Errorf("lineage: HELLO: %w", err)
 	}
 	return parseHelloReply(helloFields(m)), nil
@@ -867,6 +900,7 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 	var (
 		rotated      bool
 		staleSeen    bool
+		firstSeen    bool // the server had no lineage yet
 		adoptedValue string
 		newToken     string
 		slots        []int
@@ -979,6 +1013,7 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 			} else {
 				rotated = true
 				staleSeen = stale
+				firstSeen = current == "" && !force
 				if current != "" {
 					left.add(current)
 				}
@@ -1024,6 +1059,17 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 			l.stats.stale++
 		}
 		l.stats.mu.Unlock()
+		if firstSeen {
+			// No lineage key: the server's first use, or the key was flushed,
+			// evicted or lost in a restart without persistence. Whatever
+			// removed it removed the metas too, or left metas whose stamp no
+			// longer matches any token and so start new epochs: no write can
+			// be lost unseen, and it isn't a detection.
+			l.log(LogLevelInfo, "redis lineage: the server has no lineage yet (first use, or its lineage key was flushed or evicted), new lineage token", map[string]any{
+				"slots": len(slots), "broker_name": l.brokerNameOf(ctx),
+			})
+			return nil
+		}
 		switch {
 		case staleSeen:
 			l.countDetection(ctx, "stale_copy")
@@ -1722,7 +1768,12 @@ func (l *redisLineage) scriptCacheSupport(ctx context.Context, kind redisServerK
 		return []string{"HELLO failed: " + kindErr.Error()}
 	}
 	var reasons []string
-	if !kind.gateCapable {
+	switch {
+	case kind.helloErr != "":
+		reasons = append(reasons, "HELLO failed: "+kind.helloErr)
+	case kind.proxy:
+		reasons = append(reasons, "a proxy answers (HELLO gives no connection id): it keeps scripts itself, so its script cache can't show a failover or a restart behind it")
+	case !kind.gateCapable:
 		reasons = append(reasons, kind.desc+" is not Redis 7+ or Valkey: its script cache can't show a failover or a restart")
 	}
 	if !kind.primary {
