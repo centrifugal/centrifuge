@@ -639,7 +639,7 @@ func (l *redisLineage) probeInfo(ctx context.Context) bool {
 			// A Redis error (an ACL refusal, for example): INFO isn't allowed.
 			l.infoProbed = true
 			l.infoAllowed = false
-			l.log(LogLevelWarn, "redis lineage: PotentialLostWritesUseInfo is on but scripts can't call INFO (the ACL user needs the @dangerous category)", map[string]any{"error": err.Error()})
+			l.log(LogLevelWarn, "redis lineage: PotentialLostWritesUseInfo is on but "+infoRefusal(err), nil)
 		}
 		return false
 	}
@@ -1800,11 +1800,21 @@ func (l *redisLineage) scriptCacheSupport(ctx context.Context, kind redisServerK
 
 // infoSupport returns why this server can't run detection with INFO (none
 // when it can), from a harmless script reading INFO replication.
+// infoRefusal tells why scripts can't call INFO: the ACL user's permissions
+// (NOPERM), or the server refusing INFO from scripts for everyone (ElastiCache
+// Serverless).
+func infoRefusal(err error) string {
+	if strings.HasPrefix(err.Error(), "NOPERM") {
+		return "scripts can't call INFO (the ACL user needs the @dangerous category): " + err.Error()
+	}
+	return "the server doesn't let scripts call INFO: " + err.Error()
+}
+
 func (l *redisLineage) infoSupport(ctx context.Context) []string {
 	allowed, redisErr, err := l.infoCheck(ctx)
 	switch {
 	case err != nil && redisErr:
-		return []string{"scripts can't call INFO (the ACL user needs the @dangerous category): " + err.Error()}
+		return []string{infoRefusal(err)}
 	case err != nil:
 		return []string{"the INFO check failed: " + err.Error()}
 	case !allowed:

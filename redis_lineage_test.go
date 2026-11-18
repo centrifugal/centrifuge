@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"context"
 	"crypto/fips140"
+	"errors"
 	dto "github.com/prometheus/client_model/go"
 	"strconv"
 	"strings"
@@ -269,4 +270,12 @@ func TestLineageBrokerName(t *testing.T) {
 	require.Equal(t, "first", l.brokerNameOf(context.Background()))
 	require.Equal(t, "maps", l.brokerNameOf(withLineageBroker(context.Background(), "maps")))
 	require.Equal(t, "", l.brokerNameOf(withLineageBroker(context.Background(), "")), "an unnamed broker stays unnamed")
+}
+
+func TestInfoRefusal(t *testing.T) {
+	require.Contains(t, infoRefusal(errors.New("NOPERM User x has no permissions to run the 'info' command")), "@dangerous")
+	// ElastiCache Serverless refuses INFO from scripts for every user.
+	msg := infoRefusal(errors.New("ERR This Valkey command is not allowed from script"))
+	require.NotContains(t, msg, "ACL")
+	require.Contains(t, msg, "doesn't let scripts call INFO")
 }
