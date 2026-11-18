@@ -691,37 +691,36 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		expectedEpoch = opts.ExpectedPosition.Epoch
 	}
 
-	// In Redis Cluster, all KEYS in a Lua script must hash to the same slot. Empty string
-	// keys hash to slot 0, which differs from the hash-tagged real keys. Compute a slot-
-	// aligned nil key placeholder and substitute it for any empty KEYS. The Lua script
-	// converts these back to '' using ARGV[23].
-	nilKey := ""
-	if s.shard.isCluster {
-		nilKey = e.buildKey(s.shard, ch, ":nil:")
-		if streamKey == "" {
-			streamKey = nilKey
-		}
-		if metaKey == "" {
-			metaKey = nilKey
-		}
-		if resultKey == "" {
-			resultKey = nilKey
-		}
-		if stateHashKey == "" {
-			stateHashKey = nilKey
-		}
-		if stateOrderKey == "" {
-			stateOrderKey = nilKey
-		}
-		if stateExpireKey == "" {
-			stateExpireKey = nilKey
-		}
-		if stateMetaKey == "" {
-			stateMetaKey = nilKey
-		}
-		if cleanupRegKey == "" {
-			cleanupRegKey = nilKey
-		}
+	// Unused KEYS get a placeholder, which the Lua script converts back to ''
+	// using ARGV[23]. In Redis Cluster all KEYS of a script must hash to the
+	// same slot, and an empty key hashes to slot 0, not to the hash-tagged real
+	// keys' slot. And every key a script gets is checked against the ACL user's
+	// key patterns: an empty key doesn't match a pattern on the prefix, the
+	// placeholder starts with the prefix like every other key.
+	nilKey := e.buildKey(s.shard, ch, ":nil:")
+	if streamKey == "" {
+		streamKey = nilKey
+	}
+	if metaKey == "" {
+		metaKey = nilKey
+	}
+	if resultKey == "" {
+		resultKey = nilKey
+	}
+	if stateHashKey == "" {
+		stateHashKey = nilKey
+	}
+	if stateOrderKey == "" {
+		stateOrderKey = nilKey
+	}
+	if stateExpireKey == "" {
+		stateExpireKey = nilKey
+	}
+	if stateMetaKey == "" {
+		stateMetaKey = nilKey
+	}
+	if cleanupRegKey == "" {
+		cleanupRegKey = nilKey
 	}
 
 	// Pre-compute per-key version field names for Lua.
@@ -861,9 +860,9 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 		expectedEpoch = opts.ExpectedPosition.Epoch
 	}
 
-	// Compute slot-aligned nil key for unused KEYS in cluster mode (see Publish for details).
-	nilKey := ""
-	stateOrderKey := ""
+	// A placeholder for unused KEYS (see Publish for details).
+	nilKey := e.buildKey(s.shard, ch, ":nil:")
+	stateOrderKey := nilKey
 	// Removing a key must move the channel's cleanup registration to the next
 	// expiry, or drop it with the last key: a registration left behind points
 	// the cleanup worker at entries that are gone.
@@ -873,24 +872,20 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 		cleanupRegKey = e.cleanupRegistrationKeyForChannel(s.shard, ch)
 		channelForCleanup = ch
 	}
-	if s.shard.isCluster {
-		nilKey = e.buildKey(s.shard, ch, ":nil:")
-		if resultKey == "" {
-			resultKey = nilKey
-		}
-		stateOrderKey = nilKey
-		if cleanupRegKey == "" {
-			cleanupRegKey = nilKey
-		}
-		if streamKey == "" {
-			streamKey = nilKey
-		}
-		if metaKey == "" {
-			metaKey = nilKey
-		}
-		if stateMetaKey == "" {
-			stateMetaKey = nilKey
-		}
+	if resultKey == "" {
+		resultKey = nilKey
+	}
+	if cleanupRegKey == "" {
+		cleanupRegKey = nilKey
+	}
+	if streamKey == "" {
+		streamKey = nilKey
+	}
+	if metaKey == "" {
+		metaKey = nilKey
+	}
+	if stateMetaKey == "" {
+		stateMetaKey = nilKey
 	}
 
 	// Pre-compute per-key version field names for cleanup on remove.
