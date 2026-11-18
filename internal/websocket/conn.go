@@ -90,6 +90,28 @@ var ErrCloseSent = errors.New("websocket: close sent")
 // read limit set for the connection.
 var ErrReadLimit = errors.New("websocket: read limit exceeded")
 
+// ErrTooManyPings is returned when reading from a connection whose peer sent
+// pings faster than pingRate allows. See pingAllowed.
+var ErrTooManyPings = errors.New("websocket: too many pings")
+
+// A peer may send pingBurst pings at once and pingRate per second after that.
+//
+// Each ping costs a pong write, so an unbounded peer turns a few bytes of its
+// own - pings written thousands to a syscall - into a write per ping on the
+// server: a handful of connections can keep every core busy. Nothing else
+// bounds pings, as they never reach the application. The bound is far above
+// what keepalive needs: clients and proxies ping every few seconds at most.
+const (
+	pingBurst = 10
+	pingRate  = 1
+)
+
+// pingEmission is the time a ping allowance takes to refill.
+const pingEmission = int64(time.Second) / pingRate
+
+// monoStart anchors the monotonic clock pings are timed with.
+var monoStart = time.Now()
+
 // netError satisfies the net Error interface.
 type netError struct {
 	msg       string
@@ -272,7 +294,11 @@ type Conn struct {
 	writeErrMu       sync.Mutex
 	// bytes remaining in current frame.
 	// set setReadRemaining to safely update this value and prevent overflow
-	readRemaining          int64
+	readRemaining int64
+	// pingTat is the time, on the monotonic clock since monoStart, at which the
+	// peer's ping allowance is full again (GCRA). Fits the padding of Conn's
+	// allocation size class: no memory added per connection.
+	pingTat                int64
 	readMaskKey            [4]byte
 	readDecompress         bool // whether last read frame had RSV1 set
 	readFinal              bool // true the current message has more frames.
@@ -935,6 +961,11 @@ func (c *Conn) advanceFrame() (int, error) {
 			return noFrame, err
 		}
 	case PingMessage:
+		if !c.pingAllowed() {
+			data := FormatCloseMessage(ClosePolicyViolation, "too many pings")
+			_ = c.WriteControl(CloseMessage, data, time.Now().Add(writeWait))
+			return noFrame, ErrTooManyPings
+		}
 		pingHandler := c.handlePing
 		if pingHandler == nil {
 			pingHandler = c.defaultPingHandler
@@ -963,6 +994,19 @@ func (c *Conn) advanceFrame() (int, error) {
 	}
 
 	return frameType, nil
+}
+
+// pingAllowed reports whether a ping received now is within the peer's ping
+// allowance, and takes it from the allowance if so. Only called from the
+// reading goroutine.
+func (c *Conn) pingAllowed() bool {
+	now := int64(time.Since(monoStart))
+	tat := max(c.pingTat, now) + pingEmission
+	if tat-now > pingBurst*pingEmission {
+		return false
+	}
+	c.pingTat = tat
+	return true
 }
 
 func (c *Conn) handleProtocolError(message string) error {

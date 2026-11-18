@@ -205,6 +205,6 @@ func (n *Node) resyncLocalSubscribers(ch string) {
 		if !ok {
 			continue
 		}
-		go c.handleInsufficientState(ch, channelHasFlag(chCtx.flags, flagServerSide))
+		go c.handleInsufficientState(ch, chCtx.subGen, channelHasFlag(chCtx.flags, flagServerSide))
 	}
 }
