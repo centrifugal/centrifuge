@@ -1781,25 +1781,35 @@ func (l *redisLineage) scriptCacheSupport(ctx context.Context, kind redisServerK
 	}
 	c := l.shard.client
 	key := l.anyTokenKey()
-	sha, err := c.Do(ctx, c.B().ScriptLoad().Script(lineageCheckScript).Build()).ToString()
+	// One connection to the primary serving the key, as the gate uses: in
+	// Redis Cluster a keyless SCRIPT LOAD may reach another node than the
+	// EVALSHA after it.
+	err := c.Dedicated(func(dc rueidis.DedicatedClient) error {
+		if err := dc.Do(ctx, dc.B().Exists().Key(key).Build()).Error(); err != nil {
+			return err
+		}
+		sha, err := dc.Do(ctx, dc.B().ScriptLoad().Script(lineageCheckScript).Build()).ToString()
+		if err != nil {
+			reasons = append(reasons, "SCRIPT LOAD failed: "+err.Error())
+		} else if err := dc.Do(ctx, dc.B().Evalsha().Sha1(sha).Numkeys(1).Key(key).Build()).Error(); err != nil {
+			reasons = append(reasons, "EVALSHA failed: "+err.Error())
+		}
+		if l.shard.isCluster {
+			if err := dc.Do(ctx, dc.B().ClusterNodes().Build()).Error(); err != nil {
+				reasons = append(reasons, "CLUSTER NODES failed: "+err.Error())
+			}
+			if err := dc.Do(ctx, dc.B().Eval().Script(lineageCheckCrossSlotScript).Numkeys(1).Key(key).Build()).Error(); err != nil {
+				reasons = append(reasons, "a script with allow-cross-slot-keys failed: "+err.Error())
+			}
+		}
+		return nil
+	})
 	if err != nil {
-		reasons = append(reasons, "SCRIPT LOAD failed: "+err.Error())
-	} else if err := c.Do(ctx, c.B().Evalsha().Sha1(sha).Numkeys(1).Key(key).Build()).Error(); err != nil {
-		reasons = append(reasons, "EVALSHA failed: "+err.Error())
-	}
-	if l.shard.isCluster {
-		if err := c.Do(ctx, c.B().ClusterNodes().Build()).Error(); err != nil {
-			reasons = append(reasons, "CLUSTER NODES failed: "+err.Error())
-		}
-		if err := c.Do(ctx, c.B().Eval().Script(lineageCheckCrossSlotScript).Numkeys(1).Key(key).Build()).Error(); err != nil {
-			reasons = append(reasons, "a script with allow-cross-slot-keys failed: "+err.Error())
-		}
+		reasons = append(reasons, "the check failed: "+err.Error())
 	}
 	return reasons
 }
 
-// infoSupport returns why this server can't run detection with INFO (none
-// when it can), from a harmless script reading INFO replication.
 // infoRefusal tells why scripts can't call INFO: the ACL user's permissions
 // (NOPERM), or the server refusing INFO from scripts for everyone (ElastiCache
 // Serverless).
@@ -1810,6 +1820,8 @@ func infoRefusal(err error) string {
 	return "the server doesn't let scripts call INFO: " + err.Error()
 }
 
+// infoSupport returns why this server can't run detection with INFO (none
+// when it can), from a harmless script reading INFO replication.
 func (l *redisLineage) infoSupport(ctx context.Context) []string {
 	allowed, redisErr, err := l.infoCheck(ctx)
 	switch {

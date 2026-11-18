@@ -720,3 +720,26 @@ func TestRedisShard_ConfiguredAddressesUntouched(t *testing.T) {
 	}
 	require.Equal(t, []string{"127.0.0.1:7001", "127.0.0.1:7002", "127.0.0.1:7003"}, addrs)
 }
+
+// In Redis Cluster the startup report checks the script cache on one
+// connection to a primary: a keyless SCRIPT LOAD could reach another node than
+// the EVALSHA after it, and the report said "EVALSHA failed: NOSCRIPT".
+func TestRedisLineage_ReportScriptChecksOnOneNode(t *testing.T) {
+	for _, tt := range lineageRedisTests {
+		if !tt.UseCluster {
+			continue
+		}
+		t.Run(tt.Name, func(t *testing.T) {
+			b := newLineageTestBroker(t, tt, false)
+			s := b.shards[0].shard
+			ctx := context.Background()
+			for i := 0; i < 10; i++ {
+				flushScripts(t, s)
+				l := s.lineageFor(getUniquePrefix())
+				kind, err := l.helloKind(ctx)
+				require.NoError(t, err)
+				require.Empty(t, l.scriptCacheSupport(ctx, kind, nil))
+			}
+		})
+	}
+}
