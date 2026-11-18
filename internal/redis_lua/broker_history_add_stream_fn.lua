@@ -11,11 +11,18 @@
 -- it and a failure in between leaves a result claiming something nobody
 -- received; remember it later and a retry carrying the same idempotency key
 -- cannot tell it already happened, and writes it a second time.
+--
+-- lineage_token(token_key), defined by the prelude the Go side prepends, is the
+-- lineage token of this server's data ("" when lineage detection is off). A
+-- meta written under another token may be missing writes the server lost (a
+-- failover to a replica that missed them, a restart from disk): it is dropped
+-- with its stream, so the publication starts a new epoch. A meta without a
+-- token (written before lineage detection) is adopted.
 local function add_history(
     stream_key, meta_key, result_key,
     message_payload, stream_size, stream_ttl, channel, meta_expire,
     new_epoch_if_empty, publish_command, result_key_expire, use_delta,
-    version, version_epoch
+    version, version_epoch, token_key
 )
     if result_key_expire ~= '' then
         local cached_result = redis.call("hmget", result_key, "e", "s")
@@ -25,10 +32,26 @@ local function add_history(
         end
     end
 
-    local current_epoch = redis.call("hget", meta_key, "e")
+    local token, ancestor = lineage_token(token_key)
+    local lineage_reset = false
+    local meta_now = redis.call("hmget", meta_key, "e", LINEAGE_FIELD)
+    local current_epoch = meta_now[1]
+    if token ~= "" and current_epoch ~= false and meta_now[2] ~= token then
+        if meta_now[2] == false or meta_now[2] == ancestor then
+            redis.call("hset", meta_key, LINEAGE_FIELD, token)
+        else
+            redis.call("del", meta_key, stream_key)
+            current_epoch = false
+            lineage_reset = true
+        end
+    end
     if current_epoch == false then
         current_epoch = new_epoch_if_empty
-        redis.call("hset", meta_key, "e", current_epoch)
+        if token ~= "" then
+            redis.call("hset", meta_key, "e", current_epoch, LINEAGE_FIELD, token)
+        else
+            redis.call("hset", meta_key, "e", current_epoch)
+        end
     end
 
     if version ~= "0" then
@@ -43,13 +66,18 @@ local function add_history(
                 if current_offset then
                     offset_num = tonumber(current_offset)
                 end
-                return { offset_num, current_epoch, "0", "1" }
+                return { offset_num, current_epoch .. lineage_reset_ext(lineage_reset), "0", "1" }
             end
         end
         redis.call("hset", meta_key, "v", version, "ve", version_epoch)
     end
 
     local top_offset = redis.call("hincrby", meta_key, "s", 1)
+    local count = lineage_count(token_key)
+    if count then
+        redis.call("hset", meta_key, "w", count)
+    end
+    local obs = lineage_obs(count)
 
     if meta_expire ~= '0' then
         redis.call("expire", meta_key, meta_expire)
@@ -91,10 +119,10 @@ local function add_history(
             "d1:" ..
             top_offset ..
             ":" ..
-            current_epoch ..
+            current_epoch .. obs ..
             ":" .. #prev_message_payload .. ":" .. prev_message_payload .. ":" .. #message_payload .. ":" .. message_payload
         else
-            payload = "__" .. "p1:" .. top_offset .. ":" .. current_epoch .. "__" .. message_payload
+            payload = "__" .. "p1:" .. top_offset .. ":" .. current_epoch .. obs .. "__" .. message_payload
         end
         redis.call(publish_command, channel, payload)
     end
@@ -108,5 +136,5 @@ local function add_history(
         redis.call("expire", result_key, result_key_expire)
     end
 
-    return { top_offset, current_epoch, "0", "0" }
+    return { top_offset, current_epoch .. obs .. lineage_reset_ext(lineage_reset), "0", "0" }
 end

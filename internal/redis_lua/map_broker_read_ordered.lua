@@ -11,6 +11,8 @@
 -- KEYS[3] = state expire zset key
 -- KEYS[4] = meta key
 -- KEYS[5] = state meta key
+-- KEYS[6] = lineage token key
+-- KEYS[7] = stream key (dropped with a meta of another lineage)
 -- ARGV[1] = limit (0 = no limit, return all)
 -- ARGV[2] = cursor_score (empty string for first page, score part of cursor)
 -- ARGV[3] = cursor_key (empty string for first page, key part of cursor)
@@ -25,6 +27,8 @@ local order_key = KEYS[2]
 local expire_key = KEYS[3]
 local meta_key = KEYS[4]
 local state_meta_key = KEYS[5]
+local token_key = KEYS[6]
+local stream_key = KEYS[7]
 
 local limit = tonumber(ARGV[1])
 local cursor_score_str = ARGV[2]
@@ -36,15 +40,19 @@ local streamless = ARGV[7] == "1"
 local asc = ARGV[8] == "1"
 
 local epoch = ""
+-- epoch_out is the epoch replied, with its observation suffix (see lineage_obs).
+local epoch_out = ""
 local stream_offset = "0"
 
 if not streamless then
     -- Update meta epoch + TTL and get current stream offset
     if meta_key ~= '' then
-        epoch = redis.call("hget", meta_key, "e")
+        local token, ancestor = lineage_token(token_key)
+        local dropped
+        epoch, dropped = lineage_map_meta(meta_key, stream_key, token, ancestor)
         if not epoch then
             epoch = now_str
-            redis.call("hset", meta_key, "e", epoch)
+            lineage_map_create(meta_key, state_meta_key, epoch, token, dropped)
         end
 
         stream_offset = redis.call("hget", meta_key, "s")
@@ -55,18 +63,19 @@ if not streamless then
         if meta_ttl > 0 then
             redis.call("pexpire", meta_key, meta_ttl)
         end
+        epoch_out = epoch .. lineage_map_obs(meta_key) .. lineage_reset_ext(dropped)
     end
 
     -- Validate state epoch against stream epoch
     if state_meta_key ~= '' then
         local state_meta_exists = redis.call("exists", state_meta_key)
         if state_meta_exists == 0 then
-            return {stream_offset, epoch, {}, {}, "", ""}
+            return {stream_offset, epoch_out, {}, {}, "", ""}
         end
 
         local state_epoch = redis.call("hget", state_meta_key, "epoch")
         if state_epoch ~= epoch then
-            return {stream_offset, epoch, {}, {}, "", ""}
+            return {stream_offset, epoch_out, {}, {}, "", ""}
         end
     end
 end
@@ -183,7 +192,7 @@ local has_more = false
 local key_count = #keys_to_fetch
 
 if key_count == 0 then
-    return {stream_offset, epoch, {}, {}, "", ""}
+    return {stream_offset, epoch_out, {}, {}, "", ""}
 end
 
 if limit > 0 and key_count > limit then
@@ -210,4 +219,4 @@ if has_more then
     next_cursor_key = keys_to_fetch[key_count]
 end
 
-return {stream_offset, epoch, keys_to_fetch, values, next_cursor_score, next_cursor_key}
+return {stream_offset, epoch_out, keys_to_fetch, values, next_cursor_score, next_cursor_key}

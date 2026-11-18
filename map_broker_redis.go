@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"bytes"
 	"context"
+	"crypto/fips140"
 	"errors"
 	"fmt"
 	"runtime"
@@ -106,14 +107,16 @@ type RedisMapBroker struct {
 	// after construction (shared with the package-level precomputed table).
 	partitionTags []string
 
-	addScript           *rueidis.Lua
-	readOrderedScript   *rueidis.Lua
-	readUnorderedScript *rueidis.Lua
-	readStreamScript    *rueidis.Lua
-	readMetaScript      *rueidis.Lua
+	addScript           *lineageScript
+	resetLostScript     *rueidis.Lua
+	watermarks          *offsetWatermarks
+	readOrderedScript   *lineageScript
+	readUnorderedScript *lineageScript
+	readStreamScript    *lineageScript
+	readMetaScript      *lineageScript
 	presenceStatsScript *rueidis.Lua
 	findExpiredScript   *rueidis.Lua
-	batchRemoveScript   *rueidis.Lua
+	batchRemoveScript   *lineageScript
 
 	closeCh       chan struct{}
 	closeOnce     sync.Once
@@ -133,8 +136,27 @@ type RedisMapBrokerConfig struct {
 	// By default, empty string is used.
 	Name string
 	// LoadSHA1 enables loading SHA1 from Redis via SCRIPT LOAD instead of calculating
-	// it on the client side. This is useful for FIPS compliance.
+	// it on the client side. This is useful for FIPS compliance. It is always on
+	// in FIPS-only mode (GODEBUG=fips140=only), where SHA-1 can't be computed here.
 	LoadSHA1 bool
+	// DetectPotentialLostWrites makes the broker detect that a Redis failover
+	// or a restart may have lost writes to a map (a promoted replica that
+	// missed the last writes, a restart from an older RDB or AOF), so its
+	// maps start a new epoch and subscribers resync instead of missing
+	// publications. It uses the script cache of Redis 7+ and Valkey and needs no
+	// extra permissions; on other servers only reused offsets are detected, per
+	// channel. Off by default: the broker then works as it did before the option
+	// existed.
+	DetectPotentialLostWrites bool
+	// PotentialLostWritesUseInfo makes the detection read the server's
+	// replication ID with INFO instead, on every server, including Redis 6 and
+	// Dragonfly, at the cost of INFO in every meta script. INFO needs the
+	// @dangerous ACL category. The ID also changes when nothing was lost - a
+	// primary gets its first replica, or has had none for repl-backlog-ttl - and
+	// maps then start new epochs too. In Redis Cluster, maps of a slot
+	// moved to another node start new epochs as well. It has an effect only with
+	// DetectPotentialLostWrites.
+	PotentialLostWritesUseInfo bool
 	// IdempotentResultTTL is a time-to-live for idempotent result.
 	IdempotentResultTTL time.Duration
 	// SubscribeOnReplica allows subscribing on replica Redis nodes.
@@ -191,6 +213,10 @@ type RedisMapBrokerConfig struct {
 func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, error) {
 	if len(conf.Shards) == 0 {
 		return nil, errors.New("state broker: no shards provided")
+	}
+	if fips140.Enforced() {
+		// SHA-1 can't be computed here in FIPS-only mode.
+		conf.LoadSHA1 = true
 	}
 
 	if conf.SubscribeOnReplica {
@@ -249,30 +275,15 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 	}
 
 	e := &RedisMapBroker{
-		node:          n,
-		conf:          conf,
-		shards:        shardWrappers,
-		partitionTags: partitionTags,
-		addScript: rueidis.NewLuaScript(
-			brokerStatePublishScriptSource,
-			rueidis.WithLoadSHA1(conf.LoadSHA1),
-		),
-		readOrderedScript: rueidis.NewLuaScript(
-			brokerStateReadOrderedScriptSource,
-			rueidis.WithLoadSHA1(conf.LoadSHA1),
-		),
-		readUnorderedScript: rueidis.NewLuaScript(
-			brokerStateReadUnorderedScriptSource,
-			rueidis.WithLoadSHA1(conf.LoadSHA1),
-		),
-		readStreamScript: rueidis.NewLuaScript(
-			brokerStateReadStreamScriptSource,
-			rueidis.WithLoadSHA1(conf.LoadSHA1),
-		),
-		readMetaScript: rueidis.NewLuaScript(
-			brokerStateReadMetaScriptSource,
-			rueidis.WithLoadSHA1(conf.LoadSHA1),
-		),
+		node:                n,
+		conf:                conf,
+		shards:              shardWrappers,
+		partitionTags:       partitionTags,
+		addScript:           newLineageScript("map_add", lineageMapHelpers+brokerStatePublishScriptSource, conf.LoadSHA1),
+		readOrderedScript:   newLineageScript("map_read_ordered", lineageMapHelpers+brokerStateReadOrderedScriptSource, conf.LoadSHA1),
+		readUnorderedScript: newLineageScript("map_read_unordered", lineageMapHelpers+brokerStateReadUnorderedScriptSource, conf.LoadSHA1),
+		readStreamScript:    newLineageScript("map_read_stream", lineageMapHelpers+brokerStateReadStreamScriptSource, conf.LoadSHA1),
+		readMetaScript:      newLineageScript("map_read_meta", lineageMapHelpers+brokerStateReadMetaScriptSource, conf.LoadSHA1),
 		presenceStatsScript: rueidis.NewLuaScript(
 			brokerStateStatsScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
@@ -281,11 +292,25 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 			brokerStateFindExpiredScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
 		),
-		batchRemoveScript: rueidis.NewLuaScript(
-			brokerStateBatchRemoveScriptSource,
-			rueidis.WithLoadSHA1(conf.LoadSHA1),
-		),
-		closeCh: make(chan struct{}),
+		batchRemoveScript: newLineageScript("map_batch_remove", lineageMapHelpers+brokerStateBatchRemoveScriptSource, conf.LoadSHA1),
+		closeCh:           make(chan struct{}),
+		resetLostScript:   rueidis.NewLuaScript(resetLostMapStreamSource, rueidis.WithLoadSHA1(conf.LoadSHA1)),
+	}
+	for _, sw := range e.shards {
+		sw.shard.ensureLineage(n)
+	}
+	if conf.DetectPotentialLostWrites {
+		e.watermarks = newOffsetWatermarks()
+		for _, sw := range e.shards {
+			l := e.lin(sw.shard)
+			for _, ls := range []*lineageScript{e.addScript, e.readOrderedScript, e.readUnorderedScript, e.readStreamScript, e.readMetaScript, e.batchRemoveScript} {
+				l.register(ls, conf.LoadSHA1)
+			}
+			l.setLogger(n, conf.Name)
+		}
+	}
+	if conf.PotentialLostWritesUseInfo && !conf.DetectPotentialLostWrites {
+		n.logger.log(newLogEntry(LogLevelWarn, "redis map broker: PotentialLostWritesUseInfo has no effect without DetectPotentialLostWrites", map[string]any{"broker_name": conf.Name}))
 	}
 	e.shardChannel = conf.Prefix + redisPubSubShardChannelSuffix
 	e.messagePrefix = conf.Prefix + redisClientChannelPrefix
@@ -731,10 +756,10 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		versionEpochField = "ve:" + key
 	}
 
-	replies, err := e.addScript.Exec(ctx, shardClient,
+	replies, err := e.execLineage(ctx, s.shard, e.addScript,
 		[]string{
 			streamKey, metaKey, resultKey, stateHashKey, stateOrderKey, stateExpireKey,
-			stateMetaKey, cleanupRegKey,
+			stateMetaKey, cleanupRegKey, e.lineageKey(s.shard, e.metaKey(s.shard, ch)),
 		},
 		[]string{
 			key,                                // message_key
@@ -769,13 +794,13 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 		return MapUpdateResult{}, err
 	}
 
-	return parseAddScriptResult(replies)
+	res, err := parseAddScriptResult(replies)
+	return e.observeUpdate(s.shard, ch, res, err)
 }
 
 // Remove removes a key from keyed state state.
 func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts MapRemoveOptions) (MapUpdateResult, error) {
 	s := e.getShard(ch)
-	shardClient := s.shard.client
 
 	// Resolve channel options once for this operation.
 	chOpts, err := ResolveAndValidateMapChannelOptions(e.node.config.Map.GetMapChannelOptions, ch)
@@ -900,7 +925,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 		versionEpochField = "ve:" + key
 	}
 
-	replies, err := e.addScript.Exec(ctx, shardClient,
+	replies, err := e.execLineage(ctx, s.shard, e.addScript,
 		[]string{
 			streamKey, metaKey, resultKey,
 			stateHashKey,
@@ -908,6 +933,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 			stateExpireKey,
 			stateMetaKey,
 			cleanupRegKey,
+			e.lineageKey(s.shard, e.metaKey(s.shard, ch)),
 		},
 		[]string{
 			key,                             // message_key
@@ -941,7 +967,8 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 		return MapUpdateResult{}, err
 	}
 
-	return parseAddScriptResult(replies)
+	res, err := parseAddScriptResult(replies)
+	return e.observeUpdate(s.shard, ch, res, err)
 }
 
 // ReadState retrieves state entries with per-entry revisions for a channel.
@@ -1042,7 +1069,7 @@ func (e *RedisMapBroker) readSingleKeyWithOpts(ctx context.Context, ch string, o
 	// Execute HGET and metadata read in pipeline
 	cmds := make([]rueidis.Completed, 0, 2)
 	cmds = append(cmds, shardClient.B().Hget().Key(stateHashKey).Field(opts.Key).Build())
-	cmds = append(cmds, shardClient.B().Hmget().Key(metaKey).Field("s", "e").Build())
+	cmds = append(cmds, shardClient.B().Hmget().Key(metaKey).Field("s", "e", "w", "i").Build())
 
 	results := shardClient.DoMulti(ctx, cmds...)
 
@@ -1097,7 +1124,6 @@ func (e *RedisMapBroker) readSingleKeyWithOpts(ctx context.Context, ch string, o
 
 func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts MapReadStateOptions, chOpts MapChannelOptions) (MapStateResult, error) {
 	s := e.getShard(ch)
-	shardClient := s.shard.client
 
 	stateTTL := "0"
 	if chOpts.MetaTTL > 0 {
@@ -1122,12 +1148,14 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 		luaLimit = 0
 	}
 
-	replies, err := e.readUnorderedScript.Exec(ctx, shardClient,
+	replies, err := e.execLineage(ctx, s.shard, e.readUnorderedScript,
 		[]string{
 			e.stateHashKey(s.shard, ch),
 			e.stateExpireKey(s.shard, ch),
 			e.metaKey(s.shard, ch),
 			e.stateMetaKey(s.shard, ch),
+			e.lineageKey(s.shard, e.metaKey(s.shard, ch)),
+			e.streamKey(s.shard, ch),
 		},
 		[]string{
 			cursor,
@@ -1150,6 +1178,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 		return MapStateResult{}, err
 	}
 	streamEpoch, _ := replies[1].ToString()
+	streamEpoch = e.lin(s.shard).epochExt("map", e.conf.Name, e.metaKey(s.shard, ch), streamEpoch)
 	nextCursor, _ := replies[2].ToString()
 	if nextCursor == "0" {
 		nextCursor = "" // Convert Redis HSCAN "0" (complete) to empty string
@@ -1347,7 +1376,6 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 // Cursor format: "score\x00key" to ensure no entries are skipped during concurrent modifications.
 func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts MapReadStateOptions, chOpts MapChannelOptions) (MapStateResult, error) {
 	s := e.getShard(ch)
-	shardClient := s.shard.client
 
 	stateTTL := "0"
 	if chOpts.MetaTTL > 0 {
@@ -1377,13 +1405,15 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 		ascFlag = "1"
 	}
 
-	replies, err := e.readOrderedScript.Exec(ctx, shardClient,
+	replies, err := e.execLineage(ctx, s.shard, e.readOrderedScript,
 		[]string{
 			e.stateHashKey(s.shard, ch),
 			e.stateOrderKey(s.shard, ch),
 			e.stateExpireKey(s.shard, ch),
 			e.metaKey(s.shard, ch),
 			e.stateMetaKey(s.shard, ch),
+			e.lineageKey(s.shard, e.metaKey(s.shard, ch)),
+			e.streamKey(s.shard, ch),
 		},
 		[]string{
 			strconv.Itoa(luaLimit), // ARGV[1] = limit
@@ -1408,6 +1438,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 		return MapStateResult{}, err
 	}
 	streamEpoch, _ := replies[1].ToString()
+	streamEpoch = e.lin(s.shard).epochExt("map", e.conf.Name, e.metaKey(s.shard, ch), streamEpoch)
 	keysArr, _ := replies[2].ToArray()
 	valuesArr, _ := replies[3].ToArray()
 	nextCursorScore, _ := replies[4].ToString()
@@ -1982,8 +2013,8 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 		includePubsStr = "1"
 	}
 
-	replies, err := e.readStreamScript.Exec(ctx, s.shard.client,
-		[]string{e.streamKey(s.shard, ch), e.metaKey(s.shard, ch)},
+	replies, err := e.execLineage(ctx, s.shard, e.readStreamScript,
+		[]string{e.streamKey(s.shard, ch), e.metaKey(s.shard, ch), e.stateMetaKey(s.shard, ch), e.lineageKey(s.shard, e.metaKey(s.shard, ch))},
 		[]string{
 			includePubsStr,
 			offset,
@@ -2010,6 +2041,7 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 	if err != nil {
 		return MapStreamResult{}, fmt.Errorf("could not parse epoch: %w", err)
 	}
+	epoch = e.lin(s.shard).epochExt("map", e.conf.Name, e.metaKey(s.shard, ch), epoch)
 
 	// Validate epoch if provided in Since filter.
 	if opts.Filter.Since != nil && opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != epoch {
@@ -2137,8 +2169,8 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 	}
 
 	// 2. Call 1: Get metadata using new simpler Lua script
-	metaReplies, err := e.readMetaScript.Exec(ctx, s.shard.client,
-		[]string{e.metaKey(s.shard, ch)},
+	metaReplies, err := e.execLineage(ctx, s.shard, e.readMetaScript,
+		[]string{e.metaKey(s.shard, ch), e.streamKey(s.shard, ch), e.stateMetaKey(s.shard, ch), e.lineageKey(s.shard, e.metaKey(s.shard, ch))},
 		[]string{metaExpire, e.node.ID()},
 	).ToArray()
 	if err != nil {
@@ -2158,6 +2190,7 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 	if err != nil {
 		return MapStreamResult{}, fmt.Errorf("could not parse epoch: %w", err)
 	}
+	epoch = e.lin(s.shard).epochExt("map", e.conf.Name, e.metaKey(s.shard, ch), epoch)
 
 	// Validate epoch if provided in Since filter.
 	if opts.Filter.Since != nil && opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != epoch {
@@ -2324,6 +2357,7 @@ func (e *RedisMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 		if err := wrapper.pubSubRunner.run(wrapper, h); err != nil {
 			return err
 		}
+		go e.lin(wrapper.shard).reportEnvironment(e.node, "map_broker", e.conf.Name, e.conf.DetectPotentialLostWrites, e.conf.PotentialLostWritesUseInfo)
 	}
 	for i := 0; i < len(e.shards); i++ {
 		for j := 0; j < len(e.shards[i].pubSubStartChannels); j++ {
@@ -2800,15 +2834,16 @@ func (e *RedisMapBroker) batchRemoveExpired(ctx context.Context, shard *RedisSha
 		argv = append(argv, r.key, convert.BytesToString(r.payload), r.expireScore)
 	}
 
-	result, err := e.batchRemoveScript.Exec(ctx, shard.client,
+	result, err := e.execLineage(ctx, shard, e.batchRemoveScript,
 		[]string{
-			e.stateHashKey(shard, ch),   // KEYS[1]
-			e.stateExpireKey(shard, ch), // KEYS[2]
-			e.streamKey(shard, ch),      // KEYS[3]
-			e.metaKey(shard, ch),        // KEYS[4]
-			cleanupKey,                  // KEYS[5]
-			e.stateOrderKey(shard, ch),  // KEYS[6]
-			e.stateMetaKey(shard, ch),   // KEYS[7]
+			e.stateHashKey(shard, ch),                 // KEYS[1]
+			e.stateExpireKey(shard, ch),               // KEYS[2]
+			e.streamKey(shard, ch),                    // KEYS[3]
+			e.metaKey(shard, ch),                      // KEYS[4]
+			cleanupKey,                                // KEYS[5]
+			e.stateOrderKey(shard, ch),                // KEYS[6]
+			e.stateMetaKey(shard, ch),                 // KEYS[7]
+			e.lineageKey(shard, e.metaKey(shard, ch)), // KEYS[8]
 		},
 		argv,
 	).ToArray()
@@ -2820,6 +2855,12 @@ func (e *RedisMapBroker) batchRemoveExpired(ctx context.Context, shard *RedisSha
 			if e.node.metrics != nil {
 				e.node.metrics.addMapBrokerCleanupRemoved(e.conf.Name, removedCount)
 			}
+		}
+	}
+	if len(result) > 2 {
+		// The epoch is unused here; the hook counts a lineage reset.
+		if epoch, err := result[2].ToString(); err == nil {
+			_ = e.lin(shard).epochExt("map", e.conf.Name, "", epoch)
 		}
 	}
 	return nil
@@ -2942,6 +2983,10 @@ func (e *RedisMapBroker) handleRedisClientMessage(isCluster bool, eventHandler B
 	if channel == "" {
 		return fmt.Errorf("unsupported channel: %s", chID)
 	}
+	if strings.IndexByte(epoch, pubsubEpochExt) >= 0 {
+		shard := e.getShard(channel).shard
+		epoch = e.lin(shard).epochExt("map", e.conf.Name, e.metaKey(shard, channel), epoch)
+	}
 
 	sp := StreamPosition{Offset: offset, Epoch: epoch}
 
@@ -2950,6 +2995,16 @@ func (e *RedisMapBroker) handleRedisClientMessage(isCluster bool, eventHandler B
 	err = protoPub.UnmarshalCF(protobuf)
 	if err != nil {
 		return fmt.Errorf("can not unmarshal value to Publication: %v", err)
+	}
+
+	if e.watermarks != nil {
+		var check *watermarkCheck
+		sp.Epoch, check = e.watermarks.observe(channel, epoch, offset, protoPub.Time, func() bool {
+			return e.node.hub.NumSubscribers(channel) > 0
+		})
+		if check != nil {
+			go e.checkReusedOffset(check)
+		}
 	}
 
 	if protoPub.Offset == 0 {
@@ -3181,6 +3236,9 @@ func (e *RedisMapBroker) Unsubscribe(channels ...string) error {
 	if len(channels) == 0 {
 		return nil
 	}
+	if e.watermarks != nil {
+		e.watermarks.forget(channels...)
+	}
 	if len(channels) == 1 {
 		return e.unsubscribe(e.getShard(channels[0]), channels[0])
 	}
@@ -3391,4 +3449,123 @@ func parseAddScriptResult(replies []rueidis.RedisMessage) (MapUpdateResult, erro
 		}
 	}
 	return result, nil
+}
+
+// execLineage runs a map meta script in the lineage mode of the shard (see
+// RedisBroker.execLineageScript).
+func (e *RedisMapBroker) execLineage(ctx context.Context, s *RedisShard, ls *lineageScript, keys, args []string) rueidis.RedisResult {
+	if !e.conf.DetectPotentialLostWrites {
+		resp := ls.lua(lineageNone).Exec(ctx, s.client, keys, args)
+		s.noteError(resp.Error())
+		return resp
+	}
+	mode, err := e.lin(s).mode(ctx, e.conf.PotentialLostWritesUseInfo)
+	if err != nil {
+		return rueidis.NewErrorResult(err)
+	}
+	if mode == lineageGate {
+		return e.lin(s).exec(withLineageBroker(ctx, e.conf.Name), ls, keys, args)
+	}
+	var resp rueidis.RedisResult
+	if mode == lineageInfo {
+		resp = ls.lua(lineageInfo).Exec(ctx, s.client, keys, args)
+	} else {
+		resp = ls.lua(lineageNone).Exec(ctx, s.client, keys, args)
+	}
+	s.noteError(resp.Error())
+	return resp
+}
+
+// observeUpdate takes a map write's reply epoch through the lineage's
+// extension hook (see redisLineage.epochExt).
+func (e *RedisMapBroker) observeUpdate(s *RedisShard, ch string, res MapUpdateResult, err error) (MapUpdateResult, error) {
+	if err != nil {
+		return res, err
+	}
+	res.Position.Epoch = e.lin(s).epochExt("map", e.conf.Name, e.metaKey(s, ch), res.Position.Epoch)
+	return res, nil
+}
+
+// resetLostMapStreamSource gives a map whose server reused offsets of the
+// epoch ARGV[1] a new epoch ARGV[2], as a new lineage does: the change stream
+// is dropped, the state is what the server has and is kept, rebound to the new
+// epoch. ARGV[3]: the meta TTL in milliseconds (0: permanent).
+const resetLostMapStreamSource = `
+if redis.call("hget", KEYS[1], "e") ~= ARGV[1] then
+    return 0
+end
+redis.call("del", KEYS[1], KEYS[2])
+redis.call("hset", KEYS[1], "e", ARGV[2])
+if ARGV[3] ~= "0" then
+    redis.call("pexpire", KEYS[1], ARGV[3])
+end
+if redis.call("hget", KEYS[3], "epoch") == ARGV[1] then
+    redis.call("hset", KEYS[3], "epoch", ARGV[2])
+end
+return 1
+`
+
+// resetLostStream resets a map stream whose server reused offsets of the
+// epoch (see offsetWatermarks).
+func (e *RedisMapBroker) resetLostStream(ch string, lostEpoch string, offset uint64) {
+	s := e.getShard(ch).shard
+	if e.lin(s).gateMode() {
+		// The server lost writes: its lineage rotates, so every stream and map
+		// on it starts a new epoch (see RedisBroker.resetLostStream).
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := e.lin(s).rotateIfToken(withLineageBroker(ctx, e.conf.Name), e.metaKey(s, ch)); err != nil {
+			e.node.logger.log(newErrorLogEntry(err, "error rotating the lineage of a server that reused offsets", map[string]any{"broker_name": e.conf.Name, "channel": ch, "epoch": lostEpoch}))
+			return
+		}
+		e.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused map stream offsets, writes were lost: every stream and map on the server starts a new epoch", map[string]any{"broker_name": e.conf.Name, "channel": ch, "epoch": lostEpoch, "offset": offset}))
+		return
+	}
+	chOpts, err := e.node.resolveMapChannelOptions(ch)
+	if err != nil {
+		return
+	}
+	reset, err := e.resetLostScript.Exec(context.Background(), s.client,
+		[]string{e.metaKey(s, ch), e.streamKey(s, ch), e.stateMetaKey(s, ch)},
+		[]string{lostEpoch, epoch.Generate(), millis(chOpts.MetaTTL)}).AsInt64()
+	if err != nil {
+		e.node.logger.log(newErrorLogEntry(err, "error resetting a map stream with reused offsets", map[string]any{"broker_name": e.conf.Name, "channel": ch, "epoch": lostEpoch}))
+		return
+	}
+	e.lin(s).countDetection(withLineageBroker(context.Background(), e.conf.Name), "reused_offset")
+	if reset == 1 {
+		e.lin(s).countEpochReset("map", e.conf.Name, "reused_offset")
+	}
+	e.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused map stream offsets, writes were lost: stream reset", map[string]any{"broker_name": e.conf.Name, "channel": ch, "epoch": lostEpoch, "offset": offset, "reset": reset == 1}))
+}
+
+// checkReusedOffset verifies a suspect offset (see offsetWatermarks) and
+// reacts to a loss.
+func (e *RedisMapBroker) checkReusedOffset(c *watermarkCheck) {
+	s := e.getShard(c.ch).shard
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	lost, err := verifyReusedOffset(ctx, s.client, e.streamKey(s, c.ch), e.metaKey(s, c.ch), c)
+	if err != nil {
+		e.node.logger.log(newErrorLogEntry(err, "error verifying a reused map stream offset", map[string]any{"channel": c.ch}))
+	}
+	e.watermarks.settle(c, lost)
+	if lost {
+		e.resetLostStream(c.ch, c.epoch, c.got)
+		e.node.resyncLocalSubscribers(c.ch)
+	}
+}
+
+// lineageKey returns the key a map meta script gets as its lineage key (see
+// RedisBroker.lineageKey).
+func (e *RedisMapBroker) lineageKey(s *RedisShard, metaKey string) string {
+	if !e.conf.DetectPotentialLostWrites {
+		return metaKey
+	}
+	return e.lin(s).tokenKey(metaKey)
+}
+
+// lin returns the broker's lineage on a shard (see redis_lineage.go).
+func (e *RedisMapBroker) lin(s *RedisShard) *redisLineage {
+	return s.lineageFor(e.conf.Prefix)
 }

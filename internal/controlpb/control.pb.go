@@ -181,17 +181,20 @@ func (*Shutdown) Descriptor() ([]byte, []int) {
 }
 
 type Node struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Uid           string                 `protobuf:"bytes,1,opt,name=uid,proto3" json:"uid,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Version       string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
-	NumClients    uint32                 `protobuf:"varint,4,opt,name=num_clients,json=numClients,proto3" json:"num_clients,omitempty"`
-	NumUsers      uint32                 `protobuf:"varint,5,opt,name=num_users,json=numUsers,proto3" json:"num_users,omitempty"`
-	NumChannels   uint32                 `protobuf:"varint,6,opt,name=num_channels,json=numChannels,proto3" json:"num_channels,omitempty"`
-	Uptime        uint32                 `protobuf:"varint,7,opt,name=uptime,proto3" json:"uptime,omitempty"`
-	Metrics       *Metrics               `protobuf:"bytes,8,opt,name=metrics,proto3" json:"metrics,omitempty"`
-	Data          []byte                 `protobuf:"bytes,9,opt,name=data,proto3" json:"data,omitempty"`
-	NumSubs       uint32                 `protobuf:"varint,10,opt,name=num_subs,json=numSubs,proto3" json:"num_subs,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Uid         string                 `protobuf:"bytes,1,opt,name=uid,proto3" json:"uid,omitempty"`
+	Name        string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Version     string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	NumClients  uint32                 `protobuf:"varint,4,opt,name=num_clients,json=numClients,proto3" json:"num_clients,omitempty"`
+	NumUsers    uint32                 `protobuf:"varint,5,opt,name=num_users,json=numUsers,proto3" json:"num_users,omitempty"`
+	NumChannels uint32                 `protobuf:"varint,6,opt,name=num_channels,json=numChannels,proto3" json:"num_channels,omitempty"`
+	Uptime      uint32                 `protobuf:"varint,7,opt,name=uptime,proto3" json:"uptime,omitempty"`
+	Metrics     *Metrics               `protobuf:"bytes,8,opt,name=metrics,proto3" json:"metrics,omitempty"`
+	Data        []byte                 `protobuf:"bytes,9,opt,name=data,proto3" json:"data,omitempty"`
+	NumSubs     uint32                 `protobuf:"varint,10,opt,name=num_subs,json=numSubs,proto3" json:"num_subs,omitempty"`
+	// lineage_left: Redis lineage tokens the node saw replaced recently, the
+	// most recently replaced first.
+	LineageLeft   []*LineageToken `protobuf:"bytes,11,rep,name=lineage_left,json=lineageLeft,proto3" json:"lineage_left,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -296,6 +299,66 @@ func (x *Node) GetNumSubs() uint32 {
 	return 0
 }
 
+func (x *Node) GetLineageLeft() []*LineageToken {
+	if x != nil {
+		return x.LineageLeft
+	}
+	return nil
+}
+
+type LineageToken struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Token string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	// replaced_at: when the token was replaced, in unix seconds.
+	ReplacedAt    int64 `protobuf:"varint,2,opt,name=replaced_at,json=replacedAt,proto3" json:"replaced_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LineageToken) Reset() {
+	*x = LineageToken{}
+	mi := &file_control_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LineageToken) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LineageToken) ProtoMessage() {}
+
+func (x *LineageToken) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LineageToken.ProtoReflect.Descriptor instead.
+func (*LineageToken) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *LineageToken) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+func (x *LineageToken) GetReplacedAt() int64 {
+	if x != nil {
+		return x.ReplacedAt
+	}
+	return 0
+}
+
 type Metrics struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Interval      float64                `protobuf:"fixed64,1,opt,name=interval,proto3" json:"interval,omitempty"`
@@ -306,7 +369,7 @@ type Metrics struct {
 
 func (x *Metrics) Reset() {
 	*x = Metrics{}
-	mi := &file_control_proto_msgTypes[3]
+	mi := &file_control_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -318,7 +381,7 @@ func (x *Metrics) String() string {
 func (*Metrics) ProtoMessage() {}
 
 func (x *Metrics) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[3]
+	mi := &file_control_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -331,7 +394,7 @@ func (x *Metrics) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Metrics.ProtoReflect.Descriptor instead.
 func (*Metrics) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{3}
+	return file_control_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Metrics) GetInterval() float64 {
@@ -377,7 +440,7 @@ type Subscribe struct {
 
 func (x *Subscribe) Reset() {
 	*x = Subscribe{}
-	mi := &file_control_proto_msgTypes[4]
+	mi := &file_control_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -389,7 +452,7 @@ func (x *Subscribe) String() string {
 func (*Subscribe) ProtoMessage() {}
 
 func (x *Subscribe) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[4]
+	mi := &file_control_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -402,7 +465,7 @@ func (x *Subscribe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Subscribe.ProtoReflect.Descriptor instead.
 func (*Subscribe) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{4}
+	return file_control_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Subscribe) GetUser() string {
@@ -527,7 +590,7 @@ type StreamPosition struct {
 
 func (x *StreamPosition) Reset() {
 	*x = StreamPosition{}
-	mi := &file_control_proto_msgTypes[5]
+	mi := &file_control_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -539,7 +602,7 @@ func (x *StreamPosition) String() string {
 func (*StreamPosition) ProtoMessage() {}
 
 func (x *StreamPosition) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[5]
+	mi := &file_control_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -552,7 +615,7 @@ func (x *StreamPosition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamPosition.ProtoReflect.Descriptor instead.
 func (*StreamPosition) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{5}
+	return file_control_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *StreamPosition) GetOffset() uint64 {
@@ -586,7 +649,7 @@ type FilterNode struct {
 
 func (x *FilterNode) Reset() {
 	*x = FilterNode{}
-	mi := &file_control_proto_msgTypes[6]
+	mi := &file_control_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -598,7 +661,7 @@ func (x *FilterNode) String() string {
 func (*FilterNode) ProtoMessage() {}
 
 func (x *FilterNode) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[6]
+	mi := &file_control_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -611,7 +674,7 @@ func (x *FilterNode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FilterNode.ProtoReflect.Descriptor instead.
 func (*FilterNode) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{6}
+	return file_control_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *FilterNode) GetOp() string {
@@ -673,7 +736,7 @@ type Unsubscribe struct {
 
 func (x *Unsubscribe) Reset() {
 	*x = Unsubscribe{}
-	mi := &file_control_proto_msgTypes[7]
+	mi := &file_control_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -685,7 +748,7 @@ func (x *Unsubscribe) String() string {
 func (*Unsubscribe) ProtoMessage() {}
 
 func (x *Unsubscribe) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[7]
+	mi := &file_control_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -698,7 +761,7 @@ func (x *Unsubscribe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Unsubscribe.ProtoReflect.Descriptor instead.
 func (*Unsubscribe) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{7}
+	return file_control_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Unsubscribe) GetChannel() string {
@@ -775,7 +838,7 @@ type Disconnect struct {
 
 func (x *Disconnect) Reset() {
 	*x = Disconnect{}
-	mi := &file_control_proto_msgTypes[8]
+	mi := &file_control_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -787,7 +850,7 @@ func (x *Disconnect) String() string {
 func (*Disconnect) ProtoMessage() {}
 
 func (x *Disconnect) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[8]
+	mi := &file_control_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -800,7 +863,7 @@ func (x *Disconnect) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Disconnect.ProtoReflect.Descriptor instead.
 func (*Disconnect) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{8}
+	return file_control_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Disconnect) GetUser() string {
@@ -877,7 +940,7 @@ type SurveyRequest struct {
 
 func (x *SurveyRequest) Reset() {
 	*x = SurveyRequest{}
-	mi := &file_control_proto_msgTypes[9]
+	mi := &file_control_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -889,7 +952,7 @@ func (x *SurveyRequest) String() string {
 func (*SurveyRequest) ProtoMessage() {}
 
 func (x *SurveyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[9]
+	mi := &file_control_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -902,7 +965,7 @@ func (x *SurveyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SurveyRequest.ProtoReflect.Descriptor instead.
 func (*SurveyRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{9}
+	return file_control_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *SurveyRequest) GetId() uint64 {
@@ -937,7 +1000,7 @@ type SurveyResponse struct {
 
 func (x *SurveyResponse) Reset() {
 	*x = SurveyResponse{}
-	mi := &file_control_proto_msgTypes[10]
+	mi := &file_control_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -949,7 +1012,7 @@ func (x *SurveyResponse) String() string {
 func (*SurveyResponse) ProtoMessage() {}
 
 func (x *SurveyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[10]
+	mi := &file_control_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -962,7 +1025,7 @@ func (x *SurveyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SurveyResponse.ProtoReflect.Descriptor instead.
 func (*SurveyResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{10}
+	return file_control_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *SurveyResponse) GetId() uint64 {
@@ -996,7 +1059,7 @@ type Notification struct {
 
 func (x *Notification) Reset() {
 	*x = Notification{}
-	mi := &file_control_proto_msgTypes[11]
+	mi := &file_control_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1008,7 +1071,7 @@ func (x *Notification) String() string {
 func (*Notification) ProtoMessage() {}
 
 func (x *Notification) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[11]
+	mi := &file_control_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1021,7 +1084,7 @@ func (x *Notification) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Notification.ProtoReflect.Descriptor instead.
 func (*Notification) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{11}
+	return file_control_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Notification) GetOp() string {
@@ -1055,7 +1118,7 @@ type Refresh struct {
 
 func (x *Refresh) Reset() {
 	*x = Refresh{}
-	mi := &file_control_proto_msgTypes[12]
+	mi := &file_control_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1067,7 +1130,7 @@ func (x *Refresh) String() string {
 func (*Refresh) ProtoMessage() {}
 
 func (x *Refresh) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[12]
+	mi := &file_control_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1080,7 +1143,7 @@ func (x *Refresh) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Refresh.ProtoReflect.Descriptor instead.
 func (*Refresh) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{12}
+	return file_control_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Refresh) GetUser() string {
@@ -1159,7 +1222,7 @@ const file_control_proto_rawDesc = "" +
 	"\fnotification\x18\v \x01(\v2\x17.controlpb.NotificationR\fnotification\x12,\n" +
 	"\arefresh\x18\f \x01(\v2\x12.controlpb.RefreshR\arefresh\"\n" +
 	"\n" +
-	"\bShutdown\"\x9c\x02\n" +
+	"\bShutdown\"\xd8\x02\n" +
 	"\x04Node\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\tR\x03uid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
@@ -1172,7 +1235,12 @@ const file_control_proto_rawDesc = "" +
 	"\ametrics\x18\b \x01(\v2\x12.controlpb.MetricsR\ametrics\x12\x12\n" +
 	"\x04data\x18\t \x01(\fR\x04data\x12\x19\n" +
 	"\bnum_subs\x18\n" +
-	" \x01(\rR\anumSubs\"\x94\x01\n" +
+	" \x01(\rR\anumSubs\x12:\n" +
+	"\flineage_left\x18\v \x03(\v2\x17.controlpb.LineageTokenR\vlineageLeft\"E\n" +
+	"\fLineageToken\x12\x14\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1f\n" +
+	"\vreplaced_at\x18\x02 \x01(\x03R\n" +
+	"replacedAt\"\x94\x01\n" +
 	"\aMetrics\x12\x1a\n" +
 	"\binterval\x18\x01 \x01(\x01R\binterval\x123\n" +
 	"\x05items\x18\x02 \x03(\v2\x1d.controlpb.Metrics.ItemsEntryR\x05items\x1a8\n" +
@@ -1262,46 +1330,48 @@ func file_control_proto_rawDescGZIP() []byte {
 	return file_control_proto_rawDescData
 }
 
-var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_control_proto_goTypes = []any{
 	(*Command)(nil),        // 0: controlpb.Command
 	(*Shutdown)(nil),       // 1: controlpb.Shutdown
 	(*Node)(nil),           // 2: controlpb.Node
-	(*Metrics)(nil),        // 3: controlpb.Metrics
-	(*Subscribe)(nil),      // 4: controlpb.Subscribe
-	(*StreamPosition)(nil), // 5: controlpb.StreamPosition
-	(*FilterNode)(nil),     // 6: controlpb.FilterNode
-	(*Unsubscribe)(nil),    // 7: controlpb.Unsubscribe
-	(*Disconnect)(nil),     // 8: controlpb.Disconnect
-	(*SurveyRequest)(nil),  // 9: controlpb.SurveyRequest
-	(*SurveyResponse)(nil), // 10: controlpb.SurveyResponse
-	(*Notification)(nil),   // 11: controlpb.Notification
-	(*Refresh)(nil),        // 12: controlpb.Refresh
-	nil,                    // 13: controlpb.Metrics.ItemsEntry
+	(*LineageToken)(nil),   // 3: controlpb.LineageToken
+	(*Metrics)(nil),        // 4: controlpb.Metrics
+	(*Subscribe)(nil),      // 5: controlpb.Subscribe
+	(*StreamPosition)(nil), // 6: controlpb.StreamPosition
+	(*FilterNode)(nil),     // 7: controlpb.FilterNode
+	(*Unsubscribe)(nil),    // 8: controlpb.Unsubscribe
+	(*Disconnect)(nil),     // 9: controlpb.Disconnect
+	(*SurveyRequest)(nil),  // 10: controlpb.SurveyRequest
+	(*SurveyResponse)(nil), // 11: controlpb.SurveyResponse
+	(*Notification)(nil),   // 12: controlpb.Notification
+	(*Refresh)(nil),        // 13: controlpb.Refresh
+	nil,                    // 14: controlpb.Metrics.ItemsEntry
 }
 var file_control_proto_depIdxs = []int32{
 	2,  // 0: controlpb.Command.node:type_name -> controlpb.Node
-	7,  // 1: controlpb.Command.unsubscribe:type_name -> controlpb.Unsubscribe
-	8,  // 2: controlpb.Command.disconnect:type_name -> controlpb.Disconnect
+	8,  // 1: controlpb.Command.unsubscribe:type_name -> controlpb.Unsubscribe
+	9,  // 2: controlpb.Command.disconnect:type_name -> controlpb.Disconnect
 	1,  // 3: controlpb.Command.shutdown:type_name -> controlpb.Shutdown
-	9,  // 4: controlpb.Command.survey_request:type_name -> controlpb.SurveyRequest
-	10, // 5: controlpb.Command.survey_response:type_name -> controlpb.SurveyResponse
-	4,  // 6: controlpb.Command.subscribe:type_name -> controlpb.Subscribe
-	11, // 7: controlpb.Command.notification:type_name -> controlpb.Notification
-	12, // 8: controlpb.Command.refresh:type_name -> controlpb.Refresh
-	3,  // 9: controlpb.Node.metrics:type_name -> controlpb.Metrics
-	13, // 10: controlpb.Metrics.items:type_name -> controlpb.Metrics.ItemsEntry
-	5,  // 11: controlpb.Subscribe.recover_since:type_name -> controlpb.StreamPosition
-	6,  // 12: controlpb.Subscribe.label_filter:type_name -> controlpb.FilterNode
-	6,  // 13: controlpb.FilterNode.nodes:type_name -> controlpb.FilterNode
-	6,  // 14: controlpb.Unsubscribe.label_filter:type_name -> controlpb.FilterNode
-	6,  // 15: controlpb.Disconnect.label_filter:type_name -> controlpb.FilterNode
-	6,  // 16: controlpb.Refresh.label_filter:type_name -> controlpb.FilterNode
-	17, // [17:17] is the sub-list for method output_type
-	17, // [17:17] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	10, // 4: controlpb.Command.survey_request:type_name -> controlpb.SurveyRequest
+	11, // 5: controlpb.Command.survey_response:type_name -> controlpb.SurveyResponse
+	5,  // 6: controlpb.Command.subscribe:type_name -> controlpb.Subscribe
+	12, // 7: controlpb.Command.notification:type_name -> controlpb.Notification
+	13, // 8: controlpb.Command.refresh:type_name -> controlpb.Refresh
+	4,  // 9: controlpb.Node.metrics:type_name -> controlpb.Metrics
+	3,  // 10: controlpb.Node.lineage_left:type_name -> controlpb.LineageToken
+	14, // 11: controlpb.Metrics.items:type_name -> controlpb.Metrics.ItemsEntry
+	6,  // 12: controlpb.Subscribe.recover_since:type_name -> controlpb.StreamPosition
+	7,  // 13: controlpb.Subscribe.label_filter:type_name -> controlpb.FilterNode
+	7,  // 14: controlpb.FilterNode.nodes:type_name -> controlpb.FilterNode
+	7,  // 15: controlpb.Unsubscribe.label_filter:type_name -> controlpb.FilterNode
+	7,  // 16: controlpb.Disconnect.label_filter:type_name -> controlpb.FilterNode
+	7,  // 17: controlpb.Refresh.label_filter:type_name -> controlpb.FilterNode
+	18, // [18:18] is the sub-list for method output_type
+	18, // [18:18] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_control_proto_init() }
@@ -1315,7 +1385,7 @@ func file_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_proto_rawDesc), len(file_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

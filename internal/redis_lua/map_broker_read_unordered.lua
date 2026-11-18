@@ -3,6 +3,8 @@
 -- KEYS[2] = state expire zset key (optional, empty '' to disable expiration cleanup)
 -- KEYS[3] = meta key
 -- KEYS[4] = state meta key
+-- KEYS[5] = lineage token key
+-- KEYS[6] = stream key (dropped with a meta of another lineage)
 -- ARGV[1] = cursor (use "0" to start, returned cursor for next page)
 -- ARGV[2] = limit (0 = return all via HGETALL, >0 = use HSCAN)
 -- ARGV[3] = now (current timestamp)
@@ -14,6 +16,8 @@ local hash_key = KEYS[1]
 local expire_key = KEYS[2]
 local meta_key = KEYS[3]
 local state_meta_key = KEYS[4]
+local token_key = KEYS[5]
+local stream_key = KEYS[6]
 
 local cursor = ARGV[1]
 local limit = tonumber(ARGV[2])
@@ -24,15 +28,19 @@ local state_ttl = tonumber(ARGV[5])
 local streamless = ARGV[6] == "1"
 
 local epoch = ""
+-- epoch_out is the epoch replied, with its observation suffix (see lineage_obs).
+local epoch_out = ""
 local offset = "0"
 
 if not streamless then
     -- Update meta TTL and get current offset
     if meta_key ~= '' then
-        epoch = redis.call("hget", meta_key, "e")
+        local token, ancestor = lineage_token(token_key)
+        local dropped
+        epoch, dropped = lineage_map_meta(meta_key, stream_key, token, ancestor)
         if not epoch then
             epoch = now_str
-            redis.call("hset", meta_key, "e", epoch)
+            lineage_map_create(meta_key, state_meta_key, epoch, token, dropped)
         end
 
         offset = redis.call("hget", meta_key, "s")
@@ -43,6 +51,7 @@ if not streamless then
         if meta_ttl > 0 then
             redis.call("pexpire", meta_key, meta_ttl)
         end
+        epoch_out = epoch .. lineage_map_obs(meta_key) .. lineage_reset_ext(dropped)
     end
 
     -- Validate state epoch against stream epoch
@@ -50,13 +59,13 @@ if not streamless then
         local state_meta_exists = redis.call("exists", state_meta_key)
         if state_meta_exists == 0 then
             -- No state metadata = state is invalid/evicted
-            return {offset, epoch, "0", {}}
+            return {offset, epoch_out, "0", {}}
         end
 
         local state_epoch = redis.call("hget", state_meta_key, "epoch")
         if state_epoch ~= epoch then
             -- Epoch mismatch = state is stale (from old epoch)
-            return {offset, epoch, "0", {}}
+            return {offset, epoch_out, "0", {}}
         end
     end
 end
@@ -80,8 +89,8 @@ end
 -- Return offset, epoch and raw HSCAN/HGETALL result (no table building)
 if limit > 0 then
     local result = redis.call("hscan", hash_key, cursor, "COUNT", limit)
-    return {offset, epoch, result[1], result[2]}  -- offset, epoch, cursor, key-value array
+    return {offset, epoch_out, result[1], result[2]}  -- offset, epoch, cursor, key-value array
 else
     local data = redis.call("hgetall", hash_key)
-    return {offset, epoch, "0", data}  -- offset, epoch, cursor="0", key-value array
+    return {offset, epoch_out, "0", data}  -- offset, epoch, cursor="0", key-value array
 end

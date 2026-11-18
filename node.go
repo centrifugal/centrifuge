@@ -85,6 +85,18 @@ type Node struct {
 	surveyMu       sync.RWMutex
 	surveyID       uint64
 
+	// lineages are the Redis lineages of this node's brokers (see
+	// redis_lineage.go).
+	lineages sync.Map
+	// lineageLeft are the lineage tokens this node saw replaced, shared by its
+	// lineages and passed to other nodes with the node info.
+	lineageLeft *lineageLeftTokens
+	// lineagePeers is closed once this node heard from another node (or found
+	// none in time): a restarted node learns the replaced tokens of the others
+	// before trusting a lineage.
+	lineagePeers     chan struct{}
+	lineagePeersOnce sync.Once
+
 	notificationHandler NotificationHandler
 	nodeInfoSendHandler NodeInfoSendHandler
 
@@ -201,6 +213,8 @@ func New(c Config) (*Node, error) {
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
 		nowTimeGetter:  nowtime.Get,
 		surveyRegistry: make(map[uint64]chan survey),
+		lineageLeft:    newLineageLeftTokens(),
+		lineagePeers:   make(chan struct{}),
 		mediums:        mediums,
 		mediumLocks:    mediumLocks,
 		timerScheduler: c.ClientTimerScheduler,
@@ -675,7 +689,9 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID stri
 		Op:   op,
 		Data: data,
 	}
-	surveyChan := make(chan survey, numNodes)
+	// One more than the nodes known: the local reply is sent before the reader
+	// starts, and a node not registered yet knows no node at all.
+	surveyChan := make(chan survey, numNodes+1)
 	n.surveyRegistry[surveyRequest.Id] = surveyChan
 	n.surveyMu.Unlock()
 
@@ -1046,6 +1062,14 @@ func (n *Node) pubNode(nodeID string) error {
 		reply := n.nodeInfoSendHandler()
 		data = reply.Data
 	}
+	leftTokens, leftAt := n.lineageLeft.recent(lineageLeftExchanged, time.Now().Add(-lineageLeftExchangeWindow).Unix())
+	var lineageLeft []*controlpb.LineageToken
+	if len(leftTokens) > 0 {
+		lineageLeft = make([]*controlpb.LineageToken, len(leftTokens))
+		for i, tok := range leftTokens {
+			lineageLeft[i] = &controlpb.LineageToken{Token: tok, ReplacedAt: leftAt[i]}
+		}
+	}
 	n.mu.RLock()
 	node := &controlpb.Node{
 		Uid:         n.uid,
@@ -1057,6 +1081,7 @@ func (n *Node) pubNode(nodeID string) error {
 		NumSubs:     uint32(n.hub.NumSubscriptions()),
 		Uptime:      uint32(time.Now().Unix() - n.startedAt),
 		Data:        data,
+		LineageLeft: lineageLeft,
 	}
 
 	n.metricsMu.Lock()
@@ -1408,6 +1433,10 @@ func (n *Node) unsubscribeFromBrokerWhenEmpty(ch string, wasMap bool) {
 
 // nodeCmd handles node control command i.e. updates information about known nodes.
 func (n *Node) nodeCmd(node *controlpb.Node) error {
+	if node.Uid != n.uid {
+		n.learnLineageLeft(node.LineageLeft)
+		n.lineagePeersOnce.Do(func() { close(n.lineagePeers) })
+	}
 	isNewNode := n.nodes.add(node)
 	if isNewNode && node.Uid != n.uid {
 		// New Node in cluster
@@ -2015,6 +2044,7 @@ func (r *nodeRegistry) add(info *controlpb.Node) bool {
 				Uptime:      info.Uptime,
 				Data:        info.Data,
 				NumSubs:     info.NumSubs,
+				LineageLeft: info.LineageLeft,
 				Metrics:     node.Metrics,
 			}
 		}
@@ -2424,4 +2454,72 @@ func (n *Node) MapClear(ctx context.Context, ch string, opts MapClearOptions) er
 	}
 	n.metrics.incActionCount("map_clear", ch)
 	return mapBroker.Clear(ctx, ch, opts)
+}
+
+// lineageLeftExchanged is how many of its most recently replaced lineage tokens
+// a node sends with its node info.
+const lineageLeftExchanged = 64
+
+// lineageLeftExchangeWindow: a node sends the tokens replaced within this
+// window. Only a primary that stayed up isolated, kept our scripts and never
+// resynced can present a replaced token and pass the gate, so the tokens that
+// matter are those replaced since such a server was cut off. Older tokens stay
+// known to the nodes that saw them; with no rotation within the window, node
+// info carries none.
+const lineageLeftExchangeWindow = 24 * time.Hour
+
+// lineagePeersWait bounds how long a node starting its first lineage call
+// waits to hear from another node (others answer a new node at once).
+var lineagePeersWait = 300 * time.Millisecond
+
+func (n *Node) registerLineage(l *redisLineage) {
+	n.lineages.Store(l, struct{}{})
+}
+
+// awaitLineagePeers waits, once, until this node heard from another node or
+// lineagePeersWait passed since it started.
+func (n *Node) awaitLineagePeers(ctx context.Context) {
+	select {
+	case <-n.lineagePeers:
+		return
+	default:
+	}
+	wait := lineagePeersWait - time.Since(time.Unix(n.startedAt, 0))
+	if wait <= 0 {
+		n.lineagePeersOnce.Do(func() { close(n.lineagePeers) })
+		return
+	}
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case <-n.lineagePeers:
+	case <-t.C:
+		n.lineagePeersOnce.Do(func() { close(n.lineagePeers) })
+	case <-ctx.Done():
+	}
+}
+
+// learnLineageLeft records lineage tokens another node saw replaced. A lineage
+// whose current token is among them rotates: its server is a stale copy.
+func (n *Node) learnLineageLeft(left []*controlpb.LineageToken) {
+	if len(left) == 0 {
+		return
+	}
+	tokens := make([]string, len(left))
+	ats := make([]int64, len(left))
+	for i, t := range left {
+		tokens[i], ats[i] = t.GetToken(), t.GetReplacedAt()
+	}
+	if !n.lineageLeft.addPairs(tokens, ats) {
+		return
+	}
+	n.lineages.Range(func(k, _ any) bool {
+		l := k.(*redisLineage)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			l.reconcile(ctx)
+		}()
+		return true
+	})
 }

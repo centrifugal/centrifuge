@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"bytes"
 	"context"
+	"crypto/fips140"
 	"errors"
 	"fmt"
 	"runtime"
@@ -123,20 +124,22 @@ type brokerPubSubRunner interface {
 // By default, Redis >= 5 required (due to the fact RedisBroker uses STREAM data
 // structure to keep publication history for a channel).
 type RedisBroker struct {
-	controlRound            uint64
-	node                    *Node
-	sharding                bool
-	config                  RedisBrokerConfig
-	shards                  []*shardWrapper
+	controlRound uint64
+	node         *Node
+	sharding     bool
+	config       RedisBrokerConfig
+	shards       []*shardWrapper
 	// partitionTags is non-nil when UsePrecomputedPartitionTags is enabled;
 	// indexed by partition index, returns the hash tag string. Read-only
 	// after construction (shared with the package-level precomputed table).
 	partitionTags           []string
 	publishIdempotentScript *rueidis.Lua
 	historyListScript       *rueidis.Lua
-	historyStreamScript     *rueidis.Lua
+	historyStreamScript     *lineageScript
 	addHistoryListScript    *rueidis.Lua
-	addHistoryStreamScript  *rueidis.Lua
+	addHistoryStreamScript  *lineageScript
+	resetLostStreamScript   *rueidis.Lua
+	watermarks              *offsetWatermarks
 	shardChannel            string
 	messagePrefix           string
 	controlChannel          string
@@ -253,14 +256,38 @@ type RedisBrokerConfig struct {
 	numPubSubProcessors int
 
 	// LoadSHA1 enables loading SHA1 from Redis via SCRIPT LOAD instead of calculating
-	// it on the client side. This is useful for FIPS compliance.
+	// it on the client side. This is useful for FIPS compliance. It is always on
+	// in FIPS-only mode (GODEBUG=fips140=only), where SHA-1 can't be computed here.
 	LoadSHA1 bool
+
+	// DetectPotentialLostWrites makes the broker detect that a Redis failover
+	// or a restart may have lost writes to a stream (a promoted replica that
+	// missed the last writes, a restart from an older RDB or AOF), so its
+	// streams start a new epoch and subscribers resync instead of missing
+	// publications. It uses the script cache of Redis 7+ and Valkey and needs no
+	// extra permissions; on other servers only reused offsets are detected, per
+	// channel. Off by default: the broker then works as it did before the option
+	// existed.
+	DetectPotentialLostWrites bool
+	// PotentialLostWritesUseInfo makes the detection read the server's
+	// replication ID with INFO instead, on every server, including Redis 6 and
+	// Dragonfly, at the cost of INFO in every meta script. INFO needs the
+	// @dangerous ACL category. The ID also changes when nothing was lost - a
+	// primary gets its first replica, or has had none for repl-backlog-ttl - and
+	// streams then start new epochs too. In Redis Cluster, streams of a slot
+	// moved to another node start new epochs as well. It has an effect only with
+	// DetectPotentialLostWrites.
+	PotentialLostWritesUseInfo bool
 }
 
 // NewRedisBroker initializes Redis Broker.
 func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	if len(config.Shards) == 0 {
 		return nil, errors.New("broker: no Redis shards provided in configuration")
+	}
+	if fips140.Enforced() {
+		// SHA-1 can't be computed here in FIPS-only mode.
+		config.LoadSHA1 = true
 	}
 
 	if config.SubscribeOnReplica {
@@ -329,11 +356,27 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		partitionTags:           partitionTags,
 		sharding:                len(config.Shards) > 1,
 		publishIdempotentScript: rueidis.NewLuaScript(publishIdempotentSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
-		historyStreamScript:     rueidis.NewLuaScript(historyStreamSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
+		historyStreamScript:     newLineageScript("history_stream", historyStreamSource, config.LoadSHA1),
 		historyListScript:       rueidis.NewLuaScript(historyListSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
-		addHistoryStreamScript:  rueidis.NewLuaScript(addHistoryStreamSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
+		addHistoryStreamScript:  newLineageScript("add_history_stream", addHistoryStreamSource, config.LoadSHA1),
 		addHistoryListScript:    rueidis.NewLuaScript(addHistoryListSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
 		closeCh:                 make(chan struct{}),
+	}
+	for _, sw := range b.shards {
+		sw.shard.ensureLineage(n)
+	}
+	if config.DetectPotentialLostWrites && !config.UseLists {
+		b.watermarks = newOffsetWatermarks()
+		b.resetLostStreamScript = rueidis.NewLuaScript(resetLostStreamSource, rueidis.WithLoadSHA1(config.LoadSHA1))
+		for _, sw := range b.shards {
+			l := b.lin(sw.shard)
+			l.register(b.historyStreamScript, config.LoadSHA1)
+			l.register(b.addHistoryStreamScript, config.LoadSHA1)
+			l.setLogger(n, config.Name)
+		}
+	}
+	if config.PotentialLostWritesUseInfo && !config.DetectPotentialLostWrites {
+		n.logger.log(newLogEntry(LogLevelWarn, "redis broker: PotentialLostWritesUseInfo has no effect without DetectPotentialLostWrites", map[string]any{"broker_name": config.Name}))
 	}
 	b.shardChannel = config.Prefix + redisPubSubShardChannelSuffix
 	b.messagePrefix = config.Prefix + redisClientChannelPrefix
@@ -491,6 +534,9 @@ func (b *RedisBroker) RegisterBrokerEventHandler(h BrokerEventHandler) error {
 		}
 		if err := b.checkCapabilities(wrapper.shard); err != nil {
 			return fmt.Errorf("capability error on shard [%s]: %v", wrapper.shard.string(), err)
+		}
+		if !b.config.UseLists {
+			go b.lin(wrapper.shard).reportEnvironment(b.node, "broker", b.config.Name, b.config.DetectPotentialLostWrites, b.config.PotentialLostWritesUseInfo)
 		}
 	}
 	for i := 0; i < len(b.shards); i++ {
@@ -917,6 +963,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		// The idempotent script replies with what its publish replied, and
 		// with SkipPubSub there is nothing to publish to - a nil reply, which
 		// is not a failure: the result was remembered.
+		s.shard.noteError(resp.Error())
 		if err := resp.Error(); err != nil && !rueidis.IsRedisNil(err) {
 			return PublishResult{}, err
 		}
@@ -934,15 +981,12 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 
 	var streamKey channelID
 	var size int
-	var script *rueidis.Lua
 	if b.config.UseLists {
 		streamKey = b.historyListKey(s.shard, ch)
 		size = opts.HistorySize - 1
-		script = b.addHistoryListScript
 	} else {
 		streamKey = b.historyStreamKey(s.shard, ch)
 		size = opts.HistorySize
-		script = b.addHistoryStreamScript
 	}
 
 	var useDelta string
@@ -956,28 +1000,32 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 	}
 	versionEpoch := opts.VersionEpoch
 
-	replies, err := script.Exec(
-		context.Background(),
-		s.shard.client,
-		[]string{string(streamKey), string(historyMetaKey), string(resultKey)},
-		[]string{
-			convert.BytesToString(byteMessage),
-			strconv.Itoa(size),
-			strconv.Itoa(int(opts.HistoryTTL.Seconds())),
-			publishChannelStr,
-			strconv.Itoa(historyMetaTTLSeconds),
-			epoch.Generate(),
-			publishCommand,
-			resultExpire,
-			useDelta,
-			version,
-			versionEpoch,
-		},
-	).ToArray()
+	addArgs := []string{
+		convert.BytesToString(byteMessage),
+		strconv.Itoa(size),
+		strconv.Itoa(int(opts.HistoryTTL.Seconds())),
+		publishChannelStr,
+		strconv.Itoa(historyMetaTTLSeconds),
+		epoch.Generate(),
+		publishCommand,
+		resultExpire,
+		useDelta,
+		version,
+		versionEpoch,
+	}
+	var replies []rueidis.RedisMessage
+	if b.config.UseLists {
+		replies, err = b.addHistoryListScript.Exec(context.Background(), s.shard.client,
+			[]string{string(streamKey), string(historyMetaKey), string(resultKey)}, addArgs).ToArray()
+	} else {
+		replies, err = b.execLineageScript(context.Background(), s.shard, b.addHistoryStreamScript,
+			[]string{string(streamKey), string(historyMetaKey), string(resultKey), b.lineageKey(s.shard, string(historyMetaKey))},
+			addArgs).ToArray()
+	}
 	if err != nil {
 		return PublishResult{}, err
 	}
-	if len(replies) != 2 && len(replies) != 3 && len(replies) != 4 {
+	if len(replies) < 2 {
 		return PublishResult{}, errors.New("wrong Redis reply")
 	}
 	offset, err := replies[0].AsInt64()
@@ -988,6 +1036,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 	if err != nil {
 		return PublishResult{}, errors.New("wrong Redis reply epoch")
 	}
+	epoch = b.lin(s.shard).epochExt("stream", b.config.Name, string(historyMetaKey), epoch)
 	result := PublishResult{StreamPosition: StreamPosition{Offset: uint64(offset), Epoch: epoch}}
 	if len(replies) >= 3 {
 		fromCacheStr, err := replies[2].ToString()
@@ -1278,6 +1327,9 @@ func (b *RedisBroker) rollbackSubscribeBatch(groups map[brokerConnKey]*brokerCon
 func (b *RedisBroker) Unsubscribe(channels ...string) error {
 	if len(channels) == 0 {
 		return nil
+	}
+	if b.watermarks != nil {
+		b.watermarks.forget(channels...)
 	}
 	if len(channels) == 1 {
 		return b.unsubscribe(b.getShard(channels[0]), channels[0])
@@ -1669,6 +1721,10 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 	if channel == "" {
 		return fmt.Errorf("unsupported channel: %s", chID)
 	}
+	if strings.IndexByte(sp.Epoch, pubsubEpochExt) >= 0 {
+		shard := b.getShard(channel).shard
+		sp.Epoch = b.lin(shard).epochExt("stream", b.config.Name, string(b.historyMetaKey(shard, channel)), sp.Epoch)
+	}
 	if typeOfPush == pubPushType {
 		var pub protocol.Publication
 		err := pub.UnmarshalCF(pushData)
@@ -1687,7 +1743,7 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 			sp.Offset = pub.Offset
 		}
 		if pub.Epoch != "" {
-			sp.Epoch = pub.Epoch
+			sp.Epoch = pubsubEpoch(pub.Epoch)
 			pub.Epoch = "" // Clear — epoch travels in StreamPosition, not in Publication to clients.
 		}
 		if pub.Delta {
@@ -1695,6 +1751,15 @@ func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler Brok
 			// before passing further.
 			delta = true
 			pub.Delta = false
+		}
+		if b.watermarks != nil {
+			var check *watermarkCheck
+			sp.Epoch, check = b.watermarks.observe(channel, sp.Epoch, sp.Offset, pub.Time, func() bool {
+				return b.node.hub.NumSubscribers(channel) > 0
+			})
+			if check != nil {
+				go b.checkReusedOffset(check)
+			}
 		}
 		if len(pub.PrevData) > 0 {
 			// PrevData from map broker fan-out: carry previous data for delta computation.
@@ -1767,7 +1832,9 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOption
 
 	historyMetaTTLSeconds := int(historyMetaTTL.Seconds())
 
-	replies, err := b.historyStreamScript.Exec(context.Background(), s.client, []string{string(historyKey), string(historyMetaKey)}, []string{includePubs, strconv.FormatUint(offset, 10), strconv.Itoa(limit), reverse, strconv.Itoa(historyMetaTTLSeconds), epoch.Generate()}).ToArray()
+	replies, err := b.execLineageScript(context.Background(), s, b.historyStreamScript,
+		[]string{string(historyKey), string(historyMetaKey), b.lineageKey(s, string(historyMetaKey))},
+		[]string{includePubs, strconv.FormatUint(offset, 10), strconv.Itoa(limit), reverse, strconv.Itoa(historyMetaTTLSeconds), epoch.Generate()}).ToArray()
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}
@@ -1787,8 +1854,9 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOption
 	if err != nil {
 		return nil, StreamPosition{}, errors.New("wrong Redis reply epoch")
 	}
+	epoch = b.lin(s).epochExt("stream", b.config.Name, string(historyMetaKey), epoch)
 
-	if includePubs == "1" && len(replies) == 3 {
+	if includePubs == "1" && len(replies) >= 3 {
 		values, err := replies[2].ToArray()
 		if err != nil {
 			return nil, StreamPosition{}, err
@@ -1877,6 +1945,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 	if err != nil {
 		return nil, StreamPosition{}, errors.New("wrong Redis reply epoch")
 	}
+	epoch = b.lin(s).epochExt("stream", b.config.Name, string(historyMetaKey), epoch)
 
 	latestPosition := StreamPosition{Offset: uint64(offs), Epoch: epoch}
 
@@ -2142,4 +2211,117 @@ func parseDeltaPush(input string) (deltaPublicationPush, error) {
 		PayloadLength:     payloadLength,
 		Payload:           payload,
 	}, nil
+}
+
+// execLineageScript runs a meta script in the lineage mode of the shard: gated
+// with EVALSHA on Redis 7+ and Valkey, otherwise as a plain script.
+func (b *RedisBroker) execLineageScript(ctx context.Context, s *RedisShard, ls *lineageScript, keys, args []string) rueidis.RedisResult {
+	if !b.config.DetectPotentialLostWrites {
+		resp := ls.lua(lineageNone).Exec(ctx, s.client, keys, args)
+		s.noteError(resp.Error())
+		return resp
+	}
+	mode, err := b.lin(s).mode(ctx, b.config.PotentialLostWritesUseInfo)
+	if err != nil {
+		return rueidis.NewErrorResult(err)
+	}
+	if mode == lineageGate {
+		return b.lin(s).exec(withLineageBroker(ctx, b.config.Name), ls, keys, args)
+	}
+	var resp rueidis.RedisResult
+	if mode == lineageInfo {
+		resp = ls.lua(lineageInfo).Exec(ctx, s.client, keys, args)
+	} else {
+		resp = ls.lua(lineageNone).Exec(ctx, s.client, keys, args)
+	}
+	s.noteError(resp.Error())
+	return resp
+}
+
+// pubsubEpochExt starts an extension of an epoch in a PUB/SUB message: data a
+// later version may add (epochs never contain it). A node ignores what it
+// doesn't know, so such data needs no coordinated rollout.
+const pubsubEpochExt = ';'
+
+// pubsubEpoch returns the epoch of a PUB/SUB message without extensions.
+func pubsubEpoch(e string) string {
+	if i := strings.IndexByte(e, pubsubEpochExt); i >= 0 {
+		return e[:i]
+	}
+	return e
+}
+
+// resetLostStreamSource deletes a stream and its meta if the meta still has
+// the lost epoch (ARGV[1]): the next access starts a new epoch.
+const resetLostStreamSource = `
+if redis.call("hget", KEYS[1], "e") ~= ARGV[1] then
+    return 0
+end
+redis.call("del", KEYS[1], KEYS[2])
+return 1
+`
+
+// resetLostStream reacts to a server that gave out offsets of the epoch again
+// (see offsetWatermarks): it lost writes. With the gate, the server's lineage
+// rotates - every stream and map on it starts a new epoch, so clients holding
+// positions in other channels, offline ones too, can't recover across the loss
+// either. Otherwise (no lineage to rotate) the stream alone is reset.
+func (b *RedisBroker) resetLostStream(ch string, epoch string, offset uint64) {
+	s := b.getShard(ch).shard
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if b.lin(s).gateMode() {
+		err := b.lin(s).rotateIfToken(withLineageBroker(ctx, b.config.Name), string(b.historyMetaKey(s, ch)))
+		if err != nil {
+			b.node.logger.log(newErrorLogEntry(err, "error rotating the lineage of a server that reused offsets", map[string]any{"broker_name": b.config.Name, "channel": ch, "epoch": epoch}))
+			return
+		}
+		b.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused stream offsets, writes were lost: every stream and map on the server starts a new epoch", map[string]any{"broker_name": b.config.Name, "channel": ch, "epoch": epoch, "offset": offset}))
+		return
+	}
+	reset, err := b.resetLostStreamScript.Exec(ctx, s.client,
+		[]string{string(b.historyMetaKey(s, ch)), string(b.historyStreamKey(s, ch))},
+		[]string{epoch}).AsInt64()
+	if err != nil {
+		b.node.logger.log(newErrorLogEntry(err, "error resetting a stream with reused offsets", map[string]any{"broker_name": b.config.Name, "channel": ch, "epoch": epoch}))
+		return
+	}
+	b.lin(s).countDetection(withLineageBroker(ctx, b.config.Name), "reused_offset")
+	if reset == 1 {
+		b.lin(s).countEpochReset("stream", b.config.Name, "reused_offset")
+	}
+	b.node.logger.log(newLogEntry(LogLevelWarn, "Redis reused stream offsets, writes were lost: stream reset", map[string]any{"broker_name": b.config.Name, "channel": ch, "epoch": epoch, "offset": offset, "reset": reset == 1}))
+}
+
+// checkReusedOffset verifies a suspect offset (see offsetWatermarks) and
+// reacts to a loss.
+func (b *RedisBroker) checkReusedOffset(c *watermarkCheck) {
+	s := b.getShard(c.ch).shard
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	lost, err := verifyReusedOffset(ctx, s.client, string(b.historyStreamKey(s, c.ch)), string(b.historyMetaKey(s, c.ch)), c)
+	if err != nil {
+		b.node.logger.log(newErrorLogEntry(err, "error verifying a reused stream offset", map[string]any{"broker_name": b.config.Name, "channel": c.ch}))
+	}
+	b.watermarks.settle(c, lost)
+	if lost {
+		b.resetLostStream(c.ch, c.epoch, c.got)
+		b.node.resyncLocalSubscribers(c.ch)
+	}
+}
+
+// lineageKey returns the key a meta script gets as its lineage key. Without
+// detection the scripts never read it, and it is the meta key itself: every
+// key a script gets is checked against the ACL user's key patterns, so the
+// scripts get the same keys as before the lineage existed.
+func (b *RedisBroker) lineageKey(s *RedisShard, metaKey string) string {
+	if !b.config.DetectPotentialLostWrites {
+		return metaKey
+	}
+	return b.lin(s).tokenKey(metaKey)
+}
+
+// lin returns the broker's lineage on a shard (see redis_lineage.go).
+func (b *RedisBroker) lin(s *RedisShard) *redisLineage {
+	return s.lineageFor(b.config.Prefix)
 }

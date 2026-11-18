@@ -4,5 +4,5 @@ return add_history(
     KEYS[1], KEYS[2], KEYS[3],
     ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5],
     ARGV[6], ARGV[7], ARGV[8], ARGV[9],
-    ARGV[10], ARGV[11]
+    ARGV[10], ARGV[11], KEYS[4]
 )
