@@ -84,7 +84,12 @@ type testTCPProxy struct {
 
 func startTestTCPProxy(tb testing.TB, upstream string) *testTCPProxy {
 	tb.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	return startTestTCPProxyAt(tb, "127.0.0.1:0", upstream)
+}
+
+func startTestTCPProxyAt(tb testing.TB, addr string, upstream string) *testTCPProxy {
+	tb.Helper()
+	ln, err := net.Listen("tcp", addr)
 	require.NoError(tb, err)
 	p := &testTCPProxy{ln: ln, upstream: upstream}
 	go func() {
@@ -203,4 +208,49 @@ func TestRedisShardReadFailsFastDuringOutage(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("read-only command did not return within 5s during Redis outage — client-level retries are hiding the failure")
 	}
+}
+
+// TestNewRedisShardStartupWaitTimeoutWaitsForRedis: Redis which becomes
+// reachable during StartupWaitTimeout is connected to.
+func TestNewRedisShardStartupWaitTimeoutWaitsForRedis(t *testing.T) {
+	addr := unusedTCPAddr(t)
+	type result struct {
+		shard *RedisShard
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		shard, err := NewRedisShard(nil, RedisShardConfig{
+			Address:            addr,
+			StartupWaitTimeout: 30 * time.Second,
+		})
+		done <- result{shard: shard, err: err}
+	}()
+
+	select {
+	case res := <-done:
+		t.Fatalf("NewRedisShard returned while Redis is unreachable: %v", res.err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	proxy := startTestTCPProxyAt(t, addr, "127.0.0.1:6379")
+	t.Cleanup(proxy.stop)
+
+	res := <-done
+	require.NoError(t, res.err)
+	t.Cleanup(res.shard.Close)
+	require.NoError(t, res.shard.client.Do(context.Background(), res.shard.client.B().Ping().Build()).Error())
+}
+
+// TestNewRedisShardStartupWaitTimeoutDoesNotWaitOnRedisError: a database
+// Redis does not have is a configuration error, returned without waiting for
+// the timeout.
+func TestNewRedisShardStartupWaitTimeoutDoesNotWaitOnRedisError(t *testing.T) {
+	started := time.Now()
+	_, err := NewRedisShard(nil, RedisShardConfig{
+		Address:            "127.0.0.1:6379",
+		DB:                 1 << 20,
+		StartupWaitTimeout: 30 * time.Second,
+	})
+	require.Error(t, err)
+	require.Less(t, time.Since(started), 5*time.Second)
 }

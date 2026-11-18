@@ -37,6 +37,11 @@ const (
 	// Sentinel connection at the same moment the master dies and Redis PUB/SUB
 	// does not replay the missed message.
 	sentinelTopologyRefreshInterval = 5 * time.Second
+
+	// Delays between connection attempts made during StartupWaitTimeout grow
+	// from the initial one to the max one, each shortened by a random jitter.
+	redisStartupWaitInitialDelay = 100 * time.Millisecond
+	redisStartupWaitMaxDelay     = 5 * time.Second
 )
 
 type RedisShard struct {
@@ -433,7 +438,7 @@ func redisClientOptions(conf RedisShardConfig) (options rueidis.ClientOption, is
 }
 
 // NewRedisShard initializes new Redis shard.
-func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
+func NewRedisShard(node *Node, conf RedisShardConfig) (*RedisShard, error) {
 	if conf.ConnectTimeout == 0 {
 		conf.ConnectTimeout = defaultRedisConnectTimeout
 	}
@@ -470,7 +475,7 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	// rueidis.NewClient shuffles options.InitAddress in place: a copy of the
 	// configured addresses, so shards made from one configuration don't
 	// reorder each other's addresses while they are read (see string).
-	client, err := rueidis.NewClient(options)
+	client, err := newRedisClient(node, conf, options)
 	if err != nil {
 		return nil, fmt.Errorf("error creating Redis client: %v", err)
 	}
@@ -498,7 +503,7 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 			return nil, errors.New("replica client may be enabled only in cluster and sentinel mode")
 		}
 		options.ReplicaOnly = true
-		replicaClient, err := rueidis.NewClient(options)
+		replicaClient, err := newRedisClient(node, conf, options)
 		if err != nil {
 			return nil, fmt.Errorf("error creating Redis replica client: %w", err)
 		}
@@ -506,6 +511,79 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	}
 
 	return shard, nil
+}
+
+// newRedisClient creates a Redis client. Without StartupWaitTimeout it makes
+// one attempt. With it, it keeps trying until Redis accepts a connection and
+// answers PING, so a Redis which is not reachable yet or still loads its
+// dataset is waited for.
+func newRedisClient(node *Node, conf RedisShardConfig, options rueidis.ClientOption) (rueidis.Client, error) {
+	if conf.StartupWaitTimeout <= 0 {
+		return rueidis.NewClient(options)
+	}
+	connect := func() (rueidis.Client, error) {
+		client, err := rueidis.NewClient(options)
+		if err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), conf.IOTimeout)
+		defer cancel()
+		if err := client.Do(ctx, client.B().Ping().Build()).Error(); err != nil {
+			client.Close()
+			return nil, err
+		}
+		return client, nil
+	}
+	onRetry := func(err error, delay time.Duration) {
+		if node == nil {
+			return
+		}
+		node.logger.log(newLogEntry(LogLevelInfo, "waiting for Redis on startup", map[string]any{
+			"address":  strings.Join(options.InitAddress, ","),
+			"error":    err.Error(),
+			"retry_in": delay.String(),
+		}))
+	}
+	return waitForRedisStartup(conf.StartupWaitTimeout, connect, onRetry)
+}
+
+// waitForRedisStartup calls connect until it succeeds, fails with an error
+// which waiting can't fix, or the timeout passes. In the last case it returns
+// the error of the last attempt. It calls onRetry before each delay.
+func waitForRedisStartup(
+	timeout time.Duration,
+	connect func() (rueidis.Client, error),
+	onRetry func(err error, delay time.Duration),
+) (rueidis.Client, error) {
+	deadline := time.Now().Add(timeout)
+	maxDelay := redisStartupWaitInitialDelay
+	for {
+		client, err := connect()
+		if err == nil || !isRedisStartupErrorTransient(err) {
+			return client, err
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, err
+		}
+		// Sleep from a half of maxDelay to the full maxDelay.
+		delay := maxDelay/2 + time.Duration(randSource.Int63n(int64(maxDelay/2)+1))
+		delay = min(delay, remaining)
+		onRetry(err, delay)
+		time.Sleep(delay)
+		maxDelay = min(2*maxDelay, redisStartupWaitMaxDelay)
+	}
+}
+
+// isRedisStartupErrorTransient tells whether an error of a connection attempt
+// may go away while waiting. A network error may: Redis is not up yet. Of the
+// errors Redis replies with only LOADING may, the rest (wrong password, wrong
+// database) come from the configuration.
+func isRedisStartupErrorTransient(err error) bool {
+	if redisErr, ok := rueidis.IsRedisErr(err); ok {
+		return redisErr.IsLoading()
+	}
+	return true
 }
 
 // RedisShardConfig contains Redis connection options.
@@ -564,6 +642,12 @@ type RedisShardConfig struct {
 	// Redis with this timeout for PING operation to find out stale/broken/blocked connections.
 	// By default, 4 seconds is used.
 	IOTimeout time.Duration
+	// StartupWaitTimeout is how long NewRedisShard keeps trying to connect to
+	// a Redis which is not available yet: not reachable, or still loading its
+	// dataset. Attempts are made with a backoff of up to 5 seconds. An error
+	// which waiting can't fix, like a wrong password, is returned right away.
+	// By default, zero: NewRedisShard makes one attempt to connect.
+	StartupWaitTimeout time.Duration
 
 	// ForceRESP2 if set to true forces using RESP2 protocol for communicating with Redis.
 	// By default, Redis client tries to detect supported Redis protocol automatically
