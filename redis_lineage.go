@@ -1015,10 +1015,33 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 				intact = true
 			}
 		}
+		loaded := ""
+		load := func(token string) error {
+			if token == loaded {
+				return nil
+			}
+			for _, s := range scripts {
+				if err := c.Do(ctx, c.B().ScriptLoad().Script(s.gatedSource(token)).Build()).Error(); err != nil {
+					return fmt.Errorf("load %s: %w", s.name, err)
+				}
+			}
+			if err := c.Do(ctx, c.B().ScriptLoad().Script(lineageMarkerSource(token)).Build()).Error(); err != nil {
+				return fmt.Errorf("load marker: %w", err)
+			}
+			loaded = token
+			return nil
+		}
 		if !intact {
 			// A new lineage (a restart, a promotion, a stale copy, a flushed
 			// cache): rotate the token of every slot this server serves.
 			token = "g" + strconv.FormatInt(time.Now().UnixNano(), 36) + strconv.FormatUint(lineageRand(), 36)
+			// Its marker and scripts first: a token in the lineage key must
+			// have its marker here, or another node opening the gate between
+			// the rotation and the loading finds no marker and rotates again,
+			// starting new epochs for nothing.
+			if err := load(token); err != nil {
+				return err
+			}
 			args := make([]string, 0, 2*len(slots)+2)
 			args = append(args, tokenKey, currentValue)
 			for _, s := range slots {
@@ -1046,13 +1069,8 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 				}
 			}
 		}
-		for _, s := range scripts {
-			if err := c.Do(ctx, c.B().ScriptLoad().Script(s.gatedSource(token)).Build()).Error(); err != nil {
-				return fmt.Errorf("load %s: %w", s.name, err)
-			}
-		}
-		if err := c.Do(ctx, c.B().ScriptLoad().Script(lineageMarkerSource(token)).Build()).Error(); err != nil {
-			return fmt.Errorf("load marker: %w", err)
+		if err := load(token); err != nil {
+			return err
 		}
 		newToken = token
 		return nil

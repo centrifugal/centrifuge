@@ -770,3 +770,47 @@ func TestRedisLineage_WithInfoAloneTurnsDetectionOn(t *testing.T) {
 	require.True(t, e.conf.DetectLostWrites)
 	require.NotNil(t, e.watermarks)
 }
+
+// Nodes opening the gate of a server with no lineage at the same time rotate
+// its token once. A node writing a new token must have loaded its marker
+// first: a node opening the gate in between would find the token without its
+// marker, take it for a restart, and rotate again - new epochs for nothing.
+func TestRedisLineage_ConcurrentOpenRotatesOnce(t *testing.T) {
+	for _, tt := range []lineageRedisTest{{"rd_single", false, 6379, true}, {"rd_cluster", true, 7001, true}} {
+		t.Run(tt.Name, func(t *testing.T) {
+			for round := 0; round < 20; round++ {
+				// A subtest per round: its nodes close when it ends.
+				t.Run(strconv.Itoa(round), func(t *testing.T) {
+					prefix := getUniquePrefix()
+					const numNodes = 6
+					brokers := make([]*RedisBroker, numNodes)
+					for i := range brokers {
+						brokers[i] = newLineageTestBrokerPrefix(t, tt, false, prefix)
+					}
+					ch := "concurrent_open_" + randString(6)
+					start := make(chan struct{})
+					errCh := make(chan error, numNodes)
+					for _, b := range brokers {
+						go func(b *RedisBroker) {
+							<-start
+							_, err := b.Publish(ch, []byte(`{}`), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute})
+							errCh <- err
+						}(b)
+					}
+					close(start)
+					for range brokers {
+						require.NoError(t, <-errCh)
+					}
+					rotations := 0
+					for _, b := range brokers {
+						l := b.lin(b.shards[0].shard)
+						l.stats.mu.Lock()
+						rotations += l.stats.rotations
+						l.stats.mu.Unlock()
+					}
+					require.Equal(t, 1, rotations, "the first use rotates once, by one node")
+				})
+			}
+		})
+	}
+}
