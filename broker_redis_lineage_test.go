@@ -52,10 +52,10 @@ func newLineageTestBrokerPrefix(t *testing.T, tt lineageRedisTest, allowInfo boo
 	s, err := NewRedisShard(node, conf)
 	require.NoError(t, err)
 	b, err := NewRedisBroker(node, RedisBrokerConfig{
-		Prefix:                     prefix,
-		Shards:                     []*RedisShard{s},
-		DetectPotentialLostWrites:  true,
-		PotentialLostWritesUseInfo: allowInfo,
+		Prefix:                   prefix,
+		Shards:                   []*RedisShard{s},
+		DetectLostWrites:         true,
+		DetectLostWritesWithInfo: allowInfo,
 	})
 	require.NoError(t, err)
 	node.SetBroker(b)
@@ -114,12 +114,12 @@ func TestRedisLineage_Mode(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 			b := newLineageTestBroker(t, tt, false)
 			s := b.shards[0].shard
-			mode, err := b.lin(s).mode(context.Background(), b.config.PotentialLostWritesUseInfo)
+			mode, err := b.lin(s).mode(context.Background(), b.config.DetectLostWritesWithInfo)
 			require.NoError(t, err)
 			if tt.Gate {
 				require.Equal(t, lineageGate, mode)
 			} else {
-				require.Equal(t, lineageNone, mode, "no INFO without PotentialLostWritesUseInfo")
+				require.Equal(t, lineageNone, mode, "no INFO without DetectLostWritesWithInfo")
 			}
 		})
 	}
@@ -503,7 +503,7 @@ func loadMarkerOnOtherPrimaries(t *testing.T, s *RedisShard, key, token string) 
 	require.Positive(t, loaded)
 }
 
-// Without DetectPotentialLostWrites the broker works as it did before the
+// Without DetectLostWrites the broker works as it did before the
 // option existed: it creates no lineage key, stamps no meta, opens no gate,
 // watches no offsets, and a new script cache (a restart, a failover) keeps the
 // epoch. Only the startup report talks to the server (to tell whether the
@@ -556,10 +556,10 @@ func TestRedisLineage_StartupReport(t *testing.T) {
 			s, err := NewRedisShard(node, testSingleRedisConf(6379))
 			require.NoError(t, err)
 			b, err := NewRedisBroker(node, RedisBrokerConfig{
-				Name:                      "reported",
-				Prefix:                    getUniquePrefix(),
-				Shards:                    []*RedisShard{s},
-				DetectPotentialLostWrites: detect,
+				Name:             "reported",
+				Prefix:           getUniquePrefix(),
+				Shards:           []*RedisShard{s},
+				DetectLostWrites: detect,
 			})
 			require.NoError(t, err)
 			node.SetBroker(b)
@@ -577,8 +577,8 @@ func TestRedisLineage_StartupReport(t *testing.T) {
 			f := report.Fields
 			require.Equal(t, "broker", f["broker"])
 			require.Equal(t, "reported", f["broker_name"])
-			require.Equal(t, detect, f["detect_potential_lost_writes"])
-			require.Equal(t, false, f["potential_lost_writes_use_info"])
+			require.Equal(t, detect, f["detect_lost_writes"])
+			require.Equal(t, false, f["detect_lost_writes_with_info"])
 			if detect {
 				require.Equal(t, "script_cache", f["detection"])
 			} else {
@@ -652,9 +652,9 @@ func testLineageACLUserLimitedToPrefix(t *testing.T, tt lineageRedisTest, detect
 	s, err := NewRedisShard(node, conf)
 	require.NoError(t, err)
 	b, err := NewRedisBroker(node, RedisBrokerConfig{
-		Prefix:                    prefix,
-		Shards:                    []*RedisShard{s},
-		DetectPotentialLostWrites: detect,
+		Prefix:           prefix,
+		Shards:           []*RedisShard{s},
+		DetectLostWrites: detect,
 	})
 	require.NoError(t, err)
 	node.SetBroker(b)
@@ -673,9 +673,9 @@ func testLineageACLUserLimitedToPrefix(t *testing.T, tt lineageRedisTest, detect
 	require.Equal(t, sp, hsp)
 
 	mapConf := RedisMapBrokerConfig{
-		Prefix:                    prefix,
-		Shards:                    []*RedisShard{s},
-		DetectPotentialLostWrites: detect,
+		Prefix:           prefix,
+		Shards:           []*RedisShard{s},
+		DetectLostWrites: detect,
 	}
 	if tt.UseCluster {
 		mapConf.NumShardedPubSubPartitions = 16
@@ -742,4 +742,31 @@ func TestRedisLineage_ReportScriptChecksOnOneNode(t *testing.T) {
 			}
 		})
 	}
+}
+
+// DetectLostWritesWithInfo turns on detection by itself, in the broker and the
+// map broker: it is detection too, with INFO.
+func TestRedisLineage_WithInfoAloneTurnsDetectionOn(t *testing.T) {
+	node := testNode(t)
+	s, err := NewRedisShard(node, testSingleRedisConf(6379))
+	require.NoError(t, err)
+	t.Cleanup(s.Close)
+
+	b, err := NewRedisBroker(node, RedisBrokerConfig{
+		Prefix:                   getUniquePrefix(),
+		Shards:                   []*RedisShard{s},
+		DetectLostWritesWithInfo: true,
+	})
+	require.NoError(t, err)
+	require.True(t, b.config.DetectLostWrites)
+	require.NotNil(t, b.watermarks)
+
+	e, err := NewRedisMapBroker(node, RedisMapBrokerConfig{
+		Prefix:                   getUniquePrefix(),
+		Shards:                   []*RedisShard{s},
+		DetectLostWritesWithInfo: true,
+	})
+	require.NoError(t, err)
+	require.True(t, e.conf.DetectLostWrites)
+	require.NotNil(t, e.watermarks)
 }

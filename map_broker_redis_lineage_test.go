@@ -15,7 +15,7 @@ import (
 func TestRedisMapBroker_NewLineageKeepsState(t *testing.T) {
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
-		broker := mb.makeCustom(t, node, nil, func(c *RedisMapBrokerConfig) { c.DetectPotentialLostWrites = true })
+		broker := mb.makeCustom(t, node, nil, func(c *RedisMapBrokerConfig) { c.DetectLostWrites = true })
 		ctx := context.Background()
 		ch := randomChannel("lineage_map")
 
@@ -63,7 +63,7 @@ func TestRedisMapBroker_NewLineageKeepsState(t *testing.T) {
 func TestRedisMapBroker_NewLineageByStreamReadKeepsState(t *testing.T) {
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, _ := New(Config{})
-		broker := mb.makeCustom(t, node, nil, func(c *RedisMapBrokerConfig) { c.DetectPotentialLostWrites = true })
+		broker := mb.makeCustom(t, node, nil, func(c *RedisMapBrokerConfig) { c.DetectLostWrites = true })
 		ctx := context.Background()
 		ch := randomChannel("lineage_map_stream")
 

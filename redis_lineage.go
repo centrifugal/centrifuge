@@ -56,7 +56,7 @@ import (
 //
 // Redis 6 and Dragonfly send scripts to replicas, so the gate can't be used
 // there: no lineage, only the reused-offset check per channel. With
-// PotentialLostWritesUseInfo the scripts read master_replid with INFO on every
+// DetectLostWritesWithInfo the scripts read master_replid with INFO on every
 // server instead, at the cost of INFO in every meta script and the @dangerous
 // ACL category. It changes on every restart and promotion, and also when
 // nothing was lost: a primary creating its replication backlog (its first
@@ -666,7 +666,7 @@ func (l *redisLineage) probeInfo(ctx context.Context) bool {
 			// A Redis error (an ACL refusal, for example): INFO isn't allowed.
 			l.infoProbed = true
 			l.infoAllowed = false
-			l.log(LogLevelWarn, "redis lineage: PotentialLostWritesUseInfo is on but "+infoRefusal(err), nil)
+			l.log(LogLevelWarn, "redis lineage: DetectLostWritesWithInfo is on but "+infoRefusal(err), nil)
 		}
 		return false
 	}
@@ -1756,14 +1756,14 @@ func (l *redisLineage) reportEnvironment(n *Node, broker, brokerName string, ena
 		}
 	}
 	fields := map[string]any{
-		"broker":                         broker,
-		"broker_name":                    brokerName,
-		"shard":                          l.shard.string(),
-		"detect_potential_lost_writes":   enabled,
-		"potential_lost_writes_use_info": useInfo,
-		"detection":                      detection,
-		"script_cache":                   supportText(scriptCache),
-		"info":                           supportText(info),
+		"broker":                       broker,
+		"broker_name":                  brokerName,
+		"shard":                        l.shard.string(),
+		"detect_lost_writes":           enabled,
+		"detect_lost_writes_with_info": useInfo,
+		"detection":                    detection,
+		"script_cache":                 supportText(scriptCache),
+		"info":                         supportText(info),
 	}
 	if kindErr == nil {
 		fields["server"] = kind.desc
