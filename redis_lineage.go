@@ -56,7 +56,7 @@ import (
 //
 // Redis 6 and Dragonfly send scripts to replicas, so the gate can't be used
 // there: no lineage, only the reused-offset check per channel. With
-// PotentialLostWritesUseInfo the scripts read master_replid with INFO on every
+// DetectLostWritesWithInfo the scripts read master_replid with INFO on every
 // server instead, at the cost of INFO in every meta script and the @dangerous
 // ACL category. It changes on every restart and promotion, and also when
 // nothing was lost: a primary creating its replication backlog (its first
@@ -666,7 +666,7 @@ func (l *redisLineage) probeInfo(ctx context.Context) bool {
 			// A Redis error (an ACL refusal, for example): INFO isn't allowed.
 			l.infoProbed = true
 			l.infoAllowed = false
-			l.log(LogLevelWarn, "redis lineage: PotentialLostWritesUseInfo is on but "+infoRefusal(err), nil)
+			l.log(LogLevelWarn, "redis lineage: DetectLostWritesWithInfo is on but "+infoRefusal(err), nil)
 		}
 		return false
 	}
@@ -1015,10 +1015,33 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 				intact = true
 			}
 		}
+		loaded := ""
+		load := func(token string) error {
+			if token == loaded {
+				return nil
+			}
+			for _, s := range scripts {
+				if err := c.Do(ctx, c.B().ScriptLoad().Script(s.gatedSource(token)).Build()).Error(); err != nil {
+					return fmt.Errorf("load %s: %w", s.name, err)
+				}
+			}
+			if err := c.Do(ctx, c.B().ScriptLoad().Script(lineageMarkerSource(token)).Build()).Error(); err != nil {
+				return fmt.Errorf("load marker: %w", err)
+			}
+			loaded = token
+			return nil
+		}
 		if !intact {
 			// A new lineage (a restart, a promotion, a stale copy, a flushed
 			// cache): rotate the token of every slot this server serves.
 			token = "g" + strconv.FormatInt(time.Now().UnixNano(), 36) + strconv.FormatUint(lineageRand(), 36)
+			// Its marker and scripts first: a token in the lineage key must
+			// have its marker here, or another node opening the gate between
+			// the rotation and the loading finds no marker and rotates again,
+			// starting new epochs for nothing.
+			if err := load(token); err != nil {
+				return err
+			}
 			args := make([]string, 0, 2*len(slots)+2)
 			args = append(args, tokenKey, currentValue)
 			for _, s := range slots {
@@ -1046,13 +1069,8 @@ func (l *redisLineage) open(ctx context.Context, routeKey string, force bool, se
 				}
 			}
 		}
-		for _, s := range scripts {
-			if err := c.Do(ctx, c.B().ScriptLoad().Script(s.gatedSource(token)).Build()).Error(); err != nil {
-				return fmt.Errorf("load %s: %w", s.name, err)
-			}
-		}
-		if err := c.Do(ctx, c.B().ScriptLoad().Script(lineageMarkerSource(token)).Build()).Error(); err != nil {
-			return fmt.Errorf("load marker: %w", err)
+		if err := load(token); err != nil {
+			return err
 		}
 		newToken = token
 		return nil
@@ -1756,14 +1774,14 @@ func (l *redisLineage) reportEnvironment(n *Node, broker, brokerName string, ena
 		}
 	}
 	fields := map[string]any{
-		"broker":                         broker,
-		"broker_name":                    brokerName,
-		"shard":                          l.shard.string(),
-		"detect_potential_lost_writes":   enabled,
-		"potential_lost_writes_use_info": useInfo,
-		"detection":                      detection,
-		"script_cache":                   supportText(scriptCache),
-		"info":                           supportText(info),
+		"broker":                       broker,
+		"broker_name":                  brokerName,
+		"shard":                        l.shard.string(),
+		"detect_lost_writes":           enabled,
+		"detect_lost_writes_with_info": useInfo,
+		"detection":                    detection,
+		"script_cache":                 supportText(scriptCache),
+		"info":                         supportText(info),
 	}
 	if kindErr == nil {
 		fields["server"] = kind.desc

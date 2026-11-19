@@ -211,7 +211,7 @@ func setupPairHook(t *testing.T, p failoverPair, noLineage bool, hook func(*Redi
 	if hook != nil {
 		hook(s)
 	}
-	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}, DetectPotentialLostWrites: !noLineage})
+	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: prefix, Shards: []*RedisShard{s}, DetectLostWrites: !noLineage})
 	require.NoError(t, err)
 	node.SetBroker(br)
 	require.NoError(t, node.Run())
@@ -384,7 +384,7 @@ func TestRedisFailover_ClusterFailover(t *testing.T) {
 	node := testNode(t)
 	s, err := NewRedisShard(node, RedisShardConfig{ClusterAddresses: strings.Split(v, ","), IOTimeout: 5 * time.Second})
 	require.NoError(t, err)
-	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: getUniquePrefix(), Shards: []*RedisShard{s}, DetectPotentialLostWrites: true})
+	br, err := NewRedisBroker(node, RedisBrokerConfig{Prefix: getUniquePrefix(), Shards: []*RedisShard{s}, DetectLostWrites: true})
 	require.NoError(t, err)
 	node.SetBroker(br)
 	require.NoError(t, node.Run())
@@ -480,7 +480,7 @@ func lineageRotations(b *RedisBroker) int {
 // primary role back, behind the same address, before any call or probe
 // reached the new one. A subscriber that saw the lost offset catches it at the
 // next publication: the server's lineage rotates. Without a subscriber of that
-// channel it goes unseen - the documented gap (PotentialLostWritesUseInfo closes
+// channel it goes unseen - the documented gap (DetectLostWritesWithInfo closes
 // it).
 func TestRedisFailover_FastFailbackCaughtByReusedOffset(t *testing.T) {
 	testFastFailback(t, true)

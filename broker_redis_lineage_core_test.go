@@ -238,10 +238,10 @@ func TestRedisLineage_LoadSHA1(t *testing.T) {
 	s, err := NewRedisShard(node, testSingleRedisConf(6379))
 	require.NoError(t, err)
 	b, err := NewRedisBroker(node, RedisBrokerConfig{
-		Prefix:                    getUniquePrefix(),
-		Shards:                    []*RedisShard{s},
-		LoadSHA1:                  true,
-		DetectPotentialLostWrites: true,
+		Prefix:           getUniquePrefix(),
+		Shards:           []*RedisShard{s},
+		LoadSHA1:         true,
+		DetectLostWrites: true,
 	})
 	require.NoError(t, err)
 	node.SetBroker(b)
@@ -278,15 +278,15 @@ func setLineageProbeInterval(t *testing.T, d time.Duration) {
 }
 
 // newDetectingTestRedisBroker is NewTestRedisBroker (streams, port 6379) with
-// DetectPotentialLostWrites.
+// DetectLostWrites.
 func newDetectingTestRedisBroker(tb testing.TB, n *Node, prefix string) *RedisBroker {
 	tb.Helper()
 	s, err := NewRedisShard(n, testSingleRedisConf(6379))
 	require.NoError(tb, err)
 	e, err := NewRedisBroker(n, RedisBrokerConfig{
-		Prefix:                    prefix,
-		Shards:                    []*RedisShard{s},
-		DetectPotentialLostWrites: true,
+		Prefix:           prefix,
+		Shards:           []*RedisShard{s},
+		DetectLostWrites: true,
 	})
 	require.NoError(tb, err)
 	n.SetBroker(e)

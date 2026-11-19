@@ -52,10 +52,10 @@ func newLineageTestBrokerPrefix(t *testing.T, tt lineageRedisTest, allowInfo boo
 	s, err := NewRedisShard(node, conf)
 	require.NoError(t, err)
 	b, err := NewRedisBroker(node, RedisBrokerConfig{
-		Prefix:                     prefix,
-		Shards:                     []*RedisShard{s},
-		DetectPotentialLostWrites:  true,
-		PotentialLostWritesUseInfo: allowInfo,
+		Prefix:                   prefix,
+		Shards:                   []*RedisShard{s},
+		DetectLostWrites:         true,
+		DetectLostWritesWithInfo: allowInfo,
 	})
 	require.NoError(t, err)
 	node.SetBroker(b)
@@ -114,12 +114,12 @@ func TestRedisLineage_Mode(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 			b := newLineageTestBroker(t, tt, false)
 			s := b.shards[0].shard
-			mode, err := b.lin(s).mode(context.Background(), b.config.PotentialLostWritesUseInfo)
+			mode, err := b.lin(s).mode(context.Background(), b.config.DetectLostWritesWithInfo)
 			require.NoError(t, err)
 			if tt.Gate {
 				require.Equal(t, lineageGate, mode)
 			} else {
-				require.Equal(t, lineageNone, mode, "no INFO without PotentialLostWritesUseInfo")
+				require.Equal(t, lineageNone, mode, "no INFO without DetectLostWritesWithInfo")
 			}
 		})
 	}
@@ -503,7 +503,7 @@ func loadMarkerOnOtherPrimaries(t *testing.T, s *RedisShard, key, token string) 
 	require.Positive(t, loaded)
 }
 
-// Without DetectPotentialLostWrites the broker works as it did before the
+// Without DetectLostWrites the broker works as it did before the
 // option existed: it creates no lineage key, stamps no meta, opens no gate,
 // watches no offsets, and a new script cache (a restart, a failover) keeps the
 // epoch. Only the startup report talks to the server (to tell whether the
@@ -556,10 +556,10 @@ func TestRedisLineage_StartupReport(t *testing.T) {
 			s, err := NewRedisShard(node, testSingleRedisConf(6379))
 			require.NoError(t, err)
 			b, err := NewRedisBroker(node, RedisBrokerConfig{
-				Name:                      "reported",
-				Prefix:                    getUniquePrefix(),
-				Shards:                    []*RedisShard{s},
-				DetectPotentialLostWrites: detect,
+				Name:             "reported",
+				Prefix:           getUniquePrefix(),
+				Shards:           []*RedisShard{s},
+				DetectLostWrites: detect,
 			})
 			require.NoError(t, err)
 			node.SetBroker(b)
@@ -577,8 +577,8 @@ func TestRedisLineage_StartupReport(t *testing.T) {
 			f := report.Fields
 			require.Equal(t, "broker", f["broker"])
 			require.Equal(t, "reported", f["broker_name"])
-			require.Equal(t, detect, f["detect_potential_lost_writes"])
-			require.Equal(t, false, f["potential_lost_writes_use_info"])
+			require.Equal(t, detect, f["detect_lost_writes"])
+			require.Equal(t, false, f["detect_lost_writes_with_info"])
 			if detect {
 				require.Equal(t, "script_cache", f["detection"])
 			} else {
@@ -652,9 +652,9 @@ func testLineageACLUserLimitedToPrefix(t *testing.T, tt lineageRedisTest, detect
 	s, err := NewRedisShard(node, conf)
 	require.NoError(t, err)
 	b, err := NewRedisBroker(node, RedisBrokerConfig{
-		Prefix:                    prefix,
-		Shards:                    []*RedisShard{s},
-		DetectPotentialLostWrites: detect,
+		Prefix:           prefix,
+		Shards:           []*RedisShard{s},
+		DetectLostWrites: detect,
 	})
 	require.NoError(t, err)
 	node.SetBroker(b)
@@ -673,9 +673,9 @@ func testLineageACLUserLimitedToPrefix(t *testing.T, tt lineageRedisTest, detect
 	require.Equal(t, sp, hsp)
 
 	mapConf := RedisMapBrokerConfig{
-		Prefix:                    prefix,
-		Shards:                    []*RedisShard{s},
-		DetectPotentialLostWrites: detect,
+		Prefix:           prefix,
+		Shards:           []*RedisShard{s},
+		DetectLostWrites: detect,
 	}
 	if tt.UseCluster {
 		mapConf.NumShardedPubSubPartitions = 16
@@ -739,6 +739,77 @@ func TestRedisLineage_ReportScriptChecksOnOneNode(t *testing.T) {
 				kind, err := l.helloKind(ctx)
 				require.NoError(t, err)
 				require.Empty(t, l.scriptCacheSupport(ctx, kind, nil))
+			}
+		})
+	}
+}
+
+// DetectLostWritesWithInfo turns on detection by itself, in the broker and the
+// map broker: it is detection too, with INFO.
+func TestRedisLineage_WithInfoAloneTurnsDetectionOn(t *testing.T) {
+	node := testNode(t)
+	s, err := NewRedisShard(node, testSingleRedisConf(6379))
+	require.NoError(t, err)
+	t.Cleanup(s.Close)
+
+	b, err := NewRedisBroker(node, RedisBrokerConfig{
+		Prefix:                   getUniquePrefix(),
+		Shards:                   []*RedisShard{s},
+		DetectLostWritesWithInfo: true,
+	})
+	require.NoError(t, err)
+	require.True(t, b.config.DetectLostWrites)
+	require.NotNil(t, b.watermarks)
+
+	e, err := NewRedisMapBroker(node, RedisMapBrokerConfig{
+		Prefix:                   getUniquePrefix(),
+		Shards:                   []*RedisShard{s},
+		DetectLostWritesWithInfo: true,
+	})
+	require.NoError(t, err)
+	require.True(t, e.conf.DetectLostWrites)
+	require.NotNil(t, e.watermarks)
+}
+
+// Nodes opening the gate of a server with no lineage at the same time rotate
+// its token once. A node writing a new token must have loaded its marker
+// first: a node opening the gate in between would find the token without its
+// marker, take it for a restart, and rotate again - new epochs for nothing.
+func TestRedisLineage_ConcurrentOpenRotatesOnce(t *testing.T) {
+	for _, tt := range []lineageRedisTest{{"rd_single", false, 6379, true}, {"rd_cluster", true, 7001, true}} {
+		t.Run(tt.Name, func(t *testing.T) {
+			for round := 0; round < 20; round++ {
+				// A subtest per round: its nodes close when it ends.
+				t.Run(strconv.Itoa(round), func(t *testing.T) {
+					prefix := getUniquePrefix()
+					const numNodes = 6
+					brokers := make([]*RedisBroker, numNodes)
+					for i := range brokers {
+						brokers[i] = newLineageTestBrokerPrefix(t, tt, false, prefix)
+					}
+					ch := "concurrent_open_" + randString(6)
+					start := make(chan struct{})
+					errCh := make(chan error, numNodes)
+					for _, b := range brokers {
+						go func(b *RedisBroker) {
+							<-start
+							_, err := b.Publish(ch, []byte(`{}`), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute})
+							errCh <- err
+						}(b)
+					}
+					close(start)
+					for range brokers {
+						require.NoError(t, <-errCh)
+					}
+					rotations := 0
+					for _, b := range brokers {
+						l := b.lin(b.shards[0].shard)
+						l.stats.mu.Lock()
+						rotations += l.stats.rotations
+						l.stats.mu.Unlock()
+					}
+					require.Equal(t, 1, rotations, "the first use rotates once, by one node")
+				})
 			}
 		})
 	}
