@@ -122,6 +122,9 @@ type RedisMapBroker struct {
 	closeOnce     sync.Once
 	shardChannel  string
 	messagePrefix string
+
+	// reports are the startup lineage reports, stopped on Close.
+	reports *lineageReports
 }
 
 var _ MapBroker = (*RedisMapBroker)(nil)
@@ -299,6 +302,7 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 		),
 		batchRemoveScript: newLineageScript("map_batch_remove", lineageMapHelpers+brokerStateBatchRemoveScriptSource, conf.LoadSHA1),
 		closeCh:           make(chan struct{}),
+		reports:           newLineageReports(),
 		resetLostScript:   rueidis.NewLuaScript(resetLostMapStreamSource, rueidis.WithLoadSHA1(conf.LoadSHA1)),
 	}
 	for _, sw := range e.shards {
@@ -529,6 +533,8 @@ func (e *RedisMapBroker) Close(_ context.Context) error {
 	e.closeOnce.Do(func() {
 		close(e.closeCh)
 	})
+	// The reports hold shard connections: done before the shards close.
+	e.reports.stop()
 	return nil
 }
 
@@ -2363,7 +2369,10 @@ func (e *RedisMapBroker) RegisterEventHandler(h BrokerEventHandler) error {
 		if err := wrapper.pubSubRunner.run(wrapper, h); err != nil {
 			return err
 		}
-		go e.lin(wrapper.shard).reportEnvironment(e.node, "map_broker", e.conf.Name, e.conf.DetectLostWrites, e.conf.DetectLostWritesWithInfo)
+		l := e.lin(wrapper.shard)
+		e.reports.start(func(ctx context.Context) {
+			l.reportEnvironment(ctx, e.node, "map_broker", e.conf.Name, e.conf.DetectLostWrites, e.conf.DetectLostWritesWithInfo)
+		})
 	}
 	for i := 0; i < len(e.shards); i++ {
 		for j := 0; j < len(e.shards[i].pubSubStartChannels); j++ {

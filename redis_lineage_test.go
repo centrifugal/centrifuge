@@ -7,6 +7,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -278,4 +279,25 @@ func TestInfoRefusal(t *testing.T) {
 	msg := infoRefusal(errors.New("ERR This Valkey command is not allowed from script"))
 	require.NotContains(t, msg, "ACL")
 	require.Contains(t, msg, "doesn't let scripts call INFO")
+}
+
+// Stopping the reports cancels the running ones and waits for them; a report
+// started after the stop doesn't run.
+func TestLineageReports_StopCancelsAndWaits(t *testing.T) {
+	r := newLineageReports()
+	var finished atomic.Bool
+	started := make(chan struct{})
+	r.start(func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		finished.Store(true)
+	})
+	<-started
+	r.stop()
+	require.True(t, finished.Load(), "stop returns after the report")
+
+	var ran atomic.Bool
+	r.start(func(context.Context) { ran.Store(true) })
+	r.stop()
+	require.False(t, ran.Load(), "no report after the stop")
 }

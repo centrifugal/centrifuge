@@ -1736,14 +1736,16 @@ const lineageCheckCrossSlotScript = "#!lua flags=allow-cross-slot-keys\nreturn 1
 // server: it doesn't open the gate, and its only writes are harmless scripts in
 // the script cache. With detection off it caches nothing, so the shard's
 // detection state stays untouched.
-func (l *redisLineage) reportEnvironment(n *Node, broker, brokerName string, enabled, useInfo bool) {
+// It stops when parent is cancelled (the broker closing), and then logs
+// nothing.
+func (l *redisLineage) reportEnvironment(parent context.Context, n *Node, broker, brokerName string, enabled, useInfo bool) {
 	if l.disabledForTest {
 		return
 	}
 	if _, done := l.reported.LoadOrStore(broker+"/"+brokerName, true); done {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 
 	var kind redisServerKind
@@ -1786,6 +1788,9 @@ func (l *redisLineage) reportEnvironment(n *Node, broker, brokerName string, ena
 	if kindErr == nil {
 		fields["server"] = kind.desc
 	}
+	if parent.Err() != nil {
+		return // the broker is closing: the checks above were cut short
+	}
 	level := LogLevelInfo
 	if enabled && (detection == "reused_offsets" ||
 		(detection == "script_cache" && len(scriptCache) > 0) ||
@@ -1795,6 +1800,48 @@ func (l *redisLineage) reportEnvironment(n *Node, broker, brokerName string, ena
 	if n.logEnabled(level) {
 		n.logger.log(newLogEntry(level, "redis potential lost writes detection", fields))
 	}
+}
+
+// lineageReports runs a broker's startup lineage reports (reportEnvironment)
+// in the background, and lets the broker's Close stop them and wait for them:
+// a report holds a dedicated connection of the shard, which must be released
+// before the shard closes.
+type lineageReports struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	closed bool
+	wg     sync.WaitGroup
+}
+
+func newLineageReports() *lineageReports {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &lineageReports{ctx: ctx, cancel: cancel}
+}
+
+// start runs f in the background unless the reports were stopped.
+func (r *lineageReports) start(f func(ctx context.Context)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		f(r.ctx)
+	}()
+}
+
+// stop cancels the running reports and waits for them. It waits whatever the
+// caller's deadline: a cancelled report ends at once (its commands use its
+// context), and the shard must not close under it.
+func (r *lineageReports) stop() {
+	r.mu.Lock()
+	r.closed = true
+	r.mu.Unlock()
+	r.cancel()
+	r.wg.Wait()
 }
 
 // supportText is "supported", or "not supported: " and the reasons.

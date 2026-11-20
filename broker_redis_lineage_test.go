@@ -591,6 +591,62 @@ func TestRedisLineage_StartupReport(t *testing.T) {
 	}
 }
 
+// Closing the brokers right after start stops their startup reports and waits
+// for them: no report runs past Close, so none holds a shard connection while
+// the shard closes. A report cut short logs nothing.
+func TestRedisLineage_CloseStopsStartupReport(t *testing.T) {
+	var mu sync.Mutex
+	closed := false
+	var late []string
+	node, err := New(Config{LogLevel: LogLevelInfo, LogHandler: func(e LogEntry) {
+		if e.Message != "redis potential lost writes detection" {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if closed {
+			late = append(late, fmt.Sprint(e.Fields["broker"], "/", e.Fields["broker_name"]))
+		}
+	}})
+	require.NoError(t, err)
+	s, err := NewRedisShard(node, testSingleRedisConf(6379))
+	require.NoError(t, err)
+	prefix := getUniquePrefix()
+	b, err := NewRedisBroker(node, RedisBrokerConfig{
+		Name: "closing", Prefix: prefix, Shards: []*RedisShard{s}, DetectLostWrites: true,
+	})
+	require.NoError(t, err)
+	mb, err := NewRedisMapBroker(node, RedisMapBrokerConfig{
+		Name: "closing", Prefix: prefix, Shards: []*RedisShard{s}, DetectLostWrites: true,
+	})
+	require.NoError(t, err)
+	node.SetBroker(b)
+	node.SetMapBroker(mb)
+	require.NoError(t, node.Run())
+
+	require.NoError(t, b.Close(context.Background()))
+	require.NoError(t, mb.Close(context.Background()))
+	mu.Lock()
+	closed = true
+	mu.Unlock()
+
+	// After Close a report doesn't start, and one with its context cancelled
+	// (what Close does to a running one) logs nothing.
+	l := b.lin(s)
+	b.reports.start(func(ctx context.Context) {
+		l.reportEnvironment(ctx, node, "broker", "after_close", true, false)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	l.reportEnvironment(ctx, node, "broker", "cancelled", true, false)
+
+	_ = node.Shutdown(context.Background())
+	s.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	require.Empty(t, late, "no report after Close")
+}
+
 func TestSupportText(t *testing.T) {
 	require.Equal(t, "supported", supportText(nil))
 	require.Equal(t, "not supported: a; b", supportText([]string{"a", "b"}))
