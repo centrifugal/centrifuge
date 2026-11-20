@@ -146,6 +146,8 @@ type RedisBroker struct {
 	nodeChannel             string
 	closeOnce               sync.Once
 	closeCh                 chan struct{}
+	// reports are the startup lineage reports, stopped on Close.
+	reports *lineageReports
 }
 
 // RedisBrokerConfig is a config for Broker.
@@ -366,6 +368,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		addHistoryStreamScript:  newLineageScript("add_history_stream", addHistoryStreamSource, config.LoadSHA1),
 		addHistoryListScript:    rueidis.NewLuaScript(addHistoryListSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
 		closeCh:                 make(chan struct{}),
+		reports:                 newLineageReports(),
 	}
 	for _, sw := range b.shards {
 		sw.shard.ensureLineage(n)
@@ -538,7 +541,10 @@ func (b *RedisBroker) RegisterBrokerEventHandler(h BrokerEventHandler) error {
 			return fmt.Errorf("capability error on shard [%s]: %v", wrapper.shard.string(), err)
 		}
 		if !b.config.UseLists {
-			go b.lin(wrapper.shard).reportEnvironment(b.node, "broker", b.config.Name, b.config.DetectLostWrites, b.config.DetectLostWritesWithInfo)
+			l := b.lin(wrapper.shard)
+			b.reports.start(func(ctx context.Context) {
+				l.reportEnvironment(ctx, b.node, "broker", b.config.Name, b.config.DetectLostWrites, b.config.DetectLostWritesWithInfo)
+			})
 		}
 	}
 	for i := 0; i < len(b.shards); i++ {
@@ -627,6 +633,8 @@ func (b *RedisBroker) Close(_ context.Context) error {
 	b.closeOnce.Do(func() {
 		close(b.closeCh)
 	})
+	// The reports hold shard connections: done before the shards close.
+	b.reports.stop()
 	return nil
 }
 
