@@ -535,7 +535,13 @@ func newRedisClient(node *Node, options rueidis.ClientOption, deadline time.Time
 		if err != nil {
 			return nil, err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), options.ConnWriteTimeout)
+		// An address may set io_timeout to zero, the client then uses a
+		// default of its own: a zero timeout here would fail every PING.
+		ioTimeout := options.ConnWriteTimeout
+		if ioTimeout <= 0 {
+			ioTimeout = defaultRedisIOTimeout
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), ioTimeout)
 		defer cancel()
 		if err := client.Do(ctx, client.B().Ping().Build()).Error(); err != nil {
 			client.Close()
@@ -556,28 +562,62 @@ func newRedisClient(node *Node, options rueidis.ClientOption, deadline time.Time
 	return waitForRedisStartup(deadline, connect, onRetry)
 }
 
+// errRedisStartupWaitTimeout is returned when the startup deadline passes with
+// no failed attempt to report.
+var errRedisStartupWaitTimeout = errors.New("timeout waiting for Redis on startup")
+
 // waitForRedisStartup calls connect until it succeeds, fails with an error
 // which waiting can't fix, or the deadline passes. In the last case it returns
-// the error of the last attempt. It calls onRetry before each delay.
+// the error of the last failed attempt. It calls onRetry before each delay.
+//
+// The deadline bounds the attempts too: an attempt takes up to ConnectTimeout
+// plus IOTimeout, so one still in flight at the deadline is left to finish in
+// the background, and a client it then creates is closed.
 func waitForRedisStartup(
 	deadline time.Time,
 	connect func() (rueidis.Client, error),
 	onRetry func(err error, delay time.Duration),
 ) (rueidis.Client, error) {
+	type attempt struct {
+		client rueidis.Client
+		err    error
+	}
+	lastErr := errRedisStartupWaitTimeout
 	maxDelay := redisStartupWaitInitialDelay
 	for {
-		client, err := connect()
-		if err == nil || !isRedisStartupErrorTransient(err) {
-			return client, err
-		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return nil, err
+			return nil, lastErr
+		}
+		done := make(chan attempt, 1)
+		go func() {
+			client, err := connect()
+			done <- attempt{client: client, err: err}
+		}()
+		timer := time.NewTimer(remaining)
+		select {
+		case res := <-done:
+			timer.Stop()
+			if res.err == nil || !isRedisStartupErrorTransient(res.err) {
+				return res.client, res.err
+			}
+			lastErr = res.err
+		case <-timer.C:
+			go func() {
+				if res := <-done; res.client != nil {
+					res.client.Close()
+				}
+			}()
+			return nil, lastErr
+		}
+		remaining = time.Until(deadline)
+		if remaining <= 0 {
+			return nil, lastErr
 		}
 		// Sleep from a half of maxDelay to the full maxDelay.
 		delay := maxDelay/2 + time.Duration(randSource.Int63n(int64(maxDelay/2)+1))
 		delay = min(delay, remaining)
-		onRetry(err, delay)
+		onRetry(lastErr, delay)
 		time.Sleep(delay)
 		maxDelay = min(2*maxDelay, redisStartupWaitMaxDelay)
 	}

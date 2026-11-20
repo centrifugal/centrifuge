@@ -616,3 +616,64 @@ func TestNewRedisShardStartupWaitTimeoutWaitsForLoadingRedis(t *testing.T) {
 	require.GreaterOrEqual(t, time.Since(started), loading)
 	require.NoError(t, shard.client.Do(context.Background(), shard.client.B().Ping().Build()).Error())
 }
+
+// TestWaitForRedisStartupAbandonsSlowAttempt: an attempt which is still in
+// flight when the deadline passes is not waited for.
+func TestWaitForRedisStartupAbandonsSlowAttempt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		connect := func() (rueidis.Client, error) {
+			time.Sleep(10 * time.Second)
+			return nil, errors.New("dial tcp: i/o timeout")
+		}
+		started := time.Now()
+		_, err := waitForRedisStartup(started.Add(time.Second), connect, func(error, time.Duration) {})
+		require.ErrorIs(t, err, errRedisStartupWaitTimeout)
+		require.Equal(t, time.Second, time.Since(started))
+
+		// Let the abandoned attempt finish before the bubble ends.
+		time.Sleep(10 * time.Second)
+	})
+}
+
+// TestNewRedisShardStartupWaitTimeoutBoundsSlowAttempt: a server which accepts
+// a connection and never replies holds an attempt for ConnectTimeout, yet
+// NewRedisShard returns when StartupWaitTimeout passes.
+func TestNewRedisShardStartupWaitTimeoutBoundsSlowAttempt(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+		}
+	}()
+
+	started := time.Now()
+	_, err = NewRedisShard(nil, RedisShardConfig{
+		Address:            ln.Addr().String(),
+		ConnectTimeout:     2 * time.Second,
+		IOTimeout:          2 * time.Second,
+		StartupWaitTimeout: 100 * time.Millisecond,
+	})
+	require.Error(t, err)
+	require.Less(t, time.Since(started), time.Second)
+}
+
+// TestNewRedisShardStartupWaitTimeoutWithZeroIOTimeoutInAddress: io_timeout=0s
+// in the address means the default IO timeout for the PING of the wait too.
+func TestNewRedisShardStartupWaitTimeoutWithZeroIOTimeoutInAddress(t *testing.T) {
+	loaded := make(chan struct{})
+	close(loaded)
+	addr := startLoadingRedis(t, loaded)
+
+	shard, err := NewRedisShard(nil, RedisShardConfig{
+		Address:            "redis://" + addr + "?io_timeout=0s&force_resp2=true",
+		StartupWaitTimeout: 500 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	shard.Close()
+}
