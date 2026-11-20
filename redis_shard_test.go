@@ -1,10 +1,18 @@
 package centrifuge
 
 import (
+	"bufio"
+	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
+	"io"
 	"net"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/redis/rueidis"
@@ -362,4 +370,310 @@ func FuzzParseMapMessage(f *testing.F) {
 		_, _, _, _, _, _ = parseMessage(data)
 		_, _, _, _ = parseStateValue(data)
 	})
+}
+
+// TestWaitForRedisStartupRetriesUntilConnected: a connect which fails with a
+// network error is repeated until it succeeds.
+func TestWaitForRedisStartupRetriesUntilConnected(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var attempts int
+		connect := func() (rueidis.Client, error) {
+			attempts++
+			if attempts < 4 {
+				return nil, errors.New("dial tcp: connection refused")
+			}
+			return nil, nil
+		}
+		_, err := waitForRedisStartup(time.Now().Add(time.Minute), connect, func(error, time.Duration) {})
+		require.NoError(t, err)
+		require.Equal(t, 4, attempts)
+	})
+}
+
+// TestWaitForRedisStartupReturnsLastErrorAfterTimeout: Redis which never
+// comes up costs the timeout and no more, and the caller gets the error of
+// the last attempt.
+func TestWaitForRedisStartupReturnsLastErrorAfterTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var attempts int
+		connect := func() (rueidis.Client, error) {
+			attempts++
+			return nil, fmt.Errorf("attempt %d failed", attempts)
+		}
+		started := time.Now()
+		_, err := waitForRedisStartup(time.Now().Add(30*time.Second), connect, func(error, time.Duration) {})
+		require.EqualError(t, err, fmt.Sprintf("attempt %d failed", attempts))
+		require.Equal(t, 30*time.Second, time.Since(started))
+	})
+}
+
+// TestWaitForRedisStartupSharesDeadline: two waits with one deadline, as for
+// the primary and the replica client, take the timeout in total.
+func TestWaitForRedisStartupSharesDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := time.Now()
+		deadline := started.Add(30 * time.Second)
+		var attempts int
+		connectLate := func() (rueidis.Client, error) {
+			attempts++
+			if attempts < 6 {
+				return nil, errors.New("dial tcp: connection refused")
+			}
+			return nil, nil
+		}
+		_, err := waitForRedisStartup(deadline, connectLate, func(error, time.Duration) {})
+		require.NoError(t, err)
+		require.Positive(t, time.Since(started))
+
+		connectNever := func() (rueidis.Client, error) {
+			return nil, errors.New("dial tcp: connection refused")
+		}
+		_, err = waitForRedisStartup(deadline, connectNever, func(error, time.Duration) {})
+		require.Error(t, err)
+		require.Equal(t, 30*time.Second, time.Since(started))
+	})
+}
+
+// TestWaitForRedisStartupBacksOffWithJitter: delays grow from the initial one
+// to the max one, each with a jitter of up to a half of it.
+func TestWaitForRedisStartupBacksOffWithJitter(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		connect := func() (rueidis.Client, error) {
+			return nil, errors.New("dial tcp: connection refused")
+		}
+		var delays []time.Duration
+		_, err := waitForRedisStartup(time.Now().Add(time.Minute), connect, func(_ error, delay time.Duration) {
+			delays = append(delays, delay)
+		})
+		require.Error(t, err)
+
+		// The last delay is cut to what is left of the timeout.
+		delays = delays[:len(delays)-1]
+		require.Greater(t, len(delays), 8)
+		maxDelay := redisStartupWaitInitialDelay
+		for i, delay := range delays {
+			require.GreaterOrEqual(t, delay, maxDelay/2, "delay %d", i)
+			require.LessOrEqual(t, delay, maxDelay, "delay %d", i)
+			maxDelay = min(2*maxDelay, redisStartupWaitMaxDelay)
+		}
+		require.Equal(t, redisStartupWaitMaxDelay, maxDelay)
+	})
+}
+
+// TestWaitForRedisStartupDoesNotRetryRedisError: an error Redis replies with,
+// other than LOADING, comes from the configuration, waiting does not fix it.
+func TestWaitForRedisStartupDoesNotRetryRedisError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		redisErr := (*rueidis.RedisError)(&rueidis.RedisMessage{})
+		var attempts int
+		connect := func() (rueidis.Client, error) {
+			attempts++
+			return nil, redisErr
+		}
+		started := time.Now()
+		_, err := waitForRedisStartup(time.Now().Add(time.Minute), connect, func(error, time.Duration) {})
+		require.Equal(t, redisErr, err)
+		require.Equal(t, 1, attempts)
+		require.Zero(t, time.Since(started))
+	})
+}
+
+// unusedTCPAddr returns an address nothing listens on.
+func unusedTCPAddr(tb testing.TB) string {
+	tb.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(tb, err)
+	addr := ln.Addr().String()
+	require.NoError(tb, ln.Close())
+	return addr
+}
+
+func TestNewRedisShardFailsRightAwayWithoutStartupWaitTimeout(t *testing.T) {
+	started := time.Now()
+	_, err := NewRedisShard(nil, RedisShardConfig{Address: unusedTCPAddr(t)})
+	require.Error(t, err)
+	require.Less(t, time.Since(started), time.Second)
+}
+
+func TestNewRedisShardFailsAfterStartupWaitTimeout(t *testing.T) {
+	timeout := 500 * time.Millisecond
+	started := time.Now()
+	_, err := NewRedisShard(nil, RedisShardConfig{Address: unusedTCPAddr(t), StartupWaitTimeout: timeout})
+	require.Error(t, err)
+	require.GreaterOrEqual(t, time.Since(started), timeout)
+}
+
+func TestNewRedisShardLogsStartupWaitRetries(t *testing.T) {
+	var mu sync.Mutex
+	var messages []string
+	node, err := New(Config{
+		LogLevel: LogLevelInfo,
+		LogHandler: func(entry LogEntry) {
+			mu.Lock()
+			defer mu.Unlock()
+			messages = append(messages, entry.Message)
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	_, err = NewRedisShard(node, RedisShardConfig{Address: unusedTCPAddr(t), StartupWaitTimeout: 300 * time.Millisecond})
+	require.Error(t, err)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Contains(t, messages, "waiting for Redis on startup")
+}
+
+// startLoadingRedis starts a server which speaks enough of the Redis protocol
+// for a client to connect, and replies to PING with a LOADING error until
+// loaded is closed.
+func startLoadingRedis(tb testing.TB, loaded <-chan struct{}) string {
+	tb.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(tb, err)
+	tb.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				r := bufio.NewReader(conn)
+				for {
+					command, err := readRedisCommand(r)
+					if err != nil {
+						return
+					}
+					reply := "+OK\r\n"
+					if strings.EqualFold(command[0], "PING") {
+						select {
+						case <-loaded:
+							reply = "+PONG\r\n"
+						default:
+							reply = "-LOADING Redis is loading the dataset in memory\r\n"
+						}
+					}
+					if _, err := conn.Write([]byte(reply)); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// readRedisCommand reads a command a client sent: an array of bulk strings.
+func readRedisCommand(r *bufio.Reader) ([]string, error) {
+	readLen := func(prefix byte) (int, error) {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return 0, err
+		}
+		if line[0] != prefix {
+			return 0, fmt.Errorf("unexpected line %q", line)
+		}
+		return strconv.Atoi(strings.TrimSpace(line[1:]))
+	}
+	n, err := readLen('*')
+	if err != nil {
+		return nil, err
+	}
+	command := make([]string, n)
+	for i := range command {
+		size, err := readLen('$')
+		if err != nil {
+			return nil, err
+		}
+		arg := make([]byte, size+2)
+		if _, err := io.ReadFull(r, arg); err != nil {
+			return nil, err
+		}
+		command[i] = string(arg[:size])
+	}
+	return command, nil
+}
+
+// TestNewRedisShardStartupWaitTimeoutWaitsForLoadingRedis: Redis accepts
+// connections while it loads a dataset but is of no use yet, so
+// StartupWaitTimeout waits for the load to finish too.
+func TestNewRedisShardStartupWaitTimeoutWaitsForLoadingRedis(t *testing.T) {
+	loaded := make(chan struct{})
+	addr := startLoadingRedis(t, loaded)
+	loading := 300 * time.Millisecond
+	time.AfterFunc(loading, func() { close(loaded) })
+
+	started := time.Now()
+	shard, err := NewRedisShard(nil, RedisShardConfig{
+		Address:            addr,
+		ForceRESP2:         true,
+		StartupWaitTimeout: 30 * time.Second,
+	})
+	require.NoError(t, err)
+	t.Cleanup(shard.Close)
+	require.GreaterOrEqual(t, time.Since(started), loading)
+	require.NoError(t, shard.client.Do(context.Background(), shard.client.B().Ping().Build()).Error())
+}
+
+// TestWaitForRedisStartupAbandonsSlowAttempt: an attempt which is still in
+// flight when the deadline passes is not waited for.
+func TestWaitForRedisStartupAbandonsSlowAttempt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		connect := func() (rueidis.Client, error) {
+			time.Sleep(10 * time.Second)
+			return nil, errors.New("dial tcp: i/o timeout")
+		}
+		started := time.Now()
+		_, err := waitForRedisStartup(started.Add(time.Second), connect, func(error, time.Duration) {})
+		require.ErrorIs(t, err, errRedisStartupWaitTimeout)
+		require.Equal(t, time.Second, time.Since(started))
+
+		// Let the abandoned attempt finish before the bubble ends.
+		time.Sleep(10 * time.Second)
+	})
+}
+
+// TestNewRedisShardStartupWaitTimeoutBoundsSlowAttempt: a server which accepts
+// a connection and never replies holds an attempt for ConnectTimeout, yet
+// NewRedisShard returns when StartupWaitTimeout passes.
+func TestNewRedisShardStartupWaitTimeoutBoundsSlowAttempt(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+		}
+	}()
+
+	started := time.Now()
+	_, err = NewRedisShard(nil, RedisShardConfig{
+		Address:            ln.Addr().String(),
+		ConnectTimeout:     2 * time.Second,
+		IOTimeout:          2 * time.Second,
+		StartupWaitTimeout: 100 * time.Millisecond,
+	})
+	require.Error(t, err)
+	require.Less(t, time.Since(started), time.Second)
+}
+
+// TestNewRedisShardStartupWaitTimeoutWithZeroIOTimeoutInAddress: io_timeout=0s
+// in the address means the default IO timeout for the PING of the wait too.
+func TestNewRedisShardStartupWaitTimeoutWithZeroIOTimeoutInAddress(t *testing.T) {
+	loaded := make(chan struct{})
+	close(loaded)
+	addr := startLoadingRedis(t, loaded)
+
+	shard, err := NewRedisShard(nil, RedisShardConfig{
+		Address:            "redis://" + addr + "?io_timeout=0s&force_resp2=true",
+		StartupWaitTimeout: 500 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	shard.Close()
 }
