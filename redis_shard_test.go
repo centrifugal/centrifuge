@@ -384,7 +384,7 @@ func TestWaitForRedisStartupRetriesUntilConnected(t *testing.T) {
 			}
 			return nil, nil
 		}
-		_, err := waitForRedisStartup(time.Minute, connect, func(error, time.Duration) {})
+		_, err := waitForRedisStartup(time.Now().Add(time.Minute), connect, func(error, time.Duration) {})
 		require.NoError(t, err)
 		require.Equal(t, 4, attempts)
 	})
@@ -401,8 +401,35 @@ func TestWaitForRedisStartupReturnsLastErrorAfterTimeout(t *testing.T) {
 			return nil, fmt.Errorf("attempt %d failed", attempts)
 		}
 		started := time.Now()
-		_, err := waitForRedisStartup(30*time.Second, connect, func(error, time.Duration) {})
+		_, err := waitForRedisStartup(time.Now().Add(30*time.Second), connect, func(error, time.Duration) {})
 		require.EqualError(t, err, fmt.Sprintf("attempt %d failed", attempts))
+		require.Equal(t, 30*time.Second, time.Since(started))
+	})
+}
+
+// TestWaitForRedisStartupSharesDeadline: two waits with one deadline, as for
+// the primary and the replica client, take the timeout in total.
+func TestWaitForRedisStartupSharesDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := time.Now()
+		deadline := started.Add(30 * time.Second)
+		var attempts int
+		connectLate := func() (rueidis.Client, error) {
+			attempts++
+			if attempts < 6 {
+				return nil, errors.New("dial tcp: connection refused")
+			}
+			return nil, nil
+		}
+		_, err := waitForRedisStartup(deadline, connectLate, func(error, time.Duration) {})
+		require.NoError(t, err)
+		require.Positive(t, time.Since(started))
+
+		connectNever := func() (rueidis.Client, error) {
+			return nil, errors.New("dial tcp: connection refused")
+		}
+		_, err = waitForRedisStartup(deadline, connectNever, func(error, time.Duration) {})
+		require.Error(t, err)
 		require.Equal(t, 30*time.Second, time.Since(started))
 	})
 }
@@ -415,7 +442,7 @@ func TestWaitForRedisStartupBacksOffWithJitter(t *testing.T) {
 			return nil, errors.New("dial tcp: connection refused")
 		}
 		var delays []time.Duration
-		_, err := waitForRedisStartup(time.Minute, connect, func(_ error, delay time.Duration) {
+		_, err := waitForRedisStartup(time.Now().Add(time.Minute), connect, func(_ error, delay time.Duration) {
 			delays = append(delays, delay)
 		})
 		require.Error(t, err)
@@ -444,7 +471,7 @@ func TestWaitForRedisStartupDoesNotRetryRedisError(t *testing.T) {
 			return nil, redisErr
 		}
 		started := time.Now()
-		_, err := waitForRedisStartup(time.Minute, connect, func(error, time.Duration) {})
+		_, err := waitForRedisStartup(time.Now().Add(time.Minute), connect, func(error, time.Duration) {})
 		require.Equal(t, redisErr, err)
 		require.Equal(t, 1, attempts)
 		require.Zero(t, time.Since(started))

@@ -475,7 +475,14 @@ func NewRedisShard(node *Node, conf RedisShardConfig) (*RedisShard, error) {
 	// rueidis.NewClient shuffles options.InitAddress in place: a copy of the
 	// configured addresses, so shards made from one configuration don't
 	// reorder each other's addresses while they are read (see string).
-	client, err := newRedisClient(node, conf, options)
+	// One deadline for both clients: StartupWaitTimeout bounds how long
+	// NewRedisShard blocks in total.
+	var startupDeadline time.Time
+	if conf.StartupWaitTimeout > 0 {
+		startupDeadline = time.Now().Add(conf.StartupWaitTimeout)
+	}
+
+	client, err := newRedisClient(node, options, startupDeadline)
 	if err != nil {
 		return nil, fmt.Errorf("error creating Redis client: %v", err)
 	}
@@ -500,11 +507,13 @@ func NewRedisShard(node *Node, conf RedisShardConfig) (*RedisShard, error) {
 
 	if replicaClientEnabled {
 		if !isCluster && !isSentinel {
+			client.Close()
 			return nil, errors.New("replica client may be enabled only in cluster and sentinel mode")
 		}
 		options.ReplicaOnly = true
-		replicaClient, err := newRedisClient(node, conf, options)
+		replicaClient, err := newRedisClient(node, options, startupDeadline)
 		if err != nil {
+			client.Close()
 			return nil, fmt.Errorf("error creating Redis replica client: %w", err)
 		}
 		shard.replicaClient = replicaClient
@@ -513,12 +522,12 @@ func NewRedisShard(node *Node, conf RedisShardConfig) (*RedisShard, error) {
 	return shard, nil
 }
 
-// newRedisClient creates a Redis client. Without StartupWaitTimeout it makes
-// one attempt. With it, it keeps trying until Redis accepts a connection and
+// newRedisClient creates a Redis client. Without a deadline it makes one
+// attempt. With it, it keeps trying until Redis accepts a connection and
 // answers PING, so a Redis which is not reachable yet or still loads its
-// dataset is waited for.
-func newRedisClient(node *Node, conf RedisShardConfig, options rueidis.ClientOption) (rueidis.Client, error) {
-	if conf.StartupWaitTimeout <= 0 {
+// dataset is waited for until the deadline.
+func newRedisClient(node *Node, options rueidis.ClientOption, deadline time.Time) (rueidis.Client, error) {
+	if deadline.IsZero() {
 		return rueidis.NewClient(options)
 	}
 	connect := func() (rueidis.Client, error) {
@@ -526,7 +535,7 @@ func newRedisClient(node *Node, conf RedisShardConfig, options rueidis.ClientOpt
 		if err != nil {
 			return nil, err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), conf.IOTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), options.ConnWriteTimeout)
 		defer cancel()
 		if err := client.Do(ctx, client.B().Ping().Build()).Error(); err != nil {
 			client.Close()
@@ -544,18 +553,17 @@ func newRedisClient(node *Node, conf RedisShardConfig, options rueidis.ClientOpt
 			"retry_in": delay.String(),
 		}))
 	}
-	return waitForRedisStartup(conf.StartupWaitTimeout, connect, onRetry)
+	return waitForRedisStartup(deadline, connect, onRetry)
 }
 
 // waitForRedisStartup calls connect until it succeeds, fails with an error
-// which waiting can't fix, or the timeout passes. In the last case it returns
+// which waiting can't fix, or the deadline passes. In the last case it returns
 // the error of the last attempt. It calls onRetry before each delay.
 func waitForRedisStartup(
-	timeout time.Duration,
+	deadline time.Time,
 	connect func() (rueidis.Client, error),
 	onRetry func(err error, delay time.Duration),
 ) (rueidis.Client, error) {
-	deadline := time.Now().Add(timeout)
 	maxDelay := redisStartupWaitInitialDelay
 	for {
 		client, err := connect()
@@ -644,8 +652,9 @@ type RedisShardConfig struct {
 	IOTimeout time.Duration
 	// StartupWaitTimeout is how long NewRedisShard keeps trying to connect to
 	// a Redis which is not available yet: not reachable, or still loading its
-	// dataset. Attempts are made with a backoff of up to 5 seconds. An error
-	// which waiting can't fix, like a wrong password, is returned right away.
+	// dataset. It bounds NewRedisShard in total, the replica client included.
+	// Attempts are made with a backoff of up to 5 seconds. An error which
+	// waiting can't fix, like a wrong password, is returned right away.
 	// By default, zero: NewRedisShard makes one attempt to connect.
 	StartupWaitTimeout time.Duration
 

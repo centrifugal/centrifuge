@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -253,4 +254,24 @@ func TestNewRedisShardStartupWaitTimeoutDoesNotWaitOnRedisError(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Less(t, time.Since(started), 5*time.Second)
+}
+
+// TestNewRedisShardClosesClientOnError: NewRedisShard which fails after it
+// connected leaves no connection behind.
+func TestNewRedisShardClosesClientOnError(t *testing.T) {
+	clientName := "centrifuge-test-closes-client-on-error"
+	_, err := NewRedisShard(nil, RedisShardConfig{
+		Address:    "redis://127.0.0.1:6379?replica_client_enabled=true",
+		ClientName: clientName,
+	})
+	require.ErrorContains(t, err, "replica client may be enabled only in cluster and sentinel mode")
+
+	shard, err := NewRedisShard(nil, RedisShardConfig{Address: "127.0.0.1:6379"})
+	require.NoError(t, err)
+	t.Cleanup(shard.Close)
+	require.Eventually(t, func() bool {
+		clients, err := shard.client.Do(context.Background(), shard.client.B().ClientList().Build()).ToString()
+		require.NoError(t, err)
+		return !strings.Contains(clients, "name="+clientName)
+	}, 5*time.Second, 10*time.Millisecond)
 }
