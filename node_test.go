@@ -2799,3 +2799,32 @@ func TestNodeAddSubscriptionRollbackUnsubscribesBroker(t *testing.T) {
 	require.Equal(t, 0, node.Hub().NumSubscribers("ch"))
 	require.Eventually(t, func() bool { return broker.wasUnsubscribed("ch") }, 5*time.Second, 20*time.Millisecond)
 }
+
+// A node waits for other nodes before its first lineage call for
+// lineagePeersWait since it can hear from them (Run), not since it was
+// created; a call before Run neither waits nor ends the wait.
+func TestNode_LineagePeersWaitFromRun(t *testing.T) {
+	node, err := New(Config{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	start := time.Now()
+	node.awaitLineagePeers(context.Background())
+	require.Less(t, time.Since(start), lineagePeersWait/2, "no wait before Run")
+	select {
+	case <-node.lineagePeers:
+		t.Fatal("a call before Run ended the wait")
+	default:
+	}
+
+	time.Sleep(lineagePeersWait + 100*time.Millisecond) // a slow start
+	require.NoError(t, node.Run())
+	start = time.Now()
+	node.awaitLineagePeers(context.Background())
+	require.GreaterOrEqual(t, time.Since(start), lineagePeersWait/2, "waits after Run")
+	select {
+	case <-node.lineagePeers:
+	default:
+		t.Fatal("the wait ended")
+	}
+}
