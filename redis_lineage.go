@@ -743,7 +743,9 @@ func parseTokenValue(value string) (token, ancestor string) {
 	return value[:bar], value[bar+1:]
 }
 
-// errLineageGate is returned when the gate could not be opened.
+// errLineageGate wraps the errors of the lineage gate itself (it could
+// not be opened or followed, or a script digest could not be had), as opposed
+// to the errors of the gated script.
 var errLineageGate = errors.New("lineage gate")
 
 // sha returns the SHA-1 of a source, asking the server in FIPS mode (without
@@ -793,7 +795,7 @@ func (l *redisLineage) exec(ctx context.Context, s *lineageScript, keys, args []
 		}
 		sha, err := l.sha(ctx, l.shard.client, &s.shas, token, s.gatedSource(token))
 		if err != nil {
-			return rueidis.NewErrorResult(err)
+			return rueidis.NewErrorResult(fmt.Errorf("%w: script %s: digest: %w", errLineageGate, s.name, err))
 		}
 		cmd := l.shard.client.B().Evalsha().Sha1(sha).Numkeys(int64(len(keys))).Key(keys...).Arg(args...).Build()
 		resp := l.shard.client.Do(ctx, cmd)

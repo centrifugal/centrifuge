@@ -870,3 +870,37 @@ func TestRedisLineage_ConcurrentOpenRotatesOnce(t *testing.T) {
 		})
 	}
 }
+
+// A gated script whose digest can't be had (FIPS mode asks the server, here
+// refused by an ACL) fails with errLineageGate: an error of the gate,
+// not of the script, so a caller may run the script without the gate.
+func TestRedisLineage_DigestErrorIsGateError(t *testing.T) {
+	admin, err := NewRedisShard(nil, testSingleRedisConf(0))
+	require.NoError(t, err)
+	defer admin.Close()
+	user := "lineage_digest_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	require.NoError(t, admin.client.Do(context.Background(), admin.client.B().Arbitrary("ACL", "SETUSER", user, "on", ">pw", "~*", "&*", "+@all").Build()).Error())
+	defer admin.client.Do(context.Background(), admin.client.B().Arbitrary("ACL", "DELUSER", user).Build())
+
+	conf := testSingleRedisConf(0)
+	conf.AuthCredentialsFn = nil
+	conf.User, conf.Password = user, "pw"
+	s, err := NewRedisShard(nil, conf)
+	require.NoError(t, err)
+	defer s.Close()
+	l := s.lineageFor("lineage_digest_" + user)
+	script := newLineageScript("digest_test", "return 1", false)
+	fips := newLineageScript("digest_test_fips", "return 2", false)
+	l.register(script, false)
+	l.register(fips, false)
+	key := l.keyForSlot(0)
+	require.NoError(t, l.exec(context.Background(), script, []string{key}, nil).Error())
+
+	require.NoError(t, admin.client.Do(context.Background(), admin.client.B().Arbitrary("ACL", "SETUSER", user, "-eval").Build()).Error())
+	l.scriptsMu.Lock()
+	l.loadSHA1 = true
+	l.scriptsMu.Unlock()
+	err = l.exec(context.Background(), fips, []string{key}, nil).Error()
+	require.ErrorIs(t, err, errLineageGate)
+	require.Contains(t, err.Error(), "NOPERM")
+}

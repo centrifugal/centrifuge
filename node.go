@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/controlpb"
@@ -96,6 +97,9 @@ type Node struct {
 	// before trusting a lineage.
 	lineagePeers     chan struct{}
 	lineagePeersOnce sync.Once
+	// lineagePeersFrom: Unix nanoseconds since which this node can hear from
+	// other nodes (its control handler registered in Run), 0 before.
+	lineagePeersFrom atomic.Int64
 
 	notificationHandler NotificationHandler
 	nodeInfoSendHandler NodeInfoSendHandler
@@ -345,6 +349,7 @@ func (n *Node) Run() error {
 			return err
 		}
 	}
+	n.lineagePeersFrom.Store(time.Now().UnixNano())
 	if err := n.broker.RegisterBrokerEventHandler(n); err != nil {
 		return err
 	}
@@ -2480,14 +2485,19 @@ func (n *Node) registerLineage(l *redisLineage) {
 }
 
 // awaitLineagePeers waits, once, until this node heard from another node or
-// lineagePeersWait passed since it started.
+// lineagePeersWait passed since it could (since Run). A call made before Run
+// does not wait and does not end the wait: no other node can be heard yet.
 func (n *Node) awaitLineagePeers(ctx context.Context) {
 	select {
 	case <-n.lineagePeers:
 		return
 	default:
 	}
-	wait := lineagePeersWait - time.Since(time.Unix(n.startedAt, 0))
+	from := n.lineagePeersFrom.Load()
+	if from == 0 {
+		return
+	}
+	wait := lineagePeersWait - time.Since(time.Unix(0, from))
 	if wait <= 0 {
 		n.lineagePeersOnce.Do(func() { close(n.lineagePeers) })
 		return
