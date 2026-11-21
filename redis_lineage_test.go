@@ -1,10 +1,12 @@
 package centrifuge
 
 import (
+	"bufio"
 	"context"
 	"crypto/fips140"
 	"errors"
 	dto "github.com/prometheus/client_model/go"
+	"net"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -300,4 +302,79 @@ func TestLineageReports_StopCancelsAndWaits(t *testing.T) {
 	r.start(func(context.Context) { ran.Store(true) })
 	r.stop()
 	require.False(t, ran.Load(), "no report after the stop")
+}
+
+// startClusterDownRedis starts a server which speaks enough of the Redis
+// protocol for a client to connect, replies to EXISTS with CLUSTERDOWN until
+// up is closed, and to HELLO as Redis 8.
+func startClusterDownRedis(tb testing.TB, up <-chan struct{}) string {
+	tb.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(tb, err)
+	tb.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				r := bufio.NewReader(conn)
+				for {
+					command, err := readRedisCommand(r)
+					if err != nil {
+						return
+					}
+					reply := "+OK\r\n"
+					switch {
+					case strings.EqualFold(command[0], "EXISTS"):
+						select {
+						case <-up:
+							reply = ":0\r\n"
+						default:
+							reply = "-CLUSTERDOWN The cluster is down\r\n"
+						}
+					case strings.EqualFold(command[0], "CLUSTER"):
+						reply = "-ERR This instance has cluster support disabled\r\n"
+					case strings.EqualFold(command[0], "HELLO"):
+						fields := []string{"server", "redis", "version", "8.0.0", "id", "5", "role", "master"}
+						var b strings.Builder
+						b.WriteString("*" + strconv.Itoa(len(fields)) + "\r\n")
+						for _, f := range fields {
+							b.WriteString("$" + strconv.Itoa(len(f)) + "\r\n" + f + "\r\n")
+						}
+						reply = b.String()
+					}
+					if _, err := conn.Write([]byte(reply)); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// A server which can't answer yet (CLUSTERDOWN during a failover) is not a
+// server without the gate: the mode is an error then, not kept, and the gate
+// is found once the server answers.
+func TestRedisLineage_NotReadyServerIsNotKindWithoutGate(t *testing.T) {
+	up := make(chan struct{})
+	s, err := NewRedisShard(nil, RedisShardConfig{Address: startClusterDownRedis(t, up), IOTimeout: 2 * time.Second})
+	require.NoError(t, err)
+	t.Cleanup(s.Close)
+	l := s.lineageFor("not_ready")
+	l.noProbeForTest = true
+
+	_, err = l.mode(context.Background(), false)
+	require.Error(t, err)
+	var re *rueidis.RedisError
+	require.ErrorAs(t, err, &re)
+	require.True(t, re.IsClusterDown(), err)
+
+	close(up)
+	mode, err := l.mode(context.Background(), false)
+	require.NoError(t, err)
+	require.Equal(t, lineageGate, mode)
 }
