@@ -610,7 +610,10 @@ func (l *redisLineage) serverKind(ctx context.Context) (redisServerKind, error) 
 // helloKind asks the server what it is with HELLO (not cached), on a
 // connection to the primary serving the lineage key: in Redis Cluster a
 // keyless command may go to a replica. A server refusing HELLO (Redis before
-// 6, some proxies) is a kind without the gate, not an error.
+// 6, some proxies) is a kind without the gate, not an error. A reply telling
+// that the server or the cluster can't answer now (CLUSTERDOWN during a
+// failover, for example) is an error: it says nothing about the server, and
+// serverKind would keep it for the life of the process.
 func (l *redisLineage) helloKind(ctx context.Context) (redisServerKind, error) {
 	var m map[string]rueidis.RedisMessage
 	var helloErr error
@@ -627,7 +630,7 @@ func (l *redisLineage) helloKind(ctx context.Context) (redisServerKind, error) {
 		err = helloErr
 	}
 	if err != nil {
-		if re, ok := rueidis.IsRedisErr(err); ok && !isReadOnly(re) {
+		if re, ok := rueidis.IsRedisErr(err); ok && !isReadOnly(re) && !isRedisErrNotReady(re) {
 			return redisServerKind{desc: "a server refusing HELLO", helloErr: re.Error()}, nil
 		}
 		return redisServerKind{}, fmt.Errorf("lineage: HELLO: %w", err)
@@ -851,6 +854,21 @@ func isNoScript(err error) bool {
 	}
 	re, ok := rueidis.IsRedisErr(err)
 	return ok && re.IsNoScript()
+}
+
+// isRedisErrNotReady tells a Redis error reply meaning that the server or the
+// cluster can't serve the command now, not that it refuses it: the cluster is
+// down or the slot moving, the server loading its data, busy with a script, or
+// a replica without a reachable primary.
+func isRedisErrNotReady(re *rueidis.RedisError) bool {
+	if _, ok := re.IsRedirect(); ok {
+		return true
+	}
+	if re.IsClusterDown() || re.IsTryAgain() || re.IsLoading() {
+		return true
+	}
+	msg := re.Error()
+	return strings.HasPrefix(msg, "MASTERDOWN") || strings.HasPrefix(msg, "BUSY ")
 }
 
 func isReadOnly(err error) bool {
