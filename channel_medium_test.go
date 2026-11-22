@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"context"
 	"errors"
 	"math"
 	"runtime"
@@ -161,7 +162,8 @@ func TestChannelMediumPositionSync(t *testing.T) {
 		},
 	})
 	medium.nowFn = func() time.Time { return time.Now().Add(time.Hour) }
-	medium.CheckPosition(time.Second, StreamPosition{Offset: 1, Epoch: "test"}, time.Second)
+	_, err := medium.CheckPosition(time.Second, StreamPosition{Offset: 1, Epoch: "test"}, time.Second)
+	require.NoError(t, err)
 	select {
 	case <-doneCh:
 	case <-time.After(5 * time.Second):
@@ -190,7 +192,8 @@ func TestChannelMediumPositionSyncRetry(t *testing.T) {
 		},
 	})
 	medium.nowFn = func() time.Time { return time.Now().Add(time.Hour) }
-	medium.CheckPosition(time.Second, StreamPosition{Offset: 1, Epoch: "test"}, time.Second)
+	_, err := medium.CheckPosition(time.Second, StreamPosition{Offset: 1, Epoch: "test"}, time.Second)
+	require.NoError(t, err)
 	select {
 	case <-doneCh:
 	case <-time.After(5 * time.Second):
@@ -221,7 +224,8 @@ func TestChannelMediumPositionSyncMap(t *testing.T) {
 	medium.isMap = true
 	medium.nowFn = func() time.Time { return time.Now().Add(time.Hour) }
 	// Position matches — should return true.
-	valid := medium.CheckPosition(time.Second, StreamPosition{Offset: 5, Epoch: "abc"}, time.Second)
+	valid, err := medium.CheckPosition(time.Second, StreamPosition{Offset: 5, Epoch: "abc"}, time.Second)
+	require.NoError(t, err)
 	require.True(t, valid)
 	select {
 	case <-mapStreamTopCalled:
@@ -255,7 +259,8 @@ func TestChannelMediumPositionSyncMapMismatch(t *testing.T) {
 	medium.isMap = true
 	medium.nowFn = func() time.Time { return time.Now().Add(time.Hour) }
 	// Client has stale position — should return false.
-	valid := medium.CheckPosition(time.Second, StreamPosition{Offset: 5, Epoch: "xyz"}, time.Second)
+	valid, err := medium.CheckPosition(time.Second, StreamPosition{Offset: 5, Epoch: "xyz"}, time.Second)
+	require.NoError(t, err)
 	require.False(t, valid)
 	select {
 	case <-insufficientCh:
@@ -472,7 +477,8 @@ func TestChannelMediumCheckPositionAndInsufficientState(t *testing.T) {
 	// Mismatch: client is at offset 5, stream top at 99. Position is invalid,
 	// medium must broadcast insufficient state.
 	clientPos := StreamPosition{Offset: 5, Epoch: "e1"}
-	valid := medium.CheckPosition(time.Minute, clientPos, 0)
+	valid, err := medium.CheckPosition(time.Minute, clientPos, 0)
+	require.NoError(t, err)
 	require.False(t, valid)
 
 	// One publication delivered with the magic insufficient-state sentinel offset.
@@ -483,9 +489,10 @@ func TestChannelMediumCheckPositionAndInsufficientState(t *testing.T) {
 		t.Fatal("insufficient state broadcast not delivered")
 	}
 
-	// Calling again immediately should skip the check (delay not elapsed).
-	valid = medium.CheckPosition(time.Minute, clientPos, time.Hour)
-	require.True(t, valid)
+	// Calling again immediately should skip the check (delay not elapsed), and
+	// must not report the position as checked.
+	_, err = medium.CheckPosition(time.Minute, clientPos, time.Hour)
+	require.ErrorIs(t, err, errPositionNotChecked)
 }
 
 // TestChannelMediumOptionsIsMediumEnabled exercises isMediumEnabled across the
@@ -604,4 +611,289 @@ func TestChannelMediumKeepLatestPublicationDelta(t *testing.T) {
 	require.NotNil(t, captured.first)
 	require.NotNil(t, captured.second, "second broadcast should see prior pub as localPrev")
 	require.Equal(t, []byte("first"), captured.second.Data)
+}
+
+type sharedSyncTest struct {
+	t          *testing.T
+	node       *Node
+	medium     *channelMedium
+	isMap      bool
+	now        time.Time
+	top        StreamPosition
+	err        error
+	reads      int
+	broadcasts int
+}
+
+// newSharedSyncTest installs a medium with a fake clock and stream top into a
+// node, its check delay elapsed.
+func newSharedSyncTest(t *testing.T, isMap bool) *sharedSyncTest {
+	t.Helper()
+	s := &sharedSyncTest{t: t, isMap: isMap, now: time.Now(), top: StreamPosition{Offset: 2, Epoch: "e"}}
+	s.node = defaultTestNode()
+	t.Cleanup(func() { _ = s.node.Shutdown(context.Background()) })
+	if isMap {
+		mapBroker, err := NewMemoryMapBroker(s.node, MemoryMapBrokerConfig{})
+		require.NoError(t, err)
+		s.node.SetMapBroker(mapBroker)
+	}
+	read := func() (StreamPosition, error) {
+		s.reads++
+		return s.top, s.err
+	}
+	s.medium = setupChannelMedium(t, ChannelMediumOptions{SharedPositionSync: true}, &mockNode{
+		streamTopFunc:    func(string, time.Duration) (StreamPosition, error) { return read() },
+		mapStreamTopFunc: func(string) (StreamPosition, error) { return read() },
+		handlePublicationFunc: func(_ string, _ StreamPosition, pub, _, _ *Publication) error {
+			if pub.Offset == math.MaxUint64 {
+				s.broadcasts++
+			}
+			return nil
+		},
+	})
+	s.medium.isMap = isMap
+	s.medium.nowFn = func() time.Time { return s.now }
+	mu := s.node.mediumLock(s.medium.channel)
+	mu.Lock()
+	s.node.mediumShard(s.medium.channel)[s.medium.channel] = s.medium
+	mu.Unlock()
+	s.elapse()
+	return s
+}
+
+func (s *sharedSyncTest) elapse() {
+	s.now = s.now.Add(s.node.config.ClientChannelPositionCheckDelay + time.Second)
+}
+
+// check returns whether the position is valid and whether it was checked at
+// all: a client retries a check which was not made on its next tick.
+func (s *sharedSyncTest) check(offset uint64, epoch string) (valid, checked bool) {
+	valid, err := s.node.checkPosition(s.medium.channel, StreamPosition{Offset: offset, Epoch: epoch}, time.Hour, s.isMap)
+	return valid, err == nil
+}
+
+func (s *sharedSyncTest) requireValid(offset uint64, epoch string) {
+	s.t.Helper()
+	valid, checked := s.check(offset, epoch)
+	require.True(s.t, checked)
+	require.True(s.t, valid)
+}
+
+func (s *sharedSyncTest) requireInvalid(offset uint64, epoch string) {
+	s.t.Helper()
+	valid, checked := s.check(offset, epoch)
+	require.True(s.t, checked)
+	require.False(s.t, valid)
+}
+
+func (s *sharedSyncTest) requireNotChecked(offset uint64, epoch string) {
+	s.t.Helper()
+	_, checked := s.check(offset, epoch)
+	require.False(s.t, checked)
+}
+
+func runSharedSyncTest(t *testing.T, test func(t *testing.T, s *sharedSyncTest)) {
+	t.Parallel()
+	for name, isMap := range map[string]bool{"stream": false, "map": true} {
+		t.Run(name, func(t *testing.T) {
+			test(t, newSharedSyncTest(t, isMap))
+		})
+	}
+}
+
+func TestSharedPositionSyncBehindVerifiedTop(t *testing.T) {
+	runSharedSyncTest(t, func(t *testing.T, s *sharedSyncTest) {
+		s.requireValid(2, "e")
+		s.requireInvalid(1, "e")
+		require.Equal(t, 1, s.reads, "compared without reading again")
+		require.Zero(t, s.broadcasts, "only the client which is behind is affected")
+	})
+}
+
+func TestSharedPositionSyncSharesRead(t *testing.T) {
+	runSharedSyncTest(t, func(t *testing.T, s *sharedSyncTest) {
+		for range 1000 {
+			s.requireValid(2, "e")
+		}
+		require.Equal(t, 1, s.reads)
+		s.elapse()
+		for range 1000 {
+			s.requireValid(2, "e")
+		}
+		require.Equal(t, 2, s.reads)
+	})
+}
+
+func TestSharedPositionSyncAnotherEpoch(t *testing.T) {
+	runSharedSyncTest(t, func(t *testing.T, s *sharedSyncTest) {
+		s.requireValid(2, "e")
+		s.requireInvalid(2, "old")
+		require.Equal(t, 1, s.broadcasts)
+	})
+}
+
+func TestSharedPositionSyncEpochChanged(t *testing.T) {
+	runSharedSyncTest(t, func(t *testing.T, s *sharedSyncTest) {
+		s.requireValid(2, "e")
+		// Subscribed after the stream was reset.
+		s.top = StreamPosition{Offset: 1, Epoch: "new"}
+		s.requireValid(1, "new")
+		require.Equal(t, 2, s.reads)
+		s.requireValid(1, "new")
+		require.Equal(t, 2, s.reads, "the new top is shared")
+		s.requireInvalid(2, "e")
+	})
+}
+
+func TestSharedPositionSyncAheadOfVerifiedTop(t *testing.T) {
+	runSharedSyncTest(t, func(t *testing.T, s *sharedSyncTest) {
+		s.requireValid(2, "e")
+		// The stream went back to 2 in the same epoch: lost writes.
+		s.requireInvalid(3, "e")
+		require.Equal(t, 1, s.broadcasts)
+	})
+}
+
+func TestSharedPositionSyncSubscribedAfterLoss(t *testing.T) {
+	runSharedSyncTest(t, func(t *testing.T, s *sharedSyncTest) {
+		s.requireValid(2, "e")
+		// The node lost 3, and a client subscribed at it since.
+		s.top.Offset = 3
+		s.requireValid(3, "e")
+		s.requireInvalid(2, "e")
+		require.Equal(t, 2, s.reads)
+	})
+}
+
+func TestSharedPositionSyncPublicationAfterVerifiedTop(t *testing.T) {
+	runSharedSyncTest(t, func(t *testing.T, s *sharedSyncTest) {
+		s.requireValid(2, "e")
+		s.top.Offset = 3
+		s.medium.broadcastPublication(&Publication{Offset: 3}, s.top, false, nil)
+		// One position read just before the delivery, one just after it.
+		s.requireValid(2, "e")
+		s.requireValid(3, "e")
+		require.Zero(t, s.broadcasts)
+	})
+}
+
+func TestSharedPositionSyncNothingVerified(t *testing.T) {
+	runSharedSyncTest(t, func(t *testing.T, s *sharedSyncTest) {
+		s.medium.mu.Lock()
+		s.medium.positionCheckTime = s.now.UnixNano()
+		s.medium.mu.Unlock()
+		s.requireNotChecked(1, "e")
+		require.Zero(t, s.reads)
+	})
+}
+
+func TestSharedPositionSyncBrokerError(t *testing.T) {
+	runSharedSyncTest(t, func(t *testing.T, s *sharedSyncTest) {
+		s.err = errors.New("boom")
+		for range 100 {
+			s.requireNotChecked(2, "e")
+		}
+		require.Equal(t, 2, s.reads, "a read and its retry per delay")
+		s.elapse()
+		s.err = nil
+		s.requireValid(2, "e")
+	})
+}
+
+func TestSharedPositionSyncBrokerErrorAfterVerified(t *testing.T) {
+	runSharedSyncTest(t, func(t *testing.T, s *sharedSyncTest) {
+		s.requireValid(2, "e")
+		s.err = errors.New("boom")
+		for range 100 {
+			s.requireNotChecked(3, "e")
+		}
+		require.Equal(t, 3, s.reads, "positions ahead don't multiply reads while the broker fails")
+	})
+}
+
+func TestSharedPositionSyncReadInFlight(t *testing.T) {
+	runSharedSyncTest(t, func(t *testing.T, s *sharedSyncTest) {
+		started, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		read := func() (StreamPosition, error) {
+			close(started)
+			<-release
+			return StreamPosition{Offset: 2, Epoch: "e"}, nil
+		}
+		s.medium.node = &mockNode{
+			streamTopFunc:    func(string, time.Duration) (StreamPosition, error) { return read() },
+			mapStreamTopFunc: func(string) (StreamPosition, error) { return read() },
+		}
+		go func() {
+			defer close(done)
+			s.check(2, "e")
+		}()
+		<-started
+		s.requireNotChecked(1, "e")
+		close(release)
+		<-done
+		s.requireInvalid(1, "e")
+	})
+}
+
+func TestSharedPositionSyncPublicationWithoutOffset(t *testing.T) {
+	runSharedSyncTest(t, func(t *testing.T, s *sharedSyncTest) {
+		// Doesn't move positions, so it says nothing about them.
+		s.medium.broadcastPublication(&Publication{}, StreamPosition{}, false, nil)
+		s.requireInvalid(1, "e")
+		require.NotZero(t, s.reads)
+	})
+}
+
+type droppingEventHandler struct{}
+
+func (droppingEventHandler) HandlePublication(string, *Publication, StreamPosition, bool, *Publication) error {
+	return nil
+}
+func (droppingEventHandler) HandleJoin(string, *ClientInfo) error  { return nil }
+func (droppingEventHandler) HandleLeave(string, *ClientInfo) error { return nil }
+
+// A node loses the last publication in PUB/SUB, then a client subscribes at
+// the stream top. That client making the shared check must not hide that the
+// clients subscribed before are behind.
+func TestSharedPositionSyncLostPublication(t *testing.T) {
+	t.Parallel()
+	node, err := New(Config{GetChannelMediumOptions: func(string) ChannelMediumOptions {
+		return ChannelMediumOptions{SharedPositionSync: true}
+	}})
+	require.NoError(t, err)
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(_ SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{EnablePositioning: true}}, nil)
+		})
+	})
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	const channel = "test"
+	stale := newTestSubscribedClientV2(t, node, "stale", channel)
+	broker := node.broker.(*MemoryBroker)
+	handler := broker.eventHandler
+	broker.eventHandler = droppingEventHandler{}
+	_, err = node.Publish(channel, []byte(`{}`), WithHistory(10, time.Minute))
+	require.NoError(t, err)
+	broker.eventHandler = handler
+	fresh := newTestSubscribedClientV2(t, node, "fresh", channel)
+
+	later := func() time.Time { return time.Now().Add(2 * node.config.ClientChannelPositionCheckDelay) }
+	node.mu.Lock()
+	node.nowTimeGetter = later
+	node.mu.Unlock()
+	mu := node.mediumLock(channel)
+	mu.Lock()
+	node.mediumShard(channel)[channel].nowFn = later
+	mu.Unlock()
+
+	check := func(c *Client) bool {
+		c.mu.RLock()
+		chCtx := c.channels[channel]
+		c.mu.RUnlock()
+		return c.checkPosition(node.config.ClientChannelPositionCheckDelay, channel, chCtx)
+	}
+	require.True(t, check(fresh))
+	require.False(t, check(stale))
 }
