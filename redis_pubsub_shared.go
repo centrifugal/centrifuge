@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	pubSubProcessorBufferSize = 4096
+	pubSubProcessorBufferSize = 16384
 
 	// defaultPubSubProbeInterval is the default idle interval after which a
 	// PUB/SUB connection gets a liveness probe.
