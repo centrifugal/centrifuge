@@ -21,9 +21,10 @@ type ChannelMediumOptions struct {
 	KeepLatestPublication bool
 
 	// SharedPositionSync when true delegates connection position checks to the channel medium. In that case
-	// check is only performed no more often than once in Config.ClientChannelPositionCheckDelay thus reducing
-	// the load on broker in cases when channel has many subscribers. When message loss is detected medium layer
-	// tells caller about this and also marks all channel subscribers with insufficient state flag. By default,
+	// stream top is normally read once in Config.ClientChannelPositionCheckDelay thus reducing the load on
+	// broker in cases when channel has many subscribers, and position of each connection is compared with it.
+	// When the read detects message loss medium layer tells caller about this and also marks all channel
+	// subscribers with insufficient state flag. A connection behind the top read is marked alone. By default,
 	// medium is not used for sync – in that case each individual connection syncs position independently.
 	SharedPositionSync bool
 
@@ -71,6 +72,10 @@ type channelMedium struct {
 	latestPublication *Publication
 	// positionCheckTime is a time (Unix Nanoseconds) when last position check was performed.
 	positionCheckTime int64
+	// verifiedTop is the stream top confirmed by the last position check, if hasVerifiedTop. Positions of
+	// connections are compared with it until the next check.
+	verifiedTop    StreamPosition
+	hasVerifiedTop bool
 	// nowFn is the clock used by this medium. Defaults to time.Now in
 	// newChannelMedium; tests override it on the medium instance instead of
 	// mutating a package-level variable (which races with parallel readers).
@@ -114,9 +119,12 @@ const defaultChannelLayerQueueMaxSize = 16 * 1024 * 1024
 
 func (c *channelMedium) broadcastPublication(pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) {
 	bp := queuedPub{pub: pub, sp: sp, prevPub: prevPub, delta: delta}
-	c.mu.Lock()
-	c.positionCheckTime = c.nowFn().UnixNano()
-	c.mu.Unlock()
+	// Publication without offset does not move positions, so it can't postpone their check.
+	if pub.Offset > 0 {
+		c.mu.Lock()
+		c.positionCheckTime = c.nowFn().UnixNano()
+		c.mu.Unlock()
+	}
 
 	if c.options.enableQueue {
 		queueMaxSize := defaultChannelLayerQueueMaxSize
@@ -233,26 +241,47 @@ func (c *channelMedium) waitSendPub(delay time.Duration) bool {
 	return true
 }
 
-func (c *channelMedium) CheckPosition(historyMetaTTL time.Duration, clientPosition StreamPosition, checkDelay time.Duration) bool {
+// errPositionNotChecked means there was nothing to check a position against. Caller must not consider
+// the position checked, otherwise a connection which is behind may never be compared.
+var errPositionNotChecked = errors.New("position not checked")
+
+// CheckPosition checks position of one connection. When check delay passed it reads stream top, otherwise
+// it compares with the top verified by the last read:
+//   - same position is valid;
+//   - behind in the same epoch is invalid, for this connection only;
+//   - ahead or in another epoch can't be decided without reading again. While that read is in flight, or
+//     if it fails, there is no verified top, so such positions do not multiply reads.
+func (c *channelMedium) CheckPosition(historyMetaTTL time.Duration, clientPosition StreamPosition, checkDelay time.Duration) (bool, error) {
 	nowUnixNano := c.nowFn().UnixNano()
 	c.mu.Lock()
-	needCheckPosition := nowUnixNano-c.positionCheckTime >= checkDelay.Nanoseconds()
-	if needCheckPosition {
-		c.positionCheckTime = nowUnixNano
+	if nowUnixNano-c.positionCheckTime < checkDelay.Nanoseconds() {
+		if !c.hasVerifiedTop {
+			c.mu.Unlock()
+			return false, errPositionNotChecked
+		}
+		top := c.verifiedTop
+		if clientPosition.Epoch == top.Epoch && clientPosition.Offset <= top.Offset {
+			c.mu.Unlock()
+			return clientPosition.Offset == top.Offset, nil
+		}
 	}
+	c.positionCheckTime = nowUnixNano
+	c.hasVerifiedTop = false
 	c.mu.Unlock()
-	if !needCheckPosition {
-		return true
-	}
-	_, validPosition, err := c.checkPositionWithRetry(historyMetaTTL, clientPosition)
+
+	streamTop, validPosition, err := c.checkPositionWithRetry(historyMetaTTL, clientPosition)
 	if err != nil {
 		// Position will be checked again later.
-		return true
+		return false, err
 	}
 	if !validPosition {
 		c.broadcastInsufficientState()
+		return false, nil
 	}
-	return validPosition
+	c.mu.Lock()
+	c.verifiedTop, c.hasVerifiedTop = streamTop, true
+	c.mu.Unlock()
+	return true, nil
 }
 
 func (c *channelMedium) checkPositionWithRetry(historyMetaTTL time.Duration, clientPosition StreamPosition) (StreamPosition, bool, error) {

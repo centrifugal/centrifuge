@@ -1966,8 +1966,7 @@ func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMe
 	medium, ok := n.mediumShard(ch)[ch]
 	mu.Unlock()
 	if ok && medium.options.SharedPositionSync {
-		validPosition := medium.CheckPosition(historyMetaTTL, clientPosition, n.config.ClientChannelPositionCheckDelay)
-		return validPosition, nil
+		return medium.CheckPosition(historyMetaTTL, clientPosition, n.config.ClientChannelPositionCheckDelay)
 	}
 	// No medium for channel or position sync disabled – check position over Broker.
 	if isMap {
