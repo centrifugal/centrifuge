@@ -146,6 +146,7 @@ type RedisBroker struct {
 	nodeChannel             string
 	closeOnce               sync.Once
 	closeCh                 chan struct{}
+	pubSubBudget            *pubSubBudget
 	// reports are the startup lineage reports, stopped on Close.
 	reports *lineageReports
 }
@@ -250,6 +251,13 @@ type RedisBrokerConfig struct {
 	// probing. Not exported: the default is expected to work everywhere, the
 	// knob only exists for tests.
 	pubSubProbeInterval time.Duration
+
+	// PubSubQueueMaxSize is the maximum size in bytes of messages received
+	// over PUB/SUB which wait to be processed, for all PUB/SUB connections of
+	// the broker together. When it is reached, new messages are dropped (PUB/SUB
+	// delivery is at most once) and counted in the dropped messages metric.
+	// Memory is only taken while messages wait. Zero value means 64MB.
+	PubSubQueueMaxSize int
 
 	// numPubSubProcessors allows configuring number of workers which will process
 	// messages coming from Redis PUB/SUB. Zero value tells Centrifuge to use the
@@ -357,6 +365,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	}
 
 	b := &RedisBroker{
+		pubSubBudget:            newPubSubBudget(config.PubSubQueueMaxSize),
 		node:                    n,
 		config:                  config,
 		shards:                  shardWrappers,
@@ -851,6 +860,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, logFields map[string]any, event
 		b.node,
 		b.config.Name,
 		b.node.metrics.brokerPubSub,
+		b.pubSubBudget,
 		b.config.SubscribeOnReplica,
 		b.config.pubSubProbeInterval,
 		probeState,
