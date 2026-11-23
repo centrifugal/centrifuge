@@ -8,13 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/redis/rueidis"
 )
 
 const (
-	pubSubProcessorBufferSize = 4096
-
 	// defaultPubSubProbeInterval is the default idle interval after which a
 	// PUB/SUB connection gets a liveness probe.
 	defaultPubSubProbeInterval = 30 * time.Second
@@ -208,6 +205,7 @@ func runPubSubLoop(
 	node *Node,
 	name string,
 	psm redisPubSubMetrics,
+	budget *pubSubBudget,
 	subscribeOnReplica bool,
 	probeInterval time.Duration,
 	probeState *pubSubProbeState,
@@ -251,26 +249,22 @@ func runPubSubLoop(
 	defer closeDoneOnce()
 
 	// Run PUB/SUB message processors to spread received message processing work over worker goroutines.
-	processors := make(map[int]chan rueidis.PubSubMessage)
-	for i := 0; i < numProcessors; i++ {
-		processingCh := make(chan rueidis.PubSubMessage, pubSubProcessorBufferSize)
-		processors[i] = processingCh
-		go func(ch chan rueidis.PubSubMessage) {
-			for {
-				select {
-				case <-done:
-					return
-				case msg := <-ch:
-					err := cb.handleMessage(shard.isCluster, eventHandler, msg.Channel, convert.StringToBytes(msg.Message))
-					if err != nil {
-						psm.incErrors(name, "handle_client_message")
-						node.logger.log(newErrorLogEntry(err, "error handling client message", logFields))
-						continue
-					}
-				}
+	processors := make([]*pubSubQueue, numProcessors)
+	for i := range processors {
+		processors[i] = newPubSubQueue(budget)
+		go processors[i].run(func(channel string, data []byte) {
+			err := cb.handleMessage(shard.isCluster, eventHandler, channel, data)
+			if err != nil {
+				psm.incErrors(name, "handle_client_message")
+				node.logger.log(newErrorLogEntry(err, "error handling client message", logFields))
 			}
-		}(processingCh)
+		})
 	}
+	defer func() {
+		for _, p := range processors {
+			p.close()
+		}
+	}()
 
 	// Buffer monitoring goroutine.
 	go func() {
@@ -282,7 +276,7 @@ func runPubSubLoop(
 				return
 			case <-ticker.C:
 				for i := 0; i < numProcessors; i++ {
-					psm.buffered.WithLabelValues(name, "client", strconv.Itoa(i)).Set(float64(len(processors[i])))
+					psm.buffered.WithLabelValues(name, "client", strconv.Itoa(i)).Set(float64(processors[i].len()))
 				}
 			}
 		}
@@ -314,14 +308,13 @@ func runPubSubLoop(
 				return
 			}
 			select {
-			case processors[index(msg.Channel, numProcessors)] <- msg:
 			case <-done:
+				return
 			default:
-				// Buffer is full, drop the message. It's expected that PUB/SUB layer
-				// only provides at most once delivery guarantee.
-				// Blocking here will block Redis connection read loop which is not a
-				// good thing and can lead to slower command processing and potentially
-				// to deadlocks (see https://github.com/redis/rueidis/issues/596).
+			}
+			if !processors[index(msg.Channel, numProcessors)].add(msg) {
+				// PubSubQueueMaxSize reached, drop the message. It's expected that
+				// PUB/SUB layer only provides at most once delivery guarantee.
 				psm.dropped.WithLabelValues(name, "client").Inc()
 			}
 		},
@@ -572,4 +565,3 @@ func runPubSubLoop(
 		}
 	}
 }
-

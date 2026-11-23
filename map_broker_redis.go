@@ -107,6 +107,7 @@ type RedisMapBroker struct {
 	// after construction (shared with the package-level precomputed table).
 	partitionTags []string
 
+	pubSubBudget        *pubSubBudget
 	addScript           *lineageScript
 	resetLostScript     *rueidis.Lua
 	watermarks          *offsetWatermarks
@@ -199,6 +200,11 @@ type RedisMapBrokerConfig struct {
 	// expected to work everywhere, the knob only exists for tests.
 	pubSubProbeInterval time.Duration
 
+	// PubSubQueueMaxSize is the maximum size in bytes of messages received
+	// over PUB/SUB which wait to be processed. See the field with the same name
+	// in RedisBrokerConfig for the details. Zero value means 64MB.
+	PubSubQueueMaxSize int
+
 	// numPubSubProcessors allows configuring number of workers which will process
 	// messages coming from Redis PUB/SUB.
 	numPubSubProcessors int
@@ -283,6 +289,7 @@ func NewRedisMapBroker(n *Node, conf RedisMapBrokerConfig) (*RedisMapBroker, err
 	}
 
 	e := &RedisMapBroker{
+		pubSubBudget:        newPubSubBudget(conf.PubSubQueueMaxSize),
 		node:                n,
 		conf:                conf,
 		shards:              shardWrappers,
@@ -2914,6 +2921,7 @@ func (e *RedisMapBroker) runPubSub(s *brokerShardWrapper, logFields map[string]a
 		e.node,
 		e.conf.Name,
 		e.node.metrics.mapBrokerPubSub,
+		e.pubSubBudget,
 		e.conf.SubscribeOnReplica,
 		e.conf.pubSubProbeInterval,
 		probeState,
