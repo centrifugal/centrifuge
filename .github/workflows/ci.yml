@@ -27,13 +27,14 @@ jobs:
         redis-version: [7, 8]
         valkey-version: [8, 9]
     steps:
+      # Checkout first: setup-go keys its module and build cache on go.sum.
+      - name: Checkout code
+        uses: actions/checkout@v7
+
       - name: Install Go
         uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go-version }}
-
-      - name: Checkout code
-        uses: actions/checkout@v7
 
       - name: Start services
         env:
