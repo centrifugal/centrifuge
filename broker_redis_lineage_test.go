@@ -38,6 +38,15 @@ func newLineageTestBroker(t *testing.T, tt lineageRedisTest, allowInfo bool) *Re
 
 func newLineageTestBrokerPrefix(t *testing.T, tt lineageRedisTest, allowInfo bool, prefix string) *RedisBroker {
 	t.Helper()
+	return newLineageTestBrokerProbe(t, tt, allowInfo, prefix, true)
+}
+
+// newLineageTestBrokerProbe is newLineageTestBrokerPrefix with the idle probe
+// on or off. A test counting the rotations of a node turns it off: in Redis
+// Cluster the probe calls every primary, and on a server whose scripts the
+// test flushed it rotates too.
+func newLineageTestBrokerProbe(t *testing.T, tt lineageRedisTest, allowInfo bool, prefix string, probe bool) *RedisBroker {
+	t.Helper()
 	node := testNode(t)
 	var conf RedisShardConfig
 	if tt.UseCluster {
@@ -51,6 +60,8 @@ func newLineageTestBrokerPrefix(t *testing.T, tt lineageRedisTest, allowInfo boo
 	}
 	s, err := NewRedisShard(node, conf)
 	require.NoError(t, err)
+	// Before the broker starts: the probe starts with the gate.
+	s.lineageFor(prefix).noProbeForTest = !probe
 	b, err := NewRedisBroker(node, RedisBrokerConfig{
 		Prefix:                   prefix,
 		Shards:                   []*RedisShard{s},
@@ -371,7 +382,9 @@ func TestRedisLineage_FollowsTokenOfAnotherNode(t *testing.T) {
 			continue
 		}
 		t.Run(tt.Name, func(t *testing.T) {
-			b1 := newLineageTestBroker(t, tt, false)
+			// Without b1's idle probe: it would rotate on the other primaries
+			// of a cluster, whose scripts are flushed below too.
+			b1 := newLineageTestBrokerProbe(t, tt, false, getUniquePrefix(), false)
 			ch := "lineage_follow_" + randString(6)
 			lineagePublish(t, b1, ch, 1)
 
@@ -382,13 +395,12 @@ func TestRedisLineage_FollowsTokenOfAnotherNode(t *testing.T) {
 			after := lineagePublish(t, b2, ch, 1)
 			require.Equal(t, uint64(1), after.Offset)
 
-			s1 := b1.shards[0].shard
-			before := b1.lin(s1).stats.rotations
+			before := lineageRotations(b1)
 			// b1 still knows the old token: LINEAGE error, then the new token's scripts.
 			sp := lineagePublish(t, b1, ch, 1)
 			require.Equal(t, after.Epoch, sp.Epoch)
 			require.Equal(t, uint64(2), sp.Offset)
-			require.Equal(t, before, b1.lin(s1).stats.rotations, "following a token is not a rotation")
+			require.Equal(t, before, lineageRotations(b1), "following a token is not a rotation")
 		})
 	}
 }
