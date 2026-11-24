@@ -64,6 +64,7 @@ func NewMemoryBroker(n *Node, _ MemoryBrokerConfig) (*MemoryBroker, error) {
 		closeCh:     closeCh,
 		resultCache: make(map[string]resultCacheEntry),
 	}
+	b.historyHub.setInitialMetaTTL(n.config.HistoryMetaTTLInitial)
 	return b, nil
 }
 
@@ -268,6 +269,8 @@ type historyShard struct {
 	expireQueue     priority.Queue
 	expires         map[string]int64
 	historyMetaTTL  time.Duration
+	// initialMetaTTL is Config.HistoryMetaTTLInitial (0: off).
+	initialMetaTTL  time.Duration
 	nextRemoveCheck int64
 	removeQueue     priority.Queue
 	removes         map[string]int64
@@ -286,6 +289,14 @@ func newHistoryHub(historyMetaTTL time.Duration, closeCh chan struct{}) *history
 		}
 	}
 	return h
+}
+
+// setInitialMetaTTL sets the TTL of streams without publications, see
+// Config.HistoryMetaTTLInitial.
+func (h *historyHub) setInitialMetaTTL(ttl time.Duration) {
+	for _, s := range h.shards {
+		s.initialMetaTTL = ttl
+	}
 }
 
 func (h *historyHub) shard(ch string) *historyShard {
@@ -493,7 +504,20 @@ func (h *historyShard) getLocked(ch string, opts HistoryOptions) ([]*Publication
 		historyMetaTTL = h.historyMetaTTL
 	}
 
-	if historyMetaTTL > 0 {
+	initial := opts.MetaTTLInitial
+	if initial == 0 {
+		initial = h.initialMetaTTL
+	}
+
+	if initial > 0 {
+		// A stream without publications gets the initial TTL, kept alive by
+		// the reads of position checks; the first publication sets the usual
+		// one.
+		if s, ok := h.streams[ch]; !ok || s.Top() == 0 {
+			historyMetaTTL = emptyMetaTTL(historyMetaTTL, initial)
+		}
+		scheduleRemove(&h.removeQueue, h.removes, &h.nextRemoveCheck, ch, time.Now().Unix()+int64(historyMetaTTL.Seconds()))
+	} else if historyMetaTTL > 0 {
 		removeAt := time.Now().Unix() + int64(historyMetaTTL.Seconds())
 		if _, ok := h.removes[ch]; !ok {
 			heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})

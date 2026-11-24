@@ -105,10 +105,10 @@ func TestRedisBroker_ReusedOffsetsDetected(t *testing.T) {
 
 	// The stream got reset: the old position can't recover.
 	require.Eventually(t, func() bool {
-		top, err := node.streamTop(ch, time.Hour)
+		top, err := node.streamTop(ch, time.Hour, 0)
 		return err == nil && top.Epoch != last.Epoch
 	}, 5*time.Second, 10*time.Millisecond, "a new epoch")
-	_, err = node.recoverHistory(ch, last, time.Hour, 0)
+	_, err = node.recoverHistory(ch, last, time.Hour, 0, 0)
 	require.ErrorIs(t, err, ErrorUnrecoverablePosition)
 }
 
@@ -138,7 +138,7 @@ func TestRedisBroker_NoLossNoReset(t *testing.T) {
 		t.Fatal("no resync without a loss")
 	default:
 	}
-	top, err := node.streamTop(ch, time.Hour)
+	top, err := node.streamTop(ch, time.Hour, 0)
 	require.NoError(t, err)
 	require.Equal(t, first.Epoch, top.Epoch)
 }
@@ -222,7 +222,7 @@ func TestRedisBroker_ReusedOffsetsControl(t *testing.T) {
 		t.Fatal("no detection expected in the control")
 	default:
 	}
-	res, err := node.recoverHistory(ch, last, time.Hour, 0)
+	res, err := node.recoverHistory(ch, last, time.Hour, 0, 0)
 	require.NoError(t, err, "recovery from the old position passes: the loss is silent")
 	require.Len(t, res.Publications, 1)
 }
@@ -541,7 +541,7 @@ func TestRedisBroker_LateMessageNotALoss(t *testing.T) {
 		t.Fatal("a late message is not a loss")
 	default:
 	}
-	top, err := node.streamTop(ch, time.Hour)
+	top, err := node.streamTop(ch, time.Hour, 0)
 	require.NoError(t, err)
 	require.Equal(t, last.Epoch, top.Epoch)
 }

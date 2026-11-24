@@ -37,7 +37,7 @@ func (m *mockNode) handlePublication(channel string, sp StreamPosition, pub, pre
 	return nil
 }
 
-func (m *mockNode) streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error) {
+func (m *mockNode) streamTop(ch string, historyMetaTTL, _ time.Duration) (StreamPosition, error) {
 	if m.streamTopFunc != nil {
 		return m.streamTopFunc(ch, historyMetaTTL)
 	}
@@ -162,7 +162,7 @@ func TestChannelMediumPositionSync(t *testing.T) {
 		},
 	})
 	medium.nowFn = func() time.Time { return time.Now().Add(time.Hour) }
-	_, err := medium.CheckPosition(time.Second, StreamPosition{Offset: 1, Epoch: "test"}, time.Second)
+	_, err := medium.CheckPosition(time.Second, 0, StreamPosition{Offset: 1, Epoch: "test"}, time.Second)
 	require.NoError(t, err)
 	select {
 	case <-doneCh:
@@ -192,7 +192,7 @@ func TestChannelMediumPositionSyncRetry(t *testing.T) {
 		},
 	})
 	medium.nowFn = func() time.Time { return time.Now().Add(time.Hour) }
-	_, err := medium.CheckPosition(time.Second, StreamPosition{Offset: 1, Epoch: "test"}, time.Second)
+	_, err := medium.CheckPosition(time.Second, 0, StreamPosition{Offset: 1, Epoch: "test"}, time.Second)
 	require.NoError(t, err)
 	select {
 	case <-doneCh:
@@ -224,7 +224,7 @@ func TestChannelMediumPositionSyncMap(t *testing.T) {
 	medium.isMap = true
 	medium.nowFn = func() time.Time { return time.Now().Add(time.Hour) }
 	// Position matches — should return true.
-	valid, err := medium.CheckPosition(time.Second, StreamPosition{Offset: 5, Epoch: "abc"}, time.Second)
+	valid, err := medium.CheckPosition(time.Second, 0, StreamPosition{Offset: 5, Epoch: "abc"}, time.Second)
 	require.NoError(t, err)
 	require.True(t, valid)
 	select {
@@ -259,7 +259,7 @@ func TestChannelMediumPositionSyncMapMismatch(t *testing.T) {
 	medium.isMap = true
 	medium.nowFn = func() time.Time { return time.Now().Add(time.Hour) }
 	// Client has stale position — should return false.
-	valid, err := medium.CheckPosition(time.Second, StreamPosition{Offset: 5, Epoch: "xyz"}, time.Second)
+	valid, err := medium.CheckPosition(time.Second, 0, StreamPosition{Offset: 5, Epoch: "xyz"}, time.Second)
 	require.NoError(t, err)
 	require.False(t, valid)
 	select {
@@ -477,7 +477,7 @@ func TestChannelMediumCheckPositionAndInsufficientState(t *testing.T) {
 	// Mismatch: client is at offset 5, stream top at 99. Position is invalid,
 	// medium must broadcast insufficient state.
 	clientPos := StreamPosition{Offset: 5, Epoch: "e1"}
-	valid, err := medium.CheckPosition(time.Minute, clientPos, 0)
+	valid, err := medium.CheckPosition(time.Minute, 0, clientPos, 0)
 	require.NoError(t, err)
 	require.False(t, valid)
 
@@ -491,7 +491,7 @@ func TestChannelMediumCheckPositionAndInsufficientState(t *testing.T) {
 
 	// Calling again immediately should skip the check (delay not elapsed), and
 	// must not report the position as checked.
-	_, err = medium.CheckPosition(time.Minute, clientPos, time.Hour)
+	_, err = medium.CheckPosition(time.Minute, 0, clientPos, time.Hour)
 	require.ErrorIs(t, err, errPositionNotChecked)
 }
 
@@ -668,7 +668,7 @@ func (s *sharedSyncTest) elapse() {
 // check returns whether the position is valid and whether it was checked at
 // all: a client retries a check which was not made on its next tick.
 func (s *sharedSyncTest) check(offset uint64, epoch string) (valid, checked bool) {
-	valid, err := s.node.checkPosition(s.medium.channel, StreamPosition{Offset: offset, Epoch: epoch}, time.Hour, s.isMap)
+	valid, err := s.node.checkPosition(s.medium.channel, StreamPosition{Offset: offset, Epoch: epoch}, time.Hour, 0, s.isMap)
 	return valid, err == nil
 }
 

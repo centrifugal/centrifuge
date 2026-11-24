@@ -531,7 +531,7 @@ func testFastFailback(t *testing.T, watched bool) {
 				return
 			}
 			require.Eventually(t, func() bool {
-				top, err := br.node.streamTop(ch, time.Hour)
+				top, err := br.node.streamTop(ch, time.Hour, 0)
 				return err == nil && top.Epoch != lostA.Epoch
 			}, 10*time.Second, 20*time.Millisecond, "the reused offset rotates the server's lineage")
 		})

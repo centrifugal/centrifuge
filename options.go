@@ -198,6 +198,11 @@ type SubscribeOptions struct {
 	// HistoryMetaTTL allows to override default (set in Config.HistoryMetaTTL) history
 	// meta information expiration time.
 	HistoryMetaTTL time.Duration
+	// HistoryMetaTTLInitial allows to override Config.HistoryMetaTTLInitial for this
+	// subscription: the TTL of the channel's meta until its first publication. Must be
+	// at least 3 × Config.ClientChannelPositionCheckDelay. Zero value means using
+	// Config.HistoryMetaTTLInitial.
+	HistoryMetaTTLInitial time.Duration
 	// RecoveryMaxPublicationLimit allows to override Config.RecoveryMaxPublicationLimit
 	// for this subscription: the maximum number of publications recovered on subscribe.
 	// A subscription which missed more is not recovered. Useful for channels whose
@@ -390,6 +395,13 @@ func WithSubscribeSource(source uint8) SubscribeOption {
 func WithSubscribeHistoryMetaTTL(metaTTL time.Duration) SubscribeOption {
 	return func(opts *SubscribeOptions) {
 		opts.HistoryMetaTTL = metaTTL
+	}
+}
+
+// WithSubscribeHistoryMetaTTLInitial allows setting SubscribeOptions.HistoryMetaTTLInitial.
+func WithSubscribeHistoryMetaTTLInitial(ttl time.Duration) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.HistoryMetaTTLInitial = ttl
 	}
 }
 
@@ -678,5 +690,12 @@ func WithHistoryFilter(filter HistoryFilter) HistoryOption {
 func WithHistoryMetaTTL(metaTTL time.Duration) HistoryOption {
 	return func(opts *HistoryOptions) {
 		opts.MetaTTL = metaTTL
+	}
+}
+
+// WithHistoryMetaTTLInitial allows setting HistoryOptions.MetaTTLInitial.
+func WithHistoryMetaTTLInitial(ttl time.Duration) HistoryOption {
+	return func(opts *HistoryOptions) {
+		opts.MetaTTLInitial = ttl
 	}
 }

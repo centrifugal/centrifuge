@@ -372,7 +372,9 @@ type mapHub struct {
 	nextRemoveCheck int64
 	removeQueue     priority.Queue
 	removes         map[string]int64
-	closeCh         chan struct{}
+	// initialMetaTTL is Config.HistoryMetaTTLInitial (0: off).
+	initialMetaTTL time.Duration
+	closeCh        chan struct{}
 	// Key TTL tracking
 	nextKeyExpireCheck     int64
 	keyExpireQueue         priority.Queue                         // priority queue of {ch:key, expireAt}
@@ -417,6 +419,7 @@ func newMapHub(node *Node, pubLocks map[int]*sync.Mutex, closeCh chan struct{}) 
 		keyExpireQueue: priority.MakeQueue(),
 		keyExpires:     make(map[string]int64),
 		pubLocks:       pubLocks,
+		initialMetaTTL: node.config.HistoryMetaTTLInitial,
 	}
 }
 
@@ -903,6 +906,9 @@ func (h *mapHub) add(ch string, key string, statePub *Publication, streamPub *Pu
 			if h.nextRemoveCheck == 0 || h.nextRemoveCheck > removeAt {
 				h.nextRemoveCheck = removeAt
 			}
+		} else if h.initialFor(chOpts) > 0 {
+			// A permanent map made short-lived while empty is permanent again.
+			delete(h.removes, ch)
 		}
 
 		offset, _ := channel.stream.Add(streamPub, chOpts.StreamSize, 0, "")
@@ -1085,6 +1091,9 @@ func (h *mapHub) remove(ch string, key string, chOpts MapChannelOptions, opts Ma
 			if h.nextRemoveCheck == 0 || h.nextRemoveCheck > removeAt {
 				h.nextRemoveCheck = removeAt
 			}
+		} else if h.initialFor(chOpts) > 0 {
+			// A permanent map made short-lived while empty is permanent again.
+			delete(h.removes, ch)
 		}
 
 		offset, _ := channel.stream.Add(removePub, chOpts.StreamSize, 0, "")
@@ -1126,15 +1135,22 @@ func (h *mapHub) clear(ch string) {
 
 func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) (MapStreamResult, error) {
 	// Resolve MetaTTL from channel config.
-	var metaTTL time.Duration
+	var metaTTL, initial time.Duration
 	if h.channelOptionsResolver != nil {
 		chOpts, err := ResolveAndValidateMapChannelOptions(h.channelOptionsResolver, ch)
 		if err == nil {
 			metaTTL = chOpts.MetaTTL
+			if chOpts.Mode.HasStream() {
+				initial = h.initialFor(chOpts)
+			}
 		}
 	}
 
-	if metaTTL > 0 {
+	if initial > 0 {
+		h.Lock()
+		h.updateReadMetaTTL(ch, metaTTL, initial)
+		h.Unlock()
+	} else if metaTTL > 0 {
 		h.Lock()
 		h.updateMetaTTL(ch, metaTTL)
 		h.Unlock()
@@ -1238,14 +1254,21 @@ func (h *mapHub) getStream(ch string, opts MapReadStreamOptions) (MapStreamResul
 
 func (h *mapHub) getState(ch string, opts MapReadStateOptions) (MapStateResult, error) {
 	// Resolve MetaTTL from channel config.
-	var metaTTL time.Duration
+	var metaTTL, initial time.Duration
 	if h.channelOptionsResolver != nil {
 		chOpts, err := ResolveAndValidateMapChannelOptions(h.channelOptionsResolver, ch)
 		if err == nil {
 			metaTTL = chOpts.MetaTTL
+			if chOpts.Mode.HasStream() {
+				initial = h.initialFor(chOpts)
+			}
 		}
 	}
-	if metaTTL > 0 {
+	if initial > 0 {
+		h.Lock()
+		h.updateReadMetaTTL(ch, metaTTL, initial)
+		h.Unlock()
+	} else if metaTTL > 0 {
 		h.Lock()
 		h.updateMetaTTL(ch, metaTTL)
 		h.Unlock()
@@ -1454,6 +1477,27 @@ func (h *mapHub) createStreamPosition(ch string) StreamPosition {
 	return StreamPosition{
 		Offset: channel.stream.Top(),
 		Epoch:  channel.stream.Epoch(),
+	}
+}
+
+// initialFor is the initial TTL of a map channel: MapChannelOptions.MetaTTLInitial,
+// or Config.HistoryMetaTTLInitial. Zero: off.
+func (h *mapHub) initialFor(chOpts MapChannelOptions) time.Duration {
+	if chOpts.MetaTTLInitial > 0 {
+		return chOpts.MetaTTLInitial
+	}
+	return h.initialMetaTTL
+}
+
+// updateReadMetaTTL extends the meta of a map with a stream on a read, with an
+// initial TTL set: a map without publications gets it, kept alive by the reads
+// of position checks. Lock must be held.
+func (h *mapHub) updateReadMetaTTL(ch string, metaTTL, initial time.Duration) {
+	if channel, ok := h.channels[ch]; !ok || channel.stream == nil || channel.stream.Top() == 0 {
+		metaTTL = emptyMetaTTL(metaTTL, initial)
+	}
+	if metaTTL > 0 {
+		scheduleRemove(&h.removeQueue, h.removes, &h.nextRemoveCheck, ch, time.Now().UnixMilli()+metaTTL.Milliseconds())
 	}
 }
 

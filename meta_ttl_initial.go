@@ -1,0 +1,41 @@
+package centrifuge
+
+import (
+	"container/heap"
+	"time"
+
+	"github.com/centrifugal/centrifuge/internal/priority"
+)
+
+// initialMetaTTLFor is the initial TTL of a channel: its own (from
+// SubscribeOptions, HistoryOptions or MapChannelOptions), or
+// Config.HistoryMetaTTLInitial. Zero: off.
+func initialMetaTTLFor(own time.Duration, c Config) time.Duration {
+	if own > 0 {
+		return own
+	}
+	return c.HistoryMetaTTLInitial
+}
+
+// emptyMetaTTL is the TTL of a meta without publications with
+// Config.HistoryMetaTTLInitial set: the initial TTL, or metaTTL if that is
+// shorter. A zero metaTTL means the meta doesn't expire otherwise.
+func emptyMetaTTL(metaTTL, initial time.Duration) time.Duration {
+	if metaTTL == 0 || initial < metaTTL {
+		return initial
+	}
+	return metaTTL
+}
+
+// scheduleRemove has the memory brokers remove ch at removeAt. Unlike a plain
+// update of removes it also queues a removal earlier than the one queued, as
+// the initial TTL can be shorter than the TTL a meta had.
+func scheduleRemove(queue *priority.Queue, removes map[string]int64, nextCheck *int64, ch string, removeAt int64) {
+	if prev, ok := removes[ch]; !ok || removeAt < prev {
+		heap.Push(queue, &priority.Item{Value: ch, Priority: removeAt})
+	}
+	removes[ch] = removeAt
+	if *nextCheck == 0 || *nextCheck > removeAt {
+		*nextCheck = removeAt
+	}
+}

@@ -1851,7 +1851,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOption
 	}
 
 	historyMetaTTLSeconds := int(historyMetaTTL.Seconds())
-	emptySeconds, belowHalf := metaExtension(b.node.config, historyMetaTTL)
+	emptySeconds, belowHalf := metaExtension(b.node.config, historyMetaTTL, opts.MetaTTLInitial)
 
 	replies, err := b.execLineageScript(context.Background(), s, b.historyStreamScript,
 		[]string{string(historyKey), string(historyMetaKey), b.lineageKey(s, string(historyMetaKey))},
@@ -2348,17 +2348,15 @@ func (b *RedisBroker) lin(s *RedisShard) *redisLineage {
 }
 
 // metaExtension returns what a meta read passes to the broker: the TTL of an
-// empty meta in seconds (0: off), and "1" when a read extends a meta only once
-// less than half its TTL is left. Extending less often is safe only when the
-// TTL is at least 3 position checks: otherwise a check finding just over half
+// empty meta in seconds (0: off, see initialMetaTTLFor), and "1"
+// when a read extends a meta only once less than half its TTL is left, which
+// saves a write on most reads. Extending less often is safe only when the TTL
+// is at least 3 position checks: otherwise a check finding just over half
 // left wouldn't extend, and the meta could expire before the next check.
-func metaExtension(c Config, metaTTL time.Duration) (int, string) {
-	if c.HistoryMetaTTLUnpublished <= 0 {
-		return 0, "0"
-	}
+func metaExtension(c Config, metaTTL, initial time.Duration) (int, string) {
 	belowHalf := "0"
 	if metaTTL >= 3*c.ClientChannelPositionCheckDelay {
 		belowHalf = "1"
 	}
-	return int(c.HistoryMetaTTLUnpublished.Seconds()), belowHalf
+	return int(initialMetaTTLFor(initial, c).Seconds()), belowHalf
 }

@@ -89,6 +89,10 @@ type HistoryOptions struct {
 	// MetaTTL allows overriding default (set in Config.HistoryMetaTTL) history
 	// meta information expiration time.
 	MetaTTL time.Duration
+	// MetaTTLInitial allows overriding Config.HistoryMetaTTLInitial: the TTL of the
+	// meta of a channel until its first publication. Zero means using
+	// Config.HistoryMetaTTLInitial.
+	MetaTTLInitial time.Duration
 }
 
 // StreamPosition contains fields to describe position in stream.

@@ -803,7 +803,7 @@ func (e *RedisMapBroker) Publish(ctx context.Context, ch string, key string, opt
 			versionEpochField,                    // version_epoch_field (pre-computed "ve:KEY" or "")
 			strconv.FormatInt(now, 10),           // now (current time in milliseconds)
 			"0",                                  // copy_entry_tags
-			e.unpublishedMetaTTL(),               // empty meta TTL (made permanent again)
+			e.initialMetaTTL(chOpts),             // empty meta TTL (made permanent again)
 		},
 	).ToArray()
 	if err != nil {
@@ -973,7 +973,7 @@ func (e *RedisMapBroker) Remove(ctx context.Context, ch string, key string, opts
 			versionEpochField,          // version_epoch_field (pre-computed "ve:KEY" or "")
 			strconv.FormatInt(now, 10), // now (current time in milliseconds)
 			copyEntryTags,              // copy_entry_tags (publish with the removed entry's tags)
-			e.unpublishedMetaTTL(),     // empty meta TTL (made permanent again)
+			e.initialMetaTTL(chOpts),   // empty meta TTL (made permanent again)
 		},
 	).ToArray()
 	if err != nil {
@@ -1177,7 +1177,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 			millis(chOpts.MetaTTL),
 			stateTTL,
 			streamlessFlag,
-			e.unpublishedMetaTTL(),
+			e.initialMetaTTL(chOpts),
 			e.belowHalf(chOpts.MetaTTL),
 		},
 	).ToArray()
@@ -1439,7 +1439,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 			stateTTL,                                      // ARGV[6] = state_ttl
 			streamlessFlag,                                // ARGV[7] = streamless
 			ascFlag,                                       // ARGV[8] = asc ("1" = ascending, "0" = descending)
-			e.unpublishedMetaTTL(),                        // ARGV[9] = empty meta TTL
+			e.initialMetaTTL(chOpts),                      // ARGV[9] = empty meta TTL
 			e.belowHalf(chOpts.MetaTTL),                   // ARGV[10] = extend below half
 		},
 	).ToArray()
@@ -2039,7 +2039,7 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 			reverse,
 			metaExpire,
 			e.node.ID(),
-			e.unpublishedMetaTTL(),
+			e.initialMetaTTL(chOpts),
 			e.belowHalf(chOpts.MetaTTL),
 		},
 	).ToArray()
@@ -2190,7 +2190,7 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 	// 2. Call 1: Get metadata using new simpler Lua script
 	metaReplies, err := e.execLineage(ctx, s.shard, e.readMetaScript,
 		[]string{e.metaKey(s.shard, ch), e.streamKey(s.shard, ch), e.stateMetaKey(s.shard, ch), e.lineageKey(s.shard, e.metaKey(s.shard, ch))},
-		[]string{metaExpire, e.node.ID(), e.unpublishedMetaTTL(), e.belowHalf(chOpts.MetaTTL)},
+		[]string{metaExpire, e.node.ID(), e.initialMetaTTL(chOpts), e.belowHalf(chOpts.MetaTTL)},
 	).ToArray()
 	if err != nil {
 		return MapStreamResult{}, err
@@ -3593,18 +3593,15 @@ func (e *RedisMapBroker) lin(s *RedisShard) *redisLineage {
 	return s.lineageFor(e.conf.Prefix)
 }
 
-// unpublishedMetaTTL is the TTL of a map meta without publications in milliseconds
-// ("0": off), see Config.HistoryMetaTTLUnpublished.
-func (e *RedisMapBroker) unpublishedMetaTTL() string {
-	return millis(e.node.config.HistoryMetaTTLUnpublished)
+// initialMetaTTL is the TTL of a map meta without publications in milliseconds
+// ("0": off): MapChannelOptions.MetaTTLInitial, or Config.HistoryMetaTTLInitial.
+func (e *RedisMapBroker) initialMetaTTL(chOpts MapChannelOptions) string {
+	return millis(initialMetaTTLFor(chOpts.MetaTTLInitial, e.node.config))
 }
 
-// belowHalf tells map reads to extend a meta only below half its TTL, see
-// metaExtension.
+// belowHalf tells map reads to extend the meta of a map without publications
+// only below half its TTL, see map_meta_expire and metaExtension.
 func (e *RedisMapBroker) belowHalf(metaTTL time.Duration) string {
-	if e.node.config.HistoryMetaTTLUnpublished <= 0 {
-		return "0"
-	}
 	if metaTTL == 0 || metaTTL >= 3*e.node.config.ClientChannelPositionCheckDelay {
 		return "1"
 	}

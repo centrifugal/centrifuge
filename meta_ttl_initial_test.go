@@ -1,0 +1,256 @@
+package centrifuge
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
+
+// streamRemoveIn is in how many seconds the memory broker removes the stream
+// of ch, false if no removal is scheduled.
+func streamRemoveIn(h *historyHub, ch string) (int64, bool) {
+	s := h.shard(ch)
+	s.RLock()
+	defer s.RUnlock()
+	at, ok := s.removes[ch]
+	return at - time.Now().Unix(), ok
+}
+
+func TestMemoryHistoryHubMetaTTLInitialUnset(t *testing.T) {
+	t.Parallel()
+	h := newHistoryHub(300*time.Second, make(chan struct{}))
+
+	_, _, err := h.get("empty", HistoryOptions{})
+	require.NoError(t, err)
+	in, ok := streamRemoveIn(h, "empty")
+	require.True(t, ok)
+	require.InDelta(t, 300, in, 2, "without the option an empty stream gets the meta TTL")
+}
+
+func TestMemoryHistoryHubMetaTTLInitial(t *testing.T) {
+	t.Parallel()
+	h := newHistoryHub(300*time.Second, make(chan struct{}))
+	h.setInitialMetaTTL(60 * time.Second)
+
+	_, _, err := h.get("ch", HistoryOptions{})
+	require.NoError(t, err)
+	in, ok := streamRemoveIn(h, "ch")
+	require.True(t, ok)
+	require.InDelta(t, 60, in, 2, "empty stream gets the initial TTL")
+
+	_, _, _, err = h.add("ch", newTestPublication(), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute})
+	require.NoError(t, err)
+	in, _ = streamRemoveIn(h, "ch")
+	require.InDelta(t, 300, in, 2, "publication sets the meta TTL")
+
+	_, _, err = h.get("ch", HistoryOptions{})
+	require.NoError(t, err)
+	in, _ = streamRemoveIn(h, "ch")
+	require.InDelta(t, 300, in, 2, "a read of a stream with publications keeps the meta TTL")
+
+	// A per-channel meta TTL shorter than the initial one wins.
+	_, _, err = h.get("short", HistoryOptions{MetaTTL: 10 * time.Second})
+	require.NoError(t, err)
+	in, _ = streamRemoveIn(h, "short")
+	require.InDelta(t, 10, in, 2)
+}
+
+func TestMemoryHistoryHubMetaTTLInitialRemoves(t *testing.T) {
+	t.Parallel()
+	h := newHistoryHub(300*time.Second, make(chan struct{}))
+	h.setInitialMetaTTL(time.Second)
+	h.runCleanups()
+	t.Cleanup(h.close)
+
+	_, _, err := h.get("empty", HistoryOptions{})
+	require.NoError(t, err)
+	_, _, _, err = h.add("published", newTestPublication(), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute})
+	require.NoError(t, err)
+	require.Equal(t, 2, h.testNumStreams())
+
+	require.Eventually(t, func() bool {
+		return h.testNumStreams() == 1
+	}, 10*time.Second, 50*time.Millisecond, "empty stream removed after the initial TTL")
+	_, sp, err := h.get("published", HistoryOptions{})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), sp.Offset, "stream with publications kept")
+}
+
+func newInitialMetaTTLMapBroker(t *testing.T, initial time.Duration, opts MapChannelOptions) *MemoryMapBroker {
+	t.Helper()
+	node, err := New(Config{
+		LogLevel:                        LogLevelError,
+		LogHandler:                      func(LogEntry) {},
+		ClientChannelPositionCheckDelay: 300 * time.Millisecond,
+		HistoryMetaTTLInitial:           initial,
+		Map: MapConfig{
+			GetMapChannelOptions: func(string) MapChannelOptions { return opts },
+		},
+	})
+	require.NoError(t, err)
+	return newTestMemoryMapBroker(t, node)
+}
+
+// mapRemoveIn is in how many milliseconds the memory map broker removes ch,
+// false if no removal is scheduled.
+func mapRemoveIn(e *MemoryMapBroker, ch string) (int64, bool) {
+	e.mapHub.RLock()
+	defer e.mapHub.RUnlock()
+	at, ok := e.mapHub.removes[ch]
+	return at - time.Now().UnixMilli(), ok
+}
+
+func mapChannelExists(e *MemoryMapBroker, ch string) bool {
+	e.mapHub.RLock()
+	defer e.mapHub.RUnlock()
+	_, ok := e.mapHub.channels[ch]
+	return ok
+}
+
+func TestMemoryMapBrokerMetaTTLInitialUnset(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newInitialMetaTTLMapBroker(t, 0, MapChannelOptions{Mode: MapModePersistent, StreamSize: 10, StreamTTL: time.Minute})
+
+	_, err := e.ReadState(ctx, "persistent", MapReadStateOptions{Limit: 10})
+	require.NoError(t, err)
+	_, ok := mapRemoveIn(e, "persistent")
+	require.False(t, ok, "without the option a permanent map is never removed")
+}
+
+func TestMemoryMapBrokerMetaTTLInitialPermanent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newInitialMetaTTLMapBroker(t, time.Minute, MapChannelOptions{Mode: MapModePersistent, StreamSize: 10, StreamTTL: time.Minute})
+
+	_, err := e.ReadState(ctx, "ch", MapReadStateOptions{Limit: 10})
+	require.NoError(t, err)
+	in, ok := mapRemoveIn(e, "ch")
+	require.True(t, ok)
+	require.InDelta(t, time.Minute.Milliseconds(), in, 2000, "empty map gets the initial TTL")
+
+	_, err = e.Publish(ctx, "ch", "k", MapPublishOptions{Data: []byte("v")})
+	require.NoError(t, err)
+	_, ok = mapRemoveIn(e, "ch")
+	require.False(t, ok, "publication makes the map permanent again")
+
+	_, err = e.ReadStream(ctx, "ch", MapReadStreamOptions{Filter: StreamFilter{Limit: 10}})
+	require.NoError(t, err)
+	_, ok = mapRemoveIn(e, "ch")
+	require.False(t, ok, "a read of a map with publications keeps it permanent")
+}
+
+func TestMemoryMapBrokerMetaTTLInitialMetaTTL(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newInitialMetaTTLMapBroker(t, time.Minute, MapChannelOptions{
+		Mode: MapModeRecoverable, StreamSize: 10, StreamTTL: time.Minute, KeyTTL: time.Hour, MetaTTL: time.Hour,
+	})
+
+	_, err := e.ReadStream(ctx, "ch", MapReadStreamOptions{Filter: StreamFilter{Limit: 10}})
+	require.NoError(t, err)
+	in, _ := mapRemoveIn(e, "ch")
+	require.InDelta(t, time.Minute.Milliseconds(), in, 2000, "empty map gets the initial TTL")
+
+	_, err = e.Publish(ctx, "ch", "k", MapPublishOptions{Data: []byte("v")})
+	require.NoError(t, err)
+	in, _ = mapRemoveIn(e, "ch")
+	require.InDelta(t, time.Hour.Milliseconds(), in, 2000, "publication sets the meta TTL")
+
+	_, err = e.ReadState(ctx, "ch", MapReadStateOptions{Limit: 10})
+	require.NoError(t, err)
+	in, _ = mapRemoveIn(e, "ch")
+	require.InDelta(t, time.Hour.Milliseconds(), in, 2000)
+}
+
+func TestMemoryMapBrokerMetaTTLInitialRemoves(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newInitialMetaTTLMapBroker(t, time.Second, MapChannelOptions{Mode: MapModePersistent, StreamSize: 10, StreamTTL: time.Minute})
+
+	_, err := e.ReadState(ctx, "empty", MapReadStateOptions{Limit: 10})
+	require.NoError(t, err)
+	_, err = e.ReadState(ctx, "published", MapReadStateOptions{Limit: 10})
+	require.NoError(t, err)
+	_, err = e.Publish(ctx, "published", "k", MapPublishOptions{Data: []byte("v")})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return !mapChannelExists(e, "empty")
+	}, 10*time.Second, 50*time.Millisecond, "empty map removed after the initial TTL")
+	require.True(t, mapChannelExists(e, "published"), "map with publications kept")
+}
+
+// The initial TTL of a subscription reaches the broker on subscribe, and is
+// kept in the channel context for position checks.
+func TestClientSubscribeHistoryMetaTTLInitial(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{EnablePositioning: true, HistoryMetaTTLInitial: time.Minute}}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user")
+	subscribeClientV2(t, client, "ch")
+
+	hub := node.getBroker("ch").(*MemoryBroker).historyHub
+	in, ok := streamRemoveIn(hub, "ch")
+	require.True(t, ok)
+	require.InDelta(t, 60, in, 2, "subscribe reads with the subscription's initial TTL")
+
+	client.mu.RLock()
+	chCtx := client.channels["ch"]
+	client.mu.RUnlock()
+	require.Equal(t, uint32(60), chCtx.metaTTLInitialSeconds)
+
+	// A position check reads with it too.
+	_, err := node.checkPosition("ch", chCtx.streamPosition, 0, time.Duration(chCtx.metaTTLInitialSeconds)*time.Second, false)
+	require.NoError(t, err)
+	in, _ = streamRemoveIn(hub, "ch")
+	require.InDelta(t, 60, in, 2)
+}
+
+func TestNodeHistoryMetaTTLInitial(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	_, err := node.History("ch", WithHistoryMetaTTLInitial(time.Minute))
+	require.NoError(t, err)
+	in, ok := streamRemoveIn(node.getBroker("ch").(*MemoryBroker).historyHub, "ch")
+	require.True(t, ok)
+	require.InDelta(t, 60, in, 2)
+}
+
+// MapChannelOptions.MetaTTLInitial applies without the global option.
+func TestMemoryMapBrokerMetaTTLInitialPerChannel(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newInitialMetaTTLMapBroker(t, 0, MapChannelOptions{Mode: MapModePersistent, StreamSize: 10, StreamTTL: time.Minute, MetaTTLInitial: time.Minute})
+
+	_, err := e.ReadState(ctx, "ch", MapReadStateOptions{Limit: 10})
+	require.NoError(t, err)
+	in, ok := mapRemoveIn(e, "ch")
+	require.True(t, ok)
+	require.InDelta(t, time.Minute.Milliseconds(), in, 2000)
+
+	_, err = e.Publish(ctx, "ch", "k", MapPublishOptions{Data: []byte("v")})
+	require.NoError(t, err)
+	_, ok = mapRemoveIn(e, "ch")
+	require.False(t, ok, "publication makes the map permanent again")
+}
+
+func TestMapChannelOptionsMetaTTLInitialValidation(t *testing.T) {
+	t.Parallel()
+	resolve := func(opts MapChannelOptions) error {
+		_, err := ResolveAndValidateMapChannelOptions(func(string) MapChannelOptions { return opts }, "ch")
+		return err
+	}
+	require.Error(t, resolve(MapChannelOptions{Mode: MapModeEphemeral, KeyTTL: time.Minute, MetaTTLInitial: time.Minute}))
+	require.Error(t, resolve(MapChannelOptions{Mode: MapModePersistent, MetaTTLInitial: -time.Second}))
+	require.NoError(t, resolve(MapChannelOptions{Mode: MapModePersistent, MetaTTLInitial: time.Minute}))
+}

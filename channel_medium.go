@@ -52,7 +52,6 @@ func (o ChannelMediumOptions) isMediumEnabled() bool {
 	return o.SharedPositionSync || o.KeepLatestPublication || o.enableQueue || o.broadcastDelay > 0
 }
 
-
 // channelMedium is initialized when first subscriber comes into channel, and dropped as soon as last
 // subscriber leaves the channel on the Node.
 type channelMedium struct {
@@ -84,7 +83,7 @@ type channelMedium struct {
 
 type nodeSubset interface {
 	handlePublication(ch string, sp StreamPosition, pub, prevPub *Publication, localPrevPub *Publication) error
-	streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error)
+	streamTop(ch string, historyMetaTTL, historyMetaTTLInitial time.Duration) (StreamPosition, error)
 	mapStreamTop(ch string) (StreamPosition, error)
 }
 
@@ -251,7 +250,7 @@ var errPositionNotChecked = errors.New("position not checked")
 //   - behind in the same epoch is invalid, for this connection only;
 //   - ahead or in another epoch can't be decided without reading again. While that read is in flight, or
 //     if it fails, there is no verified top, so such positions do not multiply reads.
-func (c *channelMedium) CheckPosition(historyMetaTTL time.Duration, clientPosition StreamPosition, checkDelay time.Duration) (bool, error) {
+func (c *channelMedium) CheckPosition(historyMetaTTL, historyMetaTTLInitial time.Duration, clientPosition StreamPosition, checkDelay time.Duration) (bool, error) {
 	nowUnixNano := c.nowFn().UnixNano()
 	c.mu.Lock()
 	if nowUnixNano-c.positionCheckTime < checkDelay.Nanoseconds() {
@@ -269,7 +268,7 @@ func (c *channelMedium) CheckPosition(historyMetaTTL time.Duration, clientPositi
 	c.hasVerifiedTop = false
 	c.mu.Unlock()
 
-	streamTop, validPosition, err := c.checkPositionWithRetry(historyMetaTTL, clientPosition)
+	streamTop, validPosition, err := c.checkPositionWithRetry(historyMetaTTL, historyMetaTTLInitial, clientPosition)
 	if err != nil {
 		// Position will be checked again later.
 		return false, err
@@ -284,21 +283,21 @@ func (c *channelMedium) CheckPosition(historyMetaTTL time.Duration, clientPositi
 	return true, nil
 }
 
-func (c *channelMedium) checkPositionWithRetry(historyMetaTTL time.Duration, clientPosition StreamPosition) (StreamPosition, bool, error) {
-	sp, validPosition, err := c.checkPositionOnce(historyMetaTTL, clientPosition)
+func (c *channelMedium) checkPositionWithRetry(historyMetaTTL, historyMetaTTLInitial time.Duration, clientPosition StreamPosition) (StreamPosition, bool, error) {
+	sp, validPosition, err := c.checkPositionOnce(historyMetaTTL, historyMetaTTLInitial, clientPosition)
 	if err != nil || !validPosition {
-		return c.checkPositionOnce(historyMetaTTL, clientPosition)
+		return c.checkPositionOnce(historyMetaTTL, historyMetaTTLInitial, clientPosition)
 	}
 	return sp, validPosition, err
 }
 
-func (c *channelMedium) checkPositionOnce(historyMetaTTL time.Duration, clientPosition StreamPosition) (StreamPosition, bool, error) {
+func (c *channelMedium) checkPositionOnce(historyMetaTTL, historyMetaTTLInitial time.Duration, clientPosition StreamPosition) (StreamPosition, bool, error) {
 	var streamTop StreamPosition
 	var err error
 	if c.isMap {
 		streamTop, err = c.node.mapStreamTop(c.channel)
 	} else {
-		streamTop, err = c.node.streamTop(c.channel, historyMetaTTL)
+		streamTop, err = c.node.streamTop(c.channel, historyMetaTTL, historyMetaTTLInitial)
 	}
 	if err != nil {
 		return StreamPosition{}, false, err

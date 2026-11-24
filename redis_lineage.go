@@ -318,13 +318,16 @@ end
 -- map_meta_expire sets the TTL of a map meta (milliseconds, 0: permanent).
 -- With empty_ttl set, a meta whose stream has no publications (top 0) gets
 -- the shorter of the two, and a permanent meta that got it while empty is
--- made permanent again once it has publications. below_half: a meta with
--- more than half its TTL left isn't extended, one above it is shortened.
+-- made permanent again once it has publications. below_half: the meta of a
+-- map without publications with more than half its TTL left isn't extended,
+-- one above it is shortened. A map with publications is always extended: its
+-- reads extend its state, which an expired meta would make stale.
 local function map_meta_expire(meta_key, meta_ttl, empty_ttl, below_half, top)
     meta_ttl = tonumber(meta_ttl) or 0
     empty_ttl = tonumber(empty_ttl) or 0
+    local empty = (tonumber(top) or 0) == 0
     local target = meta_ttl
-    if empty_ttl > 0 and (tonumber(top) or 0) == 0 and (meta_ttl == 0 or empty_ttl < meta_ttl) then
+    if empty_ttl > 0 and empty and (meta_ttl == 0 or empty_ttl < meta_ttl) then
         target = empty_ttl
     end
     if target == 0 then
@@ -333,7 +336,7 @@ local function map_meta_expire(meta_key, meta_ttl, empty_ttl, below_half, top)
         end
         return
     end
-    if below_half then
+    if below_half and empty then
         local ttl = redis.call("pttl", meta_key)
         if ttl >= 0 and ttl <= target and ttl * 2 >= target then
             return
