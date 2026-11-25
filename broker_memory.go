@@ -504,10 +504,7 @@ func (h *historyShard) getLocked(ch string, opts HistoryOptions) ([]*Publication
 		historyMetaTTL = h.historyMetaTTL
 	}
 
-	initial := opts.MetaTTLInitial
-	if initial == 0 {
-		initial = h.initialMetaTTL
-	}
+	initial := initialMetaTTLFor(opts.MetaTTLInitial, h.initialMetaTTL)
 
 	if initial > 0 {
 		// A stream without publications gets the initial TTL, kept alive by

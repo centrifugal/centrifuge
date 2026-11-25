@@ -1480,13 +1480,10 @@ func (h *mapHub) createStreamPosition(ch string) StreamPosition {
 	}
 }
 
-// initialFor is the initial TTL of a map channel: MapChannelOptions.MetaTTLInitial,
-// or Config.HistoryMetaTTLInitial. Zero: off.
+// initialFor is the initial TTL of a map channel, see initialMetaTTLFor.
+// Zero: off.
 func (h *mapHub) initialFor(chOpts MapChannelOptions) time.Duration {
-	if chOpts.MetaTTLInitial > 0 {
-		return chOpts.MetaTTLInitial
-	}
-	return h.initialMetaTTL
+	return initialMetaTTLFor(chOpts.MetaTTLInitial, h.initialMetaTTL)
 }
 
 // updateReadMetaTTL extends the meta of a map with a stream on a read, with an

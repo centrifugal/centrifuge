@@ -206,7 +206,7 @@ func TestClientSubscribeHistoryMetaTTLInitial(t *testing.T) {
 	client.mu.RLock()
 	chCtx := client.channels["ch"]
 	client.mu.RUnlock()
-	require.Equal(t, uint32(120), chCtx.metaTTLInitialSeconds)
+	require.Equal(t, int32(120), chCtx.metaTTLInitialSeconds)
 
 	// A position check reads with it too.
 	_, err := node.checkPosition("ch", chCtx.streamPosition, 0, time.Duration(chCtx.metaTTLInitialSeconds)*time.Second, false)
@@ -252,7 +252,7 @@ func TestMapChannelOptionsMetaTTLInitialValidation(t *testing.T) {
 		return err
 	}
 	require.Error(t, resolve(MapChannelOptions{Mode: MapModeEphemeral, KeyTTL: time.Minute, MetaTTLInitial: time.Minute}))
-	require.Error(t, resolve(MapChannelOptions{Mode: MapModePersistent, MetaTTLInitial: -time.Second}))
+	require.NoError(t, resolve(MapChannelOptions{Mode: MapModePersistent, MetaTTLInitial: -time.Second}), "negative: off for the channel")
 	require.NoError(t, resolve(MapChannelOptions{Mode: MapModePersistent, MetaTTLInitial: time.Minute}))
 }
 
@@ -301,7 +301,7 @@ func TestClientSubscribeHistoryMetaTTLInitialRoundsUp(t *testing.T) {
 	client.mu.RLock()
 	chCtx := client.channels["ch"]
 	client.mu.RUnlock()
-	require.Equal(t, uint32(1), chCtx.metaTTLInitialSeconds)
+	require.Equal(t, int32(1), chCtx.metaTTLInitialSeconds)
 }
 
 // A map's initial TTL below 3 position checks fails subscribing to the map,
@@ -370,4 +370,94 @@ func TestClientHistoryReplyMetaTTL(t *testing.T) {
 	require.Equal(t, ErrorInternal.toProto(), history("too_short"))
 	_, ok = streamRemoveIn(hub, "too_short")
 	require.False(t, ok, "no meta read with the invalid TTL")
+}
+
+func TestInitialMetaTTLFor(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		own, global, want time.Duration
+	}{
+		{0, 0, 0},
+		{0, time.Minute, time.Minute},
+		{2 * time.Minute, time.Minute, 2 * time.Minute},
+		{-1, time.Minute, 0},                   // off for the channel
+		{0, -1, 0},                             // off globally
+		{2 * time.Minute, -1, 2 * time.Minute}, // the channel's own still applies
+	} {
+		require.Equal(t, tc.want, initialMetaTTLFor(tc.own, tc.global), "own %s, global %s", tc.own, tc.global)
+	}
+}
+
+// A negative Config.HistoryMetaTTLInitial turns the option off.
+func TestNodeHistoryMetaTTLInitialNegativeGlobal(t *testing.T) {
+	t.Parallel()
+	node, err := New(Config{LogLevel: LogLevelError, LogHandler: func(LogEntry) {}, HistoryMetaTTL: 300 * time.Second, HistoryMetaTTLInitial: -1})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	_, err = node.History("ch")
+	require.NoError(t, err)
+	in, ok := streamRemoveIn(node.getBroker("ch").(*MemoryBroker).historyHub, "ch")
+	require.True(t, ok)
+	require.InDelta(t, 300, in, 2, "off: the usual meta TTL")
+}
+
+// A negative per-channel value turns the global initial TTL off for the
+// channel: on subscribe, on its position checks and on history reads.
+func TestClientSubscribeHistoryMetaTTLInitialNegative(t *testing.T) {
+	t.Parallel()
+	node, err := New(Config{
+		LogLevel:              LogLevelError,
+		LogHandler:            func(LogEntry) {},
+		HistoryMetaTTL:        300 * time.Second,
+		HistoryMetaTTLInitial: 2 * time.Minute,
+	})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{EnablePositioning: true, HistoryMetaTTLInitial: -1}}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user")
+	subscribeClientV2(t, client, "off")
+
+	hub := node.getBroker("off").(*MemoryBroker).historyHub
+	in, ok := streamRemoveIn(hub, "off")
+	require.True(t, ok)
+	require.InDelta(t, 300, in, 2, "off for the channel: the usual meta TTL")
+
+	client.mu.RLock()
+	chCtx := client.channels["off"]
+	client.mu.RUnlock()
+	require.Equal(t, int32(-1), chCtx.metaTTLInitialSeconds)
+	_, err = node.checkPosition("off", chCtx.streamPosition, 0, time.Duration(chCtx.metaTTLInitialSeconds)*time.Second, false)
+	require.NoError(t, err)
+	in, _ = streamRemoveIn(hub, "off")
+	require.InDelta(t, 300, in, 2)
+
+	// The global one still applies to other channels; a history read with -1
+	// is a separate single-flight call from one with the global value.
+	_, err = node.History("other")
+	require.NoError(t, err)
+	in, _ = streamRemoveIn(hub, "other")
+	require.InDelta(t, 120, in, 2)
+	_, err = node.History("other2", WithHistoryMetaTTLInitial(-1))
+	require.NoError(t, err)
+	in, _ = streamRemoveIn(hub, "other2")
+	require.InDelta(t, 300, in, 2)
+}
+
+// MapChannelOptions.MetaTTLInitial < 0 turns the global initial TTL off for the map.
+func TestMemoryMapBrokerMetaTTLInitialNegative(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newInitialMetaTTLMapBroker(t, time.Minute, MapChannelOptions{Mode: MapModePersistent, StreamSize: 10, StreamTTL: time.Minute, MetaTTLInitial: -1})
+
+	_, err := e.ReadState(ctx, "ch", MapReadStateOptions{Limit: 10})
+	require.NoError(t, err)
+	_, ok := mapRemoveIn(e, "ch")
+	require.False(t, ok, "off for the map: a permanent map is never removed")
 }

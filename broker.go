@@ -91,7 +91,7 @@ type HistoryOptions struct {
 	MetaTTL time.Duration
 	// MetaTTLInitial allows overriding Config.HistoryMetaTTLInitial: the TTL of the
 	// meta of a channel until its first publication. Zero means using
-	// Config.HistoryMetaTTLInitial. Pass the value the channel's subscriptions use
+	// Config.HistoryMetaTTLInitial, negative turns it off for the channel. Pass the value the channel's subscriptions use
 	// (SubscribeOptions.HistoryMetaTTLInitial): a read of the meta applies it.
 	MetaTTLInitial time.Duration
 }

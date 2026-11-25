@@ -1835,7 +1835,7 @@ func (n *Node) historySingleFlight(ch string, opts HistoryOptions) (HistoryResul
 	builder.WriteString(strconv.FormatBool(opts.Filter.Reverse))
 	builder.WriteString(",meta_ttl:")
 	builder.WriteString(opts.MetaTTL.String())
-	if opts.MetaTTLInitial > 0 {
+	if opts.MetaTTLInitial != 0 {
 		builder.WriteString(",meta_ttl_initial:")
 		builder.WriteString(opts.MetaTTLInitial.String())
 	}

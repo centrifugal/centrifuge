@@ -57,8 +57,8 @@ type MapChannelOptions struct {
 	// Must be 0 for Ephemeral.
 	MetaTTL time.Duration
 	// MetaTTLInitial overrides Config.HistoryMetaTTLInitial for the channel: the
-	// TTL of its meta until its first publication. Zero = Config.HistoryMetaTTLInitial.
-	// Must be 0 for Ephemeral, and at least 3 × Config.ClientChannelPositionCheckDelay
+	// TTL of its meta until its first publication. Zero = Config.HistoryMetaTTLInitial,
+	// negative = off for the channel. Must not be positive for Ephemeral, and at least 3 × Config.ClientChannelPositionCheckDelay
 	// (otherwise subscribing to the channel fails). See Config.HistoryMetaTTLInitial
 	// for what it costs recovery.
 	MetaTTLInitial time.Duration
@@ -211,8 +211,9 @@ type Config struct {
 	// meta to its usual TTL (HistoryMetaTTL, or the map's meta TTL; a permanent
 	// map becomes permanent again). A shorter usual TTL wins. Supported by the
 	// memory and Redis brokers and map brokers (maps with a stream). Must be at
-	// least 3 × ClientChannelPositionCheckDelay. Zero (default): metas without
-	// publications get the usual TTL.
+	// least 3 × ClientChannelPositionCheckDelay. Zero (default) or negative:
+	// metas without publications get the usual TTL, except on channels with
+	// their own initial TTL.
 	//
 	// It bounds what subscriptions to channels nobody publishes to keep in the
 	// broker. The cost: a client that subscribed to such a channel and was

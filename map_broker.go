@@ -447,9 +447,6 @@ func ResolveAndValidateMapChannelOptions(resolver func(channel string) MapChanne
 		if opts.MetaTTL < 0 {
 			return MapChannelOptions{}, errors.New("MetaTTL must be non-negative")
 		}
-		if opts.MetaTTLInitial < 0 {
-			return MapChannelOptions{}, errors.New("MetaTTLInitial must be non-negative")
-		}
 		// Auto-derive defaults for stream-backed modes.
 		if opts.StreamSize == 0 {
 			opts.StreamSize = 100

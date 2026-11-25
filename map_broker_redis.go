@@ -3596,7 +3596,7 @@ func (e *RedisMapBroker) lin(s *RedisShard) *redisLineage {
 // initialMetaTTL is the TTL of a map meta without publications in milliseconds
 // ("0": off): MapChannelOptions.MetaTTLInitial, or Config.HistoryMetaTTLInitial.
 func (e *RedisMapBroker) initialMetaTTL(chOpts MapChannelOptions) string {
-	return millis(initialMetaTTLFor(chOpts.MetaTTLInitial, e.node.config))
+	return millis(initialMetaTTLFor(chOpts.MetaTTLInitial, e.node.config.HistoryMetaTTLInitial))
 }
 
 // belowHalf tells map reads to extend the meta of a map without publications

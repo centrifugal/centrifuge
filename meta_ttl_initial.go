@@ -3,29 +3,33 @@ package centrifuge
 import (
 	"container/heap"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/priority"
 )
 
 // initialMetaTTLFor is the initial TTL of a channel: its own (from
-// SubscribeOptions, HistoryOptions or MapChannelOptions), or
-// Config.HistoryMetaTTLInitial. Zero: off.
-func initialMetaTTLFor(own time.Duration, c Config) time.Duration {
+// SubscribeOptions, HistoryOptions, HistoryReply or MapChannelOptions), or
+// global (Config.HistoryMetaTTLInitial) when its own is zero. A negative one
+// turns it off: own for the channel, global for all channels without their
+// own. Zero: off.
+func initialMetaTTLFor(own, global time.Duration) time.Duration {
+	if own < 0 {
+		return 0
+	}
 	if own > 0 {
 		return own
 	}
-	return c.HistoryMetaTTLInitial
+	return max(global, 0)
 }
 
 // checkMetaTTLInitial checks an initial TTL (name says where it is set) against
 // the position check delay: live subscribers extend a meta without
 // publications only by their position checks, so a TTL shorter than 3 of them
-// could expire the meta under them, which starts a new epoch. Zero: off.
+// could expire the meta under them, which starts a new epoch. Zero or
+// negative: nothing to check.
 func checkMetaTTLInitial(name string, ttl time.Duration, c Config) error {
-	if ttl < 0 {
-		return fmt.Errorf("%s (%s) must be non-negative", name, ttl)
-	}
 	if ttl > 0 && ttl < 3*c.ClientChannelPositionCheckDelay {
 		return fmt.Errorf("%s (%s) must be at least 3 × ClientChannelPositionCheckDelay (%s)", name, ttl, c.ClientChannelPositionCheckDelay)
 	}
@@ -53,4 +57,14 @@ func scheduleRemove(queue *priority.Queue, removes map[string]int64, nextCheck *
 	if *nextCheck == 0 || *nextCheck > removeAt {
 		*nextCheck = removeAt
 	}
+}
+
+// metaTTLInitialSeconds is how ChannelContext keeps an initial TTL: rounded up
+// to seconds, so that a sub-second one doesn't become 0 (the global one), and
+// -1 for a negative one (off).
+func metaTTLInitialSeconds(ttl time.Duration) int32 {
+	if ttl < 0 {
+		return -1
+	}
+	return int32(min(math.Ceil(ttl.Seconds()), math.MaxInt32))
 }

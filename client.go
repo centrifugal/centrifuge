@@ -201,8 +201,9 @@ type ChannelContext struct {
 	flags             uint16
 	subscribeAllowed  bool // Reservation of an attempt SubscribeHandler allowed, see answerSubscribeCallback.
 	// metaTTLInitialSeconds is SubscribeOptions.HistoryMetaTTLInitial rounded up
-	// (not to 0), in the padding after flags and subscribeAllowed.
-	metaTTLInitialSeconds    uint32
+	// (not to 0), -1 when it is negative (off), in the padding after flags and
+	// subscribeAllowed.
+	metaTTLInitialSeconds    int32
 	mapClientPresenceChannel string
 	mapUserPresenceChannel   string
 	// subGen identifies this subscription generation; it matches the subGen the
@@ -5603,7 +5604,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			Epoch:  latestEpoch,
 		},
 		metaTTLSeconds:           int64(reply.Options.HistoryMetaTTL.Seconds()),
-		metaTTLInitialSeconds:    uint32(math.Ceil(reply.Options.HistoryMetaTTLInitial.Seconds())),
+		metaTTLInitialSeconds:    metaTTLInitialSeconds(reply.Options.HistoryMetaTTLInitial),
 		Source:                   reply.Options.Source,
 		mapClientPresenceChannel: reply.Options.MapClientPresenceChannel,
 		mapUserPresenceChannel:   reply.Options.MapUserPresenceChannel,

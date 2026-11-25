@@ -47,6 +47,8 @@ func TestNew_HistoryMetaTTLInitialValidation(t *testing.T) {
 	require.Error(t, err, "below 3 position checks (40s)")
 	_, err = New(Config{HistoryMetaTTLInitial: 2 * time.Minute})
 	require.NoError(t, err)
+	_, err = New(Config{HistoryMetaTTLInitial: -1})
+	require.NoError(t, err, "negative: off")
 }
 
 // A subscription to a channel nobody published to keeps its meta only for the
@@ -124,6 +126,28 @@ func TestRedisBroker_EmptyMetaWithoutInitial(t *testing.T) {
 	_, err := node.streamTop(ch, time.Hour, 0)
 	require.NoError(t, err)
 	require.Greater(t, metaPTTL(t, s, key), 59*time.Minute)
+}
+
+// A negative initial TTL turns the option off: for a channel (own value) or
+// for all channels without their own (Config).
+func TestRedisBroker_EmptyMetaInitialOff(t *testing.T) {
+	node, b := newMetaTTLTestBroker(t)
+	s := b.shards[0].shard
+	ch := "meta_ttl_off_" + randString(8)
+	_, err := node.streamTop(ch, time.Hour, -1)
+	require.NoError(t, err)
+	require.Greater(t, metaPTTL(t, s, string(b.historyMetaKey(s, ch))), 59*time.Minute, "off for the channel")
+
+	node, b = newMetaTTLTestBrokerWith(t, -1)
+	s = b.shards[0].shard
+	ch = "meta_ttl_off_global_" + randString(8)
+	_, err = node.streamTop(ch, time.Hour, 0)
+	require.NoError(t, err)
+	require.Greater(t, metaPTTL(t, s, string(b.historyMetaKey(s, ch))), 59*time.Minute, "off globally")
+	ch = "meta_ttl_off_global_own_" + randString(8)
+	_, err = node.streamTop(ch, time.Hour, testInitialMetaTTL)
+	require.NoError(t, err)
+	require.LessOrEqual(t, metaPTTL(t, s, string(b.historyMetaKey(s, ch))), testInitialMetaTTL, "a channel's own still applies")
 }
 
 // A meta TTL below 3 position checks is extended by every read, so a meta

@@ -559,7 +559,7 @@ type HistoryReply struct {
 	// (SubscribeOptions.HistoryMetaTTLInitial), see Config.HistoryMetaTTLInitial.
 	// Must be at least 3 × Config.ClientChannelPositionCheckDelay, otherwise the
 	// request fails with an internal error. Zero value means using
-	// Config.HistoryMetaTTLInitial.
+	// Config.HistoryMetaTTLInitial, a negative one turns it off for the channel.
 	MetaTTLInitial time.Duration
 }
 

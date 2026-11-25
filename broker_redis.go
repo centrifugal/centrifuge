@@ -2358,5 +2358,5 @@ func metaExtension(c Config, metaTTL, initial time.Duration) (int, string) {
 	if metaTTL >= 3*c.ClientChannelPositionCheckDelay {
 		belowHalf = "1"
 	}
-	return int(initialMetaTTLFor(initial, c).Seconds()), belowHalf
+	return int(initialMetaTTLFor(initial, c.HistoryMetaTTLInitial).Seconds()), belowHalf
 }
