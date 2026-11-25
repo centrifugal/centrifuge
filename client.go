@@ -200,8 +200,8 @@ type ChannelContext struct {
 	metaTTLSeconds    int64
 	flags             uint16
 	subscribeAllowed  bool // Reservation of an attempt SubscribeHandler allowed, see answerSubscribeCallback.
-	// metaTTLInitialSeconds is SubscribeOptions.HistoryMetaTTLInitial, in the
-	// padding after flags and subscribeAllowed.
+	// metaTTLInitialSeconds is SubscribeOptions.HistoryMetaTTLInitial rounded up
+	// (not to 0), in the padding after flags and subscribeAllowed.
 	metaTTLInitialSeconds    uint32
 	mapClientPresenceChannel string
 	mapUserPresenceChannel   string
@@ -5155,6 +5155,11 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	res.Expires = expires
 	res.Ttl = ttl
 
+	if err := checkMetaTTLInitial("HistoryMetaTTLInitial", reply.Options.HistoryMetaTTLInitial, c.node.config); err != nil {
+		c.node.logger.log(newErrorLogEntry(err, "invalid subscribe options", map[string]any{"channel": req.Channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+		return errorDisconnectContext(ErrorInternal, nil)
+	}
+
 	if reply.Options.Data != nil {
 		res.Data = reply.Options.Data
 	}
@@ -5592,7 +5597,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			Epoch:  latestEpoch,
 		},
 		metaTTLSeconds:           int64(reply.Options.HistoryMetaTTL.Seconds()),
-		metaTTLInitialSeconds:    uint32(reply.Options.HistoryMetaTTLInitial.Seconds()),
+		metaTTLInitialSeconds:    uint32(math.Ceil(reply.Options.HistoryMetaTTLInitial.Seconds())),
 		Source:                   reply.Options.Source,
 		mapClientPresenceChannel: reply.Options.MapClientPresenceChannel,
 		mapUserPresenceChannel:   reply.Options.MapUserPresenceChannel,

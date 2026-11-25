@@ -58,7 +58,9 @@ type MapChannelOptions struct {
 	MetaTTL time.Duration
 	// MetaTTLInitial overrides Config.HistoryMetaTTLInitial for the channel: the
 	// TTL of its meta until its first publication. Zero = Config.HistoryMetaTTLInitial.
-	// Must be 0 for Ephemeral.
+	// Must be 0 for Ephemeral, and at least 3 × Config.ClientChannelPositionCheckDelay
+	// (otherwise subscribing to the channel fails). See Config.HistoryMetaTTLInitial
+	// for what it costs recovery.
 	MetaTTLInitial time.Duration
 	// DefaultPageSize sets the default number of items per page when
 	// the client does not specify a page size. Zero means default (100).
@@ -211,6 +213,17 @@ type Config struct {
 	// memory and Redis brokers and map brokers (maps with a stream). Must be at
 	// least 3 × ClientChannelPositionCheckDelay. Zero (default): metas without
 	// publications get the usual TTL.
+	//
+	// It bounds what subscriptions to channels nobody publishes to keep in the
+	// broker. The cost: a client that subscribed to such a channel and was
+	// offline for longer than this TTL can't recover the publications it missed,
+	// as the expired meta means the first one starts a new epoch.
+	//
+	// The meta belongs to the channel: every read of it applies the TTL its
+	// caller passes, so all subscriptions (SubscribeOptions.HistoryMetaTTLInitial)
+	// and history calls (HistoryOptions.MetaTTLInitial) of a channel should use
+	// the same value. A read with a shorter one shortens the meta, one with no
+	// initial TTL at all gives it the usual TTL.
 	HistoryMetaTTLInitial time.Duration
 	// Metrics is MetricsConfig to configure Prometheus metrics provided by Centrifuge.
 	Metrics MetricsConfig

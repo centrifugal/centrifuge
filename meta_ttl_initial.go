@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"container/heap"
+	"fmt"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/priority"
@@ -15,6 +16,20 @@ func initialMetaTTLFor(own time.Duration, c Config) time.Duration {
 		return own
 	}
 	return c.HistoryMetaTTLInitial
+}
+
+// checkMetaTTLInitial checks an initial TTL (name says where it is set) against
+// the position check delay: live subscribers extend a meta without
+// publications only by their position checks, so a TTL shorter than 3 of them
+// could expire the meta under them, which starts a new epoch. Zero: off.
+func checkMetaTTLInitial(name string, ttl time.Duration, c Config) error {
+	if ttl < 0 {
+		return fmt.Errorf("%s (%s) must be non-negative", name, ttl)
+	}
+	if ttl > 0 && ttl < 3*c.ClientChannelPositionCheckDelay {
+		return fmt.Errorf("%s (%s) must be at least 3 × ClientChannelPositionCheckDelay (%s)", name, ttl, c.ClientChannelPositionCheckDelay)
+	}
+	return nil
 }
 
 // emptyMetaTTL is the TTL of a meta without publications with

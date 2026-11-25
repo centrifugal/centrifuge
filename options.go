@@ -200,8 +200,10 @@ type SubscribeOptions struct {
 	HistoryMetaTTL time.Duration
 	// HistoryMetaTTLInitial allows to override Config.HistoryMetaTTLInitial for this
 	// subscription: the TTL of the channel's meta until its first publication. Must be
-	// at least 3 × Config.ClientChannelPositionCheckDelay. Zero value means using
-	// Config.HistoryMetaTTLInitial.
+	// at least 3 × Config.ClientChannelPositionCheckDelay, otherwise the subscription
+	// fails with an internal error. Zero value means using Config.HistoryMetaTTLInitial.
+	// The meta is shared by the channel: use the same value for every subscription
+	// and history call of a channel, see Config.HistoryMetaTTLInitial.
 	HistoryMetaTTLInitial time.Duration
 	// RecoveryMaxPublicationLimit allows to override Config.RecoveryMaxPublicationLimit
 	// for this subscription: the maximum number of publications recovered on subscribe.

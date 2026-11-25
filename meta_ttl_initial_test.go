@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -191,7 +192,7 @@ func TestClientSubscribeHistoryMetaTTLInitial(t *testing.T) {
 	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeReply{Options: SubscribeOptions{EnablePositioning: true, HistoryMetaTTLInitial: time.Minute}}, nil)
+			cb(SubscribeReply{Options: SubscribeOptions{EnablePositioning: true, HistoryMetaTTLInitial: 2 * time.Minute}}, nil)
 		})
 	})
 	client := newTestConnectedClientV2(t, node, "user")
@@ -200,18 +201,18 @@ func TestClientSubscribeHistoryMetaTTLInitial(t *testing.T) {
 	hub := node.getBroker("ch").(*MemoryBroker).historyHub
 	in, ok := streamRemoveIn(hub, "ch")
 	require.True(t, ok)
-	require.InDelta(t, 60, in, 2, "subscribe reads with the subscription's initial TTL")
+	require.InDelta(t, 120, in, 2, "subscribe reads with the subscription's initial TTL")
 
 	client.mu.RLock()
 	chCtx := client.channels["ch"]
 	client.mu.RUnlock()
-	require.Equal(t, uint32(60), chCtx.metaTTLInitialSeconds)
+	require.Equal(t, uint32(120), chCtx.metaTTLInitialSeconds)
 
 	// A position check reads with it too.
 	_, err := node.checkPosition("ch", chCtx.streamPosition, 0, time.Duration(chCtx.metaTTLInitialSeconds)*time.Second, false)
 	require.NoError(t, err)
 	in, _ = streamRemoveIn(hub, "ch")
-	require.InDelta(t, 60, in, 2)
+	require.InDelta(t, 120, in, 2)
 }
 
 func TestNodeHistoryMetaTTLInitial(t *testing.T) {
@@ -253,4 +254,69 @@ func TestMapChannelOptionsMetaTTLInitialValidation(t *testing.T) {
 	require.Error(t, resolve(MapChannelOptions{Mode: MapModeEphemeral, KeyTTL: time.Minute, MetaTTLInitial: time.Minute}))
 	require.Error(t, resolve(MapChannelOptions{Mode: MapModePersistent, MetaTTLInitial: -time.Second}))
 	require.NoError(t, resolve(MapChannelOptions{Mode: MapModePersistent, MetaTTLInitial: time.Minute}))
+}
+
+// A subscription's initial TTL below 3 position checks fails the subscription:
+// its meta could expire under live subscribers.
+func TestClientSubscribeHistoryMetaTTLInitialTooShort(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers() // ClientChannelPositionCheckDelay 40s.
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{EnablePositioning: true, HistoryMetaTTLInitial: time.Minute}}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user")
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{Channel: "ch"}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Equal(t, ErrorInternal.toProto(), rwWrapper.replies[0].Error)
+	require.NotContains(t, client.Channels(), "ch")
+	require.Zero(t, node.Hub().NumSubscribers("ch"))
+	_, ok := streamRemoveIn(node.getBroker("ch").(*MemoryBroker).historyHub, "ch")
+	require.False(t, ok, "no meta read with the invalid TTL")
+}
+
+// A sub-second initial TTL isn't truncated to 0, which would mean the global one.
+func TestClientSubscribeHistoryMetaTTLInitialRoundsUp(t *testing.T) {
+	t.Parallel()
+	node, err := New(Config{
+		LogLevel:                        LogLevelError,
+		LogHandler:                      func(LogEntry) {},
+		ClientChannelPositionCheckDelay: 100 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{EnablePositioning: true, HistoryMetaTTLInitial: 300 * time.Millisecond}}, nil)
+		})
+	})
+	client := newTestConnectedClientV2(t, node, "user")
+	subscribeClientV2(t, client, "ch")
+
+	client.mu.RLock()
+	chCtx := client.channels["ch"]
+	client.mu.RUnlock()
+	require.Equal(t, uint32(1), chCtx.metaTTLInitialSeconds)
+}
+
+func TestMapChannelOptionsMetaTTLInitialTooShort(t *testing.T) {
+	t.Parallel()
+	opts := MapChannelOptions{Mode: MapModePersistent, MetaTTLInitial: time.Minute}
+	node, err := New(Config{
+		LogLevel:   LogLevelError,
+		LogHandler: func(LogEntry) {},
+		Map:        MapConfig{GetMapChannelOptions: func(string) MapChannelOptions { return opts }},
+	})
+	require.NoError(t, err)
+	_, err = node.resolveMapChannelOptions("ch")
+	require.ErrorContains(t, err, "3 × ClientChannelPositionCheckDelay")
+
+	opts.MetaTTLInitial = 2 * time.Minute
+	_, err = node.resolveMapChannelOptions("ch")
+	require.NoError(t, err)
 }

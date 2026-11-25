@@ -169,8 +169,8 @@ func New(c Config) (*Node, error) {
 	if c.HistoryMetaTTL == 0 {
 		c.HistoryMetaTTL = 30 * 24 * time.Hour // 30 days by default.
 	}
-	if c.HistoryMetaTTLInitial > 0 && c.HistoryMetaTTLInitial < 3*c.ClientChannelPositionCheckDelay {
-		return nil, fmt.Errorf("HistoryMetaTTLInitial (%s) must be at least 3 × ClientChannelPositionCheckDelay (%s)", c.HistoryMetaTTLInitial, c.ClientChannelPositionCheckDelay)
+	if err := checkMetaTTLInitial("HistoryMetaTTLInitial", c.HistoryMetaTTLInitial, c); err != nil {
+		return nil, err
 	}
 
 	uidObj, err := uuid.NewRandom()
@@ -322,7 +322,14 @@ func (n *Node) SetMapBroker(e MapBroker) {
 // Returns an error if GetMapChannelOptions is not configured or the channel
 // options are invalid.
 func (n *Node) resolveMapChannelOptions(channel string) (MapChannelOptions, error) {
-	return ResolveAndValidateMapChannelOptions(n.config.Map.GetMapChannelOptions, channel)
+	opts, err := ResolveAndValidateMapChannelOptions(n.config.Map.GetMapChannelOptions, channel)
+	if err != nil {
+		return MapChannelOptions{}, err
+	}
+	if err := checkMetaTTLInitial("MetaTTLInitial", opts.MetaTTLInitial, n.config); err != nil {
+		return MapChannelOptions{}, err
+	}
+	return opts, nil
 }
 
 // Hub returns node's Hub.
