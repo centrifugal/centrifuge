@@ -322,14 +322,7 @@ func (n *Node) SetMapBroker(e MapBroker) {
 // Returns an error if GetMapChannelOptions is not configured or the channel
 // options are invalid.
 func (n *Node) resolveMapChannelOptions(channel string) (MapChannelOptions, error) {
-	opts, err := ResolveAndValidateMapChannelOptions(n.config.Map.GetMapChannelOptions, channel)
-	if err != nil {
-		return MapChannelOptions{}, err
-	}
-	if err := checkMetaTTLInitial("MetaTTLInitial", opts.MetaTTLInitial, n.config); err != nil {
-		return MapChannelOptions{}, err
-	}
-	return opts, nil
+	return ResolveAndValidateMapChannelOptions(n.config.Map.GetMapChannelOptions, channel)
 }
 
 // Hub returns node's Hub.

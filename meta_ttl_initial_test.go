@@ -304,19 +304,30 @@ func TestClientSubscribeHistoryMetaTTLInitialRoundsUp(t *testing.T) {
 	require.Equal(t, uint32(1), chCtx.metaTTLInitialSeconds)
 }
 
-func TestMapChannelOptionsMetaTTLInitialTooShort(t *testing.T) {
+// A map's initial TTL below 3 position checks fails subscribing to the map,
+// while publishing keeps working: only subscriptions rely on it.
+func TestMapSubscribeMetaTTLInitialTooShort(t *testing.T) {
 	t.Parallel()
-	opts := MapChannelOptions{Mode: MapModePersistent, MetaTTLInitial: time.Minute}
-	node, err := New(Config{
-		LogLevel:   LogLevelError,
-		LogHandler: func(LogEntry) {},
-		Map:        MapConfig{GetMapChannelOptions: func(string) MapChannelOptions { return opts }},
+	node, broker := newTestNodeWithMapBroker(t) // ClientChannelPositionCheckDelay 40s.
+	node.config.Map.GetMapChannelOptions = func(string) MapChannelOptions {
+		return MapChannelOptions{Mode: MapModePersistent, MinPageSize: 1, MetaTTLInitial: time.Minute}
+	}
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{Options: SubscribeOptions{Type: SubscriptionTypeMap}}, nil)
+		})
 	})
-	require.NoError(t, err)
-	_, err = node.resolveMapChannelOptions("ch")
-	require.ErrorContains(t, err, "3 × ClientChannelPositionCheckDelay")
+	client := newTestConnectedClientV2(t, node, "user")
 
-	opts.MetaTTLInitial = 2 * time.Minute
-	_, err = node.resolveMapChannelOptions("ch")
+	protoErr := subscribeMapClientExpectError(t, client, &protocol.SubscribeRequest{
+		Channel: "ch",
+		Type:    int32(SubscriptionTypeMap),
+		Phase:   MapPhaseState,
+		Limit:   100,
+	})
+	require.Equal(t, ErrorInternal.Code, protoErr.Code)
+	require.NotContains(t, client.Channels(), "ch")
+
+	_, err := broker.Publish(context.Background(), "ch", "k", MapPublishOptions{Data: []byte(`{}`)})
 	require.NoError(t, err)
 }

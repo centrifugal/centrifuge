@@ -436,6 +436,12 @@ func (c *Client) handleMapSubscribe(
 
 	// Auto-set positioning flags from Mode.
 	chOpts, err := c.node.resolveMapChannelOptions(channel)
+	if err == nil {
+		// Checked here, not on every resolve: the position checks of a
+		// subscription keep the meta alive, while publishing or resetting a
+		// stream must work whatever the initial TTL.
+		err = checkMetaTTLInitial("MetaTTLInitial", chOpts.MetaTTLInitial, c.node.config)
+	}
 	if err != nil {
 		c.cleanupContinuationMapSubscribing(channel, attempt)
 		return err
