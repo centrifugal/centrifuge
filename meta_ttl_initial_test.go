@@ -331,3 +331,43 @@ func TestMapSubscribeMetaTTLInitialTooShort(t *testing.T) {
 	_, err := broker.Publish(context.Background(), "ch", "k", MapPublishOptions{Data: []byte(`{}`)})
 	require.NoError(t, err)
 }
+
+// HistoryReply.MetaTTL and MetaTTLInitial apply to the history read of a
+// client's history request, which creates the meta of an empty channel.
+func TestClientHistoryReplyMetaTTL(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers() // ClientChannelPositionCheckDelay 40s.
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+	client := newTestClient(t, node, "42")
+	var reply HistoryReply
+	client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
+		cb(reply, nil)
+	})
+	connectClientV2(t, client)
+	hub := node.getBroker("ch").(*MemoryBroker).historyHub
+
+	history := func(ch string) *protocol.Error {
+		rwWrapper := testReplyWriterWrapper()
+		err := client.handleHistory(&protocol.HistoryRequest{Channel: ch}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+		require.NoError(t, err)
+		require.Len(t, rwWrapper.replies, 1)
+		return rwWrapper.replies[0].Error
+	}
+
+	reply = HistoryReply{MetaTTL: 10 * time.Minute}
+	require.Nil(t, history("meta_ttl"))
+	in, ok := streamRemoveIn(hub, "meta_ttl")
+	require.True(t, ok)
+	require.InDelta(t, 600, in, 2)
+
+	reply = HistoryReply{MetaTTLInitial: 2 * time.Minute}
+	require.Nil(t, history("initial"))
+	in, ok = streamRemoveIn(hub, "initial")
+	require.True(t, ok)
+	require.InDelta(t, 120, in, 2)
+
+	reply = HistoryReply{MetaTTLInitial: time.Minute}
+	require.Equal(t, ErrorInternal.toProto(), history("too_short"))
+	_, ok = streamRemoveIn(hub, "too_short")
+	require.False(t, ok, "no meta read with the invalid TTL")
+}

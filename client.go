@@ -3674,8 +3674,14 @@ func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Comma
 			if reply.MaxPublicationLimit > 0 {
 				filter.Limit = capHistoryLimit(int(req.Limit), reply.MaxPublicationLimit)
 			}
+			if err := checkMetaTTLInitial("HistoryReply.MetaTTLInitial", reply.MetaTTLInitial, c.node.config); err != nil {
+				c.logWriteInternalErrorFlush(channel, protocol.FrameTypeHistory, cmd, err, "invalid history reply", started, rw)
+				return
+			}
 			result, err := c.node.History(event.Channel,
 				WithHistoryFilter(filter),
+				WithHistoryMetaTTL(reply.MetaTTL),
+				WithHistoryMetaTTLInitial(reply.MetaTTLInitial),
 			)
 			if err != nil {
 				c.logWriteInternalErrorFlush(channel, protocol.FrameTypeHistory, cmd, err, "error getting history", started, rw)

@@ -549,6 +549,18 @@ type HistoryReply struct {
 	// with MaxPublicationLimit set, the limit the client asked for is capped by it
 	// instead. Zero value means using Config.HistoryMaxPublicationLimit.
 	MaxPublicationLimit int
+	// MetaTTL allows overriding Config.HistoryMetaTTL for this request when
+	// Result is nil, like SubscribeOptions.HistoryMetaTTL: reading history
+	// extends the channel's meta (and creates it for a channel without one).
+	// Zero value means using Config.HistoryMetaTTL.
+	MetaTTL time.Duration
+	// MetaTTLInitial allows overriding Config.HistoryMetaTTLInitial for this
+	// request when Result is nil. Pass the value the channel's subscriptions use
+	// (SubscribeOptions.HistoryMetaTTLInitial), see Config.HistoryMetaTTLInitial.
+	// Must be at least 3 × Config.ClientChannelPositionCheckDelay, otherwise the
+	// request fails with an internal error. Zero value means using
+	// Config.HistoryMetaTTLInitial.
+	MetaTTLInitial time.Duration
 }
 
 // HistoryCallback should be called with HistoryReply or error.
