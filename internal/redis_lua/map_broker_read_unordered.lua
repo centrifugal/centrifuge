@@ -11,6 +11,10 @@
 -- ARGV[4] = meta_ttl (milliseconds, 0 to disable)
 -- ARGV[5] = state_ttl (milliseconds, 0 to disable - refreshes TTL on read)
 -- ARGV[6] = streamless ("1" = skip meta/epoch logic, "0" = normal streamed mode)
+-- ARGV[7] = TTL of a meta without publications (milliseconds, 0: meta_ttl)
+-- ARGV[8] = "1": extend only below half the TTL
+-- ARGV[9] = the epoch of a meta this read creates (unique per call: a recreated
+--           meta never takes an epoch it had)
 
 local hash_key = KEYS[1]
 local expire_key = KEYS[2]
@@ -39,7 +43,7 @@ if not streamless then
         local dropped
         epoch, dropped = lineage_map_meta(meta_key, stream_key, token, ancestor)
         if not epoch then
-            epoch = now_str
+            epoch = ARGV[9]
             lineage_map_create(meta_key, state_meta_key, epoch, token, dropped)
         end
 

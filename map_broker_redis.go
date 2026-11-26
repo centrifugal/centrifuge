@@ -1179,6 +1179,7 @@ func (e *RedisMapBroker) readUnorderedState(ctx context.Context, ch string, opts
 			streamlessFlag,
 			e.initialMetaTTL(chOpts),
 			e.belowHalf(chOpts.MetaTTL),
+			epoch.Generate(), // the epoch of a meta the read creates
 		},
 	).ToArray()
 	if err != nil {
@@ -1441,6 +1442,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 			ascFlag,                                       // ARGV[8] = asc ("1" = ascending, "0" = descending)
 			e.initialMetaTTL(chOpts),                      // ARGV[9] = empty meta TTL
 			e.belowHalf(chOpts.MetaTTL),                   // ARGV[10] = extend below half
+			epoch.Generate(),                              // ARGV[11] = new_epoch_if_empty
 		},
 	).ToArray()
 	if err != nil {
@@ -1577,7 +1579,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 //			strconv.Itoa(limit),
 //			reverse,
 //			metaExpire,
-//			e.node.ID(),
+//			epoch.Generate(),
 //		},
 //		func(r *bufio.Reader) error {
 //			rr := resp.NewReader(r)
@@ -1784,7 +1786,7 @@ func (e *RedisMapBroker) readOrderedState(ctx context.Context, ch string, opts M
 //		ctx,
 //		s.shard.client,
 //		[]string{e.metaKey(s.shard, ch)},
-//		[]string{metaExpire, e.node.ID()},
+//		[]string{metaExpire, epoch.Generate()},
 //		func(r *bufio.Reader) error {
 //			rr := resp.NewReader(r)
 //
@@ -2038,7 +2040,7 @@ func (e *RedisMapBroker) ReadStream(ctx context.Context, ch string, opts MapRead
 			strconv.Itoa(limit),
 			reverse,
 			metaExpire,
-			e.node.ID(),
+			epoch.Generate(), // new_epoch_if_empty
 			e.initialMetaTTL(chOpts),
 			e.belowHalf(chOpts.MetaTTL),
 		},
@@ -2190,7 +2192,7 @@ func (e *RedisMapBroker) ReadStream2(ctx context.Context, ch string, opts MapRea
 	// 2. Call 1: Get metadata using new simpler Lua script
 	metaReplies, err := e.execLineage(ctx, s.shard, e.readMetaScript,
 		[]string{e.metaKey(s.shard, ch), e.streamKey(s.shard, ch), e.stateMetaKey(s.shard, ch), e.lineageKey(s.shard, e.metaKey(s.shard, ch))},
-		[]string{metaExpire, e.node.ID(), e.initialMetaTTL(chOpts), e.belowHalf(chOpts.MetaTTL)},
+		[]string{metaExpire, epoch.Generate(), e.initialMetaTTL(chOpts), e.belowHalf(chOpts.MetaTTL)},
 	).ToArray()
 	if err != nil {
 		return MapStreamResult{}, err
@@ -2848,7 +2850,7 @@ func (e *RedisMapBroker) batchRemoveExpired(ctx context.Context, shard *RedisSha
 		strconv.Itoa(chOpts.StreamSize), // ARGV[4]: stream_size
 		millis(chOpts.StreamTTL),        // ARGV[5]: stream_ttl
 		metaExpire,                      // ARGV[6]: meta_expire
-		e.node.ID(),                     // ARGV[7]: new_epoch_if_empty
+		epoch.Generate(),                // ARGV[7]: new_epoch_if_empty
 		ch,                              // ARGV[8]: channel_for_cleanup
 		streamlessFlag,                  // ARGV[9]: streamless
 	)

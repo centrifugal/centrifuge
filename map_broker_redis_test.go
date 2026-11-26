@@ -4724,3 +4724,70 @@ func testMapBrokerACLUserLimitedToPrefix(t *testing.T, conf RedisShardConfig) {
 		require.Equal(t, map[string][]byte{"b": []byte("2")}, stateToMap(state.Publications))
 	}
 }
+
+// TestRedisMapBroker_RecreatedMetaGetsFreshEpoch: every path that creates a
+// map's stream meta (a stream read, a state read, the expired-key cleanup)
+// starts a fresh epoch. They passed the node's ID as the new epoch, so a
+// meta recreated twice on one node (its TTL expired, a lineage reset) came
+// back in the epoch it had, with offsets from 0: a subscriber at (E, n)
+// was not told its position was gone.
+func TestRedisMapBroker_RecreatedMetaGetsFreshEpoch(t *testing.T) {
+	t.Parallel()
+	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
+		node, _ := New(Config{
+			Map: MapConfig{
+				GetMapChannelOptions: func(channel string) MapChannelOptions {
+					return MapChannelOptions{Mode: MapModeRecoverable, StreamSize: 100, StreamTTL: 60 * time.Second,
+						MetaTTL: 120 * time.Second, KeyTTL: 30 * time.Second, ordered: strings.Contains(channel, "ordered")}
+				},
+			},
+		})
+		broker := mb.make(t, node)
+		ctx := context.Background()
+		paths := map[string]func(t *testing.T, ch string) string{
+			"read_stream": func(t *testing.T, ch string) string {
+				res, err := broker.ReadStream(ctx, ch, MapReadStreamOptions{Filter: StreamFilter{Limit: -1}})
+				require.NoError(t, err)
+				return res.Position.Epoch
+			},
+			"read_state_ordered": func(t *testing.T, ch string) string {
+				res, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+				require.NoError(t, err)
+				return res.Position.Epoch
+			},
+			"read_state": func(t *testing.T, ch string) string {
+				res, err := broker.ReadState(ctx, ch, MapReadStateOptions{Limit: 100})
+				require.NoError(t, err)
+				return res.Position.Epoch
+			},
+			"cleanup": func(t *testing.T, ch string) string {
+				s := broker.getShard(ch).shard
+				chOpts, err := ResolveAndValidateMapChannelOptions(node.config.Map.GetMapChannelOptions, ch)
+				require.NoError(t, err)
+				require.NoError(t, broker.batchRemoveExpired(ctx, s, ch, broker.cleanupRegistrationKeyForChannel(s, ch), chOpts,
+					[]cleanupRemovalEntry{{key: "gone", payload: []byte("x"), expireScore: "1"}}))
+				e, err := s.client.Do(ctx, s.client.B().Hget().Key(broker.metaKey(s, ch)).Field("e").Build()).ToString()
+				require.NoError(t, err)
+				return e
+			},
+		}
+		for name, create := range paths {
+			t.Run(name, func(t *testing.T) {
+				ch := randomChannel("test_recreated_meta_" + name)
+				s := broker.getShard(ch).shard
+				seen := map[string]bool{}
+				for i := 0; i < 3; i++ {
+					res, err := broker.Publish(ctx, ch, "k", MapPublishOptions{Data: []byte("v")})
+					require.NoError(t, err)
+					seen[res.Position.Epoch] = true
+					// the meta's TTL fired
+					require.NoError(t, s.client.Do(ctx, s.client.B().Del().Key(broker.metaKey(s, ch)).Build()).Error())
+					e := create(t, ch)
+					require.NotEmpty(t, e)
+					require.False(t, seen[e], "round %d: the recreated meta took epoch %q again", i, e)
+					seen[e] = true
+				}
+			})
+		}
+	})
+}
