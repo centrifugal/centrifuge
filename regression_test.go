@@ -3274,7 +3274,7 @@ func TestStreamTopMatchesHistory(t *testing.T) {
 			viaHistory, err := node.History("test", WithHistoryMetaTTL(time.Minute))
 			require.NoError(t, err)
 
-			top, err := node.streamTop("test", time.Minute)
+			top, err := node.streamTop("test", time.Minute, 0)
 			require.NoError(t, err)
 
 			require.Equal(t, viaHistory.StreamPosition, top,
@@ -3296,12 +3296,12 @@ func TestStreamTopIsAllocationFree(t *testing.T) {
 
 	// Warm up any lazily initialized state (metrics label combinations etc).
 	for i := 0; i < 100; i++ {
-		_, err := node.streamTop("test", time.Minute)
+		_, err := node.streamTop("test", time.Minute, 0)
 		require.NoError(t, err)
 	}
 
 	allocs := minAllocsPerRun(5, 200, func() {
-		_, _ = node.streamTop("test", time.Minute)
+		_, _ = node.streamTop("test", time.Minute, 0)
 	})
 	require.Zero(t, allocs, "streamTop must not allocate, got %v allocs/op", allocs)
 }

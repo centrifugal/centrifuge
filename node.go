@@ -169,8 +169,8 @@ func New(c Config) (*Node, error) {
 	if c.HistoryMetaTTL == 0 {
 		c.HistoryMetaTTL = 30 * 24 * time.Hour // 30 days by default.
 	}
-	if c.HistoryMetaTTLUnpublished > 0 && c.HistoryMetaTTLUnpublished < 3*c.ClientChannelPositionCheckDelay {
-		return nil, fmt.Errorf("HistoryMetaTTLUnpublished (%s) must be at least 3 × ClientChannelPositionCheckDelay (%s)", c.HistoryMetaTTLUnpublished, c.ClientChannelPositionCheckDelay)
+	if err := checkMetaTTLInitial("HistoryMetaTTLInitial", c.HistoryMetaTTLInitial, c); err != nil {
+		return nil, err
 	}
 
 	uidObj, err := uuid.NewRandom()
@@ -1835,6 +1835,10 @@ func (n *Node) historySingleFlight(ch string, opts HistoryOptions) (HistoryResul
 	builder.WriteString(strconv.FormatBool(opts.Filter.Reverse))
 	builder.WriteString(",meta_ttl:")
 	builder.WriteString(opts.MetaTTL.String())
+	if opts.MetaTTLInitial != 0 {
+		builder.WriteString(",meta_ttl_initial:")
+		builder.WriteString(opts.MetaTTLInitial.String())
+	}
 	key := builder.String()
 
 	result, err, _ := historyGroup.Do(key, func() (any, error) {
@@ -1860,24 +1864,24 @@ func (n *Node) recoveryLimit(maxPublications int) int {
 
 // recoverHistory recovers publications since StreamPosition last seen by client,
 // at most maxPublications of them - see recoveryLimit.
-func (n *Node) recoverHistory(ch string, since StreamPosition, historyMetaTTL time.Duration, maxPublications int) (HistoryResult, error) {
+func (n *Node) recoverHistory(ch string, since StreamPosition, historyMetaTTL, historyMetaTTLInitial time.Duration, maxPublications int) (HistoryResult, error) {
 	n.metrics.incActionCount("history_recover", ch)
 	limit := n.recoveryLimit(maxPublications)
 	return n.History(ch, WithHistoryFilter(HistoryFilter{
 		Limit: limit,
 		Since: &since,
-	}), WithHistoryMetaTTL(historyMetaTTL))
+	}), WithHistoryMetaTTL(historyMetaTTL), WithHistoryMetaTTLInitial(historyMetaTTLInitial))
 }
 
 // recoverCache recovers last publication in channel. With a tags filter it looks
 // through at most maxPublications of the latest ones - see recoveryLimit.
-func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, maxPublications int, tf *tagsFilter, serverTf *tagsFilter) (*Publication, *Publication, StreamPosition, error) {
+func (n *Node) recoverCache(ch string, historyMetaTTL, historyMetaTTLInitial time.Duration, maxPublications int, tf *tagsFilter, serverTf *tagsFilter) (*Publication, *Publication, StreamPosition, error) {
 	n.metrics.incActionCount("history_recover_cache", ch)
 	if tf == nil && serverTf == nil {
 		hr, err := n.History(ch, WithHistoryFilter(HistoryFilter{
 			Limit:   1,
 			Reverse: true,
-		}), WithHistoryMetaTTL(historyMetaTTL))
+		}), WithHistoryMetaTTL(historyMetaTTL), WithHistoryMetaTTLInitial(historyMetaTTLInitial))
 		if err != nil {
 			return nil, nil, StreamPosition{}, err
 		}
@@ -1891,7 +1895,7 @@ func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, maxPublicat
 	hr, err := n.History(ch, WithHistoryFilter(HistoryFilter{
 		Limit:   n.recoveryLimit(maxPublications),
 		Reverse: true,
-	}), WithHistoryMetaTTL(historyMetaTTL))
+	}), WithHistoryMetaTTL(historyMetaTTL), WithHistoryMetaTTLInitial(historyMetaTTLInitial))
 	if err != nil {
 		return nil, nil, StreamPosition{}, err
 	}
@@ -1913,13 +1917,13 @@ func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, maxPublicat
 }
 
 // streamTop returns current stream top StreamPosition for a channel.
-func (n *Node) streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error) {
+func (n *Node) streamTop(ch string, historyMetaTTL, historyMetaTTLInitial time.Duration) (StreamPosition, error) {
 	n.metrics.incActionCount("history_stream_top", ch)
 	// This runs for every positioned channel on every periodic position check, so
 	// build options directly instead of going through History's variadic
 	// HistoryOption closures, which force HistoryOptions to escape to the heap.
 	// historyWithOptions still reports the shared "history" action metric.
-	historyResult, err := n.historyWithOptions(ch, HistoryOptions{MetaTTL: historyMetaTTL})
+	historyResult, err := n.historyWithOptions(ch, HistoryOptions{MetaTTL: historyMetaTTL, MetaTTLInitial: historyMetaTTLInitial})
 	if err != nil {
 		return StreamPosition{}, err
 	}
@@ -1940,7 +1944,7 @@ func (n *Node) mapStreamTop(ch string) (StreamPosition, error) {
 	return streamResult.Position, nil
 }
 
-func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMetaTTL time.Duration, isMap bool) (bool, error) {
+func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMetaTTL, historyMetaTTLInitial time.Duration, isMap bool) (bool, error) {
 	if isMap {
 		mapBroker := n.getMapBroker(ch)
 		if mapBroker == nil {
@@ -1966,7 +1970,7 @@ func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMe
 	medium, ok := n.mediumShard(ch)[ch]
 	mu.Unlock()
 	if ok && medium.options.SharedPositionSync {
-		return medium.CheckPosition(historyMetaTTL, clientPosition, n.config.ClientChannelPositionCheckDelay)
+		return medium.CheckPosition(historyMetaTTL, historyMetaTTLInitial, clientPosition, n.config.ClientChannelPositionCheckDelay)
 	}
 	// No medium for channel or position sync disabled – check position over Broker.
 	if isMap {
@@ -1976,7 +1980,7 @@ func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMe
 		}
 		return streamTop.Epoch == clientPosition.Epoch && clientPosition.Offset == streamTop.Offset, nil
 	}
-	streamTop, err := n.streamTop(ch, historyMetaTTL)
+	streamTop, err := n.streamTop(ch, historyMetaTTL, historyMetaTTLInitial)
 	if err != nil {
 		return false, err
 	}

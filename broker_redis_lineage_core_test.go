@@ -193,14 +193,14 @@ func TestRedisBroker_ReusedOffsetResetsServer(t *testing.T) {
 	// The offline client's channel: new publications reach offset 3 again, but
 	// its old position can't recover - the server's lineage rotated.
 	require.Eventually(t, func() bool {
-		_, err := node.recoverHistory(offline, offlinePos, time.Hour, 0)
+		_, err := node.recoverHistory(offline, offlinePos, time.Hour, 0, 0)
 		return err != nil
 	}, 5*time.Second, 10*time.Millisecond)
 	for i := 0; i < 3; i++ {
 		_, err := node.Publish(offline, []byte(`{}`), WithHistory(10, time.Minute))
 		require.NoError(t, err)
 	}
-	_, err = node.recoverHistory(offline, offlinePos, time.Hour, 0)
+	_, err = node.recoverHistory(offline, offlinePos, time.Hour, 0, 0)
 	require.ErrorIs(t, err, ErrorUnrecoverablePosition)
 }
 

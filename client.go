@@ -191,15 +191,19 @@ const (
 // ChannelContext contains extra context for channel connection subscribed to.
 // Note: this struct is aligned to consume less memory.
 type ChannelContext struct {
-	subscribingCh            chan struct{}
-	joinGate                 *joinGate
-	info                     []byte
-	streamPosition           StreamPosition
-	expireAt                 int64
-	positionCheckTime        int64
-	metaTTLSeconds           int64
-	flags                    uint16
-	subscribeAllowed         bool // Reservation of an attempt SubscribeHandler allowed, see answerSubscribeCallback.
+	subscribingCh     chan struct{}
+	joinGate          *joinGate
+	info              []byte
+	streamPosition    StreamPosition
+	expireAt          int64
+	positionCheckTime int64
+	metaTTLSeconds    int64
+	flags             uint16
+	subscribeAllowed  bool // Reservation of an attempt SubscribeHandler allowed, see answerSubscribeCallback.
+	// metaTTLInitialSeconds is SubscribeOptions.HistoryMetaTTLInitial rounded up
+	// (not to 0), -1 when it is negative (off), in the padding after flags and
+	// subscribeAllowed.
+	metaTTLInitialSeconds    int32
 	mapClientPresenceChannel string
 	mapUserPresenceChannel   string
 	// subGen identifies this subscription generation; it matches the subGen the
@@ -1505,6 +1509,7 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx Channe
 	if chCtx.metaTTLSeconds > 0 {
 		historyMetaTTL = time.Duration(chCtx.metaTTLSeconds) * time.Second
 	}
+	historyMetaTTLInitial := time.Duration(chCtx.metaTTLInitialSeconds) * time.Second
 
 	c.mu.Lock()
 	if c.status == statusClosed {
@@ -1521,7 +1526,7 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx Channe
 	c.mu.Unlock()
 
 	isMap := channelHasFlag(chCtx.flags, flagMap)
-	validPosition, err := c.node.checkPosition(ch, position, historyMetaTTL, isMap)
+	validPosition, err := c.node.checkPosition(ch, position, historyMetaTTL, historyMetaTTLInitial, isMap)
 	if err != nil {
 		// Check later.
 		return true
@@ -3670,8 +3675,14 @@ func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Comma
 			if reply.MaxPublicationLimit > 0 {
 				filter.Limit = capHistoryLimit(int(req.Limit), reply.MaxPublicationLimit)
 			}
+			if err := checkMetaTTLInitial("HistoryReply.MetaTTLInitial", reply.MetaTTLInitial, c.node.config); err != nil {
+				c.logWriteInternalErrorFlush(channel, protocol.FrameTypeHistory, cmd, err, "invalid history reply", started, rw)
+				return
+			}
 			result, err := c.node.History(event.Channel,
 				WithHistoryFilter(filter),
+				WithHistoryMetaTTL(reply.MetaTTL),
+				WithHistoryMetaTTLInitial(reply.MetaTTLInitial),
 			)
 			if err != nil {
 				c.logWriteInternalErrorFlush(channel, protocol.FrameTypeHistory, cmd, err, "error getting history", started, rw)
@@ -5151,6 +5162,11 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	res.Expires = expires
 	res.Ttl = ttl
 
+	if err := checkMetaTTLInitial("HistoryMetaTTLInitial", reply.Options.HistoryMetaTTLInitial, c.node.config); err != nil {
+		c.node.logger.log(newErrorLogEntry(err, "invalid subscribe options", map[string]any{"channel": req.Channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+		return errorDisconnectContext(ErrorInternal, nil)
+	}
+
 	if reply.Options.Data != nil {
 		res.Data = reply.Options.Data
 	}
@@ -5340,7 +5356,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 				var latestPub *Publication
 				var recoveredPub *Publication
 				var currentSP StreamPosition
-				latestPub, recoveredPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, reply.Options.RecoveryMaxPublicationLimit, sub.tagsFilter, sub.serverTagsFilter)
+				latestPub, recoveredPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, reply.Options.HistoryMetaTTLInitial, reply.Options.RecoveryMaxPublicationLimit, sub.tagsFilter, sub.serverTagsFilter)
 				if err != nil {
 					c.node.logger.log(newErrorLogEntry(err, "error on cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 					return handleErr(err)
@@ -5358,7 +5374,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					}
 					if cacheReply.Populated && !recovered {
 						// One more chance to recover in case we know cache was populated.
-						latestPub, recoveredPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, reply.Options.RecoveryMaxPublicationLimit, sub.tagsFilter, sub.serverTagsFilter)
+						latestPub, recoveredPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, reply.Options.HistoryMetaTTLInitial, reply.Options.RecoveryMaxPublicationLimit, sub.tagsFilter, sub.serverTagsFilter)
 						if err != nil {
 							c.node.logger.log(newErrorLogEntry(err, "error on populated cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 							return handleErr(err)
@@ -5384,7 +5400,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					}
 				}
 			} else {
-				historyResult, err := c.node.recoverHistory(channel, StreamPosition{Offset: cmdOffset, Epoch: cmdEpoch}, reply.Options.HistoryMetaTTL, reply.Options.RecoveryMaxPublicationLimit)
+				historyResult, err := c.node.recoverHistory(channel, StreamPosition{Offset: cmdOffset, Epoch: cmdEpoch}, reply.Options.HistoryMetaTTL, reply.Options.HistoryMetaTTLInitial, reply.Options.RecoveryMaxPublicationLimit)
 				if err != nil {
 					if errors.Is(err, ErrorUnrecoverablePosition) {
 						if req.Flag&subscriptionFlagRejectUnrecovered != 0 {
@@ -5428,7 +5444,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 				}
 			}
 		} else {
-			streamTop, err := c.node.streamTop(channel, reply.Options.HistoryMetaTTL)
+			streamTop, err := c.node.streamTop(channel, reply.Options.HistoryMetaTTL, reply.Options.HistoryMetaTTLInitial)
 			if err != nil {
 				c.node.logger.log(newErrorLogEntry(err, "error getting stream state for channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				return handleErr(err)
@@ -5588,6 +5604,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			Epoch:  latestEpoch,
 		},
 		metaTTLSeconds:           int64(reply.Options.HistoryMetaTTL.Seconds()),
+		metaTTLInitialSeconds:    metaTTLInitialSeconds(reply.Options.HistoryMetaTTLInitial),
 		Source:                   reply.Options.Source,
 		mapClientPresenceChannel: reply.Options.MapClientPresenceChannel,
 		mapUserPresenceChannel:   reply.Options.MapUserPresenceChannel,

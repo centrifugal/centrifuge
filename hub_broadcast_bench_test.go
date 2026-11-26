@@ -345,7 +345,7 @@ func BenchmarkClientSubscribeRecoveringDuringPublish(b *testing.B) {
 		}
 		// The next subscribe recovers from the latest offset: no history to read
 		// beyond what came meanwhile.
-		sp, err := n.streamTop(ch, 0)
+		sp, err := n.streamTop(ch, 0, 0)
 		if err != nil {
 			b.Fatal(err)
 		}

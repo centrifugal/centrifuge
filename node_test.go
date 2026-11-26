@@ -1459,21 +1459,21 @@ func TestNodeCheckPosition(t *testing.T) {
 	isValid, err := node.checkPosition("test", StreamPosition{
 		Offset: 20,
 		Epoch:  "test",
-	}, 200*time.Second, false)
+	}, 200*time.Second, 0, false)
 	require.NoError(t, err)
 	require.True(t, isValid)
 
 	isValid, err = node.checkPosition("test", StreamPosition{
 		Offset: 19,
 		Epoch:  "test",
-	}, 200*time.Second, false)
+	}, 200*time.Second, 0, false)
 	require.NoError(t, err)
 	require.False(t, isValid)
 
 	isValid, err = node.checkPosition("test", StreamPosition{
 		Offset: 20,
 		Epoch:  "test_new",
-	}, 200*time.Second, false)
+	}, 200*time.Second, 0, false)
 	require.NoError(t, err)
 	require.False(t, isValid)
 }
@@ -1506,7 +1506,7 @@ func TestNodeCheckPositionMap(t *testing.T) {
 	streamPos := result.Position
 
 	// Check with correct position - should be valid.
-	isValid, err := node.checkPosition(channel, streamPos, 200*time.Second, true)
+	isValid, err := node.checkPosition(channel, streamPos, 200*time.Second, 0, true)
 	require.NoError(t, err)
 	require.True(t, isValid)
 
@@ -1514,7 +1514,7 @@ func TestNodeCheckPositionMap(t *testing.T) {
 	isValid, err = node.checkPosition(channel, StreamPosition{
 		Offset: streamPos.Offset - 1,
 		Epoch:  streamPos.Epoch,
-	}, 200*time.Second, true)
+	}, 200*time.Second, 0, true)
 	require.NoError(t, err)
 	require.False(t, isValid)
 
@@ -1522,7 +1522,7 @@ func TestNodeCheckPositionMap(t *testing.T) {
 	isValid, err = node.checkPosition(channel, StreamPosition{
 		Offset: streamPos.Offset,
 		Epoch:  "wrong_epoch",
-	}, 200*time.Second, true)
+	}, 200*time.Second, 0, true)
 	require.NoError(t, err)
 	require.False(t, isValid)
 
@@ -1534,12 +1534,12 @@ func TestNodeCheckPositionMap(t *testing.T) {
 	streamPos2 := result2.Position
 
 	// Old position should now be invalid.
-	isValid, err = node.checkPosition(channel, streamPos, 200*time.Second, true)
+	isValid, err = node.checkPosition(channel, streamPos, 200*time.Second, 0, true)
 	require.NoError(t, err)
 	require.False(t, isValid)
 
 	// New position should be valid.
-	isValid, err = node.checkPosition(channel, streamPos2, 200*time.Second, true)
+	isValid, err = node.checkPosition(channel, streamPos2, 200*time.Second, 0, true)
 	require.NoError(t, err)
 	require.True(t, isValid)
 }
@@ -1598,7 +1598,7 @@ func TestNodeCheckPositionMapWithMedium(t *testing.T) {
 
 	// Now checkPosition should use the medium's SharedPositionSync path.
 	// Correct position — valid.
-	isValid, err := node.checkPosition(channel, streamPos, 200*time.Second, true)
+	isValid, err := node.checkPosition(channel, streamPos, 200*time.Second, 0, true)
 	require.NoError(t, err)
 	require.True(t, isValid)
 
@@ -1606,7 +1606,7 @@ func TestNodeCheckPositionMapWithMedium(t *testing.T) {
 	isValid, err = node.checkPosition(channel, StreamPosition{
 		Offset: streamPos.Offset + 1,
 		Epoch:  streamPos.Epoch,
-	}, 200*time.Second, true)
+	}, 200*time.Second, 0, true)
 	require.NoError(t, err)
 	require.False(t, isValid)
 
@@ -1614,7 +1614,7 @@ func TestNodeCheckPositionMapWithMedium(t *testing.T) {
 	isValid, err = node.checkPosition(channel, StreamPosition{
 		Offset: streamPos.Offset,
 		Epoch:  "wrong",
-	}, 200*time.Second, true)
+	}, 200*time.Second, 0, true)
 	require.NoError(t, err)
 	require.False(t, isValid)
 }

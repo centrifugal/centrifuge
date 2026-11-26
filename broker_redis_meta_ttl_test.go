@@ -10,11 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const testUnpublishedMetaTTL = 5 * time.Minute
+const testInitialMetaTTL = 5 * time.Minute
 
 func newMetaTTLTestBroker(t *testing.T) (*Node, *RedisBroker) {
 	t.Helper()
-	node, err := New(Config{LogLevel: LogLevelError, LogHandler: func(LogEntry) {}, HistoryMetaTTLUnpublished: testUnpublishedMetaTTL})
+	return newMetaTTLTestBrokerWith(t, testInitialMetaTTL)
+}
+
+func newMetaTTLTestBrokerWith(t *testing.T, initial time.Duration) (*Node, *RedisBroker) {
+	t.Helper()
+	node, err := New(Config{LogLevel: LogLevelError, LogHandler: func(LogEntry) {}, HistoryMetaTTLInitial: initial})
 	require.NoError(t, err)
 	b := newTestRedisBroker(t, node, true, false, 6379)
 	node.SetBroker(b)
@@ -37,11 +42,13 @@ func setPTTL(t *testing.T, s *RedisShard, key string, d time.Duration) {
 	require.NoError(t, s.client.Do(context.Background(), s.client.B().Pexpire().Key(key).Milliseconds(d.Milliseconds()).Build()).Error())
 }
 
-func TestNew_HistoryMetaTTLUnpublishedValidation(t *testing.T) {
-	_, err := New(Config{HistoryMetaTTLUnpublished: time.Minute})
+func TestNew_HistoryMetaTTLInitialValidation(t *testing.T) {
+	_, err := New(Config{HistoryMetaTTLInitial: time.Minute})
 	require.Error(t, err, "below 3 position checks (40s)")
-	_, err = New(Config{HistoryMetaTTLUnpublished: 2 * time.Minute})
+	_, err = New(Config{HistoryMetaTTLInitial: 2 * time.Minute})
 	require.NoError(t, err)
+	_, err = New(Config{HistoryMetaTTLInitial: -1})
+	require.NoError(t, err, "negative: off")
 }
 
 // A subscription to a channel nobody published to keeps its meta only for the
@@ -52,18 +59,18 @@ func TestRedisBroker_EmptyMetaShortTTL(t *testing.T) {
 	ch := "meta_ttl_" + randString(8)
 	key := string(b.historyMetaKey(s, ch))
 
-	_, err := node.streamTop(ch, time.Hour)
+	_, err := node.streamTop(ch, time.Hour, 0)
 	require.NoError(t, err)
 	ttl := metaPTTL(t, s, key)
-	require.Greater(t, ttl, testUnpublishedMetaTTL-time.Minute)
-	require.LessOrEqual(t, ttl, testUnpublishedMetaTTL)
+	require.Greater(t, ttl, testInitialMetaTTL-time.Minute)
+	require.LessOrEqual(t, ttl, testInitialMetaTTL)
 
 	_, err = node.Publish(ch, []byte(`{}`), WithHistory(10, time.Minute, time.Hour))
 	require.NoError(t, err)
 	require.Greater(t, metaPTTL(t, s, key), 59*time.Minute, "publications: the meta TTL")
 
 	// Reads never shorten a meta with publications.
-	_, err = node.streamTop(ch, time.Hour)
+	_, err = node.streamTop(ch, time.Hour, 0)
 	require.NoError(t, err)
 	require.Greater(t, metaPTTL(t, s, key), 59*time.Minute)
 }
@@ -76,35 +83,71 @@ func TestRedisBroker_EmptyMetaShortened(t *testing.T) {
 	ch := "meta_ttl_old_" + randString(8)
 	key := string(b.historyMetaKey(s, ch))
 
-	_, err := node.streamTop(ch, time.Hour)
+	_, err := node.streamTop(ch, time.Hour, 0)
 	require.NoError(t, err)
 	setPTTL(t, s, key, 30*24*time.Hour)
 
-	_, err = node.streamTop(ch, time.Hour)
+	_, err = node.streamTop(ch, time.Hour, 0)
 	require.NoError(t, err)
-	require.LessOrEqual(t, metaPTTL(t, s, key), testUnpublishedMetaTTL)
+	require.LessOrEqual(t, metaPTTL(t, s, key), testInitialMetaTTL)
 }
 
 // With more than half the TTL left a read writes no EXPIRE; below half it
-// extends.
+// extends. With or without the initial TTL.
 func TestRedisBroker_MetaExtendedBelowHalf(t *testing.T) {
-	node, b := newMetaTTLTestBroker(t)
+	for _, initial := range []time.Duration{0, testInitialMetaTTL} {
+		node, b := newMetaTTLTestBrokerWith(t, initial)
+		s := b.shards[0].shard
+		ch := "meta_ttl_half_" + randString(8)
+		key := string(b.historyMetaKey(s, ch))
+
+		_, err := node.Publish(ch, []byte(`{}`), WithHistory(10, time.Minute, time.Hour))
+		require.NoError(t, err)
+
+		setPTTL(t, s, key, 40*time.Minute)
+		_, err = node.streamTop(ch, time.Hour, 0)
+		require.NoError(t, err)
+		require.LessOrEqual(t, metaPTTL(t, s, key), 40*time.Minute, "above half: not extended, initial %s", initial)
+
+		setPTTL(t, s, key, 20*time.Minute)
+		_, err = node.streamTop(ch, time.Hour, 0)
+		require.NoError(t, err)
+		require.Greater(t, metaPTTL(t, s, key), 59*time.Minute, "below half: extended, initial %s", initial)
+	}
+}
+
+// Without the initial TTL an empty meta gets the meta TTL.
+func TestRedisBroker_EmptyMetaWithoutInitial(t *testing.T) {
+	node, b := newMetaTTLTestBrokerWith(t, 0)
 	s := b.shards[0].shard
-	ch := "meta_ttl_half_" + randString(8)
+	ch := "meta_ttl_noinit_" + randString(8)
 	key := string(b.historyMetaKey(s, ch))
 
-	_, err := node.Publish(ch, []byte(`{}`), WithHistory(10, time.Minute, time.Hour))
+	_, err := node.streamTop(ch, time.Hour, 0)
 	require.NoError(t, err)
+	require.Greater(t, metaPTTL(t, s, key), 59*time.Minute)
+}
 
-	setPTTL(t, s, key, 40*time.Minute)
-	_, err = node.streamTop(ch, time.Hour)
+// A negative initial TTL turns the option off: for a channel (own value) or
+// for all channels without their own (Config).
+func TestRedisBroker_EmptyMetaInitialOff(t *testing.T) {
+	node, b := newMetaTTLTestBroker(t)
+	s := b.shards[0].shard
+	ch := "meta_ttl_off_" + randString(8)
+	_, err := node.streamTop(ch, time.Hour, -1)
 	require.NoError(t, err)
-	require.LessOrEqual(t, metaPTTL(t, s, key), 40*time.Minute, "above half: not extended")
+	require.Greater(t, metaPTTL(t, s, string(b.historyMetaKey(s, ch))), 59*time.Minute, "off for the channel")
 
-	setPTTL(t, s, key, 20*time.Minute)
-	_, err = node.streamTop(ch, time.Hour)
+	node, b = newMetaTTLTestBrokerWith(t, -1)
+	s = b.shards[0].shard
+	ch = "meta_ttl_off_global_" + randString(8)
+	_, err = node.streamTop(ch, time.Hour, 0)
 	require.NoError(t, err)
-	require.Greater(t, metaPTTL(t, s, key), 59*time.Minute, "below half: extended")
+	require.Greater(t, metaPTTL(t, s, string(b.historyMetaKey(s, ch))), 59*time.Minute, "off globally")
+	ch = "meta_ttl_off_global_own_" + randString(8)
+	_, err = node.streamTop(ch, time.Hour, testInitialMetaTTL)
+	require.NoError(t, err)
+	require.LessOrEqual(t, metaPTTL(t, s, string(b.historyMetaKey(s, ch))), testInitialMetaTTL, "a channel's own still applies")
 }
 
 // A meta TTL below 3 position checks is extended by every read, so a meta
@@ -118,7 +161,7 @@ func TestRedisBroker_ShortMetaTTLExtendedEveryRead(t *testing.T) {
 	_, err := node.Publish(ch, []byte(`{}`), WithHistory(10, time.Minute, time.Minute))
 	require.NoError(t, err)
 	setPTTL(t, s, key, 40*time.Second)
-	_, err = node.streamTop(ch, time.Minute)
+	_, err = node.streamTop(ch, time.Minute, 0)
 	require.NoError(t, err)
 	require.Greater(t, metaPTTL(t, s, key), 50*time.Second)
 }
@@ -131,12 +174,12 @@ func TestRedisBroker_EmptyMetaExpiredNewEpoch(t *testing.T) {
 	ch := "meta_ttl_expired_" + randString(8)
 	key := string(b.historyMetaKey(s, ch))
 
-	before, err := node.streamTop(ch, time.Hour)
+	before, err := node.streamTop(ch, time.Hour, 0)
 	require.NoError(t, err)
 	require.NoError(t, s.client.Do(context.Background(), s.client.B().Del().Key(key).Build()).Error())
 	_, err = node.Publish(ch, []byte(`{}`), WithHistory(10, time.Minute, time.Hour))
 	require.NoError(t, err)
-	_, err = node.recoverHistory(ch, before, time.Hour, 0)
+	_, err = node.recoverHistory(ch, before, time.Hour, 0, 0)
 	require.ErrorIs(t, err, ErrorUnrecoverablePosition, "a new epoch")
 }
 
@@ -145,7 +188,7 @@ func TestRedisBroker_EmptyMetaExpiredNewEpoch(t *testing.T) {
 func TestRedisMapBroker_EmptyMetaShortTTL(t *testing.T) {
 	runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
 		node, err := New(Config{
-			HistoryMetaTTLUnpublished: testUnpublishedMetaTTL,
+			HistoryMetaTTLInitial: testInitialMetaTTL,
 			Map: MapConfig{
 				GetMapChannelOptions: func(channel string) MapChannelOptions {
 					return MapChannelOptions{Mode: MapModePersistent, StreamSize: 100, StreamTTL: 300 * time.Second}
@@ -168,7 +211,7 @@ func TestRedisMapBroker_EmptyMetaShortTTL(t *testing.T) {
 			require.NoError(t, err)
 			ttl := metaPTTL(t, s, key)
 			require.Greater(t, ttl, time.Duration(0), read)
-			require.LessOrEqual(t, ttl, testUnpublishedMetaTTL, read)
+			require.LessOrEqual(t, ttl, testInitialMetaTTL, read)
 
 			_, err = broker.Publish(ctx, ch, "a", MapPublishOptions{Data: []byte("1")})
 			require.NoError(t, err)
@@ -179,4 +222,47 @@ func TestRedisMapBroker_EmptyMetaShortTTL(t *testing.T) {
 			require.Equal(t, time.Duration(-1), metaPTTL(t, s, key), "%s: reads keep it permanent", read)
 		}
 	})
+}
+
+// A map with publications has its meta extended by every read, as its reads
+// extend its state: an expired meta would make the state stale. Only the meta
+// of a map without publications is extended below half its TTL.
+func TestRedisMapBroker_MetaExtendedWithState(t *testing.T) {
+	for _, initial := range []time.Duration{0, testInitialMetaTTL} {
+		runMapBrokerTest(t, func(t *testing.T, mb redisMapBrokerFactory) {
+			node, err := New(Config{
+				HistoryMetaTTLInitial: initial,
+				Map: MapConfig{
+					GetMapChannelOptions: func(channel string) MapChannelOptions {
+						return MapChannelOptions{Mode: MapModeRecoverable, StreamSize: 100, StreamTTL: 300 * time.Second, KeyTTL: time.Hour, MetaTTL: time.Hour}
+					},
+				},
+			})
+			require.NoError(t, err)
+			broker := mb.make(t, node)
+			ctx := context.Background()
+			s := broker.shards[0].shard
+
+			empty := randomChannel("map_meta_half_empty")
+			_, err = broker.ReadState(ctx, empty, MapReadStateOptions{Limit: 100})
+			require.NoError(t, err)
+			target := time.Hour
+			if initial > 0 {
+				target = initial
+			}
+			aboveHalf := target * 4 / 5
+			setPTTL(t, s, broker.metaKey(s, empty), aboveHalf)
+			_, err = broker.ReadState(ctx, empty, MapReadStateOptions{Limit: 100})
+			require.NoError(t, err)
+			require.LessOrEqual(t, metaPTTL(t, s, broker.metaKey(s, empty)), aboveHalf, "empty map above half: not extended, initial %s", initial)
+
+			withState := randomChannel("map_meta_half_state")
+			_, err = broker.Publish(ctx, withState, "a", MapPublishOptions{Data: []byte("1")})
+			require.NoError(t, err)
+			setPTTL(t, s, broker.metaKey(s, withState), 40*time.Minute)
+			_, err = broker.ReadState(ctx, withState, MapReadStateOptions{Limit: 100})
+			require.NoError(t, err)
+			require.Greater(t, metaPTTL(t, s, broker.metaKey(s, withState)), 59*time.Minute, "map with state: extended, initial %s", initial)
+		})
+	}
 }
