@@ -42,6 +42,9 @@ local asc = ARGV[8] == "1"
 -- ARGV[10] = "1": extend only below half the TTL
 local empty_ttl = ARGV[9] or "0"
 local below_half = ARGV[10] == "1"
+-- ARGV[11] = the epoch of a meta this read creates (unique per call: a
+-- recreated meta never takes an epoch it had)
+local new_epoch_if_empty = ARGV[11]
 
 local epoch = ""
 -- epoch_out is the epoch replied, with its observation suffix (see lineage_obs).
@@ -55,7 +58,7 @@ if not streamless then
         local dropped
         epoch, dropped = lineage_map_meta(meta_key, stream_key, token, ancestor)
         if not epoch then
-            epoch = now_str
+            epoch = new_epoch_if_empty
             lineage_map_create(meta_key, state_meta_key, epoch, token, dropped)
         end
 
